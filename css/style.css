@@ -1,0 +1,647 @@
+/* =========================================================
+   style.css（完整重写｜默认暗色 + 一键切换亮色｜全屏不炸）
+   规则：所有颜色都走变量，不再写死；亮色覆盖变量即可全局生效
+   ========================================================= */
+
+/* ===================== Theme Tokens ===================== */
+/* 默认：暗色（你提供的 rgb 系） */
+:root {
+    --bg: rgb(30, 30, 30);
+    --panel: rgb(52, 59, 77);
+    --panel-soft: rgb(46, 43, 43);
+    --panel-head: rgb(62, 57, 54);
+
+    --text: #e9eef8;
+    --muted: rgba(233, 238, 248, .72);
+
+    --line: rgba(255, 255, 255, .10);
+    --line2: rgba(255, 255, 255, .14);
+
+    --accent: #6aa8ff;
+    --accent2: #35d38b;
+    --danger: #ff5a6f;
+
+    --btn-bg: rgba(46, 43, 43, .72);
+    --btn-bg-hover: rgba(46, 43, 43, .88);
+
+    --input-bg: rgba(30, 30, 30, .62);
+    --input-bg-focus: rgba(30, 30, 30, .74);
+
+    --shadow: 0 12px 30px rgba(0, 0, 0, .38);
+    --shadow2: 0 18px 60px rgba(0, 0, 0, .52);
+
+    --radius: 14px;
+    --radius2: 18px;
+
+    --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+    --sans: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, "Helvetica Neue", Arial, "Noto Sans",
+    "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+}
+
+/* 亮色：只覆盖变量（不改结构样式） */
+body.theme-light {
+    --bg: #f6f8fc;
+    --panel: #ffffff;
+    --panel-soft: #fbfcff;
+    --panel-head: #f1f5ff;
+
+    --text: #0f172a;
+    --muted: #5b6b85;
+
+    --line: rgba(15, 23, 42, .10);
+    --line2: rgba(15, 23, 42, .14);
+
+    --accent: #2f76ff;
+    --accent2: #22c55e;
+    --danger: #ef4444;
+
+    --btn-bg: rgba(255, 255, 255, .92);
+    --btn-bg-hover: #ffffff;
+
+    --input-bg: rgba(248, 250, 255, .95);
+    --input-bg-focus: #ffffff;
+
+    --shadow: 0 10px 28px rgba(15, 23, 42, .08);
+    --shadow2: 0 18px 60px rgba(15, 23, 42, .12);
+}
+
+/* ===================== Base ===================== */
+* {
+    box-sizing: border-box;
+}
+
+html, body {
+    height: 100%;
+}
+
+body {
+    margin: 0;
+    font-family: var(--sans);
+    color: var(--text);
+    background: radial-gradient(1200px 800px at 70% -200px, color-mix(in srgb, var(--accent) 22%, transparent), transparent 55%),
+    radial-gradient(900px 700px at -10% 30%, color-mix(in srgb, var(--accent2) 16%, transparent), transparent 55%),
+    var(--bg);
+}
+
+code {
+    font-family: var(--mono);
+}
+
+.app {
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+}
+
+/* ===================== Topbar ===================== */
+.topbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 14px 16px;
+    border-bottom: 1px solid var(--line);
+    background: color-mix(in srgb, var(--bg) 55%, transparent);
+    backdrop-filter: blur(10px);
+}
+
+.brand {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.brand .dot {
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    background: var(--accent);
+    box-shadow: 0 0 0 6px color-mix(in srgb, var(--accent) 18%, transparent);
+}
+
+.brand .title {
+    font-weight: 900;
+    letter-spacing: .2px;
+    font-size: 16px;
+}
+
+.brand .sub {
+    color: var(--muted);
+    font-size: 12px;
+    margin-top: 2px;
+}
+
+.top-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.sep {
+    width: 1px;
+    height: 28px;
+    background: var(--line);
+    margin: 0 2px;
+}
+
+/* ===================== Buttons ===================== */
+.btn {
+    border: 1px solid var(--line2);
+    background: var(--btn-bg);
+    color: var(--text);
+    padding: 8px 10px;
+    border-radius: 12px;
+    cursor: pointer;
+    box-shadow: 0 8px 18px color-mix(in srgb, #000 18%, transparent);
+    transition: transform .08s ease, border-color .12s ease, background .12s ease, box-shadow .12s ease;
+    user-select: none;
+    white-space: nowrap;
+}
+
+.btn:hover {
+    border-color: color-mix(in srgb, var(--accent) 35%, var(--line2));
+    background: var(--btn-bg-hover);
+    box-shadow: 0 10px 22px color-mix(in srgb, #000 22%, transparent);
+}
+
+.btn:active {
+    transform: translateY(1px);
+}
+
+.btn.primary {
+    border-color: color-mix(in srgb, var(--accent) 55%, var(--line2));
+    background: color-mix(in srgb, var(--accent) 18%, var(--btn-bg));
+}
+
+.btn.danger {
+    border-color: color-mix(in srgb, var(--danger) 55%, var(--line2));
+    background: color-mix(in srgb, var(--danger) 16%, var(--btn-bg));
+}
+
+.smallBtn {
+    padding: 8px 10px;
+    border-radius: 12px;
+}
+
+.iconBtn {
+    border: 1px solid var(--line2);
+    background: var(--btn-bg);
+    color: var(--text);
+    border-radius: 12px;
+    padding: 6px 9px;
+    cursor: pointer;
+}
+
+.iconBtn:hover {
+    border-color: color-mix(in srgb, var(--accent) 35%, var(--line2));
+}
+
+/* ===================== Layout ===================== */
+.main {
+    flex: 1;
+    display: grid;
+    grid-template-columns: 440px 1fr 440px;
+    gap: 14px;
+    padding: 14px;
+    min-height: 0;
+}
+
+.panel {
+    background: linear-gradient(180deg,
+    color-mix(in srgb, var(--panel) 92%, transparent),
+    color-mix(in srgb, var(--panel-soft) 92%, transparent)
+    );
+    border: 1px solid var(--line);
+    border-radius: var(--radius2);
+    box-shadow: var(--shadow);
+    min-height: 0;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+}
+
+.panel.left, .panel.right {
+    overflow: auto;
+    scrollbar-gutter: stable;
+}
+
+.panel-title {
+    padding: 12px 14px;
+    font-weight: 900;
+    border-bottom: 1px solid var(--line);
+    background: linear-gradient(180deg,
+    color-mix(in srgb, var(--panel-head) 70%, transparent),
+    color-mix(in srgb, var(--panel-soft) 35%, transparent)
+    );
+}
+
+.panel-subtitle {
+    padding: 12px 14px 6px 14px;
+    font-weight: 800;
+    color: color-mix(in srgb, var(--text) 92%, transparent);
+}
+
+/* ===================== Forms ===================== */
+.grid1, .grid2, .grid3 {
+    display: grid;
+    gap: 10px;
+    padding: 0 14px 10px 14px;
+}
+
+.grid1 {
+    grid-template-columns:1fr;
+}
+
+.grid2 {
+    grid-template-columns:1fr 1fr;
+}
+
+.grid3 {
+    grid-template-columns:1fr 1fr 1fr;
+}
+
+.field label {
+    display: block;
+    font-size: 12px;
+    color: var(--muted);
+    margin-bottom: 6px;
+}
+
+.field input, .field select, textarea {
+    width: 100%;
+    padding: 10px 10px;
+    border-radius: 12px;
+    border: 1px solid var(--line2);
+    background: var(--input-bg);
+    color: var(--text);
+    outline: none;
+    min-width: 0;
+}
+
+.field input:focus, .field select:focus, textarea:focus {
+    border-color: color-mix(in srgb, var(--accent) 60%, var(--line2));
+    box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 18%, transparent);
+    background: var(--input-bg-focus);
+}
+
+.vec3Row {
+    display: flex;
+    gap: 10px;
+    padding: 0 14px 10px 14px;
+    align-items: center;
+}
+
+.vec3Row .miniLabel {
+    width: 110px;
+    flex: 0 0 110px;
+    font-size: 12px;
+    color: var(--muted);
+}
+
+.vec3Row .vec3 {
+    flex: 1 1 auto;
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 8px;
+    min-width: 0;
+}
+
+.vec3Row .vec3 input {
+    width: 100%;
+    min-width: 0;
+    padding: 10px 8px;
+    font-family: var(--mono);
+    font-size: 13px;
+    text-align: center;
+    border-radius: 12px;
+    border: 1px solid var(--line2);
+    background: var(--input-bg);
+    color: var(--text);
+    outline: none;
+}
+
+.vec3Row .vec3 input:focus {
+    border-color: color-mix(in srgb, var(--accent) 60%, var(--line2));
+    box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 18%, transparent);
+    background: var(--input-bg-focus);
+}
+
+.hint {
+    padding: 10px 14px 14px 14px;
+    font-size: 12px;
+    color: var(--muted);
+    line-height: 1.55;
+}
+
+.emitBox {
+    padding: 10px 14px;
+    border-top: 1px dashed var(--line);
+}
+
+.emitSection {
+    display: none;
+}
+
+.emitSection.active {
+    display: block;
+}
+
+input[type="color"] {
+    height: 44px;
+    padding: 6px 8px;
+    cursor: pointer;
+    border-radius: 12px;
+    border: 1px solid var(--line2);
+    background: var(--input-bg);
+}
+
+input[type="color"]::-webkit-color-swatch-wrapper {
+    padding: 0;
+}
+
+input[type="color"]::-webkit-color-swatch {
+    border-radius: 10px;
+    border: 1px solid var(--line2);
+}
+
+/* ===================== Preview ===================== */
+.viewport-wrap {
+    position: relative;
+    padding: 12px 14px 8px 14px;
+}
+
+.viewport {
+    height: 560px;
+    border-radius: 16px;
+    border: 1px solid var(--line2);
+    overflow: hidden;
+    background: radial-gradient(900px 520px at 50% 20%, color-mix(in srgb, var(--accent) 18%, transparent), transparent 60%),
+    linear-gradient(180deg,
+            color-mix(in srgb, var(--panel-head) 40%, transparent),
+            color-mix(in srgb, var(--panel-soft) 60%, transparent)
+    );
+}
+
+.overlay {
+    position: absolute;
+    left: 24px;
+    top: 22px;
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    pointer-events: none;
+}
+
+.chip {
+    font-size: 12px;
+    padding: 6px 10px;
+    border-radius: 999px;
+    border: 1px solid var(--line2);
+    background: color-mix(in srgb, var(--bg) 40%, transparent);
+    color: color-mix(in srgb, var(--text) 92%, transparent);
+    backdrop-filter: blur(6px);
+    box-shadow: 0 10px 26px color-mix(in srgb, #000 20%, transparent);
+}
+
+.fsBtn {
+    position: absolute;
+    right: 24px;
+    top: 22px;
+    pointer-events: auto;
+    display: flex;
+    gap: 8px;
+}
+
+#kotlinOut {
+    margin: 0 14px 14px 14px;
+    height: 240px;
+    resize: vertical;
+    font-family: var(--mono);
+    font-size: 12px;
+    line-height: 1.55;
+    background: var(--input-bg);
+    border: 1px solid var(--line2);
+    border-radius: 16px;
+    color: var(--text);
+}
+
+/* ===================== Right: Command Queue（重新稳固布局） ===================== */
+.add-row {
+    position: sticky;
+    top: 0;
+    z-index: 5;
+    display: flex;
+    gap: 8px;
+    padding: 12px 14px;
+    border-bottom: 1px solid var(--line);
+    background: linear-gradient(180deg,
+    color-mix(in srgb, var(--panel-head) 62%, transparent),
+    color-mix(in srgb, var(--panel-soft) 38%, transparent)
+    );
+}
+
+.add-row select {
+    flex: 1;
+    height: 40px;
+}
+
+.add-row .btn {
+    height: 40px;
+    padding: 0 12px;
+}
+
+.cmdList {
+    padding: 12px 14px 14px 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+/* 卡片 */
+.cmdCard {
+    border: 1px solid var(--line2);
+    background: linear-gradient(180deg,
+    color-mix(in srgb, var(--panel) 92%, transparent),
+    color-mix(in srgb, var(--panel-soft) 92%, transparent)
+    );
+    border-radius: 18px;
+    overflow: hidden;
+    box-shadow: 0 10px 26px color-mix(in srgb, #000 18%, transparent);
+}
+
+.cmdCard:hover {
+    border-color: color-mix(in srgb, var(--accent) 30%, var(--line2));
+    box-shadow: 0 14px 36px color-mix(in srgb, #000 22%, transparent);
+}
+
+.cmdHead {
+    display: grid;
+    grid-template-columns: 36px 1fr auto;
+    align-items: center;
+    gap: 10px;
+    padding: 10px;
+    border-bottom: 1px solid var(--line);
+    background: color-mix(in srgb, var(--panel-head) 55%, transparent);
+}
+
+.dragHandle {
+    width: 34px;
+    height: 34px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: grab;
+    border-radius: 12px;
+    border: 1px solid var(--line2);
+    background: color-mix(in srgb, var(--bg) 35%, transparent);
+    font-family: var(--mono);
+    user-select: none;
+    color: color-mix(in srgb, var(--text) 80%, transparent);
+}
+
+.dragHandle:active {
+    cursor: grabbing;
+}
+
+.cmdTitle {
+    font-weight: 900;
+    letter-spacing: .2px;
+    line-height: 1.1;
+}
+
+.cmdTitle .sub {
+    display: block;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--muted);
+    margin-top: 3px;
+}
+
+.cmdRight {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.cmdBtns {
+    display: flex;
+    gap: 6px;
+}
+
+.cmdBody {
+    padding: 12px;
+}
+
+.cmdGrid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+}
+
+.cmdGrid .field label {
+    font-size: 11.5px;
+    color: var(--muted);
+}
+
+/* switch */
+.switch {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    user-select: none;
+}
+
+.switch span {
+    font-weight: 700;
+    font-size: 12px;
+    color: var(--muted);
+}
+
+.switch input {
+    width: 44px;
+    height: 24px;
+    appearance: none;
+    background: color-mix(in srgb, var(--text) 14%, transparent);
+    border-radius: 999px;
+    position: relative;
+    outline: none;
+    cursor: pointer;
+    border: 1px solid var(--line2);
+    transition: background .14s ease, border-color .14s ease;
+}
+
+.switch input::after {
+    content: "";
+    width: 20px;
+    height: 20px;
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--panel) 92%, #fff);
+    position: absolute;
+    top: 1px;
+    left: 2px;
+    box-shadow: 0 8px 16px color-mix(in srgb, #000 18%, transparent);
+    transition: transform .14s ease;
+}
+
+.switch input:checked {
+    background: color-mix(in srgb, var(--accent) 35%, transparent);
+    border-color: color-mix(in srgb, var(--accent) 35%, var(--line2));
+}
+
+.switch input:checked::after {
+    transform: translateX(19px);
+}
+
+.small {
+    font-size: 12px;
+    color: var(--muted);
+    padding: 0 12px 12px 12px;
+}
+
+/* ===================== Fullscreen（修复：盖住一切 + 禁止 body 滚动） ===================== */
+body.fullscreen-lock {
+    overflow: hidden;
+}
+
+.viewport-wrap.isFull {
+    position: fixed;
+    inset: 10px;
+    z-index: 999999;
+    padding: 14px;
+    border-radius: 18px;
+    background: color-mix(in srgb, var(--bg) 55%, transparent);
+    border: 1px solid var(--line2);
+    box-shadow: var(--shadow2);
+    backdrop-filter: blur(10px);
+}
+
+.viewport-wrap.isFull .viewport {
+    height: calc(100vh - 90px);
+}
+
+/* ===================== Footer ===================== */
+.footer {
+    padding: 10px 14px;
+    border-top: 1px solid var(--line);
+    color: var(--muted);
+    font-size: 12px;
+    background: color-mix(in srgb, var(--bg) 55%, transparent);
+    backdrop-filter: blur(10px);
+}
+
+/* ===================== Responsive ===================== */
+@media (max-width: 1320px) {
+    .main {
+        grid-template-columns: 420px 1fr 420px;
+    }
+}
+
+@media (max-width: 1160px) {
+    .main {
+        grid-template-columns: 1fr;
+    }
+
+    .viewport {
+        height: 520px;
+    }
+}

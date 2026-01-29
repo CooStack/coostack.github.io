@@ -1,0 +1,287 @@
+<!-- EmitterCommandEditor.html（完整代码） -->
+<!doctype html>
+<html lang="zh-CN">
+<head>
+    <meta charset="utf-8"/>
+    <meta name="viewport" content="width=device-width,initial-scale=1"/>
+    <title>粒子发射器可视化（命令队列生成）</title>
+
+    <script src="js/lib/jquery.min.js"></script>
+    <script src="js/lib/Sortable.min.js"></script>
+    <script src="js/lib/three.min.js"></script>
+    <script src="js/lib/index.min.js"></script>
+    <script src="js/app.js"></script>
+    <link rel="stylesheet" type="text/css" href="css/style.css">
+</head>
+
+<body>
+<div class="app">
+    <header class="topbar">
+        <div class="brand">
+            <div class="dot"></div>
+            <div>
+                <div class="title">粒子发射器可视化</div>
+                <div class="sub">生成 Kotlin：<code>val command = ParticleCommandQueue().add(...)</code></div>
+            </div>
+        </div>
+        <div class="top-actions">
+            <button class="btn" id="btnPlay">▶ 预览</button>
+            <button class="btn" id="btnPause">⏸ 暂停</button>
+            <button class="btn" id="btnClear">🧹 清空粒子</button>
+            <button class="btn" id="btnTheme" title="切换亮/暗主题">🌙 暗色</button>
+            <div class="sep"></div>
+            <button class="btn primary" id="btnGen">🧾 生成 Kotlin</button>
+            <button class="btn" id="btnCopy">📋 复制代码</button>
+        </div>
+    </header>
+
+    <main class="main">
+        <!-- 左侧参数栏 -->
+        <section class="panel left">
+            <div class="panel-title">基础参数</div>
+
+            <div class="grid2">
+                <div class="field">
+                    <label>发射器类型</label>
+                    <select id="emitterType">
+                        <option value="point">点 (Point)</option>
+                        <option value="box">盒 (Box)</option>
+                        <option value="sphere">球 (Sphere 体积)</option>
+                        <option value="sphere_surface">球面 (Sphere Surface)</option>
+                        <option value="ring">环 (Ring)</option>
+                    </select>
+                </div>
+
+                <div class="field">
+                    <label>Tick/秒（预览）</label>
+                    <input id="ticksPerSecond" type="number" step="1" min="1" max="200" value="20"/>
+                </div>
+            </div>
+
+            <!-- ✅新增：发射器位置偏移 -->
+            <div class="panel-subtitle">发射器位置（偏移量）</div>
+            <div class="vec3Row">
+                <div class="miniLabel">Offset Vec3</div>
+                <div class="vec3">
+                    <input id="emitOffX" type="number" step="0.01" value="0"/>
+                    <input id="emitOffY" type="number" step="0.01" value="0"/>
+                    <input id="emitOffZ" type="number" step="0.01" value="0"/>
+                </div>
+            </div>
+            <div class="hint" style="padding-top:0;">
+                偏移量用于预览：发射器整体位置平移（不改变形状参数）。
+            </div>
+
+            <div class="panel-subtitle">颜色渐变（生命周期）</div>
+            <div class="grid2">
+                <div class="field">
+                    <label>开始颜色（life=0）</label>
+                    <input id="colStart" type="color" value="#4df3ff"/>
+                </div>
+                <div class="field">
+                    <label>结束颜色（life=end）</label>
+                    <input id="colEnd" type="color" value="#d04dff"/>
+                </div>
+            </div>
+
+            <div class="panel-subtitle">粒子随机范围</div>
+
+            <div class="grid2">
+                <div class="field">
+                    <label>生命周期 min</label>
+                    <input id="lifeMin" type="number" step="1" min="1" value="40"/>
+                </div>
+                <div class="field">
+                    <label>生命周期 max</label>
+                    <input id="lifeMax" type="number" step="1" min="1" value="120"/>
+                </div>
+            </div>
+
+            <div class="grid2">
+                <div class="field">
+                    <label>大小 min（预览：点大小）</label>
+                    <input id="sizeMin" type="number" step="0.01" min="0.01" value="0.8"/>
+                </div>
+                <div class="field">
+                    <label>大小 max（预览：点大小）</label>
+                    <input id="sizeMax" type="number" step="0.01" min="0.01" value="0.9"/>
+                </div>
+            </div>
+
+            <div class="grid2">
+                <div class="field">
+                    <label>数量 min / tick</label>
+                    <input id="countMin" type="number" step="1" min="0" value="2"/>
+                </div>
+                <div class="field">
+                    <label>数量 max / tick</label>
+                    <input id="countMax" type="number" step="1" min="0" value="6"/>
+                </div>
+            </div>
+
+            <div class="vec3Row">
+                <div class="miniLabel">速度方向 Vec3</div>
+                <div class="vec3">
+                    <input id="velX" type="number" step="0.01" value="0"/>
+                    <input id="velY" type="number" step="0.01" value="0.15"/>
+                    <input id="velZ" type="number" step="0.01" value="0"/>
+                </div>
+            </div>
+
+            <div class="grid2">
+                <div class="field">
+                    <label>速度倍率（预览）</label>
+                    <input id="velSpeed" type="number" step="0.01" min="0" value="1.0"/>
+                </div>
+                <div class="field">
+                    <label>可见范围（预览）</label>
+                    <input id="visibleRange" type="number" step="1" min="1" value="128"/>
+                </div>
+            </div>
+
+            <div class="panel-subtitle">发射器参数</div>
+
+            <div id="emitPoint" class="emitBox emitSection">
+                <div class="hint">点发射：无额外参数</div>
+            </div>
+
+            <div id="emitBox" class="emitBox emitSection">
+                <div class="grid3">
+                    <div class="field">
+                        <label>盒子大小 X</label>
+                        <input id="boxX" type="number" step="0.01" value="2.0"/>
+                    </div>
+                    <div class="field">
+                        <label>盒子大小 Y</label>
+                        <input id="boxY" type="number" step="0.01" value="1.0"/>
+                    </div>
+                    <div class="field">
+                        <label>盒子大小 Z</label>
+                        <input id="boxZ" type="number" step="0.01" value="2.0"/>
+                    </div>
+                </div>
+                <div class="grid2">
+                    <div class="field">
+                        <label>密度（0~1，越大越靠近中心）</label>
+                        <input id="boxDensity" type="number" step="0.01" min="0" max="1" value="0.0"/>
+                    </div>
+                    <div class="field">
+                        <label>是否表面发射</label>
+                        <select id="boxSurface">
+                            <option value="0">否（体积内）</option>
+                            <option value="1">是（表面）</option>
+                        </select>
+                    </div>
+                </div>
+            </div>
+
+            <div id="emitSphere" class="emitBox emitSection">
+                <div class="grid1">
+                    <div class="field">
+                        <label>半径（体积）</label>
+                        <input id="sphereR" type="number" step="0.01" value="2.0"/>
+                    </div>
+                </div>
+                <div class="hint">体积球：随机落在球内部。</div>
+            </div>
+
+            <div id="emitSphereSurface" class="emitBox emitSection">
+                <div class="grid1">
+                    <div class="field">
+                        <label>半径（球面）</label>
+                        <input id="sphereSurfR" type="number" step="0.01" value="2.0"/>
+                    </div>
+                </div>
+                <div class="hint">球面：随机落在球表面。</div>
+            </div>
+
+            <div id="emitRing" class="emitBox emitSection">
+                <div class="grid3">
+                    <div class="field">
+                        <label>半径</label>
+                        <input id="ringR" type="number" step="0.01" value="2.5"/>
+                    </div>
+                    <div class="field">
+                        <label>厚度（离散/抖动）</label>
+                        <input id="ringThickness" type="number" step="0.01" min="0" value="0.15"/>
+                    </div>
+                    <div class="field">
+                        <label>轴 Axis Vec3</label>
+                        <div class="vec3">
+                            <input id="ringAx" type="number" step="0.01" value="0"/>
+                            <input id="ringAy" type="number" step="0.01" value="1"/>
+                            <input id="ringAz" type="number" step="0.01" value="0"/>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="panel-subtitle">Kotlin 生成选项</div>
+            <div class="grid2">
+                <div class="field">
+                    <label>变量名</label>
+                    <input id="kVarName" type="text" value="command"/>
+                </div>
+                <div class="field">
+                    <label>Supplier / emitter 引用名</label>
+                    <input id="kRefName" type="text" value="emitter"/>
+                </div>
+            </div>
+
+            <div class="hint">
+                预览相机操作：<strong>左键旋转</strong> / <strong>右键平移</strong> / <strong>滚轮缩放</strong>。<br>
+                本页只生成命令队列代码（<code>ParticleCommandQueue()</code> + <code>.add(...)</code>）。
+            </div>
+        </section>
+
+        <!-- 中间预览 -->
+        <section class="panel center">
+            <div class="panel-title">预览</div>
+            <div id="viewportWrap" class="viewport-wrap">
+                <div id="viewport" class="viewport"></div>
+                <div class="overlay">
+                    <div class="chip">左键旋转 / 右键平移 / 滚轮缩放</div>
+                    <div class="chip" id="statChip">Particles: 0</div>
+                </div>
+                <div class="fsBtn">
+                    <button class="btn" id="btnFull">⛶ 全屏</button>
+                    <button class="btn" id="btnExitFull" style="display:none;">✕ 退出</button>
+                </div>
+            </div>
+
+            <div class="panel-title" style="margin-top:12px;">Kotlin 输出</div>
+            <textarea id="kotlinOut" spellcheck="false"></textarea>
+        </section>
+
+        <!-- 右侧命令队列 -->
+        <section class="panel right">
+            <div class="panel-title">命令队列（可拖拽排序）</div>
+
+            <div class="add-row">
+                <select id="addCommandType">
+                    <option value="ParticleNoiseCommand">Noise 噪声扰动</option>
+                    <option value="ParticleDragCommand">Drag 空气阻力</option>
+                    <option value="ParticleFlowFieldCommand">FlowField 流场</option>
+                    <option value="ParticleAttractionCommand">Attraction 吸引/排斥</option>
+                    <option value="ParticleOrbitCommand">Orbit 轨道</option>
+                    <option value="ParticleVortexCommand">Vortex 漩涡（吸入 center）</option>
+                    <option value="ParticleRotationForceCommand">RotationForce 切向旋转力</option>
+                    <option value="ParticleGravityCommand">Gravity 重力(物理)</option>
+                </select>
+                <button class="btn" id="btnAddCmd">➕ 添加</button>
+            </div>
+
+            <div id="cmdList" class="cmdList"></div>
+
+            <div class="hint">
+                拖动卡片左侧“≡”排序；关闭“启用”则生成代码时跳过该命令。
+            </div>
+        </section>
+    </main>
+
+    <footer class="footer">
+        <div>Depend：<code>CooParticlesAPI</code></div>
+    </footer>
+</div>
+</body>
+</html>
