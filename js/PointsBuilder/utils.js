@@ -164,6 +164,37 @@
             return res;
         },
 
+        // Kotlin Math3DUtil.getRadianXZCenter / getRadianXZ
+        // 获取弧线：从 -radian/2 .. radian/2（以 Z 轴为对称轴），可选初始旋转(绕 Y 轴)
+        getRadianXZCenter(r, count, radian, rotateRad = 0) {
+            const rr = Number(r) || 0;
+            const c = Math.max(1, Math.trunc(Number(count) || 1));
+            const rad = Number(radian) || 0;
+            return Utils.getRadianXZ(rr, c, -rad / 2, rad / 2, rotateRad);
+        },
+
+        // 获取弧线：从 startRadian .. endRadian（弧度），可选初始旋转(绕 Y 轴)
+        getRadianXZ(r, count, startRadian, endRadian, rotateRad = 0) {
+            const rr = Number(r) || 0;
+            const c = Math.max(1, Math.trunc(Number(count) || 1));
+            const sr = Number(startRadian) || 0;
+            const er = Number(endRadian) || 0;
+
+            const step = (er - sr) / c;
+            let rad = sr;
+            let res = [];
+            for (let i = 0; i < c; i++) {
+                res.push({ x: rr * Math.cos(rad), y: 0, z: rr * Math.sin(rad) });
+                rad += step;
+            }
+
+            if (Math.abs(rotateRad) > 1e-12) {
+                const axis = { x: 0, y: 1, z: 0 };
+                res = res.map(p => Utils.rotateAroundAxis(p, axis, rotateRad));
+            }
+            return res;
+        },
+
         getBallLocations(r, countPow) {
             const rr = Number(r) || 0;
             const n = Math.max(1, Math.trunc(Number(countPow) || 1));

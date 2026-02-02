@@ -18,8 +18,10 @@ import {OrbitControls} from "three/addons/controls/OrbitControls.js";
 
     const btnExportKotlin = document.getElementById("btnExportKotlin");
     const btnCopyKotlin = document.getElementById("btnCopyKotlin");
+    const btnDownloadKotlin = document.getElementById("btnDownloadKotlin");
     const btnCopyKotlin2 = document.getElementById("btnCopyKotlin2");
     const btnExportKotlin2 = document.getElementById("btnExportKotlin2");
+    const btnDownloadKotlin2 = document.getElementById("btnDownloadKotlin2");
 
     const btnSaveJson = document.getElementById("btnSaveJson");
     const btnLoadJson = document.getElementById("btnLoadJson");
@@ -232,6 +234,46 @@ import {OrbitControls} from "three/addons/controls/OrbitControls.js";
                 if (!node.params.useRotate) return `.addHalfCircle(${r}, ${c})`;
                 const radExpr = U.degToKotlinRadExpr(num(node.params.rotateDeg));
                 return `.addHalfCircle(${r}, ${c}, ${radExpr})`;
+            }
+        },
+
+        add_radian_center: {
+            title: "addRadianCenter(弧线中心XZ)",
+            desc: "从 -radian/2..radian/2；可选 rotate(rad)；输入度导出*PI",
+            defaultParams: {r: 2, count: 80, radianDeg: 120, useRotate: false, rotateDeg: 0},
+            apply(ctx, node) {
+                const radian = U.degToRad(num(node.params.radianDeg));
+                const rot = node.params.useRotate ? U.degToRad(num(node.params.rotateDeg)) : 0;
+                ctx.points.push(...U.getRadianXZCenter(num(node.params.r), int(node.params.count), radian, rot));
+            },
+            kotlin(node) {
+                const r = U.fmt(num(node.params.r));
+                const c = int(node.params.count);
+                const radianExpr = U.degToKotlinRadExpr(num(node.params.radianDeg));
+                if (!node.params.useRotate) return `.addRadianCenter(${r}, ${c}, ${radianExpr})`;
+                const rotExpr = U.degToKotlinRadExpr(num(node.params.rotateDeg));
+                return `.addRadianCenter(${r}, ${c}, ${radianExpr}, ${rotExpr})`;
+            }
+        },
+
+        add_radian: {
+            title: "addRadian(弧线XZ)",
+            desc: "从 start..end；可选 rotate(rad)；输入度导出*PI",
+            defaultParams: {r: 2, count: 80, startDeg: 0, endDeg: 120, useRotate: false, rotateDeg: 0},
+            apply(ctx, node) {
+                const sr = U.degToRad(num(node.params.startDeg));
+                const er = U.degToRad(num(node.params.endDeg));
+                const rot = node.params.useRotate ? U.degToRad(num(node.params.rotateDeg)) : 0;
+                ctx.points.push(...U.getRadianXZ(num(node.params.r), int(node.params.count), sr, er, rot));
+            },
+            kotlin(node) {
+                const r = U.fmt(num(node.params.r));
+                const c = int(node.params.count);
+                const srExpr = U.degToKotlinRadExpr(num(node.params.startDeg));
+                const erExpr = U.degToKotlinRadExpr(num(node.params.endDeg));
+                if (!node.params.useRotate) return `.addRadian(${r}, ${c}, ${srExpr}, ${erExpr})`;
+                const rotExpr = U.degToKotlinRadExpr(num(node.params.rotateDeg));
+                return `.addRadian(${r}, ${c}, ${srExpr}, ${erExpr}, ${rotExpr})`;
             }
         },
 
@@ -542,6 +584,24 @@ import {OrbitControls} from "three/addons/controls/OrbitControls.js";
         return n;
     }
 
+    // 深拷贝一个节点（含 children/terms），并重新生成所有 id
+    function cloneNodeDeep(node) {
+        const raw = JSON.parse(JSON.stringify(node || {}));
+        const reId = (n) => {
+            n.id = uid();
+            if (Array.isArray(n.terms)) {
+                for (const t of n.terms) {
+                    if (t && typeof t === "object") t.id = uid();
+                }
+            }
+            if (Array.isArray(n.children)) {
+                for (const c of n.children) reId(c);
+            }
+        };
+        reId(raw);
+        return raw;
+    }
+
     // -------------------------
     // state
     // -------------------------
@@ -554,16 +614,53 @@ import {OrbitControls} from "three/addons/controls/OrbitControls.js";
     };
 
     // -------------------------
-    // Eval
+    // Eval（同时计算：每个卡片新增的点在最终点数组里的区间，用于高亮）
     // -------------------------
-    function evalBuilder(nodes, initialAxis) {
-        const ctx = {points: [], axis: U.clone(initialAxis || U.v(0, 1, 0))};
-        for (const n of (nodes || [])) {
-            const def = KIND[n.kind];
-            if (!def || !def.apply) continue;
-            def.apply(ctx, n);
+    function evalBuilderWithMeta(nodes, initialAxis) {
+        const ctx = { points: [], axis: U.clone(initialAxis || U.v(0, 1, 0)) };
+        const segments = new Map(); // nodeId -> {start, end}
+
+        function evalList(list, targetCtx, baseOffset) {
+            const arr = list || [];
+            for (const n of arr) {
+                if (!n) continue;
+
+                // 特殊：withBuilder 需要递归并把子段位移到父数组区间
+                if (n.kind === "with_builder") {
+                    const before = targetCtx.points.length;
+                    const child = evalBuilderWithMeta(n.children || [], U.v(0, 1, 0));
+                    targetCtx.points.push(...child.points);
+                    const after = targetCtx.points.length;
+
+                    if (after > before) segments.set(n.id, { start: before + baseOffset, end: after + baseOffset });
+                    for (const [cid, seg] of child.segments.entries()) {
+                        segments.set(cid, { start: seg.start + before + baseOffset, end: seg.end + before + baseOffset });
+                    }
+                    continue;
+                }
+
+                const def = KIND[n.kind];
+                if (!def || !def.apply) continue;
+
+                const beforeLen = targetCtx.points.length;
+                const beforeRef = targetCtx.points;
+                def.apply(targetCtx, n);
+                const afterLen = targetCtx.points.length;
+
+                // 只有“追加到同一数组”的情况才认为这张卡片直接新增了粒子
+                if (afterLen > beforeLen && targetCtx.points === beforeRef) {
+                    segments.set(n.id, { start: beforeLen + baseOffset, end: afterLen + baseOffset });
+                }
+            }
         }
-        return ctx.points;
+
+        evalList(nodes || [], ctx, 0);
+        return { points: ctx.points, segments };
+    }
+
+    // 兼容旧调用：只要点集
+    function evalBuilder(nodes, initialAxis) {
+        return evalBuilderWithMeta(nodes, initialAxis).points;
     }
 
     // -------------------------
@@ -613,7 +710,15 @@ import {OrbitControls} from "three/addons/controls/OrbitControls.js";
     let raycaster, mouse;
     let pickPlane;
     let hoverMarker = null;   // ✅ 实时跟随的红点
-    let lastPoints = [];      // ✅ 当前预览点，用于“吸附到最近点”（如果你也想保留这个功能）
+    let lastPoints = [];      // ✅ 当前预览点，用于“吸附到最近点”
+
+    // ✅ 点高亮：卡片获得焦点时，让该卡片“直接新增”的粒子变色
+    let nodePointSegments = new Map(); // nodeId -> {start,end}
+    let focusedNodeId = null;          // 当前聚焦的卡片 id（或 null）
+    let defaultColorBuf = null;        // Float32Array：默认颜色缓存（与 position 等长）
+    const DEFAULT_POINT_HEX = 0xffffff;
+    const FOCUS_POINT_HEX = 0xffcc33;
+
     let pickMarkers = [];
     let pointSize = 0.2;     // ✅ 粒子大小（PointsMaterial.size）
     // line pick state (可指向主/任意子 builder)
@@ -899,25 +1004,49 @@ import {OrbitControls} from "three/addons/controls/OrbitControls.js";
             pointsObj.material.dispose();
             pointsObj = null;
         }
-        lastPoints = points ? points.map(p => ({x: p.x, y: p.y, z: p.z})) : [];
+
+        lastPoints = points ? points.map(p => ({ x: p.x, y: p.y, z: p.z })) : [];
         if (!points || points.length === 0) {
+            defaultColorBuf = null;
             needAutoFit = true; // 清空后，下一次重新出现点时允许对焦一次
             return;
         }
 
         const geom = new THREE.BufferGeometry();
-        const arr = new Float32Array(points.length * 3);
+
+        // position
+        const pos = new Float32Array(points.length * 3);
         for (let i = 0; i < points.length; i++) {
-            arr[i * 3 + 0] = points[i].x;
-            arr[i * 3 + 1] = points[i].y;
-            arr[i * 3 + 2] = points[i].z;
+            pos[i * 3 + 0] = points[i].x;
+            pos[i * 3 + 1] = points[i].y;
+            pos[i * 3 + 2] = points[i].z;
         }
-        geom.setAttribute("position", new THREE.BufferAttribute(arr, 3));
+        geom.setAttribute("position", new THREE.BufferAttribute(pos, 3));
+
+        // color（默认色 + 聚焦色）
+        const c0 = new THREE.Color(DEFAULT_POINT_HEX);
+        defaultColorBuf = new Float32Array(points.length * 3);
+        for (let i = 0; i < points.length; i++) {
+            defaultColorBuf[i * 3 + 0] = c0.r;
+            defaultColorBuf[i * 3 + 1] = c0.g;
+            defaultColorBuf[i * 3 + 2] = c0.b;
+        }
+        const colorArr = defaultColorBuf.slice();
+        geom.setAttribute("color", new THREE.BufferAttribute(colorArr, 3));
+
         geom.computeBoundingSphere();
 
-        const mat = new THREE.PointsMaterial({ size: pointSize, sizeAttenuation: true });
+        const mat = new THREE.PointsMaterial({
+            size: pointSize,
+            sizeAttenuation: true,
+            vertexColors: true,
+            color: 0xffffff
+        });
         pointsObj = new THREE.Points(geom, mat);
         scene.add(pointsObj);
+
+        // ✅ 根据当前聚焦的卡片，重新着色
+        updateFocusColors();
 
         if (chkAutoFit.checked && needAutoFit) {
             const b = U.computeBounds(points);
@@ -934,6 +1063,44 @@ import {OrbitControls} from "three/addons/controls/OrbitControls.js";
 
             needAutoFit = false; // ✅ 之后改参数不再重置镜头
         }
+    }
+
+    function updateFocusColors() {
+        if (!pointsObj) return;
+        const g = pointsObj.geometry;
+        const attr = g.getAttribute("color");
+        if (!attr || !attr.array || !defaultColorBuf) return;
+
+        // 先恢复默认色
+        attr.array.set(defaultColorBuf);
+
+        // 再打聚焦色
+        const seg = focusedNodeId ? nodePointSegments.get(focusedNodeId) : null;
+        if (seg && seg.end > seg.start) {
+            const c1 = new THREE.Color(FOCUS_POINT_HEX);
+            for (let i = seg.start; i < seg.end; i++) {
+                const k = i * 3;
+                attr.array[k + 0] = c1.r;
+                attr.array[k + 1] = c1.g;
+                attr.array[k + 2] = c1.b;
+            }
+        }
+
+        attr.needsUpdate = true;
+    }
+
+    function setFocusedNode(id) {
+        const next = id || null;
+        if (focusedNodeId === next) return;
+        focusedNodeId = next;
+        updateFocusColors();
+    }
+
+    function clearFocusedNodeIf(id) {
+        if (!id) return;
+        if (focusedNodeId !== id) return;
+        focusedNodeId = null;
+        updateFocusColors();
     }
 
     function animate() {
@@ -1033,6 +1200,15 @@ import {OrbitControls} from "three/addons/controls/OrbitControls.js";
     }
 
     function onPointerDown(ev) {
+        // 点击预览区域：视为左侧卡片失焦（否则 input 可能不会 blur，导致高亮残留）
+        if (focusedNodeId) {
+            try {
+                const ae = document.activeElement;
+                if (ae && elCardsRoot.contains(ae) && ae.blur) ae.blur();
+            } catch {}
+            setFocusedNode(null);
+        }
+
         if (!linePickMode) return;
 
         // ✅ 右键 / Ctrl+Click：不选点，只进入“可能的右键双击取消”判定流程
@@ -1090,13 +1266,17 @@ import {OrbitControls} from "three/addons/controls/OrbitControls.js";
     function rebuildPreviewAndKotlin() {
         if (rebuildTimer) cancelAnimationFrame(rebuildTimer);
         rebuildTimer = requestAnimationFrame(() => {
-            const pts = evalBuilder(state.root.children, U.v(0, 1, 0));
-            setPoints(pts);
+            const res = evalBuilderWithMeta(state.root.children, U.v(0, 1, 0));
+            nodePointSegments = res.segments;
+            setPoints(res.points);
+            // setPoints 内部会根据 focusedNodeId 重新上色
             elKotlinOut.value = emitKotlin();
         });
     }
 
     function renderAll() {
+        // 重新渲染卡片会丢失 DOM 焦点，避免残留高亮
+        setFocusedNode(null);
         renderCards();
         rebuildPreviewAndKotlin();
     }
@@ -1399,6 +1579,56 @@ import {OrbitControls} from "three/addons/controls/OrbitControls.js";
                     renderAll();
                 })));
                 if (p.useRotate) body.appendChild(row("角度(度)", inputNum(p.rotateDeg, v => {
+                    p.rotateDeg = v;
+                    rebuildPreviewAndKotlin();
+                })));
+                break;
+
+            case "add_radian_center":
+                body.appendChild(row("r", inputNum(p.r, v => {
+                    p.r = v;
+                    rebuildPreviewAndKotlin();
+                })));
+                body.appendChild(row("count", inputNum(p.count, v => {
+                    p.count = v;
+                    rebuildPreviewAndKotlin();
+                })));
+                body.appendChild(row("radian(度)", inputNum(p.radianDeg, v => {
+                    p.radianDeg = v;
+                    rebuildPreviewAndKotlin();
+                })));
+                body.appendChild(row("rotate", checkbox(p.useRotate, v => {
+                    p.useRotate = v;
+                    renderAll();
+                })));
+                if (p.useRotate) body.appendChild(row("rotate角度(度)", inputNum(p.rotateDeg, v => {
+                    p.rotateDeg = v;
+                    rebuildPreviewAndKotlin();
+                })));
+                break;
+
+            case "add_radian":
+                body.appendChild(row("r", inputNum(p.r, v => {
+                    p.r = v;
+                    rebuildPreviewAndKotlin();
+                })));
+                body.appendChild(row("count", inputNum(p.count, v => {
+                    p.count = v;
+                    rebuildPreviewAndKotlin();
+                })));
+                body.appendChild(row("start(度)", inputNum(p.startDeg, v => {
+                    p.startDeg = v;
+                    rebuildPreviewAndKotlin();
+                })));
+                body.appendChild(row("end(度)", inputNum(p.endDeg, v => {
+                    p.endDeg = v;
+                    rebuildPreviewAndKotlin();
+                })));
+                body.appendChild(row("rotate", checkbox(p.useRotate, v => {
+                    p.useRotate = v;
+                    renderAll();
+                })));
+                if (p.useRotate) body.appendChild(row("rotate角度(度)", inputNum(p.rotateDeg, v => {
                     p.rotateDeg = v;
                     rebuildPreviewAndKotlin();
                 })));
@@ -1861,6 +2091,31 @@ import {OrbitControls} from "three/addons/controls/OrbitControls.js";
         card.appendChild(head);
         card.appendChild(body);
 
+        // ✅ 同样处理焦点：避免焦点落在 Fourier 子卡片时仍残留上一张卡的高亮
+        card.tabIndex = 0;
+        card.addEventListener("pointerdown", (e) => {
+            if (e.button !== 0) return;
+            // ✅ 避免父卡片接管子卡片的点击：只响应“事件发生在当前卡片自身区域”
+            const inner = e.target && e.target.closest ? e.target.closest(".card") : null;
+            if (inner && inner !== card) return;
+            setFocusedNode(t.id);
+        });
+        card.addEventListener("focusin", (e) => {
+            // ✅ focusin 会冒泡：子卡片获得焦点时，父卡片不应抢走高亮
+            const inner = e.target && e.target.closest ? e.target.closest(".card") : null;
+            if (inner && inner !== card) return;
+            setFocusedNode(t.id);
+        });
+        card.addEventListener("focusout", (e) => {
+            const next = e.relatedTarget;
+            if (next && card.contains(next)) return;
+            requestAnimationFrame(() => {
+                const ae = document.activeElement;
+                if (ae && card.contains(ae)) return;
+                clearFocusedNodeIf(t.id);
+            });
+        });
+
         setupDrag(handle, card, parentNode.terms, () => idx, () => renderAll());
         return card;
     }
@@ -1911,6 +2166,21 @@ import {OrbitControls} from "three/addons/controls/OrbitControls.js";
                 renderAll();
             }
         }));
+        // ✅ 复制卡片：在当前卡片下方插入一张一模一样的（含子卡片/terms）
+        actions.appendChild(iconBtn("⧉", () => {
+            const cloned = cloneNodeDeep(node);
+            siblings.splice(idx + 1, 0, cloned);
+            renderAll();
+
+            // 尝试把焦点放到新卡片，方便继续编辑
+            requestAnimationFrame(() => {
+                const el = elCardsRoot.querySelector(`.card[data-id="${cloned.id}"]`);
+                if (el) {
+                    el.focus();
+                    try { el.scrollIntoView({ block: "nearest" }); } catch {}
+                }
+            });
+        }));
         actions.appendChild(iconBtn("🗑", () => {
             siblings.splice(idx, 1);
             renderAll();
@@ -1934,6 +2204,32 @@ import {OrbitControls} from "three/addons/controls/OrbitControls.js";
         card.appendChild(head);
         card.appendChild(body);
 
+        // ✅ 聚焦高亮：卡片获得焦点时，让对应新增的粒子变色
+        card.tabIndex = 0; // 让卡片标题区也可获得焦点（点击空白处也算聚焦）
+        card.addEventListener("pointerdown", (e) => {
+            if (e.button !== 0) return;
+            // ✅ 避免 withBuilder 父卡片接管子卡片：只响应“事件发生在当前卡片自身区域”
+            const inner = e.target && e.target.closest ? e.target.closest(".card") : null;
+            if (inner && inner !== card) return;
+            setFocusedNode(node.id);
+        });
+        card.addEventListener("focusin", (e) => {
+            // ✅ focusin 会冒泡：子卡片获得焦点时，父卡片不应抢走高亮
+            const inner = e.target && e.target.closest ? e.target.closest(".card") : null;
+            if (inner && inner !== card) return;
+            setFocusedNode(node.id);
+        });
+        card.addEventListener("focusout", (e) => {
+            const next = e.relatedTarget;
+            if (next && card.contains(next)) return;
+            // 延迟一帧：避免同卡片内切换焦点时误清空
+            requestAnimationFrame(() => {
+                const ae = document.activeElement;
+                if (ae && card.contains(ae)) return;
+                clearFocusedNodeIf(node.id);
+            });
+        });
+
         setupDrag(handle, card, siblings, () => idx, () => renderAll());
         return card;
     }
@@ -1950,10 +2246,22 @@ import {OrbitControls} from "three/addons/controls/OrbitControls.js";
         navigator.clipboard?.writeText(text);
     }
 
+    function doDownloadKotlin() {
+        const text = elKotlinOut.value || emitKotlin();
+        const blob = new Blob([text], { type: "text/plain;charset=utf-8" });
+        const a = document.createElement("a");
+        a.href = URL.createObjectURL(blob);
+        a.download = "PointsBuilder_Generated.kt";
+        a.click();
+        setTimeout(() => URL.revokeObjectURL(a.href), 200);
+    }
+
     btnExportKotlin.addEventListener("click", doExportKotlin);
     btnExportKotlin2.addEventListener("click", doExportKotlin);
     btnCopyKotlin.addEventListener("click", doCopyKotlin);
     btnCopyKotlin2.addEventListener("click", doCopyKotlin);
+    btnDownloadKotlin && btnDownloadKotlin.addEventListener("click", doDownloadKotlin);
+    btnDownloadKotlin2 && btnDownloadKotlin2.addEventListener("click", doDownloadKotlin);
 
     btnAddCard.addEventListener("click", () => openModal(state.root.children));
     btnQuickOffset.addEventListener("click", () => addQuickOffsetTo(state.root.children));
