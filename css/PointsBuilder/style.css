@@ -700,3 +700,4 @@ select.input {
     border: 2px solid transparent;
     background-clip: content-box;
 }
+.three-host { touch-action: none; }

@@ -38,6 +38,7 @@ import {OrbitControls} from "three/addons/controls/OrbitControls.js";
     const chkGrid = document.getElementById("chkGrid");
     const chkAutoFit = document.getElementById("chkAutoFit");
     const chkSnapGrid = document.getElementById("chkSnapGrid");
+    const chkSnapParticle = document.getElementById("chkSnapParticle");
     const inpSnapStep = document.getElementById("inpSnapStep");
     const statusLinePick = document.getElementById("statusLinePick");
     const statusPoints = document.getElementById("statusPoints");
@@ -612,6 +613,7 @@ import {OrbitControls} from "three/addons/controls/OrbitControls.js";
     let pickPlane;
     let hoverMarker = null;   // ✅ 实时跟随的红点
     let lastPoints = [];      // ✅ 当前预览点，用于“吸附到最近点”（如果你也想保留这个功能）
+    let pickMarkers = [];
     const GRID_STEP = 1;      // ✅ 网格吸附步长（你 GridHelper 40/40 时就是 1）
     // line pick state (可指向主/任意子 builder)
     let linePickMode = false;
@@ -620,6 +622,23 @@ import {OrbitControls} from "three/addons/controls/OrbitControls.js";
     let linePickTargetLabel = "主Builder";
     let needAutoFit = true
 
+    let _rClickT = 0;
+    let _rClickX = 0;
+    let _rClickY = 0;
+    const RDBL_MS = 320;  // 双击间隔
+    const RDBL_PX = 7;    // 双击最大位移
+    let _rDown = false;
+    let _rMoved = false;
+    let _rDownX = 0;
+    let _rDownY = 0;
+
+    function isRightLike(ev) {
+        // 1) 标准右键：button===2
+        // 2) 右键按下位掩码：buttons&2
+        // 3) macOS Ctrl+Click：button===0 且 ctrlKey=true
+        return ev.button === 2 || (ev.buttons & 2) === 2 || (ev.button === 0 && ev.ctrlKey);
+    }
+
     function ensureHoverMarker() {
         if (hoverMarker) return;
         const geom = new THREE.SphereGeometry(0.12, 16, 12);
@@ -627,6 +646,49 @@ import {OrbitControls} from "three/addons/controls/OrbitControls.js";
         hoverMarker = new THREE.Mesh(geom, mat);
         hoverMarker.visible = false;
         scene.add(hoverMarker);
+    }
+
+    function setHoverMarkerColor(hex) {
+        ensureHoverMarker();
+        hoverMarker.material.color.setHex(hex);
+    }
+
+    function colorForPickIndex(idx) {
+        // idx=0：第一个点；idx=1：第二个点
+        return idx === 0 ? 0xff3333 : 0x33a1ff;
+    }
+
+    function addPickMarker(p, hex) {
+        const geom = new THREE.SphereGeometry(0.12, 16, 12);
+        const mat = new THREE.MeshBasicMaterial({color: hex});
+        const mesh = new THREE.Mesh(geom, mat);
+        mesh.position.set(p.x, p.y, p.z);
+        scene.add(mesh);
+        pickMarkers.push(mesh);
+    }
+
+    function clearPickMarkers() {
+        if (!pickMarkers || pickMarkers.length === 0) return;
+        if (!scene) {
+            pickMarkers = [];
+            return;
+        }
+
+        for (const m of pickMarkers) {
+            try {
+                scene.remove(m);
+            } catch {
+            }
+            try {
+                m.geometry && m.geometry.dispose && m.geometry.dispose();
+            } catch {
+            }
+            try {
+                m.material && m.material.dispose && m.material.dispose();
+            } catch {
+            }
+        }
+        pickMarkers = [];
     }
 
     function showHoverMarker(p) {
@@ -675,14 +737,20 @@ import {OrbitControls} from "three/addons/controls/OrbitControls.js";
 
 // ✅ 拾取映射入口：先得到平面点 -> 若开启网格吸附则吸附网格，否则吸附最近点（你可改优先级）
     function mapPickPoint(hitVec3) {
-        let p = {x: hitVec3.x, y: 0, z: hitVec3.z};
+        let p = { x: hitVec3.x, y: 0, z: hitVec3.z };
 
+        // 1) 网格吸附（优先级最高）
         if (chkSnapGrid && chkSnapGrid.checked) {
             p = snapToGrid(p, getSnapStep());
-        } else {
+            return p;
+        }
+
+        // 2) 粒子吸附（只有开关打开才吸附）
+        if (chkSnapParticle && chkSnapParticle.checked) {
             p = snapToNearestPointXZ(p, 0.35);
         }
 
+        // 3) 都没开 => 原始点击点
         return p;
     }
 
@@ -719,6 +787,7 @@ import {OrbitControls} from "three/addons/controls/OrbitControls.js";
         window.addEventListener("resize", onResize);
         renderer.domElement.addEventListener("pointerdown", onPointerDown);
         renderer.domElement.addEventListener("pointermove", onPointerMove);
+        renderer.domElement.addEventListener("pointerup", onPointerUp);
 
         chkAxes.addEventListener("change", () => axesHelper.visible = chkAxes.checked);
         chkGrid.addEventListener("change", () => gridHelper.visible = chkGrid.checked);
@@ -729,11 +798,13 @@ import {OrbitControls} from "three/addons/controls/OrbitControls.js";
             }
         });
         if (inpSnapStep) inpSnapStep.disabled = !(chkSnapGrid && chkSnapGrid.checked);
-
         chkSnapGrid?.addEventListener("change", () => {
             if (inpSnapStep) inpSnapStep.disabled = !chkSnapGrid.checked;
         });
-
+        renderer.domElement.addEventListener("contextmenu", (e) => {
+            // 通常 three 应用都会禁用默认右键菜单（不影响右键拖动平移）
+            e.preventDefault();
+        });
         inpSnapStep?.addEventListener("input", () => {
             // 拾取模式下，步长改变时让红点立刻更新一次
             if (linePickMode) {
@@ -816,7 +887,10 @@ import {OrbitControls} from "three/addons/controls/OrbitControls.js";
     }
 
     function startLinePick(targetList, label) {
+        _rClickT = 0;
+        clearPickMarkers();
         ensureHoverMarker();
+        setHoverMarkerColor(colorForPickIndex(0)); // 第一个点红
         hoverMarker.visible = true;
         linePickTargetList = targetList || state.root.children;
         linePickTargetLabel = label || "主Builder";
@@ -826,6 +900,8 @@ import {OrbitControls} from "three/addons/controls/OrbitControls.js";
     }
 
     function stopLinePick() {
+        _rClickT = 0;
+        clearPickMarkers();
         hideHoverMarker();
         linePickMode = false;
         picked = [];
@@ -834,6 +910,12 @@ import {OrbitControls} from "three/addons/controls/OrbitControls.js";
 
     function onPointerMove(ev) {
         if (!linePickMode) return;
+        if (_rDown) {
+            const d = Math.hypot(ev.clientX - _rDownX, ev.clientY - _rDownY);
+            if (d > 6) _rMoved = true; // 视为拖动
+            hideHoverMarker();
+            return;
+        }
         if (!renderer || !camera) return;
 
         const rect = renderer.domElement.getBoundingClientRect();
@@ -844,14 +926,58 @@ import {OrbitControls} from "three/addons/controls/OrbitControls.js";
         const hit = new THREE.Vector3();
         if (raycaster.ray.intersectPlane(pickPlane, hit)) {
             const mapped = mapPickPoint(hit);
-            showHoverMarker(mapped);     // ✅ 实时红点跟随显示在“映射后的点”
+            setHoverMarkerColor(colorForPickIndex((picked?.length || 0) >= 1 ? 1 : 0));
+            showHoverMarker(mapped);
         } else {
             hideHoverMarker();
         }
     }
 
+    function onPointerUp(ev) {
+        if (!linePickMode) return;
+        if (!_rDown) return;
+
+        _rDown = false;
+
+        // 右键拖动过：这是平移，不算点击，不参与双击取消
+        if (_rMoved) {
+            _rMoved = false;
+            return;
+        }
+
+        // 没拖动：算一次“右键点击”
+        const now = performance.now();
+        const dx = ev.clientX - _rClickX;
+        const dy = ev.clientY - _rClickY;
+        const dist = Math.hypot(dx, dy);
+
+        if (now - _rClickT < RDBL_MS && dist < RDBL_PX) {
+            // ✅ 右键双击取消拾取
+            stopLinePick();   // 你已有：会 clearPickMarkers + hideHoverMarker
+            _rClickT = 0;
+            return;
+        }
+
+        // 记录第一次点击
+        _rClickT = now;
+        _rClickX = ev.clientX;
+        _rClickY = ev.clientY;
+    }
+
     function onPointerDown(ev) {
         if (!linePickMode) return;
+
+        // ✅ 右键 / Ctrl+Click：不选点，只进入“可能的右键双击取消”判定流程
+        if (isRightLike(ev)) {
+            _rDown = true;
+            _rMoved = false;
+            _rDownX = ev.clientX;
+            _rDownY = ev.clientY;
+            return; // 关键：右键永远不选点
+        }
+
+        // ✅ 只允许纯左键选点（排除 ctrlKey）
+        if (ev.button !== 0 || ev.ctrlKey) return;
 
         const rect = renderer.domElement.getBoundingClientRect();
         mouse.x = ((ev.clientX - rect.left) / rect.width) * 2 - 1;
@@ -861,21 +987,28 @@ import {OrbitControls} from "three/addons/controls/OrbitControls.js";
         const hit = new THREE.Vector3();
         if (raycaster.ray.intersectPlane(pickPlane, hit)) {
             const mapped = mapPickPoint(hit);
+            const idx = picked.length; // 0=第一个点, 1=第二个点
             picked.push(mapped);
-            showHoverMarker(mapped); // 点击也刷新一次（避免 move 没触发）
+
+            addPickMarker(mapped, colorForPickIndex(idx));
+            setHoverMarkerColor(colorForPickIndex(picked.length >= 1 ? 1 : 0));
+            showHoverMarker(mapped);
+
             if (picked.length === 1) {
-                setLinePickStatus(`XZ 拾取模式[${linePickTargetLabel}]：已选第 1 点：(${U.fmt(hit.x)}, 0, ${U.fmt(hit.z)})，再点第 2 点`);
+                setLinePickStatus(`XZ 拾取模式[${linePickTargetLabel}]：已选第 1 点：(${U.fmt(mapped.x)}, 0, ${U.fmt(mapped.z)})，再点第 2 点`);
             } else if (picked.length === 2) {
                 const a = picked[0], b = picked[1];
                 const list = linePickTargetList || state.root.children;
                 list.push(makeNode("add_line", {
                     params: {sx: a.x, sy: 0, sz: a.z, ex: b.x, ey: 0, ez: b.z, count: 30}
                 }));
+
                 setLinePickStatus(`XZ 拾取模式[${linePickTargetLabel}]：已添加 addLine（可在卡片里改 count）`);
                 picked = [];
                 linePickMode = false;
                 setTimeout(() => hideLinePickStatus(), 900);
                 hideHoverMarker();
+                clearPickMarkers();
                 renderAll();
             }
         }
