@@ -51,6 +51,8 @@
             </div>
         </aside>
 
+        <div class="resizer resizer-left" data-resizer="left" aria-hidden="true"></div>
+
         <section class="viewer">
             <div class="viewer-hud">
                 <div class="hud-left">
@@ -104,9 +106,13 @@
             <div id="threeHost" class="three-host"></div>
         </section>
 
+        <div class="resizer resizer-right" data-resizer="right" aria-hidden="true"></div>
+
         <aside class="panel right">
-            <div class="panel-title">Kotlin 代码</div>
-            <textarea id="kotlinOut" class="code" spellcheck="false" readonly></textarea>
+            <div class="panel-title kotlin-title">
+                <span>Kotlin 代码</span>
+            </div>
+            <pre id="kotlinOut" class="code code-highlight" aria-readonly="true"></pre>
 
             <div class="panel-actions">
                 <button id="btnCopyKotlin2" class="btn">复制</button>
@@ -118,6 +124,8 @@
                 角度输入为“度”，导出会转换为“弧度表达式”：<code>x*PI</code>（已计算）。
             </div>
         </aside>
+
+        <button id="btnToggleKotlin" class="kotlin-toggle" title="隐藏 Kotlin">></button>
     </main>
 
     <div id="modalMask" class="modal-mask hidden"></div>
@@ -169,6 +177,7 @@
     }
 </script>
 <script src="./assets/points_builder/js/utils.js"></script>
+<script src="./assets/blog/js/codehighlight.js"></script>
 <script type="module" src="./assets/points_builder/js/main.js"></script>
 </body>
 </html>

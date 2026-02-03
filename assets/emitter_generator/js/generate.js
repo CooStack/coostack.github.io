@@ -1993,12 +1993,20 @@ $("#btnFull, #btnFullTop").on("click", () => setFullscreen(true));
                 return;
             }
 
+            const isMac = /Mac|iPhone|iPad|iPod/i.test(navigator.platform);
+            const mod = isMac ? e.metaKey : e.ctrlKey;
+            const key = (e.key || "").toLowerCase();
+
+            if (mod && key === "s" && !e.shiftKey && !e.altKey) {
+                e.preventDefault();
+                exportStateJson();
+                return;
+            }
+
             const el = document.activeElement;
             const isEditable = !!el && (el.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/i.test(el.tagName));
             if (isEditable) return;
 
-            const isMac = /Mac|iPhone|iPad|iPod/i.test(navigator.platform);
-            const mod = isMac ? e.metaKey : e.ctrlKey;
             if (!mod) return;
 
             const k = (e.key || "").toLowerCase();

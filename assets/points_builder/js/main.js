@@ -12,7 +12,7 @@ import {OrbitControls} from "three/addons/controls/OrbitControls.js";
     const elKotlinOut = document.getElementById("kotlinOut");
 
     // 用户要求：右侧 Kotlin 代码栏只读（可复制，不可编辑）
-    if (elKotlinOut) {
+    if (elKotlinOut && elKotlinOut.tagName === "TEXTAREA") {
         try { elKotlinOut.readOnly = true; } catch {}
         try { elKotlinOut.setAttribute("readonly", ""); } catch {}
     }
@@ -31,6 +31,7 @@ import {OrbitControls} from "three/addons/controls/OrbitControls.js";
     const btnFullscreen = document.getElementById("btnFullscreen");
 
     const btnExportKotlin = document.getElementById("btnExportKotlin");
+    const btnToggleKotlin = document.getElementById("btnToggleKotlin");
     const btnCopyKotlin = document.getElementById("btnCopyKotlin");
     const btnDownloadKotlin = document.getElementById("btnDownloadKotlin");
     const btnCopyKotlin2 = document.getElementById("btnCopyKotlin2");
@@ -79,6 +80,12 @@ import {OrbitControls} from "three/addons/controls/OrbitControls.js";
     const statusLinePick = document.getElementById("statusLinePick");
     const statusPoints = document.getElementById("statusPoints");
 
+    const layoutEl = document.querySelector(".layout");
+    const panelLeft = document.querySelector(".panel.left");
+    const panelRight = document.querySelector(".panel.right");
+    const resizerLeft = document.querySelector(".resizer-left");
+    const resizerRight = document.querySelector(".resizer-right");
+
     // -------------------------
     // helpers
     // -------------------------
@@ -112,6 +119,404 @@ import {OrbitControls} from "three/addons/controls/OrbitControls.js";
         el.classList.add("show");
         clearTimeout(toastTimer);
         toastTimer = setTimeout(() => el.classList.remove("show"), 1600);
+    }
+
+    // 让 axis 指向 toPoint，并保持“上方向”稳定（平面包含世界 Up）
+    function rotatePointsToPointUpright(points, toPoint, axis, upRef = U.v(0, 1, 0)) {
+        if (!points || points.length === 0) return points;
+        const fwd = U.norm(axis);
+        const dir = U.norm(toPoint);
+        if (U.len(fwd) <= 1e-6 || U.len(dir) <= 1e-6) return points;
+
+        const buildBasis = (forward) => {
+            const f = U.norm(forward);
+            let r = U.cross(upRef, f);
+            if (U.len(r) <= 1e-6) {
+                const altUp = (Math.abs(upRef.y) > 0.9) ? U.v(1, 0, 0) : U.v(0, 1, 0);
+                r = U.cross(altUp, f);
+            }
+            if (U.len(r) <= 1e-6) return null;
+            r = U.norm(r);
+            const u = U.norm(U.cross(f, r));
+            return {r, u, f};
+        };
+
+        const from = buildBasis(fwd);
+        const to = buildBasis(dir);
+        if (!from || !to) return points;
+
+        for (let i = 0; i < points.length; i++) {
+            const p = points[i];
+            const x = U.dot(p, from.r);
+            const y = U.dot(p, from.u);
+            const z = U.dot(p, from.f);
+            points[i] = {
+                x: to.r.x * x + to.u.x * y + to.f.x * z,
+                y: to.r.y * x + to.u.y * y + to.f.y * z,
+                z: to.r.z * x + to.u.z * y + to.f.z * z,
+            };
+        }
+        return points;
+    }
+
+    // -------------------------
+    // Kotlin output (highlight)
+    // -------------------------
+    let kotlinRaw = "";
+    function setKotlinOut(text) {
+        kotlinRaw = text || "";
+        if (!elKotlinOut) return;
+        const highlighter = globalThis.CodeHighlighter && globalThis.CodeHighlighter.highlightKotlin;
+        if (typeof highlighter === "function") {
+            elKotlinOut.innerHTML = highlighter(kotlinRaw);
+        } else {
+            elKotlinOut.textContent = kotlinRaw;
+        }
+    }
+
+    // -------------------------
+    // Layout (panel sizes + kotlin toggle)
+    // -------------------------
+    const LAYOUT_STORAGE_KEY = "pb_layout_v1";
+    const MIN_LEFT_W = 220;
+    const MIN_RIGHT_W = 260;
+    const MIN_VIEWER_W = 280;
+
+    let layoutState = loadLayoutState();
+
+    function clamp(v, min, max) {
+        let lo = Number(min);
+        let hi = Number(max);
+        if (!Number.isFinite(lo)) lo = 0;
+        if (!Number.isFinite(hi)) hi = lo;
+        if (hi < lo) hi = lo;
+        return Math.min(Math.max(Number(v) || 0, lo), hi);
+    }
+
+    function loadLayoutState() {
+        try {
+            const raw = localStorage.getItem(LAYOUT_STORAGE_KEY);
+            if (raw) {
+                const obj = JSON.parse(raw);
+                if (obj && typeof obj === "object") {
+                    return {
+                        leftWidth: Number.isFinite(obj.leftWidth) ? obj.leftWidth : null,
+                        rightWidth: Number.isFinite(obj.rightWidth) ? obj.rightWidth : null,
+                        kotlinHidden: !!obj.kotlinHidden,
+                    };
+                }
+            }
+        } catch (e) {
+            console.warn("loadLayoutState failed:", e);
+        }
+        return { leftWidth: null, rightWidth: null, kotlinHidden: false };
+    }
+
+    function saveLayoutState() {
+        try {
+            localStorage.setItem(LAYOUT_STORAGE_KEY, JSON.stringify(layoutState));
+        } catch (e) {
+            console.warn("saveLayoutState failed:", e);
+        }
+    }
+
+    function getPanelWidth(panel) {
+        if (!panel) return 0;
+        const rect = panel.getBoundingClientRect();
+        return rect && rect.width ? rect.width : 0;
+    }
+
+    function setPanelWidth(panel, w) {
+        if (!panel || !Number.isFinite(w)) return;
+        const v = Math.max(0, w);
+        panel.style.width = `${v}px`;
+        panel.style.flex = `0 0 ${v}px`;
+    }
+
+    function clampLeftWidth(w) {
+        if (!layoutEl) return w;
+        const layoutW = layoutEl.getBoundingClientRect().width || 0;
+        const rightW = layoutState.kotlinHidden ? 0 : (getPanelWidth(panelRight) || layoutState.rightWidth || MIN_RIGHT_W);
+        const max = Math.max(MIN_LEFT_W, layoutW - rightW - MIN_VIEWER_W);
+        return clamp(w, MIN_LEFT_W, max);
+    }
+
+    function clampRightWidth(w) {
+        if (!layoutEl) return w;
+        const layoutW = layoutEl.getBoundingClientRect().width || 0;
+        const leftW = getPanelWidth(panelLeft) || layoutState.leftWidth || MIN_LEFT_W;
+        const max = Math.max(MIN_RIGHT_W, layoutW - leftW - MIN_VIEWER_W);
+        return clamp(w, MIN_RIGHT_W, max);
+    }
+
+    function updateKotlinToggleText() {
+        if (!btnToggleKotlin) return;
+        if (layoutState.kotlinHidden) {
+            btnToggleKotlin.textContent = "<";
+            btnToggleKotlin.title = "显示 Kotlin";
+        } else {
+            btnToggleKotlin.textContent = ">";
+            btnToggleKotlin.title = "隐藏 Kotlin";
+        }
+    }
+
+    function setKotlinHidden(hidden, persist = true) {
+        if (!layoutEl) return;
+        const next = !!hidden;
+        if (next) {
+            const curRight = getPanelWidth(panelRight);
+            if (curRight) layoutState.rightWidth = curRight;
+            if (Number.isFinite(curRight) && curRight > 0) setPanelWidth(panelRight, curRight);
+            requestAnimationFrame(() => layoutEl.classList.add("kotlin-hidden"));
+        } else {
+            layoutEl.classList.remove("kotlin-hidden");
+            if (Number.isFinite(layoutState.rightWidth)) {
+                const w = clampRightWidth(layoutState.rightWidth);
+                layoutState.rightWidth = w;
+                requestAnimationFrame(() => setPanelWidth(panelRight, w));
+            }
+        }
+        layoutState.kotlinHidden = next;
+        updateKotlinToggleText();
+        scheduleThreeResize();
+        scheduleTogglePosition();
+        setTimeout(scheduleThreeResize, 360);
+        setTimeout(scheduleTogglePosition, 360);
+        if (persist) saveLayoutState();
+    }
+
+    function applyLayoutState(persist = false) {
+        if (!layoutEl) return;
+        setKotlinHidden(!!layoutState.kotlinHidden, false);
+        if (Number.isFinite(layoutState.leftWidth)) {
+            const w = clampLeftWidth(layoutState.leftWidth);
+            layoutState.leftWidth = w;
+            setPanelWidth(panelLeft, w);
+        }
+        if (!layoutState.kotlinHidden && Number.isFinite(layoutState.rightWidth)) {
+            const w = clampRightWidth(layoutState.rightWidth);
+            layoutState.rightWidth = w;
+            setPanelWidth(panelRight, w);
+        }
+        scheduleTogglePosition();
+        if (persist) saveLayoutState();
+    }
+
+    let resizeRaf = 0;
+    let togglePosRaf = 0;
+    function scheduleThreeResize() {
+        if (resizeRaf) cancelAnimationFrame(resizeRaf);
+        resizeRaf = requestAnimationFrame(() => {
+            resizeRaf = 0;
+            onResize();
+        });
+    }
+
+    function positionKotlinToggle() {
+        if (!btnToggleKotlin || !layoutEl) return;
+        const layoutRect = layoutEl.getBoundingClientRect();
+        if (!layoutRect || layoutRect.width <= 0) return;
+        if (layoutState.kotlinHidden || !panelRight) {
+            btnToggleKotlin.style.left = "auto";
+            btnToggleKotlin.style.right = "10px";
+            return;
+        }
+        const rightRect = panelRight.getBoundingClientRect();
+        const desiredLeft = rightRect.left - layoutRect.left + 8;
+        const safeLeft = clamp(desiredLeft, 8, Math.max(8, layoutRect.width - 36));
+        btnToggleKotlin.style.left = `${safeLeft}px`;
+        btnToggleKotlin.style.right = "auto";
+    }
+
+    function scheduleTogglePosition() {
+        if (togglePosRaf) cancelAnimationFrame(togglePosRaf);
+        togglePosRaf = requestAnimationFrame(() => {
+            togglePosRaf = 0;
+            positionKotlinToggle();
+        });
+    }
+
+    if (panelRight) {
+        panelRight.addEventListener("transitionend", (e) => {
+            if (e.propertyName === "width" || e.propertyName === "flex-basis" || e.propertyName === "transform") {
+                scheduleThreeResize();
+                scheduleTogglePosition();
+            }
+        });
+    }
+
+    function bindResizer(el, side) {
+        if (!el) return;
+        el.addEventListener("pointerdown", (e) => {
+            if (e.button !== 0) return;
+            if (side === "right" && layoutState.kotlinHidden) return;
+            e.preventDefault();
+            const startX = e.clientX;
+            const startLeft = getPanelWidth(panelLeft);
+            const startRight = getPanelWidth(panelRight);
+
+            const onMove = (ev) => {
+                const dx = ev.clientX - startX;
+                if (side === "left") {
+                    const w = clampLeftWidth(startLeft + dx);
+                    layoutState.leftWidth = w;
+                    setPanelWidth(panelLeft, w);
+                    scheduleTogglePosition();
+                } else {
+                    const w = clampRightWidth(startRight - dx);
+                    layoutState.rightWidth = w;
+                    setPanelWidth(panelRight, w);
+                    scheduleTogglePosition();
+                }
+            };
+
+            const onUp = () => {
+                document.removeEventListener("pointermove", onMove);
+                document.removeEventListener("pointerup", onUp);
+                document.body.classList.remove("resizing-panels");
+                saveLayoutState();
+                scheduleThreeResize();
+                scheduleTogglePosition();
+            };
+
+            document.body.classList.add("resizing-panels");
+            document.addEventListener("pointermove", onMove);
+            document.addEventListener("pointerup", onUp);
+        });
+    }
+
+    function bindCardBodyResizer(resizerEl, bodyEl, target) {
+        if (!resizerEl || !bodyEl || !target) return;
+        resizerEl.addEventListener("pointerdown", (e) => {
+            if (e.button !== 0) return;
+            if (target.collapsed) return;
+            e.preventDefault();
+            e.stopPropagation();
+            historyCapture("resize_card_body");
+
+            const startY = e.clientY;
+            const startH = bodyEl.getBoundingClientRect().height || 0;
+            const minH = 40;
+            let maxH = Math.max(minH, Math.round(window.innerHeight * 0.8));
+
+            const cardEl = bodyEl.closest ? bodyEl.closest(".card") : null;
+            const subcards = cardEl && cardEl.parentElement && cardEl.parentElement.classList.contains("subcards")
+                ? cardEl.parentElement
+                : null;
+            if (subcards) {
+                const comp = window.getComputedStyle(subcards);
+                const maxHStr = comp && comp.maxHeight ? String(comp.maxHeight) : "";
+                const maxFromCss = maxHStr && maxHStr !== "none" ? parseFloat(maxHStr) : NaN;
+                const headEl = cardEl.querySelector(".card-head");
+                const headH = headEl ? headEl.getBoundingClientRect().height : 0;
+                const limit = Math.floor((Number.isFinite(maxFromCss) ? maxFromCss : subcards.getBoundingClientRect().height) - headH - 12);
+                if (Number.isFinite(limit) && limit > minH) {
+                    maxH = Math.min(maxH, limit);
+                }
+            }
+            const prevTransition = bodyEl.style.transition;
+            bodyEl.style.transition = "none";
+
+            const onMove = (ev) => {
+                const next = clamp(startH + (ev.clientY - startY), minH, maxH);
+                target.bodyHeight = next;
+                bodyEl.style.height = `${next}px`;
+                bodyEl.style.maxHeight = `${next}px`;
+            };
+
+            const onUp = () => {
+                document.removeEventListener("pointermove", onMove);
+                document.removeEventListener("pointerup", onUp);
+                document.body.classList.remove("resizing-card");
+                bodyEl.style.transition = prevTransition || "";
+            };
+
+            document.body.classList.add("resizing-card");
+            document.addEventListener("pointermove", onMove);
+            document.addEventListener("pointerup", onUp);
+        });
+    }
+
+    function bindSubblockWidthResizer(resizerEl, blockEl, target) {
+        if (!resizerEl || !blockEl || !target) return;
+        resizerEl.addEventListener("pointerdown", (e) => {
+            if (e.button !== 0) return;
+            e.preventDefault();
+            e.stopPropagation();
+            historyCapture("resize_subblock");
+
+            const startX = e.clientX;
+            const startW = blockEl.getBoundingClientRect().width || 0;
+            const parentW = (blockEl.parentElement && blockEl.parentElement.getBoundingClientRect().width) || startW;
+            const minW = 240;
+            const maxW = Math.max(minW, parentW - 6);
+            const prevTransition = blockEl.style.transition;
+            blockEl.style.transition = "none";
+
+            const onMove = (ev) => {
+                const next = clamp(startW + (ev.clientX - startX), minW, maxW);
+                target.subWidth = next;
+                blockEl.style.width = `${next}px`;
+            };
+
+            const onUp = () => {
+                document.removeEventListener("pointermove", onMove);
+                document.removeEventListener("pointerup", onUp);
+                document.body.classList.remove("resizing-subblock");
+                blockEl.style.transition = prevTransition || "";
+            };
+
+            document.body.classList.add("resizing-subblock");
+            document.addEventListener("pointermove", onMove);
+            document.addEventListener("pointerup", onUp);
+        });
+    }
+
+    function bindSubblockHeightResizer(resizerEl, subEl, target) {
+        if (!resizerEl || !subEl || !target) return;
+        resizerEl.addEventListener("pointerdown", (e) => {
+            if (e.button !== 0) return;
+            e.preventDefault();
+            e.stopPropagation();
+            historyCapture("resize_subblock_height");
+
+            const startY = e.clientY;
+            const startH = subEl.getBoundingClientRect().height || 0;
+            const minH = 120;
+            let maxH = Math.max(minH, Math.round(window.innerHeight * 0.75));
+            const blockEl = subEl.closest ? subEl.closest(".subblock") : null;
+            const parentBody = blockEl ? blockEl.closest(".card-body") : null;
+            if (parentBody && parentBody.style && parentBody.style.height) {
+                const bodyRect = parentBody.getBoundingClientRect();
+                const blockRect = blockEl.getBoundingClientRect();
+                const subRect = subEl.getBoundingClientRect();
+                const otherH = Math.max(0, blockRect.height - subRect.height);
+                const limit = Math.floor(bodyRect.height - otherH - 10);
+                if (Number.isFinite(limit) && limit > minH) {
+                    maxH = Math.min(maxH, limit);
+                }
+            }
+            const prevTransition = subEl.style.transition;
+            subEl.style.transition = "none";
+
+            const onMove = (ev) => {
+                const next = clamp(startH + (ev.clientY - startY), minH, maxH);
+                target.subHeight = next;
+                subEl.style.height = `${next}px`;
+                subEl.style.maxHeight = `${next}px`;
+            };
+
+            const onUp = () => {
+                document.removeEventListener("pointermove", onMove);
+                document.removeEventListener("pointerup", onUp);
+                document.body.classList.remove("resizing-subblock-y");
+                subEl.style.transition = prevTransition || "";
+            };
+
+            document.body.classList.add("resizing-subblock-y");
+            document.addEventListener("pointermove", onMove);
+            document.addEventListener("pointerup", onUp);
+        });
     }
 
 
@@ -730,6 +1135,81 @@ import {OrbitControls} from "three/addons/controls/OrbitControls.js";
             }
         },
 
+        add_with: {
+            title: "addWith(旋转重复)",
+            desc: "PointsBuilder.addWith { 子Builder 旋转重复 }",
+            defaultParams: {r: 3, c: 6, rotateToCenter: true, rotateReverse: false, rotateOffsetEnabled: false, rox: 0, roy: 0, roz: 0},
+            apply(ctx, node) {
+                const r = num(node.params.r);
+                const c = int(node.params.c);
+                const rotateToCenter = !!node.params.rotateToCenter;
+                const rotateReverse = !!node.params.rotateReverse;
+                const rotateOffsetEnabled = !!node.params.rotateOffsetEnabled;
+                const rox = num(node.params.rox);
+                const roy = num(node.params.roy);
+                const roz = num(node.params.roz);
+                const verts = U.getPolygonInCircleVertices(c, r);
+
+                for (const it of verts) {
+                    const childCtx = {points: [], axis: U.v(0, 1, 0)};
+                    for (const ch of (node.children || [])) {
+                        const def = KIND[ch.kind];
+                        if (def && def.apply) def.apply(childCtx, ch);
+                    }
+
+                    const pts = (childCtx.points || []).map(p => U.clone(p));
+                    const base = it;
+                    if (rotateToCenter) {
+                        const targetPoint = rotateOffsetEnabled ? U.v(rox, roy, roz) : U.v(0, 0, 0);
+                        const rotateTarget = rotateReverse ? U.add(targetPoint, it) : U.sub(targetPoint, it);
+                        rotatePointsToPointUpright(pts, rotateTarget, childCtx.axis);
+                    }
+                    for (const p of pts) {
+                        ctx.points.push({x: p.x + base.x, y: p.y + base.y, z: p.z + base.z});
+                    }
+                }
+            },
+            kotlin(node, emitCtx, indent, emitNodesKotlinLines) {
+                const r = U.fmt(num(node.params.r));
+                const c = int(node.params.c);
+                const rotateToCenter = !!node.params.rotateToCenter;
+                const rotateReverse = !!node.params.rotateReverse;
+                const rotateOffsetEnabled = !!node.params.rotateOffsetEnabled;
+                const rox = U.fmt(num(node.params.rox));
+                const roy = U.fmt(num(node.params.roy));
+                const roz = U.fmt(num(node.params.roz));
+                const lines = [];
+                lines.push(`${indent}.addWith {`);
+                lines.push(`${indent}  val res = arrayListOf<RelativeLocation>()`);
+                lines.push(`${indent}  getPolygonInCircleVertices(${c}, ${r})`);
+                lines.push(`${indent}        .forEach { it ->`);
+                lines.push(`${indent}            val p = PointsBuilder()`);
+
+                const childLines = emitNodesKotlinLines(node.children || [], indent + "              ", emitCtx);
+                lines.push(...childLines);
+
+                if (rotateToCenter) {
+                    if (rotateOffsetEnabled) {
+                        if (rotateReverse) {
+                            lines.push(`${indent}            p.rotateTo(it.clone().add(${rox}, ${roy}, ${roz}))`);
+                        } else {
+                            lines.push(`${indent}            p.rotateTo((-it).add(${rox}, ${roy}, ${roz}))`);
+                        }
+                    } else {
+                        lines.push(`${indent}            p.rotateTo(${rotateReverse ? "it" : "-it"})`);
+                    }
+                }
+                lines.push(`${indent}            res.addAll(p`);
+                lines.push(`${indent}                    .pointsOnEach { rel -> rel.add(it) }`);
+                lines.push(`${indent}                    .createWithoutClone()`);
+                lines.push(`${indent}            )`);
+                lines.push(`${indent}        }`);
+                lines.push(`${indent}  res`);
+                lines.push(`${indent}}`);
+                return lines;
+            }
+        },
+
         with_builder: {
             title: "withBuilder(子PointsBuilder)",
             desc: "PointsBuilder.withBuilder { it.xxx() }",
@@ -801,6 +1281,10 @@ import {OrbitControls} from "three/addons/controls/OrbitControls.js";
             id: uid(),
             kind,
             folded: false,
+            collapsed: false,
+            bodyHeight: null,
+            subWidth: null,
+            subHeight: null,
             params: JSON.parse(JSON.stringify(def?.defaultParams || {})),
             children: [],
             terms: [],
@@ -973,12 +1457,16 @@ import {OrbitControls} from "three/addons/controls/OrbitControls.js";
         // no-op
     }
 
+    function isBuilderContainerKind(kind) {
+        return kind === "with_builder" || kind === "add_with";
+    }
+
     function forEachNode(list, fn) {
         const arr = list || [];
         for (const n of arr) {
             if (!n) continue;
             fn(n);
-            if (n.kind === "with_builder" && Array.isArray(n.children)) {
+            if (isBuilderContainerKind(n.kind) && Array.isArray(n.children)) {
                 forEachNode(n.children, fn);
             }
         }
@@ -990,7 +1478,7 @@ import {OrbitControls} from "three/addons/controls/OrbitControls.js";
             const n = arr[i];
             if (!n) continue;
             if (n.id === id) return { node: n, parentList: arr, index: i, parentNode };
-            if (n.kind === "with_builder" && Array.isArray(n.children)) {
+            if (isBuilderContainerKind(n.kind) && Array.isArray(n.children)) {
                 const r = findNodeContextById(id, n.children, n);
                 if (r) return r;
             }
@@ -1016,7 +1504,7 @@ import {OrbitControls} from "three/addons/controls/OrbitControls.js";
                 }
             }
 
-            if (n.kind === "with_builder" && Array.isArray(n.children)) {
+            if (isBuilderContainerKind(n.kind) && Array.isArray(n.children)) {
                 const r = findAnyCardContextById(id, n.children, n);
                 if (r) return r;
             }
@@ -1108,7 +1596,7 @@ import {OrbitControls} from "three/addons/controls/OrbitControls.js";
     function nodeContainsId(node, id) {
         if (!node) return false;
         if (node.id === id) return true;
-        if (node.kind === "with_builder" && Array.isArray(node.children)) {
+        if (isBuilderContainerKind(node.kind) && Array.isArray(node.children)) {
             for (const c of node.children) if (nodeContainsId(c, id)) return true;
         }
         return false;
@@ -1196,7 +1684,7 @@ import {OrbitControls} from "three/addons/controls/OrbitControls.js";
             const def = KIND[n.kind];
             if (!def || !def.kotlin) continue;
 
-            if (n.kind === "with_builder") {
+            if (n.kind === "with_builder" || n.kind === "add_with") {
                 lines.push(...def.kotlin(n, emitCtx, indent, emitNodesKotlinLines));
                 continue;
             }
@@ -2210,7 +2698,7 @@ function onCanvasClick(ev) {
             pointOwnerByIndex = buildPointOwnerByIndex(res.points.length, res.segments);
             setPoints(res.points);
             // setPoints 内部会根据 focusedNodeId 重新上色
-            elKotlinOut.value = emitKotlin();
+            setKotlinOut(emitKotlin());
         });
     }
 
@@ -2839,7 +3327,7 @@ function beginHotkeyCapture(target) {
         if (focusedNodeId) {
             const ctx = findNodeContextById(focusedNodeId);
             if (ctx && ctx.node) {
-                if (ctx.node.kind === "with_builder") {
+                if (isBuilderContainerKind(ctx.node.kind)) {
                     if (!Array.isArray(ctx.node.children)) ctx.node.children = [];
                     return { list: ctx.node.children, insertIndex: ctx.node.children.length, label: "子Builder", ownerNode: ctx.node };
                 }
@@ -2862,7 +3350,7 @@ function beginHotkeyCapture(target) {
         renderAll();
 
         // ✅ 若是在 withBuilder 内新增，则保持聚焦在 withBuilder；否则聚焦新卡片
-        const focusAfter = (ctx && ctx.ownerNode && ctx.ownerNode.kind === "with_builder") ? ctx.ownerNode.id : nn.id;
+        const focusAfter = (ctx && ctx.ownerNode && isBuilderContainerKind(ctx.ownerNode.kind)) ? ctx.ownerNode.id : nn.id;
         requestAnimationFrame(() => {
             suppressFocusHistory = true;
             focusCardById(focusAfter, false, true);
@@ -2900,6 +3388,15 @@ function beginHotkeyCapture(target) {
             setHotkeyFor(hotkeyCapture, hk);
             hotkeyCapture = null;
             if (hkHint) hkHint.textContent = "已保存。";
+            return;
+        }
+
+        const isMac = /Mac|iPhone|iPad|iPod/i.test(navigator.platform);
+        const mod = isMac ? e.metaKey : e.ctrlKey;
+        const key = (e.key || "").toLowerCase();
+        if (mod && key === "s" && !e.shiftKey && !e.altKey) {
+            e.preventDefault();
+            if (btnSaveJson) btnSaveJson.click();
             return;
         }
 
@@ -2976,7 +3473,7 @@ function beginHotkeyCapture(target) {
                 hideHotkeysModal();
             }
             const ctx = getInsertContextFromFocus();
-            const ownerNodeId = (ctx && ctx.ownerNode && ctx.ownerNode.kind === "with_builder") ? ctx.ownerNode.id : null;
+            const ownerNodeId = (ctx && ctx.ownerNode && isBuilderContainerKind(ctx.ownerNode.kind)) ? ctx.ownerNode.id : null;
             openModal(ctx.list, ctx.insertIndex, ctx.label, ownerNodeId);
             return;
         }
@@ -3515,6 +4012,159 @@ function addQuickOffsetTo(list) {
                 )));
                 break;
 
+            case "add_with":
+                if (!Array.isArray(node.children)) node.children = [];
+                body.appendChild(row("旋转半径 r", inputNum(p.r, v => {
+                    p.r = v;
+                    rebuildPreviewAndKotlin();
+                })));
+                body.appendChild(row("置换个数 c", inputNum(p.c, v => {
+                    p.c = v;
+                    rebuildPreviewAndKotlin();
+                })));
+                body.appendChild(row("rotateToCenter", checkbox(p.rotateToCenter, v => {
+                    p.rotateToCenter = v;
+                    renderAll();
+                })));
+                if (p.rotateToCenter) {
+                    body.appendChild(row("反向", checkbox(p.rotateReverse, v => {
+                        p.rotateReverse = v;
+                        rebuildPreviewAndKotlin();
+                    })));
+                }
+                body.appendChild(row("旋转偏移", checkbox(p.rotateOffsetEnabled, v => {
+                    p.rotateOffsetEnabled = v;
+                    renderAll();
+                })));
+                if (p.rotateOffsetEnabled) {
+                    body.appendChild(row("偏移", makeVec3Editor(p, "ro", rebuildPreviewAndKotlin, "offset")));
+                }
+                body.appendChild(row("折叠子卡片", checkbox(node.folded, v => {
+                    node.folded = v;
+                    renderAll();
+                })));
+                if (!node.folded) {
+                    const block = document.createElement("div");
+                    block.className = "subblock";
+                    if (Number.isFinite(node.subWidth)) {
+                        const w = Math.max(240, node.subWidth);
+                        node.subWidth = w;
+                        block.style.width = `${w}px`;
+                    }
+
+                    const head = document.createElement("div");
+                    head.className = "subblock-head";
+
+                    const title = document.createElement("div");
+                    title.className = "subblock-title";
+                    title.textContent = "子 PointsBuilder（addWith）";
+
+                    const actions = document.createElement("div");
+                    actions.className = "mini";
+
+                    const addBtn = document.createElement("button");
+                    addBtn.className = "btn small primary";
+                    addBtn.textContent = "添加卡片";
+                    addBtn.addEventListener("click", () => openModal(node.children, (node.children || []).length, "子Builder", node.id));
+
+                    const offBtn = document.createElement("button");
+                    offBtn.className = "btn small";
+                    offBtn.textContent = "快捷Offset";
+                    offBtn.addEventListener("click", () => addQuickOffsetTo(node.children));
+
+                    const pickBtn = document.createElement("button");
+                    pickBtn.className = "btn small";
+                    pickBtn.textContent = "XZ拾取直线";
+                    pickBtn.dataset.pickLineBtn = "1";
+                    pickBtn.addEventListener("click", () => {
+                        if (linePickMode) stopLinePick();
+                        else {
+                            if (pointPickMode) stopPointPick();
+                            startLinePick(node.children, "子Builder", (node.children || []).length);
+                        }
+                    });
+
+                    const exportBtn = document.createElement("button");
+                    exportBtn.className = "btn small";
+                    exportBtn.textContent = "导出JSON";
+                    exportBtn.addEventListener("click", () => {
+                        const out = {root: {id: "root", kind: "ROOT", children: deepClone(node.children || [])}};
+                        downloadText("addWithBuilder.json", JSON.stringify(out, null, 2), "application/json");
+                    });
+
+                    const importBtn = document.createElement("button");
+                    importBtn.className = "btn small";
+                    importBtn.textContent = "导入JSON";
+                    importBtn.addEventListener("click", () => {
+                        if (!fileBuilderJson) return;
+                        builderJsonTargetNode = node;
+                        fileBuilderJson.click();
+                    });
+
+                    const clearBtn = document.createElement("button");
+                    clearBtn.className = "btn small danger";
+                    clearBtn.textContent = "清空";
+                    clearBtn.addEventListener("click", () => {
+                        historyCapture("clear_add_with");
+                        node.children.splice(0);
+                        ensureAxisInList(node.children);
+                        renderAll();
+                    });
+
+                    actions.appendChild(addBtn);
+                    actions.appendChild(offBtn);
+                    actions.appendChild(pickBtn);
+                    actions.appendChild(exportBtn);
+                    actions.appendChild(importBtn);
+                    actions.appendChild(clearBtn);
+
+                    head.appendChild(title);
+                    head.appendChild(actions);
+
+                    const sub = document.createElement("div");
+                    sub.className = "subcards";
+                    if (Number.isFinite(node.subHeight)) {
+                        const h = Math.max(120, node.subHeight);
+                        node.subHeight = h;
+                        sub.style.height = `${h}px`;
+                        sub.style.maxHeight = `${h}px`;
+                    }
+                    setupListDropZone(sub, () => node.children, () => node);
+
+                    const list = node.children || [];
+                    for (let i = 0; i < list.length; i++) {
+                        sub.appendChild(renderNodeCard(list[i], list, i, "子Builder", node));
+                    }
+
+                    block.appendChild(head);
+                    block.appendChild(sub);
+
+                    const zone = document.createElement("div");
+                    zone.className = "dropzone";
+                    zone.textContent = "拖拽卡片到这里：放入该 addWith 的子卡片（也可拖到主列表把子卡片拖出来）";
+                    bindSubDropZone(zone, node.children, node);
+                    block.appendChild(zone);
+
+                    const heightResizer = document.createElement("div");
+                    heightResizer.className = "subblock-resizer-y";
+                    bindSubblockHeightResizer(heightResizer, sub, node);
+                    block.appendChild(heightResizer);
+
+                    const widthResizer = document.createElement("div");
+                    widthResizer.className = "subblock-resizer";
+                    bindSubblockWidthResizer(widthResizer, block, node);
+                    block.appendChild(widthResizer);
+
+                    body.appendChild(block);
+                } else {
+                    const zone = document.createElement("div");
+                    zone.className = "dropzone";
+                    zone.textContent = "拖拽卡片到这里：放入该 addWith 的子卡片（折叠状态）";
+                    bindSubDropZone(zone, node.children, node);
+                    body.appendChild(zone);
+                }
+                break;
+
             case "with_builder":
                 body.appendChild(row("折叠子卡片", checkbox(node.folded, v => {
                     node.folded = v;
@@ -3523,6 +4173,11 @@ function addQuickOffsetTo(list) {
                 if (!node.folded) {
                     const block = document.createElement("div");
                     block.className = "subblock";
+                    if (Number.isFinite(node.subWidth)) {
+                        const w = Math.max(240, node.subWidth);
+                        node.subWidth = w;
+                        block.style.width = `${w}px`;
+                    }
 
                     const head = document.createElement("div");
                     head.className = "subblock-head";
@@ -3596,6 +4251,12 @@ function addQuickOffsetTo(list) {
 
                     const sub = document.createElement("div");
                     sub.className = "subcards";
+                    if (Number.isFinite(node.subHeight)) {
+                        const h = Math.max(120, node.subHeight);
+                        node.subHeight = h;
+                        sub.style.height = `${h}px`;
+                        sub.style.maxHeight = `${h}px`;
+                    }
                     setupListDropZone(sub, () => node.children, () => node);
 
                     const list = node.children || [];
@@ -3611,6 +4272,16 @@ function addQuickOffsetTo(list) {
                     zone.textContent = "拖拽卡片到这里：放入该 withBuilder 的子卡片（也可拖到主列表把子卡片拖出来）";
                     bindSubDropZone(zone, node.children, node);
                     block.appendChild(zone);
+
+                    const heightResizer = document.createElement("div");
+                    heightResizer.className = "subblock-resizer-y";
+                    bindSubblockHeightResizer(heightResizer, sub, node);
+                    block.appendChild(heightResizer);
+
+                    const widthResizer = document.createElement("div");
+                    widthResizer.className = "subblock-resizer";
+                    bindSubblockWidthResizer(widthResizer, block, node);
+                    block.appendChild(widthResizer);
 
                     body.appendChild(block);
                 } else {
@@ -3654,7 +4325,7 @@ function addQuickOffsetTo(list) {
                     addBtn.textContent = "添加 Fourier 项";
                     addBtn.addEventListener("click", () => {
                         historyCapture("add_fourier_term");
-                        node.terms.push({id: uid(), r: 1, w: 1, startAngle: 0});
+                        node.terms.push({id: uid(), r: 1, w: 1, startAngle: 0, collapsed: false, bodyHeight: null});
                         renderAll();
                     });
 
@@ -3698,6 +4369,7 @@ function addQuickOffsetTo(list) {
         card.className = "card";
         card.dataset.id = t.id;
         if (t.id === focusedNodeId) card.classList.add("focused");
+        if (t.collapsed) card.classList.add("collapsed");
 
         const head = document.createElement("div");
         head.className = "card-head";
@@ -3723,6 +4395,17 @@ function addQuickOffsetTo(list) {
 
         const actions = document.createElement("div");
         actions.className = "card-actions";
+
+        const collapseBtn = iconBtn(t.collapsed ? "▸" : "▾", (e) => {
+            e.stopPropagation();
+            historyCapture("toggle_term_collapse");
+            t.collapsed = !t.collapsed;
+            card.classList.toggle("collapsed", t.collapsed);
+            collapseBtn.textContent = t.collapsed ? "▸" : "▾";
+            collapseBtn.title = t.collapsed ? "展开" : "收起";
+        });
+        collapseBtn.title = t.collapsed ? "展开" : "收起";
+        actions.appendChild(collapseBtn);
 
         actions.appendChild(iconBtn("↑", () => {
             if (idx > 0) {
@@ -3759,6 +4442,10 @@ function addQuickOffsetTo(list) {
 
         const body = document.createElement("div");
         body.className = "card-body";
+        if (Number.isFinite(t.bodyHeight)) {
+            body.style.height = `${t.bodyHeight}px`;
+            body.style.maxHeight = `${t.bodyHeight}px`;
+        }
         const desc = document.createElement("div");
         desc.className = "pill";
         desc.textContent = "r, w, startAngle(度)";
@@ -3779,6 +4466,10 @@ function addQuickOffsetTo(list) {
 
         card.appendChild(head);
         card.appendChild(body);
+        const resizer = document.createElement("div");
+        resizer.className = "card-resizer";
+        bindCardBodyResizer(resizer, body, t);
+        card.appendChild(resizer);
 
         // ✅ 同样处理焦点：避免焦点落在 Fourier 子卡片时仍残留上一张卡的高亮
         card.tabIndex = 0;
@@ -3820,6 +4511,7 @@ function addQuickOffsetTo(list) {
         card.dataset.id = node.id;
         if (node.id === focusedNodeId) card.classList.add("focused");
         if (node.id === focusedNodeId) card.classList.add("focused");
+        if (node.collapsed) card.classList.add("collapsed");
 
         const head = document.createElement("div");
         head.className = "card-head";
@@ -3846,10 +4538,20 @@ function addQuickOffsetTo(list) {
         const actions = document.createElement("div");
         actions.className = "card-actions";
 
+        const collapseBtn = iconBtn(node.collapsed ? "▸" : "▾", (e) => {
+            e.stopPropagation();
+            historyCapture("toggle_card_collapse");
+            node.collapsed = !node.collapsed;
+            card.classList.toggle("collapsed", node.collapsed);
+            collapseBtn.textContent = node.collapsed ? "▸" : "▾";
+            collapseBtn.title = node.collapsed ? "展开" : "收起";
+        });
+        collapseBtn.title = node.collapsed ? "展开" : "收起";
+        actions.appendChild(collapseBtn);
 
         // ✅ 快捷添加：在当前卡片下方插入（若选中 withBuilder 卡片则插入到子Builder）
         const addBtn = iconBtn("＋", () => {
-            if (node.kind === "with_builder") {
+            if (isBuilderContainerKind(node.kind)) {
                 openModal(node.children, (node.children || []).length, "子Builder", node.id);
             } else {
                 openModal(siblings, idx + 1, ownerLabel);
@@ -3963,6 +4665,10 @@ function addQuickOffsetTo(list) {
 
         const body = document.createElement("div");
         body.className = "card-body";
+        if (Number.isFinite(node.bodyHeight)) {
+            body.style.height = `${node.bodyHeight}px`;
+            body.style.maxHeight = `${node.bodyHeight}px`;
+        }
 
         if (def?.desc) {
             const d = document.createElement("div");
@@ -3975,6 +4681,10 @@ function addQuickOffsetTo(list) {
 
         card.appendChild(head);
         card.appendChild(body);
+        const resizer = document.createElement("div");
+        resizer.className = "card-resizer";
+        bindCardBodyResizer(resizer, body, node);
+        card.appendChild(resizer);
 
         // ✅ 聚焦高亮：卡片获得焦点时，让对应新增的粒子变色
         card.tabIndex = 0; // 让卡片标题区也可获得焦点（点击空白处也算聚焦）
@@ -4012,16 +4722,18 @@ function addQuickOffsetTo(list) {
     // Top buttons
     // -------------------------
     function doExportKotlin() {
-        elKotlinOut.value = emitKotlin();
+        setKotlinOut(emitKotlin());
     }
 
     function doCopyKotlin() {
-        const text = elKotlinOut.value || emitKotlin();
+        const text = kotlinRaw || emitKotlin();
+        if (!kotlinRaw) setKotlinOut(text);
         navigator.clipboard?.writeText(text);
     }
 
     function doDownloadKotlin() {
-        const text = elKotlinOut.value || emitKotlin();
+        const text = kotlinRaw || emitKotlin();
+        if (!kotlinRaw) setKotlinOut(text);
         const blob = new Blob([text], { type: "text/plain;charset=utf-8" });
         const a = document.createElement("a");
         a.href = URL.createObjectURL(blob);
@@ -4032,6 +4744,7 @@ function addQuickOffsetTo(list) {
 
     btnExportKotlin.addEventListener("click", doExportKotlin);
     btnExportKotlin2.addEventListener("click", doExportKotlin);
+    btnToggleKotlin && btnToggleKotlin.addEventListener("click", () => setKotlinHidden(!layoutState.kotlinHidden));
     btnCopyKotlin.addEventListener("click", doCopyKotlin);
     btnCopyKotlin2.addEventListener("click", doCopyKotlin);
     btnDownloadKotlin && btnDownloadKotlin.addEventListener("click", doDownloadKotlin);
@@ -4039,7 +4752,7 @@ function addQuickOffsetTo(list) {
 
     btnAddCard.addEventListener("click", () => {
             const ctx = getInsertContextFromFocus();
-            const ownerNodeId = (ctx && ctx.ownerNode && ctx.ownerNode.kind === "with_builder") ? ctx.ownerNode.id : null;
+            const ownerNodeId = (ctx && ctx.ownerNode && isBuilderContainerKind(ctx.ownerNode.kind)) ? ctx.ownerNode.id : null;
             openModal(ctx.list, ctx.insertIndex, ctx.label, ownerNodeId);
         });
     btnQuickOffset.addEventListener("click", () => {
@@ -4154,6 +4867,11 @@ function addQuickOffsetTo(list) {
     // -------------------------
     // Boot
     // -------------------------
+    applyLayoutState(false);
+    bindResizer(resizerLeft, "left");
+    bindResizer(resizerRight, "right");
+    updateKotlinToggleText();
+    window.addEventListener("resize", () => applyLayoutState(true));
     initThree();
     setupListDropZone(elCardsRoot, () => state.root.children, () => null);
     refreshHotkeyHints();
