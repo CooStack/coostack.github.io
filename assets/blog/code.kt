@@ -1,38 +1,5 @@
 package cn.coostack.cooparticlesapi.network.particle.emitters
 
-import cn.coostack.cooparticlesapi.annotations.emitter.handle.ParticleEmittersHelper
-import cn.coostack.cooparticlesapi.extend.asVec3
-import cn.coostack.cooparticlesapi.extend.lengthCoerceAtMost
-import cn.coostack.cooparticlesapi.extend.ofFloored
-import cn.coostack.cooparticlesapi.extend.times
-import cn.coostack.cooparticlesapi.network.particle.emitters.environment.wind.GlobalWindDirection
-import cn.coostack.cooparticlesapi.network.particle.emitters.environment.wind.WindDirection
-import cn.coostack.cooparticlesapi.network.particle.emitters.environment.wind.WindDirections
-import cn.coostack.cooparticlesapi.network.particle.emitters.event.*
-import cn.coostack.cooparticlesapi.network.particle.emitters.impl.PhysicsParticleEmitters.Companion.CROSS_SECTIONAL_AREA
-import cn.coostack.cooparticlesapi.network.particle.emitters.impl.PhysicsParticleEmitters.Companion.DRAG_COEFFICIENT
-import cn.coostack.cooparticlesapi.particles.ControlableParticle
-import cn.coostack.cooparticlesapi.particles.control.ControlParticleManager
-import cn.coostack.cooparticlesapi.particles.control.ParticleControler
-import cn.coostack.cooparticlesapi.utils.PhysicsUtil
-import cn.coostack.cooparticlesapi.utils.RelativeLocation
-import cn.coostack.cooparticlesapi.utils.interpolator.Interpolator
-import cn.coostack.cooparticlesapi.utils.interpolator.emitters.LineEmitterInterpolator
-import net.minecraft.client.Minecraft
-import net.minecraft.client.multiplayer.ClientLevel
-import net.minecraft.core.BlockPos
-import net.minecraft.core.Direction
-import net.minecraft.network.FriendlyByteBuf
-import net.minecraft.world.entity.Entity
-import net.minecraft.world.level.Level
-import net.minecraft.world.phys.BlockHitResult
-import net.minecraft.world.phys.HitResult
-import net.minecraft.world.phys.Vec3
-import java.util.*
-import java.util.concurrent.ConcurrentHashMap
-import kotlin.math.max
-import kotlin.math.pow
-
 /** 通过自定义类来实现一些发散性粒子样式 (实在懒得写表达式了) */
 abstract class ClassParticleEmitters(
     override var pos: Vec3,
