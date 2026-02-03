@@ -3,7 +3,7 @@
 // 1) 不做“幽灵显示”（不会提前展示未输入的代码）
 // 2) 自动滚动，让光标始终靠近展示框中间
 // 3) 简单代码高亮（依赖 window.CodeHighlighter.highlightKotlin）
-// 4) 视觉“按两次回车”：显示时把每个 \n 渲染成 \n\n（更易读）
+// 4) 不靠“每行双回车”造行距；改为自动滚动让光标保持在展示框中间
 (() => {
   const sleep = (ms) => new Promise(r => setTimeout(r, ms));
   const nextFrame = () => new Promise(requestAnimationFrame);
@@ -167,8 +167,8 @@ fun main() {
       const boxRect = this.boxEl.getBoundingClientRect();
       const curRect = this.cursorEl.getBoundingClientRect();
       const delta = curRect.top - boxRect.top;
-      // 光标位置略偏上（更像在编辑器里输入，而不是居中）
-      const target = this.boxEl.scrollTop + delta - this.boxEl.clientHeight * 0.35;
+      // 让光标保持在展示框中间
+      const target = this.boxEl.scrollTop + delta - this.boxEl.clientHeight * 0.50;
 
       const max = Math.max(0, this.boxEl.scrollHeight - this.boxEl.clientHeight);
       this.boxEl.scrollTop = clamp(target, 0, max);

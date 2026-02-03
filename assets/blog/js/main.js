@@ -53,8 +53,8 @@
     // 默认从这一行开始（找不到就从文件开头）
     startAnchor: 'abstract class ClassParticleEmitters',
     startFromAnchor: true,
-    // 每行间隔一空行（视觉上相当于按了两次回车）
-    doubleEnter: true,
+    // 不做“每行双回车”的伪行距；改为让光标保持在展示框中间
+    doubleEnter: false,
   });
   code.start();
 
