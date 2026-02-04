@@ -203,18 +203,19 @@ export function initCardSystem(ctx = {}) {
 
     function syncCollapseUIForList(list) {
         if (typeof ctx.syncCardCollapseUI !== "function") return false;
+        let updated = 0;
         const visit = (arr) => {
             const nodes = arr || [];
             for (const n of nodes) {
                 if (!n) continue;
-                if (n.id) ctx.syncCardCollapseUI(n.id);
+                if (n.id && ctx.syncCardCollapseUI(n.id)) updated++;
                 if (isBuilderContainerKind(n.kind) && Array.isArray(n.children)) {
                     visit(n.children);
                 }
             }
         };
         visit(list);
-        return true;
+        return updated > 0;
     }
 
     function makeCollapseAllButtons(scopeId, listGetter, small = true) {
@@ -299,8 +300,7 @@ export function initCardSystem(ctx = {}) {
         if (title.parentElement.querySelector(".panel-tools")) return;
         const tools = document.createElement("div");
         tools.className = "panel-tools";
-        const state = getState();
-        const { collapseBtn, expandBtn } = makeCollapseAllButtons(null, () => state?.root?.children || [], true);
+        const { collapseBtn, expandBtn } = makeCollapseAllButtons(null, () => (getState()?.root?.children || []), true);
         tools.appendChild(collapseBtn);
         tools.appendChild(expandBtn);
 
@@ -570,9 +570,12 @@ export function initCardSystem(ctx = {}) {
             e.stopPropagation();
             historyCapture("toggle_term_collapse");
             t.collapsed = !t.collapsed;
-            card.classList.toggle("collapsed", t.collapsed);
-            collapseBtn.textContent = t.collapsed ? "▸" : "▾";
-            collapseBtn.title = t.collapsed ? "展开" : "收起";
+            const synced = (typeof ctx.syncCardCollapseUI === "function") ? ctx.syncCardCollapseUI(t.id) : false;
+            if (!synced) {
+                card.classList.toggle("collapsed", t.collapsed);
+                collapseBtn.textContent = t.collapsed ? "▸" : "▾";
+                collapseBtn.title = t.collapsed ? "展开" : "收起";
+            }
         });
         collapseBtn.title = t.collapsed ? "展开" : "收起";
         actions.appendChild(collapseBtn);
@@ -611,7 +614,7 @@ export function initCardSystem(ctx = {}) {
 
         const body = document.createElement("div");
         body.className = "card-body";
-        if (Number.isFinite(t.bodyHeight)) {
+        if (Number.isFinite(t.bodyHeight) && !t.collapsed) {
             body.style.height = `${t.bodyHeight}px`;
             body.style.maxHeight = `${t.bodyHeight}px`;
         }
@@ -728,9 +731,12 @@ export function initCardSystem(ctx = {}) {
                     else scope.manualOpen.add(node.id);
                 }
             }
-            card.classList.toggle("collapsed", node.collapsed);
-            collapseBtn.textContent = node.collapsed ? "▸" : "▾";
-            collapseBtn.title = node.collapsed ? "展开" : "收起";
+            const synced = (typeof ctx.syncCardCollapseUI === "function") ? ctx.syncCardCollapseUI(node.id) : false;
+            if (!synced) {
+                card.classList.toggle("collapsed", node.collapsed);
+                collapseBtn.textContent = node.collapsed ? "▸" : "▾";
+                collapseBtn.title = node.collapsed ? "展开" : "收起";
+            }
         });
         collapseBtn.addEventListener("pointerdown", rememberCollapsePrev);
         collapseBtn.addEventListener("mousedown", rememberCollapsePrev);
@@ -894,7 +900,7 @@ export function initCardSystem(ctx = {}) {
 
         const body = document.createElement("div");
         body.className = "card-body";
-        if (Number.isFinite(node.bodyHeight)) {
+        if (Number.isFinite(node.bodyHeight) && !node.collapsed) {
             body.style.height = `${node.bodyHeight}px`;
             body.style.maxHeight = `${node.bodyHeight}px`;
         }

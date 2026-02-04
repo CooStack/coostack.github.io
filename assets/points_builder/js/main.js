@@ -734,6 +734,10 @@ import {
         return scope;
     }
 
+    function resetCollapseScopes() {
+        collapseScopes.clear();
+    }
+
     function isCollapseAllActive(scopeId) {
         return !!getCollapseScope(scopeId).active;
     }
@@ -801,18 +805,72 @@ import {
 
 
     function syncCardCollapseUI(id) {
-        if (!id || !elCardsRoot) return;
+        if (!id || !elCardsRoot) return false;
         const ctx = findNodeContextById(id);
-        if (!ctx || !ctx.node) return;
+        if (!ctx || !ctx.node) return false;
         const card = elCardsRoot.querySelector(`.card[data-id="${id}"]`);
-        if (!card) return;
-        const collapsed = !!ctx.node.collapsed;
-        card.classList.toggle("collapsed", collapsed);
+        if (!card) return false;
+        const body = card.querySelector(".card-body");
         const btn = card.querySelector('.iconbtn[data-collapse-btn="1"]');
+        const collapsed = !!ctx.node.collapsed;
+        const wasCollapsed = card.classList.contains("collapsed");
+
         if (btn) {
             btn.textContent = collapsed ? "▸" : "▾";
             btn.title = collapsed ? "展开" : "收起";
         }
+        if (wasCollapsed === collapsed) {
+            if (!collapsed && body && !Number.isFinite(ctx.node.bodyHeight)) {
+                body.style.height = "";
+                body.style.maxHeight = "";
+            }
+            return true;
+        }
+
+        const token = String(Date.now() + Math.random());
+        if (body) body.dataset.animToken = token;
+
+        if (collapsed) {
+            // 先测量当前高度，再折叠（避免先加 collapsed 导致高度变成 0）
+            if (body) {
+                const current = body.getBoundingClientRect().height || 0;
+                body.style.height = `${current}px`;
+                body.style.maxHeight = `${current}px`;
+            }
+            card.classList.add("collapsed");
+            if (body) {
+                requestAnimationFrame(() => {
+                    if (body.dataset.animToken !== token) return;
+                    body.style.height = "0px";
+                    body.style.maxHeight = "0px";
+                });
+            }
+        } else {
+            // 先取消 collapsed，再动画展开到内容高度
+            card.classList.remove("collapsed");
+            if (body) {
+                const targetH = Number.isFinite(ctx.node.bodyHeight)
+                    ? ctx.node.bodyHeight
+                    : body.scrollHeight || 0;
+                body.style.height = "0px";
+                body.style.maxHeight = "0px";
+                requestAnimationFrame(() => {
+                    if (body.dataset.animToken !== token) return;
+                    body.style.height = `${targetH}px`;
+                    body.style.maxHeight = `${targetH}px`;
+                });
+                if (!Number.isFinite(ctx.node.bodyHeight)) {
+                    setTimeout(() => {
+                        if (body.dataset.animToken !== token) return;
+                        if (!ctx.node.collapsed) {
+                            body.style.height = "";
+                            body.style.maxHeight = "";
+                        }
+                    }, 460);
+                }
+            }
+        }
+        return true;
     }
 
     function handleCollapseAllFocusChange(prevId, nextId) {
@@ -853,7 +911,7 @@ import {
         const scope = getCollapseScope(scopeId);
         scope.active = false;
         scope.manualOpen.clear();
-        scope.forceOpenOnce = true;
+        scope.forceOpenOnce = false;
         expandAllInList(list);
     }
 
@@ -2722,6 +2780,14 @@ function onCanvasClick(ev) {
             historyCapture("import_json");
             state = obj;
             ensureAxisEverywhere();
+            resetCollapseScopes();
+            const rawName = (f.name || "").replace(/\.[^/.]+$/, "");
+            const nextName = sanitizeFileBase(rawName || "");
+            if (nextName) {
+                projectName = nextName;
+                saveProjectName(projectName);
+                if (inpProjectName) inpProjectName.value = projectName;
+            }
             renderAll();
             showToast("导入成功", "success");
         } catch (e) {
@@ -2743,6 +2809,7 @@ function onCanvasClick(ev) {
             historyCapture("import_with_builder_json");
             target.children = obj.root.children;
             ensureAxisInList(target.children);
+            resetCollapseScopes();
             renderAll();
             showToast("导入成功", "success");
         } catch (e) {
