@@ -11,7 +11,7 @@
       this.life--;
       this.vx *= 0.985;
       this.vy *= 0.985;
-      this.vy += 0.06; // 重力
+      this.vy += 0.03; // 重力
       this.x += this.vx;
       this.y += this.vy;
     }

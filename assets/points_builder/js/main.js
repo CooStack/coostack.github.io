@@ -1,5 +1,23 @@
 ﻿import * as THREE from "three";
 import {OrbitControls} from "three/addons/controls/OrbitControls.js";
+import { createCardInputs, initCardSystem } from "./cards.js";
+import { initFilterSystem } from "./filters.js";
+import { initHotkeysSystem } from "./hotkeys.js";
+import { createKindDefs } from "./kinds.js";
+import { createBuilderTools } from "./builder.js";
+import { initLayoutSystem } from "./layout.js";
+import { createNodeHelpers } from "./nodes.js";
+import { toggleFullscreen } from "./viewer.js";
+import {
+    sanitizeFileBase,
+    loadProjectName,
+    saveProjectName,
+    loadKotlinEndMode,
+    saveKotlinEndMode,
+    loadAutoState,
+    saveAutoState,
+    downloadText
+} from "./io.js";
 
 (function () {
     const U = globalThis.Utils;
@@ -37,12 +55,14 @@ import {OrbitControls} from "three/addons/controls/OrbitControls.js";
     const btnCopyKotlin2 = document.getElementById("btnCopyKotlin2");
     const btnExportKotlin2 = document.getElementById("btnExportKotlin2");
     const btnDownloadKotlin2 = document.getElementById("btnDownloadKotlin2");
+    const selKotlinEnd = document.getElementById("selKotlinEnd");
 
     const btnSaveJson = document.getElementById("btnSaveJson");
     const btnLoadJson = document.getElementById("btnLoadJson");
     const fileJson = document.getElementById("fileJson");
     const fileBuilderJson = document.getElementById("fileBuilderJson");
     const btnReset = document.getElementById("btnReset");
+    const inpProjectName = document.getElementById("inpProjectName");
     let builderJsonTargetNode = null;
 
     const modal = document.getElementById("modal");
@@ -104,6 +124,22 @@ import {OrbitControls} from "three/addons/controls/OrbitControls.js";
         return `RelativeLocation(${U.fmt(num(x))}, ${U.fmt(num(y))}, ${U.fmt(num(z))})`;
     }
 
+    function clamp(v, min, max) {
+        let lo = Number(min);
+        let hi = Number(max);
+        if (!Number.isFinite(lo)) lo = 0;
+        if (!Number.isFinite(hi)) hi = lo;
+        if (hi < lo) hi = lo;
+        return Math.min(Math.max(Number(v) || 0, lo), hi);
+    }
+
+    let getFilterScope, saveRootFilter, isFilterActive, filterAllows, getVisibleEntries, getVisibleIndices, swapInList, findVisibleSwapIndex, cleanupFilterMenus;
+    let renderCards, renderParamsEditors, layoutActionOverflow, initCollapseAllControls, setupListDropZone, addQuickOffsetTo;
+    let createFilterControls, createParamSyncControls, renderSyncMenu, bindParamSyncListeners, isSyncSelectableEvent, toggleSyncTarget, paramSync;
+    let hotkeys, hotkeyToHuman, hotkeyMatchEvent, normalizeHotkey, shouldIgnorePlainHotkeys;
+    let openHotkeysModal, hideHotkeysModal, beginHotkeyCapture, refreshHotkeyHints, handleHotkeyCaptureKeydown;
+
+
     let toastTimer = 0;
     function showToast(msg, type = "info") {
         let el = document.getElementById("pbToast");
@@ -120,6 +156,23 @@ import {OrbitControls} from "three/addons/controls/OrbitControls.js";
         clearTimeout(toastTimer);
         toastTimer = setTimeout(() => el.classList.remove("show"), 1600);
     }
+
+    // -------------------------
+    // Project name / Kotlin ending
+    // -------------------------
+    let projectName = loadProjectName();
+
+    function getProjectBaseName() {
+        return sanitizeFileBase(projectName || "");
+    }
+
+    function makeExportFileName(ext, fallbackBase) {
+        const base = getProjectBaseName();
+        const safeBase = base || fallbackBase || "export";
+        return `${safeBase}.${ext}`;
+    }
+
+    let kotlinEndMode = loadKotlinEndMode();
 
     // 让 axis 指向 toPoint，并保持“上方向”稳定（平面包含世界 Up）
     function rotatePointsToPointUpright(points, toPoint, axis, upRef = U.v(0, 1, 0)) {
@@ -177,213 +230,23 @@ import {OrbitControls} from "three/addons/controls/OrbitControls.js";
     // -------------------------
     // Layout (panel sizes + kotlin toggle)
     // -------------------------
-    const LAYOUT_STORAGE_KEY = "pb_layout_v1";
-    const MIN_LEFT_W = 220;
-    const MIN_RIGHT_W = 260;
-    const MIN_VIEWER_W = 280;
-
-    let layoutState = loadLayoutState();
-
-    function clamp(v, min, max) {
-        let lo = Number(min);
-        let hi = Number(max);
-        if (!Number.isFinite(lo)) lo = 0;
-        if (!Number.isFinite(hi)) hi = lo;
-        if (hi < lo) hi = lo;
-        return Math.min(Math.max(Number(v) || 0, lo), hi);
-    }
-
-    function loadLayoutState() {
-        try {
-            const raw = localStorage.getItem(LAYOUT_STORAGE_KEY);
-            if (raw) {
-                const obj = JSON.parse(raw);
-                if (obj && typeof obj === "object") {
-                    return {
-                        leftWidth: Number.isFinite(obj.leftWidth) ? obj.leftWidth : null,
-                        rightWidth: Number.isFinite(obj.rightWidth) ? obj.rightWidth : null,
-                        kotlinHidden: !!obj.kotlinHidden,
-                    };
-                }
-            }
-        } catch (e) {
-            console.warn("loadLayoutState failed:", e);
-        }
-        return { leftWidth: null, rightWidth: null, kotlinHidden: false };
-    }
-
-    function saveLayoutState() {
-        try {
-            localStorage.setItem(LAYOUT_STORAGE_KEY, JSON.stringify(layoutState));
-        } catch (e) {
-            console.warn("saveLayoutState failed:", e);
-        }
-    }
-
-    function getPanelWidth(panel) {
-        if (!panel) return 0;
-        const rect = panel.getBoundingClientRect();
-        return rect && rect.width ? rect.width : 0;
-    }
-
-    function setPanelWidth(panel, w) {
-        if (!panel || !Number.isFinite(w)) return;
-        const v = Math.max(0, w);
-        panel.style.width = `${v}px`;
-        panel.style.flex = `0 0 ${v}px`;
-    }
-
-    function clampLeftWidth(w) {
-        if (!layoutEl) return w;
-        const layoutW = layoutEl.getBoundingClientRect().width || 0;
-        const rightW = layoutState.kotlinHidden ? 0 : (getPanelWidth(panelRight) || layoutState.rightWidth || MIN_RIGHT_W);
-        const max = Math.max(MIN_LEFT_W, layoutW - rightW - MIN_VIEWER_W);
-        return clamp(w, MIN_LEFT_W, max);
-    }
-
-    function clampRightWidth(w) {
-        if (!layoutEl) return w;
-        const layoutW = layoutEl.getBoundingClientRect().width || 0;
-        const leftW = getPanelWidth(panelLeft) || layoutState.leftWidth || MIN_LEFT_W;
-        const max = Math.max(MIN_RIGHT_W, layoutW - leftW - MIN_VIEWER_W);
-        return clamp(w, MIN_RIGHT_W, max);
-    }
-
-    function updateKotlinToggleText() {
-        if (!btnToggleKotlin) return;
-        if (layoutState.kotlinHidden) {
-            btnToggleKotlin.textContent = "<";
-            btnToggleKotlin.title = "显示 Kotlin";
-        } else {
-            btnToggleKotlin.textContent = ">";
-            btnToggleKotlin.title = "隐藏 Kotlin";
-        }
-    }
-
-    function setKotlinHidden(hidden, persist = true) {
-        if (!layoutEl) return;
-        const next = !!hidden;
-        if (next) {
-            const curRight = getPanelWidth(panelRight);
-            if (curRight) layoutState.rightWidth = curRight;
-            if (Number.isFinite(curRight) && curRight > 0) setPanelWidth(panelRight, curRight);
-            requestAnimationFrame(() => layoutEl.classList.add("kotlin-hidden"));
-        } else {
-            layoutEl.classList.remove("kotlin-hidden");
-            if (Number.isFinite(layoutState.rightWidth)) {
-                const w = clampRightWidth(layoutState.rightWidth);
-                layoutState.rightWidth = w;
-                requestAnimationFrame(() => setPanelWidth(panelRight, w));
-            }
-        }
-        layoutState.kotlinHidden = next;
-        updateKotlinToggleText();
-        scheduleThreeResize();
-        scheduleTogglePosition();
-        setTimeout(scheduleThreeResize, 360);
-        setTimeout(scheduleTogglePosition, 360);
-        if (persist) saveLayoutState();
-    }
-
-    function applyLayoutState(persist = false) {
-        if (!layoutEl) return;
-        setKotlinHidden(!!layoutState.kotlinHidden, false);
-        if (Number.isFinite(layoutState.leftWidth)) {
-            const w = clampLeftWidth(layoutState.leftWidth);
-            layoutState.leftWidth = w;
-            setPanelWidth(panelLeft, w);
-        }
-        if (!layoutState.kotlinHidden && Number.isFinite(layoutState.rightWidth)) {
-            const w = clampRightWidth(layoutState.rightWidth);
-            layoutState.rightWidth = w;
-            setPanelWidth(panelRight, w);
-        }
-        scheduleTogglePosition();
-        if (persist) saveLayoutState();
-    }
-
-    let resizeRaf = 0;
-    let togglePosRaf = 0;
-    function scheduleThreeResize() {
-        if (resizeRaf) cancelAnimationFrame(resizeRaf);
-        resizeRaf = requestAnimationFrame(() => {
-            resizeRaf = 0;
-            onResize();
-        });
-    }
-
-    function positionKotlinToggle() {
-        if (!btnToggleKotlin || !layoutEl) return;
-        const layoutRect = layoutEl.getBoundingClientRect();
-        if (!layoutRect || layoutRect.width <= 0) return;
-        if (layoutState.kotlinHidden || !panelRight) {
-            btnToggleKotlin.style.left = "auto";
-            btnToggleKotlin.style.right = "10px";
-            return;
-        }
-        const rightRect = panelRight.getBoundingClientRect();
-        const desiredLeft = rightRect.left - layoutRect.left + 8;
-        const safeLeft = clamp(desiredLeft, 8, Math.max(8, layoutRect.width - 36));
-        btnToggleKotlin.style.left = `${safeLeft}px`;
-        btnToggleKotlin.style.right = "auto";
-    }
-
-    function scheduleTogglePosition() {
-        if (togglePosRaf) cancelAnimationFrame(togglePosRaf);
-        togglePosRaf = requestAnimationFrame(() => {
-            togglePosRaf = 0;
-            positionKotlinToggle();
-        });
-    }
-
-    if (panelRight) {
-        panelRight.addEventListener("transitionend", (e) => {
-            if (e.propertyName === "width" || e.propertyName === "flex-basis" || e.propertyName === "transform") {
-                scheduleThreeResize();
-                scheduleTogglePosition();
-            }
-        });
-    }
-
-    function bindResizer(el, side) {
-        if (!el) return;
-        el.addEventListener("pointerdown", (e) => {
-            if (e.button !== 0) return;
-            if (side === "right" && layoutState.kotlinHidden) return;
-            e.preventDefault();
-            const startX = e.clientX;
-            const startLeft = getPanelWidth(panelLeft);
-            const startRight = getPanelWidth(panelRight);
-
-            const onMove = (ev) => {
-                const dx = ev.clientX - startX;
-                if (side === "left") {
-                    const w = clampLeftWidth(startLeft + dx);
-                    layoutState.leftWidth = w;
-                    setPanelWidth(panelLeft, w);
-                    scheduleTogglePosition();
-                } else {
-                    const w = clampRightWidth(startRight - dx);
-                    layoutState.rightWidth = w;
-                    setPanelWidth(panelRight, w);
-                    scheduleTogglePosition();
-                }
-            };
-
-            const onUp = () => {
-                document.removeEventListener("pointermove", onMove);
-                document.removeEventListener("pointerup", onUp);
-                document.body.classList.remove("resizing-panels");
-                saveLayoutState();
-                scheduleThreeResize();
-                scheduleTogglePosition();
-            };
-
-            document.body.classList.add("resizing-panels");
-            document.addEventListener("pointermove", onMove);
-            document.addEventListener("pointerup", onUp);
-        });
-    }
+    const layoutSystem = initLayoutSystem({
+        layoutEl,
+        panelLeft,
+        panelRight,
+        resizerLeft,
+        resizerRight,
+        btnToggleKotlin,
+        onResize,
+        clamp
+    });
+    const {
+        applyLayoutState,
+        setKotlinHidden,
+        updateKotlinToggleText,
+        bindResizers,
+        isKotlinHidden
+    } = layoutSystem;
 
     function bindCardBodyResizer(resizerEl, bodyEl, target) {
         if (!resizerEl || !bodyEl || !target) return;
@@ -521,823 +384,25 @@ import {OrbitControls} from "three/addons/controls/OrbitControls.js";
 
 
     // -------------------------
-    // Hotkeys + Download helpers
-    // -------------------------
-    const HOTKEY_STORAGE_KEY = "pb_hotkeys_v1";
-
-    const DEFAULT_HOTKEYS = {
-        version: 1,
-        actions: {
-            openPicker: "KeyW",          // W
-            pickLineXZ: "KeyQ",          // Q
-            pickPoint: "KeyE",           // E
-            snapPlaneXZ: "Digit1",       // 1
-            snapPlaneXY: "Digit2",       // 2
-            snapPlaneZY: "Digit3",       // 3
-            mirrorPlaneXZ: "Shift+Digit1", // Shift + 1
-            mirrorPlaneXY: "Shift+Digit2", // Shift + 2
-            mirrorPlaneZY: "Shift+Digit3", // Shift + 3
-            copyFocused: "Mod+KeyD",     // Ctrl/Cmd + D
-            mirrorCopy: "Mod+Shift+KeyM",// Ctrl/Cmd + Shift + M
-            undo: "Mod+KeyZ",            // Ctrl/Cmd + Z
-            redo: "Mod+Shift+KeyZ",      // Ctrl/Cmd + Shift + Z
-            // 删除聚焦卡片（Mac 键盘上的“Delete”通常对应 Backspace；更通用）
-            deleteFocused: "Backspace",
-        },
-        kinds: {},
-    };
-
-    function normalizeHotkey(hk) {
-        if (!hk || typeof hk !== "string") return "";
-        const parts = hk.split("+").map(s => s.trim()).filter(Boolean);
-        const hasMod = parts.includes("Mod");
-        const hasShift = parts.includes("Shift");
-        const hasAlt = parts.includes("Alt");
-        const main = parts.find(p => p !== "Mod" && p !== "Shift" && p !== "Alt") || "";
-        const out = [];
-        if (hasMod) out.push("Mod");
-        if (hasShift) out.push("Shift");
-        if (hasAlt) out.push("Alt");
-        if (main) out.push(main);
-        return out.join("+");
-    }
-
-    function eventToHotkey(e) {
-        const parts = [];
-        if (e.ctrlKey || e.metaKey) parts.push("Mod");
-        if (e.shiftKey) parts.push("Shift");
-        if (e.altKey) parts.push("Alt");
-
-        const code = e.code || "";
-        const isModifierCode = (
-            code === "ShiftLeft" || code === "ShiftRight" ||
-            code === "ControlLeft" || code === "ControlRight" ||
-            code === "AltLeft" || code === "AltRight" ||
-            code === "MetaLeft" || code === "MetaRight"
-        );
-        if (code && !isModifierCode) parts.push(code);
-        return normalizeHotkey(parts.join("+"));
-    }
-
-    function hotkeyToHuman(hk) {
-        hk = normalizeHotkey(hk);
-        if (!hk) return "";
-        const parts = hk.split("+");
-        const out = parts.map(p => {
-            if (p === "Mod") return "Ctrl/Cmd";
-            if (p === "Shift") return "Shift";
-            if (p === "Alt") return "Alt";
-                        if (p.startsWith("Key")) return p.slice(3).toUpperCase();
-            if (p.startsWith("Digit")) return p.slice(5);
-            if (p === "Space") return "Space";
-            if (p === "Escape") return "Esc";
-            if (p === "Backspace") return "Backspace";
-            if (p === "Enter") return "Enter";
-            if (p.startsWith("Arrow")) return p.replace("Arrow", "");
-            return p;
-        });
-        return out.join("+");
-    }
-
-    function hotkeyMatchEvent(e, hk) {
-        hk = normalizeHotkey(hk);
-        if (!hk) return false;
-        return eventToHotkey(e) === hk;
-    }
-
-    function shouldIgnorePlainHotkeys() {
-        const ae = document.activeElement;
-        if (!ae) return false;
-        const tag = (ae.tagName || "").toUpperCase();
-        if (tag === "INPUT") {
-            const type = (ae.type || "text").toLowerCase();
-            // number 输入允许快捷键触发（避免影响常用工作流）
-            if (type === "number") return false;
-            return true;
-        }
-        if (tag === "TEXTAREA") {
-            // 右侧 Kotlin 代码栏只读，但用户希望快捷键（W/Q等）依然可用
-            if (ae.id === "kotlinOut" && ae.readOnly) return false;
-            return true;
-        }
-        if (ae.isContentEditable) return true;
-        return false;
-    }
-
-    function downloadText(filename, text, mime = "text/plain") {
-        const blob = new Blob([text], { type: `${mime};charset=utf-8` });
-        const a = document.createElement("a");
-        a.href = URL.createObjectURL(blob);
-        a.download = filename || "download.txt";
-        document.body.appendChild(a);
-        a.click();
-        a.remove();
-        setTimeout(() => URL.revokeObjectURL(a.href), 200);
-    }
-
-    function loadHotkeys() {
-        try {
-            const raw = localStorage.getItem(HOTKEY_STORAGE_KEY);
-            if (raw) {
-                const obj = JSON.parse(raw);
-                const out = {
-                    version: 1,
-                    actions: Object.assign({}, DEFAULT_HOTKEYS.actions),
-                    kinds: {},
-                };
-                if (obj && typeof obj === "object") {
-                    if (obj.actions && typeof obj.actions === "object") {
-                        Object.assign(out.actions, obj.actions);
-                    }
-                    if (obj.kinds && typeof obj.kinds === "object") {
-                        out.kinds = Object.assign({}, obj.kinds);
-                    }
-                }
-                // normalize
-                for (const k of Object.keys(out.actions)) out.actions[k] = normalizeHotkey(out.actions[k]);
-                for (const k of Object.keys(out.kinds)) out.kinds[k] = normalizeHotkey(out.kinds[k]);
-                return out;
-            }
-        } catch (e) {
-            console.warn("loadHotkeys failed:", e);
-        }
-        return JSON.parse(JSON.stringify(DEFAULT_HOTKEYS));
-    }
-
-    function saveHotkeys() {
-        try {
-            localStorage.setItem(HOTKEY_STORAGE_KEY, JSON.stringify(hotkeys));
-        } catch (e) {
-            console.warn("saveHotkeys failed:", e);
-        }
-        refreshHotkeyHints();
-    }
-
-    function resetHotkeys() {
-        hotkeys = JSON.parse(JSON.stringify(DEFAULT_HOTKEYS));
-        saveHotkeys();
-        renderHotkeysList();
-    }
-
-    function removeHotkeyConflicts(hk, except = null) {
-        hk = normalizeHotkey(hk);
-        if (!hk) return;
-
-        // 清理重复绑定（同一个按键只能绑定一个功能）
-        for (const [id, v] of Object.entries(hotkeys.actions || {})) {
-            if (except && except.type === "action" && except.id === id) continue;
-            if (normalizeHotkey(v) === hk) hotkeys.actions[id] = "";
-        }
-        for (const [kind, v] of Object.entries(hotkeys.kinds || {})) {
-            if (except && except.type === "kind" && except.id === kind) continue;
-            if (normalizeHotkey(v) === hk) delete hotkeys.kinds[kind];
-        }
-    }
-
-    // load hotkeys once
-    let hotkeys = loadHotkeys();
-    // 关键动作快捷键不允许为空（否则用户会出现“按 W/Q 没反应”的体验）
-    for (const k of Object.keys(DEFAULT_HOTKEYS.actions)) {
-        if (!hotkeys.actions[k]) hotkeys.actions[k] = DEFAULT_HOTKEYS.actions[k];
-    }
-
-
-    // -------------------------
     // KIND
     // -------------------------
-    const KIND = {
-        axis: {
-            title: "axis(对称轴)",
-            desc: "PointsBuilder.axis(RelativeLocation)",
-            defaultParams: {x: 0, y: 1, z: 0},
-            apply(ctx, node) {
-                ctx.axis = U.v(num(node.params.x), num(node.params.y), num(node.params.z));
-            },
-            kotlin(node) {
-                return `.axis(${relExpr(node.params.x, node.params.y, node.params.z)})`;
-            }
-        },
-
-        rotate_as_axis: {
-            title: "rotateAsAxis(绕轴旋转)",
-            desc: "度输入；导出为 系数*PI",
-            defaultParams: {deg: 90, useCustomAxis: false, ax: 0, ay: 1, az: 0},
-            apply(ctx, node) {
-                const rad = U.degToRad(num(node.params.deg));
-                const axis = node.params.useCustomAxis
-                    ? U.v(num(node.params.ax), num(node.params.ay), num(node.params.az))
-                    : ctx.axis;
-                ctx.points = ctx.points.map(p => U.rotateAroundAxis(p, axis, rad));
-            },
-            kotlin(node) {
-                const radExpr = U.degToKotlinRadExpr(num(node.params.deg));
-                if (node.params.useCustomAxis) {
-                    return `.rotateAsAxis(${radExpr}, ${relExpr(node.params.ax, node.params.ay, node.params.az)})`;
-                }
-                return `.rotateAsAxis(${radExpr})`;
-            }
-        },
-
-        rotate_to: {
-            title: "rotateTo(指向目标)",
-            desc: "让 axis 指向目标方向（已修复预览）",
-            defaultParams: {mode: "toVec", tox: 0, toy: 1, toz: 1, ox: 0, oy: 0, oz: 0, ex: 0, ey: 0, ez: 1},
-            apply(ctx, node) {
-                if (!ctx.points || ctx.points.length === 0) return;
-
-                // 检查参数
-                const toX = num(node.params.tox);
-                const toY = num(node.params.toy);
-                const toZ = num(node.params.toz);
-
-                let to;
-                if (node.params.mode === "originEnd") {
-                    // origin+end 模式计算目标向量
-                    const origin = U.v(num(node.params.ox), num(node.params.oy), num(node.params.oz));
-                    const end = U.v(num(node.params.ex), num(node.params.ey), num(node.params.ez));
-                    to = U.sub(end, origin); // 计算目标向量
-                } else {
-                    // 使用传入的 toX, toY, toZ 作为目标向量
-                    to = U.v(toX, toY, toZ);  // 将目标向量传入
-                }
-
-                console.log(to, toX, toY, toZ);
-                const axis = U.norm(ctx.axis);  // 当前轴向
-                const toN = U.norm(to);         // 目标向量的单位向量
-
-                // 目标向量和轴向为零向量：跳过
-                if (U.len(axis) <= 1e-12 || U.len(toN) <= 1e-12) return;
-
-                // 计算旋转的四元数（根据目标向量来旋转）
-                const q = new THREE.Quaternion();
-                q.setFromUnitVectors(
-                    new THREE.Vector3(axis.x, axis.y, axis.z),
-                    new THREE.Vector3(toN.x, toN.y, toN.z)
-                );
-
-                // 使用四元数旋转所有点
-                const v = new THREE.Vector3();
-                for (let i = 0; i < ctx.points.length; i++) {
-                    const p = ctx.points[i];
-                    v.set(p.x, p.y, p.z).applyQuaternion(q);  // 使用四元数旋转
-                    p.x = v.x;
-                    p.y = v.y;
-                    p.z = v.z;
-                }
-            },
-            kotlin(node) {
-                if (node.params.mode === "originEnd") {
-                    return `.rotateTo(${relExpr(node.params.ox, node.params.oy, node.params.oz)}, ${relExpr(node.params.ex, node.params.ey, node.params.ez)})`;
-                }
-                return `.rotateTo(${relExpr(node.params.tox, node.params.toy, node.params.toz)})`;
-            }
-        },
-
-        scale: {
-            title: "scale(缩放)",
-            desc: "PointsBuilder.scale(factor)",
-            defaultParams: {factor: 1},
-            apply(ctx, node) {
-                const f = num(node.params.factor);
-                if (f <= 0) return;
-                ctx.points = ctx.points.map(p => U.mul(p, f));
-            },
-            kotlin(node) {
-                return `.scale(${U.fmt(num(node.params.factor))})`;
-            }
-        },
-
-        add_point: {
-            title: "addPoint(单点)",
-            desc: "PointsBuilder.addPoint(RelativeLocation)",
-            defaultParams: {x: 0, y: 0, z: 0},
-            apply(ctx, node) {
-                ctx.points.push(U.v(num(node.params.x), num(node.params.y), num(node.params.z)));
-            },
-            kotlin(node) {
-                return `.addPoint(${relExpr(node.params.x, node.params.y, node.params.z)})`;
-            }
-        },
-
-        add_line: {
-            title: "addLine(线段)",
-            desc: "start -> end",
-            defaultParams: {sx: 0, sy: 0, sz: 0, ex: 3, ey: 0, ez: 3, count: 30},
-            apply(ctx, node) {
-                const s = U.v(num(node.params.sx), num(node.params.sy), num(node.params.sz));
-                const e = U.v(num(node.params.ex), num(node.params.ey), num(node.params.ez));
-                ctx.points.push(...U.getLineLocations(s, e, Math.max(1, int(node.params.count))));
-            },
-            kotlin(node) {
-                return `.addLine(${relExpr(node.params.sx, node.params.sy, node.params.sz)}, ${relExpr(node.params.ex, node.params.ey, node.params.ez)}, ${int(node.params.count)})`;
-            }
-        },
-
-        add_circle: {
-            title: "addCircle(XZ圆)",
-            desc: "addCircle(r, count)",
-            defaultParams: {r: 2, count: 120},
-            apply(ctx, node) {
-                ctx.points.push(...U.getCircleXZ(num(node.params.r), int(node.params.count)));
-            },
-            kotlin(node) {
-                return `.addCircle(${U.fmt(num(node.params.r))}, ${int(node.params.count)})`;
-            }
-        },
-
-        add_discrete_circle_xz: {
-            title: "addDiscreteCircleXZ(离散圆环)",
-            desc: "addDiscreteCircleXZ(r, count, discrete)",
-            defaultParams: {r: 2, count: 120, discrete: 0.4, seedEnabled: false, seed: 1},
-            apply(ctx, node) {
-                const seed = node.params.seedEnabled ? int(node.params.seed) : null;
-                ctx.points.push(...U.getDiscreteCircleXZ(num(node.params.r), int(node.params.count), num(node.params.discrete), seed));
-            },
-            kotlin(node) {
-                return `.addDiscreteCircleXZ(${U.fmt(num(node.params.r))}, ${int(node.params.count)}, ${U.fmt(num(node.params.discrete))})`;
-            }
-        },
-
-        add_half_circle: {
-            title: "addHalfCircle(半圆XZ)",
-            desc: "可选 rotate(rad)；输入度导出*PI",
-            defaultParams: {r: 2, count: 80, useRotate: false, rotateDeg: 0},
-            apply(ctx, node) {
-                const rot = node.params.useRotate ? U.degToRad(num(node.params.rotateDeg)) : 0;
-                ctx.points.push(...U.getHalfCircleXZ(num(node.params.r), int(node.params.count), rot));
-            },
-            kotlin(node) {
-                const r = U.fmt(num(node.params.r));
-                const c = int(node.params.count);
-                if (!node.params.useRotate) return `.addHalfCircle(${r}, ${c})`;
-                const radExpr = U.degToKotlinRadExpr(num(node.params.rotateDeg));
-                return `.addHalfCircle(${r}, ${c}, ${radExpr})`;
-            }
-        },
-
-        add_radian_center: {
-            title: "addRadianCenter(弧线中心XZ)",
-            desc: "从 -radian/2..radian/2；可选 rotate(rad)；输入度导出*PI",
-            defaultParams: {r: 2, count: 80, radianDeg: 120, useRotate: false, rotateDeg: 0},
-            apply(ctx, node) {
-                const radian = U.degToRad(num(node.params.radianDeg));
-                const rot = node.params.useRotate ? U.degToRad(num(node.params.rotateDeg)) : 0;
-                ctx.points.push(...U.getRadianXZCenter(num(node.params.r), int(node.params.count), radian, rot));
-            },
-            kotlin(node) {
-                const r = U.fmt(num(node.params.r));
-                const c = int(node.params.count);
-                const radianExpr = U.degToKotlinRadExpr(num(node.params.radianDeg));
-                if (!node.params.useRotate) return `.addRadianCenter(${r}, ${c}, ${radianExpr})`;
-                const rotExpr = U.degToKotlinRadExpr(num(node.params.rotateDeg));
-                return `.addRadianCenter(${r}, ${c}, ${radianExpr}, ${rotExpr})`;
-            }
-        },
-
-        add_radian: {
-            title: "addRadian(弧线XZ)",
-            desc: "从 start..end；可选 rotate(rad)；输入度导出*PI",
-            defaultParams: {r: 2, count: 80, startDeg: 0, endDeg: 120, useRotate: false, rotateDeg: 0},
-            apply(ctx, node) {
-                const sr = U.degToRad(num(node.params.startDeg));
-                const er = U.degToRad(num(node.params.endDeg));
-                const rot = node.params.useRotate ? U.degToRad(num(node.params.rotateDeg)) : 0;
-                ctx.points.push(...U.getRadianXZ(num(node.params.r), int(node.params.count), sr, er, rot));
-            },
-            kotlin(node) {
-                const r = U.fmt(num(node.params.r));
-                const c = int(node.params.count);
-                const srExpr = U.degToKotlinRadExpr(num(node.params.startDeg));
-                const erExpr = U.degToKotlinRadExpr(num(node.params.endDeg));
-                if (!node.params.useRotate) return `.addRadian(${r}, ${c}, ${srExpr}, ${erExpr})`;
-                const rotExpr = U.degToKotlinRadExpr(num(node.params.rotateDeg));
-                return `.addRadian(${r}, ${c}, ${srExpr}, ${erExpr}, ${rotExpr})`;
-            }
-        },
-
-        add_ball: {
-            title: "addBall(球面点集)",
-            desc: "addBall(r, countPow)",
-            defaultParams: {r: 2, countPow: 24},
-            apply(ctx, node) {
-                ctx.points.push(...U.getBallLocations(num(node.params.r), int(node.params.countPow)));
-            },
-            kotlin(node) {
-                return `.addBall(${U.fmt(num(node.params.r))}, ${int(node.params.countPow)})`;
-            }
-        },
-
-        add_polygon_in_circle: {
-            title: "addPolygonInCircle(内接正多边形边点)",
-            desc: "addPolygonInCircle(n, edgeCount, r)",
-            defaultParams: {n: 5, edgeCount: 30, r: 2},
-            apply(ctx, node) {
-                ctx.points.push(...U.getPolygonInCircleLocations(int(node.params.n) || 3, int(node.params.edgeCount) || 1, num(node.params.r)));
-            },
-            kotlin(node) {
-                return `.addPolygonInCircle(${int(node.params.n)}, ${int(node.params.edgeCount)}, ${U.fmt(num(node.params.r))})`;
-            }
-        },
-
-        add_round_shape: {
-            title: "addRoundShape(圆面XZ)",
-            desc: "addRoundShape(r, step, preCircleCount) 或 (min,max)",
-            defaultParams: {
-                r: 3,
-                step: 0.25,
-                mode: "fixed",
-                preCircleCount: 60,
-                minCircleCount: 20,
-                maxCircleCount: 120
-            },
-            apply(ctx, node) {
-                if (node.params.mode === "range") {
-                    ctx.points.push(...U.getRoundScapeLocationsRange(num(node.params.r), num(node.params.step), int(node.params.minCircleCount), int(node.params.maxCircleCount)));
-                } else {
-                    ctx.points.push(...U.getRoundScapeLocations(num(node.params.r), num(node.params.step), int(node.params.preCircleCount)));
-                }
-            },
-            kotlin(node) {
-                const r = U.fmt(num(node.params.r));
-                const step = U.fmt(num(node.params.step));
-                if (node.params.mode === "range") {
-                    return `.addRoundShape(${r}, ${step}, ${int(node.params.minCircleCount)}, ${int(node.params.maxCircleCount)})`;
-                }
-                return `.addRoundShape(${r}, ${step}, ${int(node.params.preCircleCount)})`;
-            }
-        },
-
-        add_bezier_curve: {
-            title: "addBezierCurve(三次贝塞尔)",
-            desc: "addBezierCurve(target, startHandle, endHandle, count)",
-            defaultParams: {tx: 5, ty: 0, shx: 2, shy: 2, ehx: -2, ehy: 2, count: 80},
-            apply(ctx, node) {
-                const target = U.v(num(node.params.tx), num(node.params.ty), 0);
-                const sh = U.v(num(node.params.shx), num(node.params.shy), 0);
-                const eh = U.v(num(node.params.ehx), num(node.params.ehy), 0);
-                ctx.points.push(...U.generateBezierCurve(target, sh, eh, int(node.params.count)));
-            },
-            kotlin(node) {
-                const target = relExpr(node.params.tx, node.params.ty, 0);
-                const sh = relExpr(node.params.shx, node.params.shy, 0);
-                const eh = relExpr(node.params.ehx, node.params.ehy, 0);
-                return `.addBezierCurve(${target}, ${sh}, ${eh}, ${int(node.params.count)})`;
-            }
-        },
-
-        add_lightning_points: {
-            title: "addLightningPoints(闪电折线点)",
-            desc: "对应 PointsBuilder.addLightningPoints(...)",
-            defaultParams: {
-                useStart: false,
-                sx: 0, sy: 0, sz: 0,
-                ex: 6, ey: 2, ez: 0,
-                count: 6,
-                preLineCount: 10,
-                useOffsetRange: true,
-                offsetRange: 1.2
-            },
-            apply(ctx, node) {
-                const end = U.v(num(node.params.ex), num(node.params.ey), num(node.params.ez));
-                const counts = int(node.params.count);
-                const plc = int(node.params.preLineCount);
-                const offset = node.params.useOffsetRange ? num(node.params.offsetRange) : null;
-
-                if (!node.params.useStart) {
-                    ctx.points.push(...U.getLightningEffectPoints(end, counts, plc, offset));
-                } else {
-                    // 对齐 Kotlin：getLightningEffectPoints(end...).onEach{ it.add(start) }
-                    // 注意：这里 end 是“偏移向量”，不是绝对终点
-                    const start = U.v(num(node.params.sx), num(node.params.sy), num(node.params.sz));
-                    const pts = U.getLightningEffectPoints(end, counts, plc, offset);
-                    ctx.points.push(...pts.map(p => U.add(p, start)));
-                }
-            },
-            kotlin(node) {
-                const counts = int(node.params.count);
-                const plc = int(node.params.preLineCount);
-                const end = relExpr(node.params.ex, node.params.ey, node.params.ez);
-
-                if (!node.params.useStart) {
-                    if (node.params.useOffsetRange) {
-                        return `.addLightningPoints(${end}, ${counts}, ${plc}, ${U.fmt(num(node.params.offsetRange))})`;
-                    }
-                    return `.addLightningPoints(${end}, ${counts}, ${plc})`;
-                } else {
-                    const start = relExpr(node.params.sx, node.params.sy, node.params.sz);
-                    if (node.params.useOffsetRange) {
-                        return `.addLightningPoints(${start}, ${end}, ${counts}, ${plc}, ${U.fmt(num(node.params.offsetRange))})`;
-                    }
-                    return `.addLightningPoints(${start}, ${end}, ${counts}, ${plc})`;
-                }
-            }
-        },
-        add_lightning_nodes_attenuation: {
-            title: "addLightningNodesAttenuation(衰减闪电节点)",
-            desc: "只添加节点（不进行每段采样连线）",
-            defaultParams: {
-                useStart: false,
-                sx: 0, sy: 0, sz: 0,
-                ex: 6, ey: 2, ez: 0,
-                counts: 6,
-                maxOffset: 1.2,
-                attenuation: 0.8,
-                seedEnabled: false,
-                seed: 1
-            },
-            apply(ctx, node) {
-                const p = node.params;
-                const start = p.useStart ? U.v(num(p.sx), num(p.sy), num(p.sz)) : U.v(0, 0, 0);
-                const end = U.v(num(p.ex), num(p.ey), num(p.ez));
-                const seed = p.seedEnabled ? int(p.seed) : null;
-
-                ctx.points.push(
-                    ...U.getLightningNodesEffectAttenuation(
-                        start,
-                        end,
-                        int(p.counts),
-                        num(p.maxOffset),
-                        num(p.attenuation),
-                        seed
-                    )
-                );
-            },
-            kotlin(node) {
-                const p = node.params;
-                const end = relExpr(p.ex, p.ey, p.ez);
-                const counts = int(p.counts);
-                const maxOffset = U.fmt(num(p.maxOffset));
-                const attenuation = U.fmt(num(p.attenuation));
-
-                if (!p.useStart) {
-                    return `.addLightningNodesAttenuation(${end}, ${counts}, ${maxOffset}, ${attenuation})`;
-                }
-                const start = relExpr(p.sx, p.sy, p.sz);
-                return `.addLightningNodesAttenuation(${start}, ${end}, ${counts}, ${maxOffset}, ${attenuation})`;
-            }
-        },
-        apply_noise_offset: {
-            title: "applyNoiseOffset(随机扰动)",
-            desc: "applyNoiseOffset(noiseX, noiseY, noiseZ, mode, seed, offsetLenMin, offsetLenMax)",
-            defaultParams: {
-                noiseX: 0.2, noiseY: 0.2, noiseZ: 0.2,
-                mode: "AXIS_UNIFORM",
-                seedEnabled: false, seed: 1,
-                lenMinEnabled: false, offsetLenMin: 0.0,
-                lenMaxEnabled: false, offsetLenMax: 0.0
-            },
-            apply(ctx, node) {
-                const opts = {
-                    mode: node.params.mode,
-                    seed: node.params.seedEnabled ? int(node.params.seed) : null,
-                    offsetLenMin: node.params.lenMinEnabled ? num(node.params.offsetLenMin) : null,
-                    offsetLenMax: node.params.lenMaxEnabled ? num(node.params.offsetLenMax) : null,
-                };
-                U.applyNoiseOffset(ctx.points, num(node.params.noiseX), num(node.params.noiseY), num(node.params.noiseZ), opts);
-            },
-            kotlin(node) {
-                const nx = U.fmt(num(node.params.noiseX));
-                const ny = U.fmt(num(node.params.noiseY));
-                const nz = U.fmt(num(node.params.noiseZ));
-
-                const named = [];
-                if (node.params.mode && node.params.mode !== "AXIS_UNIFORM") named.push(`mode = NoiseMode.${node.params.mode}`);
-                if (node.params.seedEnabled) named.push(`seed = ${int(node.params.seed)}L`);
-                if (node.params.lenMinEnabled) named.push(`offsetLenMin = ${U.fmt(num(node.params.offsetLenMin))}`);
-                if (node.params.lenMaxEnabled) named.push(`offsetLenMax = ${U.fmt(num(node.params.offsetLenMax))}`);
-
-                if (named.length > 0) return `.applyNoiseOffset(${nx}, ${ny}, ${nz}, ${named.join(", ")})`;
-                return `.applyNoiseOffset(${nx}, ${ny}, ${nz})`;
-            }
-        },
-
-        points_on_each_offset: {
-            title: "pointsOnEach { it.add(...) } (快捷偏移)",
-            desc: "三种导出形式",
-            defaultParams: {offX: 0.2, offY: 0, offZ: 0, kotlinMode: "direct3"},
-            apply(ctx, node) {
-                const dx = num(node.params.offX), dy = num(node.params.offY), dz = num(node.params.offZ);
-                ctx.points = ctx.points.map(p => ({x: p.x + dx, y: p.y + dy, z: p.z + dz}));
-            },
-            kotlin(node, emitCtx) {
-                const dx = U.fmt(num(node.params.offX));
-                const dy = U.fmt(num(node.params.offY));
-                const dz = U.fmt(num(node.params.offZ));
-                const mode = node.params.kotlinMode;
-
-                if (mode === "newRel") return `.pointsOnEach { it.add(RelativeLocation(${dx}, ${dy}, ${dz})) }`;
-                if (mode === "valRel") {
-                    const varName = `rel_${node.id.slice(0, 6)}`;
-                    emitCtx.decls.push(`val ${varName} = RelativeLocation(${dx}, ${dy}, ${dz})`);
-                    return `.pointsOnEach { it.add(${varName}) }`;
-                }
-                return `.pointsOnEach { it.add(${dx}, ${dy}, ${dz}) }`;
-            }
-        },
-
-        add_with: {
-            title: "addWith(旋转重复)",
-            desc: "PointsBuilder.addWith { 子Builder 旋转重复 }",
-            defaultParams: {r: 3, c: 6, rotateToCenter: true, rotateReverse: false, rotateOffsetEnabled: false, rox: 0, roy: 0, roz: 0},
-            apply(ctx, node) {
-                const r = num(node.params.r);
-                const c = int(node.params.c);
-                const rotateToCenter = !!node.params.rotateToCenter;
-                const rotateReverse = !!node.params.rotateReverse;
-                const rotateOffsetEnabled = !!node.params.rotateOffsetEnabled;
-                const rox = num(node.params.rox);
-                const roy = num(node.params.roy);
-                const roz = num(node.params.roz);
-                const verts = U.getPolygonInCircleVertices(c, r);
-
-                for (const it of verts) {
-                    const childCtx = {points: [], axis: U.v(0, 1, 0)};
-                    for (const ch of (node.children || [])) {
-                        const def = KIND[ch.kind];
-                        if (def && def.apply) def.apply(childCtx, ch);
-                    }
-
-                    const pts = (childCtx.points || []).map(p => U.clone(p));
-                    const base = it;
-                    if (rotateToCenter) {
-                        const targetPoint = rotateOffsetEnabled ? U.v(rox, roy, roz) : U.v(0, 0, 0);
-                        const rotateTarget = rotateReverse ? U.add(targetPoint, it) : U.sub(targetPoint, it);
-                        rotatePointsToPointUpright(pts, rotateTarget, childCtx.axis);
-                    }
-                    for (const p of pts) {
-                        ctx.points.push({x: p.x + base.x, y: p.y + base.y, z: p.z + base.z});
-                    }
-                }
-            },
-            kotlin(node, emitCtx, indent, emitNodesKotlinLines) {
-                const r = U.fmt(num(node.params.r));
-                const c = int(node.params.c);
-                const rotateToCenter = !!node.params.rotateToCenter;
-                const rotateReverse = !!node.params.rotateReverse;
-                const rotateOffsetEnabled = !!node.params.rotateOffsetEnabled;
-                const rox = U.fmt(num(node.params.rox));
-                const roy = U.fmt(num(node.params.roy));
-                const roz = U.fmt(num(node.params.roz));
-                const lines = [];
-                lines.push(`${indent}.addWith {`);
-                lines.push(`${indent}  val res = arrayListOf<RelativeLocation>()`);
-                lines.push(`${indent}  getPolygonInCircleVertices(${c}, ${r})`);
-                lines.push(`${indent}        .forEach { it ->`);
-                lines.push(`${indent}            val p = PointsBuilder()`);
-
-                const childLines = emitNodesKotlinLines(node.children || [], indent + "              ", emitCtx);
-                lines.push(...childLines);
-
-                if (rotateToCenter) {
-                    if (rotateOffsetEnabled) {
-                        if (rotateReverse) {
-                            lines.push(`${indent}            p.rotateTo(it.clone().add(${rox}, ${roy}, ${roz}))`);
-                        } else {
-                            lines.push(`${indent}            p.rotateTo((-it).add(${rox}, ${roy}, ${roz}))`);
-                        }
-                    } else {
-                        lines.push(`${indent}            p.rotateTo(${rotateReverse ? "it" : "-it"})`);
-                    }
-                }
-                lines.push(`${indent}            res.addAll(p`);
-                lines.push(`${indent}                    .pointsOnEach { rel -> rel.add(it) }`);
-                lines.push(`${indent}                    .createWithoutClone()`);
-                lines.push(`${indent}            )`);
-                lines.push(`${indent}        }`);
-                lines.push(`${indent}  res`);
-                lines.push(`${indent}}`);
-                return lines;
-            }
-        },
-
-        with_builder: {
-            title: "withBuilder(子PointsBuilder)",
-            desc: "PointsBuilder.withBuilder { it.xxx() }",
-            defaultParams: {folded: false},
-            apply(ctx, node) {
-                const childCtx = {points: [], axis: U.v(0, 1, 0)};
-                for (const ch of (node.children || [])) {
-                    const def = KIND[ch.kind];
-                    if (def && def.apply) def.apply(childCtx, ch);
-                }
-                ctx.points.push(...childCtx.points);
-            },
-            kotlin(node, emitCtx, indent, emitNodesKotlinLines) {
-                const lines = [];
-                lines.push(`${indent}.withBuilder(`);
-                lines.push(`${indent}  PointsBuilder()`);
-
-                const childLines = emitNodesKotlinLines(node.children || [], indent + "    ", emitCtx);
-                lines.push(...childLines);
-
-                lines.push(`${indent}  )`);
-                return lines;
-            }
-        },
-
-        add_fourier_series: {
-            title: "addFourierSeries(傅里叶级数)",
-            desc: "PointsBuilder.addFourierSeries(FourierSeriesBuilder().addFourier(...))",
-            defaultParams: {count: 360, scale: 1.0, folded: false},
-            apply(ctx, node) {
-                const terms = (node.terms || []).map(t => ({r: num(t.r), w: num(t.w), startAngle: num(t.startAngle)}));
-                const pts = U.buildFourierSeries(terms, int(node.params.count), num(node.params.scale));
-                ctx.points.push(...pts);
-            },
-            kotlin(node, emitCtx, indent) {
-                const lines = [];
-                lines.push(`${indent}.addFourierSeries(`);
-                lines.push(`${indent}  FourierSeriesBuilder()`);
-                lines.push(`${indent}    .count(${int(node.params.count)})`);
-                lines.push(`${indent}    .scale(${U.fmt(num(node.params.scale))})`);
-                for (const t of (node.terms || [])) {
-                    // Kotlin: addFourier(r, w, startAngle)
-                    lines.push(`${indent}    .addFourier(${U.fmt(num(t.r))}, ${U.fmt(num(t.w))}, ${U.fmt(num(t.startAngle))})`);
-                }
-                lines.push(`${indent}  )`);
-                return lines;
-            }
-        },
-
-        clear: {
-            title: "clear()",
-            desc: "清空 points",
-            defaultParams: {},
-            apply(ctx) {
-                ctx.points = [];
-            },
-            kotlin() {
-                return `.clear()`;
-            }
-        },
-    };
+    const KIND = createKindDefs({ U, num, int, relExpr, rotatePointsToPointUpright });
 
     // -------------------------
     // Node
     // -------------------------
-    function makeNode(kind, init = {}) {
-        const def = KIND[kind];
-        const n = {
-            id: uid(),
-            kind,
-            folded: false,
-            collapsed: false,
-            bodyHeight: null,
-            subWidth: null,
-            subHeight: null,
-            params: JSON.parse(JSON.stringify(def?.defaultParams || {})),
-            children: [],
-            terms: [],
-            ...init
-        };
-        if (init.params) Object.assign(n.params, init.params);
-        if (init.folded !== undefined) n.folded = !!init.folded;
-        // FourierSeries：terms 初始化空即可
-        return n;
-    }
-
-    // 深拷贝一个节点（含 children/terms），并重新生成所有 id
-    function cloneNodeDeep(node) {
-        const raw = JSON.parse(JSON.stringify(node || {}));
-        const reId = (n) => {
-            n.id = uid();
-            if (Array.isArray(n.terms)) {
-                for (const t of n.terms) {
-                    if (t && typeof t === "object") t.id = uid();
-                }
-            }
-            if (Array.isArray(n.children)) {
-                for (const c of n.children) reId(c);
-            }
-        };
-        reId(raw);
-        return raw;
-    }
-
-    function mirrorPointByPlane(p, planeKey) {
-        const plane = planeKey || mirrorPlane || "XZ";
-        if (plane === "XY") return {x: p.x, y: p.y, z: -p.z};
-        if (plane === "ZY") return {x: -p.x, y: p.y, z: p.z};
-        return {x: p.x, y: -p.y, z: p.z}; // XZ
-    }
-
-    function mirrorCopyNode(node, planeKey) {
-        if (!node || !node.kind) return null;
-        const cloned = cloneNodeDeep(node);
-        if (node.kind === "add_line") {
-            const s = mirrorPointByPlane({x: node.params.sx, y: node.params.sy, z: node.params.sz}, planeKey);
-            const e = mirrorPointByPlane({x: node.params.ex, y: node.params.ey, z: node.params.ez}, planeKey);
-            cloned.params.sx = s.x; cloned.params.sy = s.y; cloned.params.sz = s.z;
-            cloned.params.ex = e.x; cloned.params.ey = e.y; cloned.params.ez = e.z;
-            return cloned;
-        }
-        if (node.kind === "points_on_each_offset") {
-            const v = mirrorPointByPlane({x: node.params.offX, y: node.params.offY, z: node.params.offZ}, planeKey);
-            cloned.params.offX = v.x; cloned.params.offY = v.y; cloned.params.offZ = v.z;
-            return cloned;
-        }
-        return null;
-    }
+    const nodeHelpers = createNodeHelpers({
+        KIND,
+        uid,
+        getDefaultMirrorPlane: () => mirrorPlane
+    });
+    const {
+        makeNode,
+        cloneNodeDeep,
+        cloneNodeListDeep,
+        replaceListContents,
+        mirrorCopyNode
+    } = nodeHelpers;
 
     // -------------------------
     // state
@@ -1348,6 +413,89 @@ import {OrbitControls} from "three/addons/controls/OrbitControls.js";
             kind: "ROOT",
             children: []}
     };
+
+    function normalizeState(obj) {
+        if (!obj || typeof obj !== "object") return null;
+        if (!obj.root || typeof obj.root !== "object") return null;
+        if (!Array.isArray(obj.root.children)) obj.root.children = [];
+        if (!obj.root.id) obj.root.id = "root";
+        if (!obj.root.kind) obj.root.kind = "ROOT";
+        return obj;
+    }
+
+    const restoredState = normalizeState(loadAutoState());
+    if (restoredState) state = restoredState;
+
+    let autoSaveTimer = 0;
+    let lastSavedStateJson = "";
+
+    function safeStringifyState(obj) {
+        try {
+            return JSON.stringify(obj);
+        } catch (e) {
+            console.warn("state stringify failed:", e);
+            return "";
+        }
+    }
+
+    lastSavedStateJson = safeStringifyState(state);
+
+    function scheduleAutoSave() {
+        if (autoSaveTimer) clearTimeout(autoSaveTimer);
+        autoSaveTimer = setTimeout(() => {
+            autoSaveTimer = 0;
+            const json = safeStringifyState(state);
+            if (!json || json === lastSavedStateJson) return;
+            if (saveAutoState(state)) lastSavedStateJson = json;
+        }, 180);
+    }
+
+    const hotkeySystem = initHotkeysSystem({
+        modal,
+        modalMask,
+        hkModal,
+        hkMask,
+        hkSearch,
+        hkList,
+        hkHint,
+        btnAddCard,
+        btnPickLine,
+        btnPickPoint,
+        btnFullscreen,
+        btnResetCamera,
+        btnLoadJson,
+        btnHotkeys,
+        btnCloseHotkeys,
+        btnCloseHotkeys2,
+        btnHotkeysReset,
+        btnHotkeysExport,
+        btnHotkeysImport,
+        fileHotkeys,
+        cardSearch,
+        KIND,
+        showToast,
+        downloadText
+    });
+    ({
+        hotkeys,
+        hotkeyToHuman,
+        hotkeyMatchEvent,
+        normalizeHotkey,
+        shouldIgnorePlainHotkeys,
+        openHotkeysModal,
+        hideHotkeysModal,
+        beginHotkeyCapture,
+        refreshHotkeyHints,
+        handleHotkeyCaptureKeydown
+    } = hotkeySystem);
+
+    const builderTools = createBuilderTools({
+        KIND,
+        U,
+        getState: () => state,
+        getKotlinEndMode: () => kotlinEndMode
+    });
+    const { evalBuilderWithMeta, emitKotlin } = builderTools;
 
     // -------------------------
     // focus/render flags
@@ -1447,6 +595,13 @@ import {OrbitControls} from "three/addons/controls/OrbitControls.js";
         });
     }
 
+    const { row, inputNum, select, checkbox, makeVec3Editor } = createCardInputs({
+        num,
+        armHistoryOnFocus,
+        historyCapture,
+        setActiveVecTarget: (target) => { activeVecTarget = target; }
+    });
+
     // 用户要求：左侧卡片允许“全部删除”（不再强制至少保留 axis）。
     // PointsBuilder 本身 axis 默认是 y 轴，因此 UI 不必强制插入 axis 卡片。
     function ensureAxisInList(_list) {
@@ -1470,6 +625,146 @@ import {OrbitControls} from "three/addons/controls/OrbitControls.js";
                 forEachNode(n.children, fn);
             }
         }
+    }
+
+    const COLLAPSE_SCOPE_ROOT = "root";
+    const collapseScopes = new Map(); // scopeId -> { active: boolean, manualOpen: Set }
+
+    function scopeKey(scopeId) {
+        return scopeId || COLLAPSE_SCOPE_ROOT;
+    }
+
+    function getCollapseScope(scopeId) {
+        const key = scopeKey(scopeId);
+        let scope = collapseScopes.get(key);
+        if (!scope) {
+            scope = { active: false, manualOpen: new Set(), forceOpenOnce: false };
+            collapseScopes.set(key, scope);
+        }
+        return scope;
+    }
+
+    function isCollapseAllActive(scopeId) {
+        return !!getCollapseScope(scopeId).active;
+    }
+
+    function buildFocusPathIds(focusId = focusedNodeId) {
+        const set = new Set();
+        if (!focusId) return set;
+        let ctx = findNodeContextById(focusId);
+        if (!ctx || !ctx.node) return set;
+        set.add(ctx.node.id);
+        let parent = ctx.parentNode || null;
+        while (parent && parent.id) {
+            set.add(parent.id);
+            const next = findNodeContextById(parent.id);
+            parent = next ? (next.parentNode || null) : null;
+        }
+        return set;
+    }
+
+    function collapseAllInList(list, scopeId, focusPath = null) {
+        const scope = getCollapseScope(scopeId);
+        const focusSet = focusPath || buildFocusPathIds();
+        const arr = list || [];
+        for (const n of arr) {
+            if (!n) continue;
+            const keepOpen = scope.manualOpen.has(n.id) || (focusSet && focusSet.has(n.id));
+            n.collapsed = !keepOpen;
+        }
+    }
+
+    function expandAllInList(list) {
+        const arr = list || [];
+        for (const n of arr) {
+            if (!n) continue;
+            n.collapsed = false;
+        }
+    }
+
+    function applyCollapseAllStates() {
+        const focusPath = buildFocusPathIds();
+        const rootScope = getCollapseScope(null);
+        if (rootScope.forceOpenOnce) {
+            expandAllInList(state.root.children);
+            rootScope.forceOpenOnce = false;
+        } else if (rootScope.active) {
+            collapseAllInList(state.root.children, null, focusPath);
+        }
+        forEachNode(state.root.children, (n) => {
+            if (!isBuilderContainerKind(n.kind)) return;
+            const scope = collapseScopes.get(n.id);
+            if (scope && scope.forceOpenOnce) {
+                expandAllInList(n.children || []);
+                scope.forceOpenOnce = false;
+            } else if (scope && scope.active) {
+                collapseAllInList(n.children || [], n.id, focusPath);
+            }
+        });
+    }
+
+    function getScopeIdForNodeId(id) {
+        const ctx = findNodeContextById(id);
+        if (!ctx) return null;
+        return ctx.parentNode ? ctx.parentNode.id : null;
+    }
+
+
+    function syncCardCollapseUI(id) {
+        if (!id || !elCardsRoot) return;
+        const ctx = findNodeContextById(id);
+        if (!ctx || !ctx.node) return;
+        const card = elCardsRoot.querySelector(`.card[data-id="${id}"]`);
+        if (!card) return;
+        const collapsed = !!ctx.node.collapsed;
+        card.classList.toggle("collapsed", collapsed);
+        const btn = card.querySelector('.iconbtn[data-collapse-btn="1"]');
+        if (btn) {
+            btn.textContent = collapsed ? "▸" : "▾";
+            btn.title = collapsed ? "展开" : "收起";
+        }
+    }
+
+    function handleCollapseAllFocusChange(prevId, nextId) {
+        const nextPath = nextId ? buildFocusPathIds(nextId) : null;
+        if (prevId && prevId !== nextId) {
+            const scopeId = getScopeIdForNodeId(prevId);
+            const scope = getCollapseScope(scopeId);
+            const keepOpen = nextPath && nextPath.has(prevId);
+            if (scope.active && !scope.manualOpen.has(prevId) && !keepOpen) {
+                const ctx = findNodeContextById(prevId);
+                if (ctx && ctx.node && !ctx.node.collapsed) {
+                    ctx.node.collapsed = true;
+                    syncCardCollapseUI(prevId);
+                }
+            }
+        }
+        if (nextId) {
+            const scopeId = getScopeIdForNodeId(nextId);
+            const scope = getCollapseScope(scopeId);
+            if (scope.active) {
+                const ctx = findNodeContextById(nextId);
+                if (ctx && ctx.node && ctx.node.collapsed) {
+                    ctx.node.collapsed = false;
+                    syncCardCollapseUI(nextId);
+                }
+            }
+        }
+    }
+
+    function collapseAllInScope(scopeId, list) {
+        const scope = getCollapseScope(scopeId);
+        scope.active = true;
+        scope.manualOpen.clear();
+        collapseAllInList(list, scopeId, buildFocusPathIds());
+    }
+
+    function expandAllInScope(scopeId, list) {
+        const scope = getCollapseScope(scopeId);
+        scope.active = false;
+        scope.manualOpen.clear();
+        scope.forceOpenOnce = true;
+        expandAllInList(list);
     }
 
     function findNodeContextById(id, list = state.root.children, parentNode = null) {
@@ -1614,6 +909,16 @@ import {OrbitControls} from "three/addons/controls/OrbitControls.js";
         const fromList = from.parentList;
         const fromIndex = from.index;
 
+        // 过滤模式下，同列表只允许交换位置。
+        const scopeId = targetOwnerNode ? targetOwnerNode.id : null;
+        if (typeof isFilterActive === "function" && isFilterActive(scopeId) && fromList === targetList) {
+            if (targetIndex < 0 || targetIndex >= targetList.length) return false;
+            if (fromIndex === targetIndex) return false;
+            swapInList(targetList, fromIndex, targetIndex);
+            ensureAxisEverywhere();
+            return true;
+        }
+
         const [moved] = fromList.splice(fromIndex, 1);
 
         let idx = Math.max(0, Math.min(targetIndex, targetList.length));
@@ -1624,99 +929,40 @@ import {OrbitControls} from "three/addons/controls/OrbitControls.js";
         return true;
     }
 
+    function tryCopyWithBuilderIntoAddWith(dragId, targetOwnerNode) {
+        if (!dragId || !targetOwnerNode || targetOwnerNode.kind !== "add_with") return false;
+        const from = findNodeContextById(dragId);
+        if (!from || !from.node || from.node.kind !== "with_builder") return false;
 
-    // -------------------------
-    // Eval（同时计算：每个卡片新增的点在最终点数组里的区间，用于高亮）
-    // -------------------------
-    function evalBuilderWithMeta(nodes, initialAxis) {
-        const ctx = { points: [], axis: U.clone(initialAxis || U.v(0, 1, 0)) };
-        const segments = new Map(); // nodeId -> {start, end}
-
-        function evalList(list, targetCtx, baseOffset) {
-            const arr = list || [];
-            for (const n of arr) {
-                if (!n) continue;
-
-                // 特殊：withBuilder 需要递归并把子段位移到父数组区间
-                if (n.kind === "with_builder") {
-                    const before = targetCtx.points.length;
-                    const child = evalBuilderWithMeta(n.children || [], U.v(0, 1, 0));
-                    targetCtx.points.push(...child.points);
-                    const after = targetCtx.points.length;
-
-                    if (after > before) segments.set(n.id, { start: before + baseOffset, end: after + baseOffset });
-                    for (const [cid, seg] of child.segments.entries()) {
-                        segments.set(cid, { start: seg.start + before + baseOffset, end: seg.end + before + baseOffset });
-                    }
-                    continue;
-                }
-
-                const def = KIND[n.kind];
-                if (!def || !def.apply) continue;
-
-                const beforeLen = targetCtx.points.length;
-                const beforeRef = targetCtx.points;
-                def.apply(targetCtx, n);
-                const afterLen = targetCtx.points.length;
-
-                // 只有“追加到同一数组”的情况才认为这张卡片直接新增了粒子
-                if (afterLen > beforeLen && targetCtx.points === beforeRef) {
-                    segments.set(n.id, { start: beforeLen + baseOffset, end: afterLen + baseOffset });
-                }
-            }
-        }
-
-        evalList(nodes || [], ctx, 0);
-        return { points: ctx.points, segments };
+        historyCapture("copy_withBuilder_into_addWith");
+        if (!Array.isArray(targetOwnerNode.children)) targetOwnerNode.children = [];
+        const cloned = cloneNodeListDeep(from.node.children || []);
+        replaceListContents(targetOwnerNode.children, cloned);
+        return true;
     }
 
-    // 兼容旧调用：只要点集
-    function evalBuilder(nodes, initialAxis) {
-        return evalBuilderWithMeta(nodes, initialAxis).points;
+    function handleBuilderDrop(info, targetList, targetIndex, targetOwnerNode) {
+        if (!info || !Array.isArray(targetList)) return false;
+        if (info.type !== "add_with_builder") return false;
+        const srcCtx = findNodeContextById(info.ownerId);
+        if (!srcCtx || !srcCtx.node || srcCtx.node.kind !== "add_with") return false;
+        if (targetOwnerNode && targetOwnerNode.id === srcCtx.node.id) return false;
+
+        historyCapture("drag_out_addWith_builder");
+        const node = makeNode("with_builder");
+        node.children = cloneNodeListDeep(srcCtx.node.children || []);
+
+        const idx = Math.max(0, Math.min(targetIndex, targetList.length));
+        targetList.splice(idx, 0, node);
+        return true;
     }
 
-    // -------------------------
-    // Kotlin emit（每个 add/调用一行）
-    // -------------------------
-    function emitNodesKotlinLines(nodes, indent, emitCtx) {
-        const lines = [];
-        for (const n of (nodes || [])) {
-            const def = KIND[n.kind];
-            if (!def || !def.kotlin) continue;
-
-            if (n.kind === "with_builder" || n.kind === "add_with") {
-                lines.push(...def.kotlin(n, emitCtx, indent, emitNodesKotlinLines));
-                continue;
-            }
-            if (n.kind === "add_fourier_series") {
-                lines.push(...def.kotlin(n, emitCtx, indent));
-                continue;
-            }
-            const call = def.kotlin(n, emitCtx);
-            lines.push(`${indent}${call}`);
-        }
-        return lines;
-    }
-
-    function emitKotlin() {
-        const emitCtx = {decls: []};
-        const lines = [];
-        lines.push("PointsBuilder()");
-        lines.push(...emitNodesKotlinLines(state.root.children, "  ", emitCtx));
-        lines.push("  .createWithoutClone()");
-
-        const expr = lines.join("\n");
-        if (emitCtx.decls.length > 0) {
-            const declLines = emitCtx.decls.map(s => `  ${s}`);
-            return ["run {", ...declLines, `  ${expr.replace(/\n/g, "\n  ")}`, "}"].join("\n");
-        }
-        return expr;
-    }
 
     // -------------------------
     // Three.js
     // -------------------------
     let renderer, scene, camera, controls;
+    let initialCameraState = null;
     let pointsObj = null;
     let axesHelper, gridHelper, axisLabelGroup;
     let raycaster, mouse;
@@ -2110,6 +1356,7 @@ import {OrbitControls} from "three/addons/controls/OrbitControls.js";
         controls.mouseButtons.LEFT = null;
         controls.mouseButtons.MIDDLE = THREE.MOUSE.ROTATE;
         controls.mouseButtons.RIGHT = THREE.MOUSE.PAN;
+        captureInitialCamera();
         axesHelper = new THREE.AxesHelper(5);
         scene.add(axesHelper);
         buildAxisLabels();
@@ -2185,8 +1432,32 @@ import {OrbitControls} from "three/addons/controls/OrbitControls.js";
         layoutActionOverflow();
     }
 
+    function captureInitialCamera() {
+        if (!camera || !controls) return;
+        initialCameraState = {
+            position: camera.position.clone(),
+            target: controls.target.clone(),
+            near: camera.near,
+            far: camera.far,
+        };
+    }
+
+    function restoreInitialCamera() {
+        if (!camera || !controls || !initialCameraState) return;
+        camera.position.copy(initialCameraState.position);
+        controls.target.copy(initialCameraState.target);
+        camera.near = initialCameraState.near;
+        camera.far = initialCameraState.far;
+        camera.updateProjectionMatrix();
+        controls.update();
+    }
+
     function resetCameraToPoints() {
-        if (!lastPoints || lastPoints.length === 0 || !camera || !controls) return;
+        if (!camera || !controls) return;
+        if (!lastPoints || lastPoints.length === 0) {
+            restoreInitialCamera();
+            return;
+        }
         const b = U.computeBounds(lastPoints);
         const r = b.radius;
         const c = b.center;
@@ -2293,23 +1564,27 @@ import {OrbitControls} from "three/addons/controls/OrbitControls.js";
     function setFocusedNode(id, recordHistory = true) {
         const next = id || null;
         if (focusedNodeId === next) return;
+        const prev = focusedNodeId;
         if (recordHistory && !isRestoringHistory && !suppressFocusHistory && !isRenderingCards) {
             historyCapture("focus_change");
         }
         focusedNodeId = next;
         updateFocusColors();
         updateFocusCardUI();
+        handleCollapseAllFocusChange(prev, focusedNodeId);
     }
 
     function clearFocusedNodeIf(id, recordHistory = true) {
         if (!id) return;
         if (focusedNodeId !== id) return;
+        const prev = focusedNodeId;
         if (recordHistory && !isRestoringHistory && !suppressFocusHistory && !isRenderingCards) {
             historyCapture("focus_clear");
         }
         focusedNodeId = null;
         updateFocusColors();
         updateFocusCardUI();
+        handleCollapseAllFocusChange(prev, null);
     }
 
 
@@ -2699,12 +1974,15 @@ function onCanvasClick(ev) {
             setPoints(res.points);
             // setPoints 内部会根据 focusedNodeId 重新上色
             setKotlinOut(emitKotlin());
+            scheduleAutoSave();
         });
     }
 
     function renderAll() {
         // 保持选中卡片：用于高亮 & 插入规则（withBuilder 内新增等）
+        applyCollapseAllStates();
         renderCards();
+        if (paramSync && paramSync.open && typeof renderSyncMenu === "function") renderSyncMenu();
         // 如果选中的卡片已不存在，则清空
         if (focusedNodeId && !linePickMode) {
             const ctx = findNodeContextById(focusedNodeId);
@@ -2713,282 +1991,6 @@ function onCanvasClick(ev) {
         rebuildPreviewAndKotlin();
     }
 
-    function iconBtn(text, onClick, danger = false) {
-        const b = document.createElement("button");
-        b.className = "iconbtn" + (danger ? " danger" : "");
-        b.classList.add("action-item");
-        b.textContent = text;
-        b.addEventListener("click", onClick);
-        return b;
-    }
-
-    let moreMenuBound = false;
-    function ensureMoreMenu(actionsEl) {
-        let wrap = actionsEl.querySelector(".more-wrap");
-        if (wrap) return wrap;
-        wrap = document.createElement("div");
-        wrap.className = "more-wrap hidden";
-        const btn = document.createElement("button");
-        btn.className = "iconbtn more-btn";
-        btn.textContent = "⋯";
-        const menu = document.createElement("div");
-        menu.className = "more-menu";
-        wrap.appendChild(btn);
-        wrap.appendChild(menu);
-        actionsEl.appendChild(wrap);
-        btn.addEventListener("click", (e) => {
-            e.stopPropagation();
-            wrap.classList.toggle("open");
-        });
-        menu.addEventListener("click", (e) => e.stopPropagation());
-        if (!moreMenuBound) {
-            moreMenuBound = true;
-            document.addEventListener("click", () => {
-                document.querySelectorAll(".more-wrap.open").forEach((el) => el.classList.remove("open"));
-            });
-        }
-        return wrap;
-    }
-
-    function layoutActionOverflow() {
-        const cards = document.querySelectorAll(".card-actions");
-        cards.forEach((actionsEl) => {
-            const wrap = ensureMoreMenu(actionsEl);
-            const menu = wrap.querySelector(".more-menu");
-            wrap.classList.remove("open");
-
-            // move all items back to main row
-            Array.from(menu.children).forEach((item) => {
-                actionsEl.insertBefore(item, wrap);
-            });
-            menu.innerHTML = "";
-            wrap.classList.add("hidden");
-
-            if (actionsEl.scrollWidth <= actionsEl.clientWidth) return;
-            wrap.classList.remove("hidden");
-
-            let items = Array.from(actionsEl.querySelectorAll(".action-item")).filter((el) => !wrap.contains(el));
-            while (actionsEl.scrollWidth > actionsEl.clientWidth && items.length) {
-                const item = items.pop();
-                menu.insertBefore(item, menu.firstChild);
-            }
-            if (!menu.children.length) wrap.classList.add("hidden");
-        });
-    }
-
-    function row(label, editorEl) {
-        const r = document.createElement("div");
-        r.className = "row";
-        const l = document.createElement("div");
-        l.className = "label";
-        l.textContent = label;
-        r.appendChild(l);
-        r.appendChild(editorEl);
-        return r;
-    }
-
-    function inputNum(value, onInput) {
-        const i = document.createElement("input");
-        i.className = "input";
-        i.type = "number";
-        i.step = "any";
-        i.value = String(value ?? 0);
-        armHistoryOnFocus(i, "edit");
-        i.addEventListener("input", () => onInput(num(i.value)));
-        return i;
-    }
-
-    function select(options, value, onChange) {
-        const s = document.createElement("select");
-        s.className = "input";
-        armHistoryOnFocus(s, "edit");
-        for (const [val, name] of options) {
-            const o = document.createElement("option");
-            o.value = val;
-            o.textContent = name;
-            if (val === value) o.selected = true;
-            s.appendChild(o);
-        }
-        s.addEventListener("change", () => onChange(s.value));
-        return s;
-    }
-
-    function checkbox(checked, onChange) {
-        const wrap = document.createElement("div");
-        wrap.className = "mini";
-        const c = document.createElement("input");
-        c.type = "checkbox";
-        c.checked = !!checked;
-        armHistoryOnFocus(c, "edit");
-        c.addEventListener("pointerdown", () => historyCapture("checkbox"));
-        c.addEventListener("change", () => onChange(c.checked));
-        wrap.appendChild(c);
-        const sp = document.createElement("span");
-        sp.className = "pill";
-        sp.textContent = c.checked ? "启用" : "禁用";
-        wrap.appendChild(sp);
-        c.addEventListener("change", () => sp.textContent = c.checked ? "启用" : "禁用");
-        return wrap;
-    }
-
-    function makeVec3Editor(p, prefix, onChange, label = "") {
-        const box = document.createElement("div");
-        box.className = "mini";
-        const ix = inputNum(p[prefix + "x"], v => {
-            p[prefix + "x"] = v;
-            onChange();
-        });
-        const iy = inputNum(p[prefix + "y"], v => {
-            p[prefix + "y"] = v;
-            onChange();
-        });
-        const iz = inputNum(p[prefix + "z"], v => {
-            p[prefix + "z"] = v;
-            onChange();
-        });
-        ix.style.width = iy.style.width = iz.style.width = "96px";
-        box.appendChild(ix);
-        box.appendChild(iy);
-        box.appendChild(iz);
-        const target = {
-            obj: p,
-            keys: {x: prefix + "x", y: prefix + "y", z: prefix + "z"},
-            inputs: {x: ix, y: iy, z: iz},
-            label: label || prefix || "vec3",
-            onChange
-        };
-        ix.__vecTarget = target;
-        iy.__vecTarget = target;
-        iz.__vecTarget = target;
-        const onFocus = () => { activeVecTarget = target; };
-        ix.addEventListener("focus", onFocus);
-        iy.addEventListener("focus", onFocus);
-        iz.addEventListener("focus", onFocus);
-        return box;
-    }
-
-    let draggingId = null;
-
-    function setupDnD(handleEl, cardEl, node, listRef, getIdx, ownerNode = null) {
-        handleEl.setAttribute("draggable", "true");
-        handleEl.addEventListener("dragstart", (e) => {
-            draggingId = node?.id || cardEl.dataset.id;
-            cardEl.classList.add("dragging");
-            e.dataTransfer.effectAllowed = "move";
-            e.dataTransfer.setData("text/plain", draggingId);
-        });
-        handleEl.addEventListener("dragend", () => {
-            draggingId = null;
-            cardEl.classList.remove("dragging");
-            cardEl.classList.remove("drag-over");
-        });
-
-        cardEl.addEventListener("dragover", (e) => {
-            e.preventDefault();
-            e.dataTransfer.dropEffect = "move";
-            cardEl.classList.add("drag-over");
-        });
-        cardEl.addEventListener("dragleave", () => cardEl.classList.remove("drag-over"));
-        cardEl.addEventListener("drop", (e) => {
-            e.preventDefault();
-            e.stopPropagation();
-            cardEl.classList.remove("drag-over");
-            const id = e.dataTransfer.getData("text/plain") || draggingId;
-            if (!id) return;
-
-            // drop 在卡片上：插入到该卡片之前（同列表=排序，跨列表=移动）
-            historyCapture("drag_drop");
-            const ok = moveNodeById(id, listRef, getIdx(), ownerNode);
-            if (ok) renderAll();
-        });
-    }
-
-    // 用于 add_fourier_series 内部 term 卡片的拖拽排序
-    function setupDrag(handleEl, cardEl, listRef, getIdx, onRender) {
-        if (!handleEl || !cardEl || !Array.isArray(listRef)) return;
-        handleEl.setAttribute("draggable", "true");
-        handleEl.addEventListener("dragstart", (e) => {
-            draggingId = cardEl.dataset.id;
-            cardEl.classList.add("dragging");
-            e.dataTransfer.effectAllowed = "move";
-            e.dataTransfer.setData("text/plain", draggingId);
-        });
-        handleEl.addEventListener("dragend", () => {
-            draggingId = null;
-            cardEl.classList.remove("dragging");
-            cardEl.classList.remove("drag-over");
-        });
-
-        cardEl.addEventListener("dragover", (e) => {
-            e.preventDefault();
-            e.dataTransfer.dropEffect = "move";
-            cardEl.classList.add("drag-over");
-        });
-        cardEl.addEventListener("dragleave", () => cardEl.classList.remove("drag-over"));
-        cardEl.addEventListener("drop", (e) => {
-            e.preventDefault();
-            e.stopPropagation();
-            cardEl.classList.remove("drag-over");
-            const id = e.dataTransfer.getData("text/plain") || draggingId;
-            if (!id) return;
-            const fromIdx = listRef.findIndex(it => it && it.id === id);
-            const toIdx = getIdx();
-            if (fromIdx < 0 || toIdx < 0 || fromIdx === toIdx) return;
-            historyCapture("drag_term");
-            const item = listRef.splice(fromIdx, 1)[0];
-            const insertAt = (fromIdx < toIdx) ? Math.max(0, toIdx - 1) : toIdx;
-            listRef.splice(insertAt, 0, item);
-            if (typeof onRender === "function") onRender();
-            else renderAll();
-        });
-    }
-
-    function setupListDropZone(containerEl, getListRef, getOwnerNode) {
-        if (!containerEl || containerEl.__pbDropZoneBound) return;
-        containerEl.__pbDropZoneBound = true;
-
-        containerEl.addEventListener("dragover", (e) => {
-            e.preventDefault();
-            e.dataTransfer.dropEffect = "move";
-            containerEl.classList.add("dropzone-active");
-        });
-
-        containerEl.addEventListener("dragleave", () => containerEl.classList.remove("dropzone-active"));
-
-        containerEl.addEventListener("drop", (e) => {
-            e.preventDefault();
-            containerEl.classList.remove("dropzone-active");
-            const id = e.dataTransfer.getData("text/plain") || draggingId;
-            if (!id) return;
-            const listRef = getListRef();
-            const owner = getOwnerNode ? getOwnerNode() : null;
-            if (!Array.isArray(listRef)) return;
-
-            historyCapture("drag_drop_end");
-            const ok = moveNodeById(id, listRef, listRef.length, owner);
-            if (ok) renderAll();
-        });
-    }
-
-    function bindSubDropZone(zoneEl, listRef, ownerNode) {
-        if (!zoneEl) return;
-        zoneEl.addEventListener("dragover", (e) => {
-            e.preventDefault();
-            e.dataTransfer.dropEffect = "move";
-            zoneEl.classList.add("active");
-        });
-        zoneEl.addEventListener("dragleave", () => zoneEl.classList.remove("active"));
-        zoneEl.addEventListener("drop", (e) => {
-            e.preventDefault();
-            e.stopPropagation();
-            zoneEl.classList.remove("active");
-            const id = e.dataTransfer.getData("text/plain") || draggingId;
-            if (!id) return;
-            historyCapture("drag_into_withBuilder");
-            const ok = moveNodeById(id, listRef, listRef.length, ownerNode);
-            if (ok) renderAll();
-        });
-    }
 
     // ------- Modal -------
     let addTarget = { list: null, insertIndex: null, ownerLabel: "主Builder", ownerNodeId: null, keepFocusId: null };
@@ -3027,14 +2029,39 @@ function onCanvasClick(ev) {
     function renderPicker(filterText) {
         const f = (filterText || "").trim().toLowerCase();
         cardPicker.innerHTML = "";
-        const entries = Object.entries(KIND).map(([kind, def]) => ({kind, def}));
+        const entries = Object.entries(KIND).map(([kind, def], order) => ({kind, def, order}));
 
-        const shown = entries.filter(({kind, def}) => {
-            const key = (kind + " " + def.title + " " + (def.desc || "")).toLowerCase();
-            return !f || key.includes(f);
-        });
+        const shown = [];
+        for (const it of entries) {
+            const title = ((it.def?.title || it.kind) + "").toLowerCase();
+            const kind = (it.kind || "").toLowerCase();
+            const desc = ((it.def?.desc || "") + "").toLowerCase();
+            if (!f) {
+                shown.push({it, group: 0, score: 0, order: it.order});
+                continue;
+            }
+            const tIdx = title.indexOf(f);
+            const kIdx = kind.indexOf(f);
+            const bestTitleIdx = [tIdx, kIdx].filter(v => v >= 0).reduce((a, b) => Math.min(a, b), Infinity);
+            const dIdx = desc.indexOf(f);
+            if (Number.isFinite(bestTitleIdx)) {
+                shown.push({it, group: 0, score: bestTitleIdx, order: it.order});
+            } else if (dIdx >= 0) {
+                shown.push({it, group: 1, score: dIdx, order: it.order});
+            }
+        }
 
-        for (const it of shown) {
+        if (f) {
+            shown.sort((a, b) => {
+                if (a.group !== b.group) return a.group - b.group;
+                if (a.score !== b.score) return a.score - b.score;
+                return a.order - b.order;
+            });
+        } else {
+            shown.sort((a, b) => a.order - b.order);
+        }
+
+        for (const {it} of shown) {
             const div = document.createElement("div");
             div.className = "pickitem";
             const t = document.createElement("div");
@@ -3105,222 +2132,6 @@ function onCanvasClick(ev) {
 
 
     // -------------------------
-    // Hotkeys modal UI
-    // -------------------------
-    let hotkeyCapture = null; // {type:"action"|"kind", id:"...", title:"..."}
-
-    const HOTKEY_ACTION_DEFS = [
-        {id: "openPicker", title: "打开「添加卡片」", desc: "默认 W"},
-        {id: "pickLineXZ", title: "进入 XZ 拾取直线", desc: "默认 Q"},
-        {id: "pickPoint", title: "点拾取（填充当前输入）", desc: "默认 E"},
-        {id: "snapPlaneXZ", title: "切换吸附平面：XZ", desc: "默认 1"},
-        {id: "snapPlaneXY", title: "切换吸附平面：XY", desc: "默认 2"},
-        {id: "snapPlaneZY", title: "切换吸附平面：ZY", desc: "默认 3"},
-        {id: "mirrorPlaneXZ", title: "切换镜像平面：XZ", desc: "默认 Shift+1"},
-        {id: "mirrorPlaneXY", title: "切换镜像平面：XY", desc: "默认 Shift+2"},
-        {id: "mirrorPlaneZY", title: "切换镜像平面：ZY", desc: "默认 Shift+3"},
-        {id: "copyFocused", title: "复制当前聚焦卡片", desc: "默认 Ctrl/Cmd + D"},
-        {id: "mirrorCopy", title: "镜像复制（直线/Offset）", desc: "默认 Ctrl/Cmd + Shift + M"},
-        {id: "deleteFocused", title: "删除当前聚焦卡片", desc: "默认 Backspace"},
-        {id: "undo", title: "撤销", desc: "默认 Ctrl/Cmd + Z"},
-        {id: "redo", title: "恢复", desc: "默认 Ctrl/Cmd + Shift + Z"},
-    ];
-
-
-    // ✅ 解决：从「添加卡片」窗口内打开快捷键设置会遮挡：采用“叠窗 + 底层磨砂”
-// 打开快捷键时：让添加卡片弹窗进入 under（模糊、不可交互）；关闭快捷键时恢复。
-    let _addModalWasOpenWhenHotkeys = false;
-    function openHotkeysModal() {
-        _addModalWasOpenWhenHotkeys = !!(modal && !modal.classList.contains("hidden"));
-        if (_addModalWasOpenWhenHotkeys) {
-            try { modal.classList.add("under"); } catch {}
-            try { modalMask.classList.add("under"); } catch {} // under 会把 mask 隐藏，避免双层遮罩
-        }
-        showHotkeysModal();
-    }
-
-    function showHotkeysModal() {
-        hkModal?.classList.remove("hidden");
-        hkMask?.classList.remove("hidden");
-        hkSearch.value = "";
-        renderHotkeysList();
-        hkSearch.focus();
-    }
-
-    function hideHotkeysModal() {
-        hkModal?.classList.add("hidden");
-        hkMask?.classList.add("hidden");
-        hotkeyCapture = null;
-        if (hkHint) hkHint.textContent = "提示：点击“设置”后按键。Esc 取消，Backspace/Delete 清空。所有配置会保存到浏览器。";
-
-        // ✅ 若打开快捷键时下面还有「添加卡片」窗口，则恢复其可交互状态
-        if (_addModalWasOpenWhenHotkeys) {
-            _addModalWasOpenWhenHotkeys = false;
-            try { modal.classList.remove("under"); } catch {}
-            try { modalMask.classList.remove("under"); } catch {}
-            // 添加卡片窗口仍然打开时，恢复遮罩
-            if (modal && !modal.classList.contains("hidden")) {
-                modalMask.classList.remove("hidden");
-                try { cardSearch && cardSearch.focus(); } catch {}
-            }
-        }
-    }
-
-
-function beginHotkeyCapture(target) {
-        hotkeyCapture = target;
-        if (hkHint) hkHint.textContent = `正在设置：${target.title || target.id}（按下新按键；Esc 取消；Backspace/Delete 清空）`;
-    }
-
-    function setHotkeyFor(target, hk) {
-        if (!target) return;
-        const except = {type: target.type, id: target.id};
-        removeHotkeyConflicts(hk, except);
-        if (target.type === "action") {
-            hotkeys.actions[target.id] = hk || "";
-        } else if (target.type === "kind") {
-            if (!hk) delete hotkeys.kinds[target.id];
-            else hotkeys.kinds[target.id] = hk;
-        }
-        saveHotkeys();
-        renderHotkeysList();
-    }
-
-    function renderHotkeysList() {
-        if (!hkList) return;
-        const f = (hkSearch.value || "").trim().toLowerCase();
-        hkList.innerHTML = "";
-
-        const makeRow = ({title, desc, type, id, hk}) => {
-            const rowEl = document.createElement("div");
-            rowEl.className = "hk-row";
-
-            const name = document.createElement("div");
-            name.className = "hk-name";
-            const t = document.createElement("div");
-            t.className = "t";
-            t.textContent = title;
-            const d = document.createElement("div");
-            d.className = "d";
-            d.textContent = desc || id;
-            name.appendChild(t);
-            name.appendChild(d);
-
-            const key = document.createElement("div");
-            const human = hotkeyToHuman(hk || "");
-            key.className = "hk-key" + (human ? "" : " empty");
-            key.textContent = human || "未设置";
-
-            const btns = document.createElement("div");
-            btns.className = "hk-btns";
-
-            const bSet = document.createElement("button");
-            bSet.className = "btn small primary";
-            bSet.textContent = "设置";
-            bSet.addEventListener("click", () => beginHotkeyCapture({type, id, title}));
-
-            const bClr = document.createElement("button");
-            bClr.className = "btn small";
-            bClr.textContent = "清空";
-            bClr.addEventListener("click", () => setHotkeyFor({type, id, title}, ""));
-
-            btns.appendChild(bSet);
-            btns.appendChild(bClr);
-
-            rowEl.appendChild(name);
-            rowEl.appendChild(key);
-            rowEl.appendChild(btns);
-            return rowEl;
-        };
-
-        const section = (title) => {
-            const s = document.createElement("div");
-            s.className = "hk-section";
-            const h = document.createElement("div");
-            h.className = "hk-section-title";
-            h.textContent = title;
-            s.appendChild(h);
-            return s;
-        };
-
-        // Actions
-        const s1 = section("动作");
-        for (const a of HOTKEY_ACTION_DEFS) {
-            const hk = (hotkeys.actions || {})[a.id] || "";
-            const text = (a.title + " " + a.desc + " " + hotkeyToHuman(hk)).toLowerCase();
-            if (f && !text.includes(f)) continue;
-            s1.appendChild(makeRow({title: a.title, desc: a.desc, type: "action", id: a.id, hk}));
-        }
-        hkList.appendChild(s1);
-
-        // Card kinds
-        const s2 = section("卡片类型（新增）");
-        const entries = Object.entries(KIND).map(([kind, def]) => ({kind, def}))
-            .filter(it => it.kind !== "ROOT");
-        entries.sort((a, b) => (a.def?.title || a.kind).localeCompare(b.def?.title || b.kind, "zh-CN"));
-
-        for (const it of entries) {
-            const hk = (hotkeys.kinds || {})[it.kind] || "";
-            const title = it.def?.title || it.kind;
-            const desc = it.def?.desc || it.kind;
-            const text = (it.kind + " " + title + " " + desc + " " + hotkeyToHuman(hk)).toLowerCase();
-            if (f && !text.includes(f)) continue;
-            s2.appendChild(makeRow({title, desc, type: "kind", id: it.kind, hk}));
-        }
-        hkList.appendChild(s2);
-    }
-
-    function refreshHotkeyHints() {
-        // 不改变按钮原始文案，只更新 title 提示
-        if (btnAddCard) btnAddCard.title = `快捷键：${hotkeyToHuman(hotkeys.actions.openPicker || "") || "未设置"}`;
-        if (btnPickLine) btnPickLine.title = `快捷键：${hotkeyToHuman(hotkeys.actions.pickLineXZ || "") || "未设置"}`;
-        if (btnPickPoint) btnPickPoint.title = `快捷键：${hotkeyToHuman(hotkeys.actions.pickPoint || "") || "未设置"}`;
-        if (btnHotkeys) btnHotkeys.title = "打开快捷键设置";
-    }
-
-    // Hotkeys modal events
-    btnHotkeys && btnHotkeys.addEventListener("click", openHotkeysModal);
-    btnCloseHotkeys && btnCloseHotkeys.addEventListener("click", hideHotkeysModal);
-    btnCloseHotkeys2 && btnCloseHotkeys2.addEventListener("click", hideHotkeysModal);
-    hkMask && hkMask.addEventListener("click", hideHotkeysModal);
-    hkSearch && hkSearch.addEventListener("input", renderHotkeysList);
-
-    btnHotkeysReset && btnHotkeysReset.addEventListener("click", () => {
-        if (!confirm("确定恢复默认快捷键？")) return;
-        resetHotkeys();
-    });
-
-    btnHotkeysExport && btnHotkeysExport.addEventListener("click", () => {
-        downloadText("hotkeys.json", JSON.stringify(hotkeys, null, 2), "application/json");
-    });
-
-    btnHotkeysImport && btnHotkeysImport.addEventListener("click", () => fileHotkeys && fileHotkeys.click());
-    fileHotkeys && fileHotkeys.addEventListener("change", async () => {
-        const f = fileHotkeys.files && fileHotkeys.files[0];
-        if (!f) return;
-        try {
-            const text = await f.text();
-            const obj = JSON.parse(text);
-            if (!obj || typeof obj !== "object") throw new Error("invalid json");
-            if (!obj.actions || typeof obj.actions !== "object") obj.actions = {};
-            if (!obj.kinds || typeof obj.kinds !== "object") obj.kinds = {};
-            hotkeys = {
-                version: 1,
-                actions: Object.assign({}, DEFAULT_HOTKEYS.actions, obj.actions),
-                kinds: Object.assign({}, obj.kinds),
-            };
-            saveHotkeys();
-            renderHotkeysList();
-            showToast("导入成功", "success");
-        } catch (e) {
-            showToast(`导入失败-格式错误(${e.message || e})`, "error");
-        } finally {
-            fileHotkeys.value = "";
-        }
-    });
-
-
-    // -------------------------
     // Insert context (based on selected / focused card)
     // -------------------------
     function getInsertContextFromFocus() {
@@ -3363,33 +2174,7 @@ function beginHotkeyCapture(target) {
     // -------------------------
     window.addEventListener("keydown", (e) => {
         // 1) Hotkey capture mode (for settings)
-        if (!hkModal?.classList.contains("hidden") && hotkeyCapture) {
-            e.preventDefault();
-            e.stopPropagation();
-
-            if (e.code === "Escape") {
-                hotkeyCapture = null;
-                if (hkHint) hkHint.textContent = "已取消。";
-                renderHotkeysList();
-                return;
-            }
-            if (e.code === "Backspace" || e.code === "Delete") {
-                setHotkeyFor(hotkeyCapture, "");
-                hotkeyCapture = null;
-                if (hkHint) hkHint.textContent = "已清空。";
-                return;
-            }
-
-            const hk = eventToHotkey(e);
-            // 必须包含一个“非修饰键”
-            if (!hk || hk === "Mod" || hk === "Shift" || hk === "Alt" || hk === "Mod+Shift" || hk === "Mod+Alt" || hk === "Shift+Alt" || hk === "Mod+Shift+Alt") {
-                return;
-            }
-            setHotkeyFor(hotkeyCapture, hk);
-            hotkeyCapture = null;
-            if (hkHint) hkHint.textContent = "已保存。";
-            return;
-        }
+        if (typeof handleHotkeyCaptureKeydown === "function" && handleHotkeyCaptureKeydown(e)) return;
 
         const isMac = /Mac|iPhone|iPad|iPod/i.test(navigator.platform);
         const mod = isMac ? e.metaKey : e.ctrlKey;
@@ -3475,6 +2260,28 @@ function beginHotkeyCapture(target) {
             const ctx = getInsertContextFromFocus();
             const ownerNodeId = (ctx && ctx.ownerNode && isBuilderContainerKind(ctx.ownerNode.kind)) ? ctx.ownerNode.id : null;
             openModal(ctx.list, ctx.insertIndex, ctx.label, ownerNodeId);
+            return;
+        }
+
+        if (hotkeyMatchEvent(e, hotkeys.actions.toggleFullscreen)) {
+            e.preventDefault();
+            if (modal && !modal.classList.contains("hidden")) hideModal();
+            if (hkModal && !hkModal.classList.contains("hidden")) hideHotkeysModal();
+            toggleFullscreen();
+            return;
+        }
+
+        if (hotkeyMatchEvent(e, hotkeys.actions.resetCamera)) {
+            e.preventDefault();
+            resetCameraToPoints();
+            return;
+        }
+
+        if (hotkeyMatchEvent(e, hotkeys.actions.importJson)) {
+            e.preventDefault();
+            if (modal && !modal.classList.contains("hidden")) hideModal();
+            if (hkModal && !hkModal.classList.contains("hidden")) hideHotkeysModal();
+            triggerImportJson();
             return;
         }
 
@@ -3579,1148 +2386,122 @@ function beginHotkeyCapture(target) {
         panKeyState.ArrowRight = false;
     });
 
-    // -------------------------
-    // Cards render
-    // -------------------------
-    function renderCards() {
-        isRenderingCards = true;
-        try {
-            elCardsRoot.innerHTML = "";
-            const list = state.root.children;
-            for (let i = 0; i < list.length; i++) {
-                elCardsRoot.appendChild(renderNodeCard(list[i], list, i, "主Builder", null));
-            }
-        } finally {
-            isRenderingCards = false;
-        }
-        // DOM 重建后重新标记聚焦高亮
-        updateFocusCardUI();
-        requestAnimationFrame(() => layoutActionOverflow());
-    }
-
-
-function addQuickOffsetTo(list) {
-        const target = (list || state.root.children);
-        historyCapture("quick_offset");
-        target.push(makeNode("points_on_each_offset", {params: {offX: 0.2, offY: 0, offZ: 0}}));
-        renderAll();
-    }
-
-    function renderParamsEditors(body, node, ownerLabel) {
-        const p = node.params;
-
-        switch (node.kind) {
-            case "axis":
-                body.appendChild(row("axis", makeVec3Editor(p, "", rebuildPreviewAndKotlin, "axis")));
-                break;
-
-            case "scale":
-                body.appendChild(row("factor", inputNum(p.factor, v => {
-                    p.factor = v;
-                    rebuildPreviewAndKotlin();
-                })));
-                break;
-
-            case "rotate_as_axis":
-                body.appendChild(row("角度(度)", inputNum(p.deg, v => {
-                    p.deg = v;
-                    rebuildPreviewAndKotlin();
-                })));
-                body.appendChild(row("自定义轴", checkbox(p.useCustomAxis, v => {
-                    p.useCustomAxis = v;
-                    renderAll();
-                })));
-                if (p.useCustomAxis) {
-                    body.appendChild(row("ax", inputNum(p.ax, v => {
-                        p.ax = v;
-                        rebuildPreviewAndKotlin();
-                    })));
-                    body.appendChild(row("ay", inputNum(p.ay, v => {
-                        p.ay = v;
-                        rebuildPreviewAndKotlin();
-                    })));
-                    body.appendChild(row("az", inputNum(p.az, v => {
-                        p.az = v;
-                        rebuildPreviewAndKotlin();
-                    })));
-                }
-                break;
-
-            case "rotate_to":
-                body.appendChild(row("模式", select([["toVec", "目标向量"], ["originEnd", "origin+end"]], p.mode, v => {
-                    p.mode = v;
-                    renderAll();
-                })));
-                if (p.mode === "originEnd") {
-                    body.appendChild(row("origin", makeVec3Editor(p, "o", rebuildPreviewAndKotlin, "origin")));
-                    body.appendChild(row("end", makeVec3Editor(p, "e", rebuildPreviewAndKotlin, "end")));
-                } else {
-                    body.appendChild(row("to", makeVec3Editor(p, "to", rebuildPreviewAndKotlin, "to")));
-                }
-                break;
-
-            case "add_point":
-                body.appendChild(row("point", makeVec3Editor(p, "", rebuildPreviewAndKotlin, "point")));
-                break;
-
-            case "add_circle":
-                body.appendChild(row("r", inputNum(p.r, v => {
-                    p.r = v;
-                    rebuildPreviewAndKotlin();
-                })));
-                body.appendChild(row("count", inputNum(p.count, v => {
-                    p.count = v;
-                    rebuildPreviewAndKotlin();
-                })));
-                break;
-
-            case "add_discrete_circle_xz":
-                body.appendChild(row("r", inputNum(p.r, v => {
-                    p.r = v;
-                    rebuildPreviewAndKotlin();
-                })));
-                body.appendChild(row("count", inputNum(p.count, v => {
-                    p.count = v;
-                    rebuildPreviewAndKotlin();
-                })));
-                body.appendChild(row("discrete", inputNum(p.discrete, v => {
-                    p.discrete = v;
-                    rebuildPreviewAndKotlin();
-                })));
-                body.appendChild(row("seed", checkbox(p.seedEnabled, v => {
-                    p.seedEnabled = v;
-                    renderAll();
-                })));
-                if (p.seedEnabled) body.appendChild(row("seed值", inputNum(p.seed, v => {
-                    p.seed = v;
-                    rebuildPreviewAndKotlin();
-                })));
-                break;
-
-            case "add_half_circle":
-                body.appendChild(row("r", inputNum(p.r, v => {
-                    p.r = v;
-                    rebuildPreviewAndKotlin();
-                })));
-                body.appendChild(row("count", inputNum(p.count, v => {
-                    p.count = v;
-                    rebuildPreviewAndKotlin();
-                })));
-                body.appendChild(row("rotate", checkbox(p.useRotate, v => {
-                    p.useRotate = v;
-                    renderAll();
-                })));
-                if (p.useRotate) body.appendChild(row("角度(度)", inputNum(p.rotateDeg, v => {
-                    p.rotateDeg = v;
-                    rebuildPreviewAndKotlin();
-                })));
-                break;
-
-            case "add_radian_center":
-                body.appendChild(row("r", inputNum(p.r, v => {
-                    p.r = v;
-                    rebuildPreviewAndKotlin();
-                })));
-                body.appendChild(row("count", inputNum(p.count, v => {
-                    p.count = v;
-                    rebuildPreviewAndKotlin();
-                })));
-                body.appendChild(row("radian(度)", inputNum(p.radianDeg, v => {
-                    p.radianDeg = v;
-                    rebuildPreviewAndKotlin();
-                })));
-                body.appendChild(row("rotate", checkbox(p.useRotate, v => {
-                    p.useRotate = v;
-                    renderAll();
-                })));
-                if (p.useRotate) body.appendChild(row("rotate角度(度)", inputNum(p.rotateDeg, v => {
-                    p.rotateDeg = v;
-                    rebuildPreviewAndKotlin();
-                })));
-                break;
-
-            case "add_radian":
-                body.appendChild(row("r", inputNum(p.r, v => {
-                    p.r = v;
-                    rebuildPreviewAndKotlin();
-                })));
-                body.appendChild(row("count", inputNum(p.count, v => {
-                    p.count = v;
-                    rebuildPreviewAndKotlin();
-                })));
-                body.appendChild(row("start(度)", inputNum(p.startDeg, v => {
-                    p.startDeg = v;
-                    rebuildPreviewAndKotlin();
-                })));
-                body.appendChild(row("end(度)", inputNum(p.endDeg, v => {
-                    p.endDeg = v;
-                    rebuildPreviewAndKotlin();
-                })));
-                body.appendChild(row("rotate", checkbox(p.useRotate, v => {
-                    p.useRotate = v;
-                    renderAll();
-                })));
-                if (p.useRotate) body.appendChild(row("rotate角度(度)", inputNum(p.rotateDeg, v => {
-                    p.rotateDeg = v;
-                    rebuildPreviewAndKotlin();
-                })));
-                break;
-
-            case "add_ball":
-                body.appendChild(row("r", inputNum(p.r, v => {
-                    p.r = v;
-                    rebuildPreviewAndKotlin();
-                })));
-                body.appendChild(row("countPow", inputNum(p.countPow, v => {
-                    p.countPow = v;
-                    rebuildPreviewAndKotlin();
-                })));
-                break;
-
-            case "add_polygon_in_circle":
-                body.appendChild(row("n", inputNum(p.n, v => {
-                    p.n = v;
-                    rebuildPreviewAndKotlin();
-                })));
-                body.appendChild(row("edgeCount", inputNum(p.edgeCount, v => {
-                    p.edgeCount = v;
-                    rebuildPreviewAndKotlin();
-                })));
-                body.appendChild(row("r", inputNum(p.r, v => {
-                    p.r = v;
-                    rebuildPreviewAndKotlin();
-                })));
-                break;
-
-            case "add_round_shape":
-                body.appendChild(row("r", inputNum(p.r, v => {
-                    p.r = v;
-                    rebuildPreviewAndKotlin();
-                })));
-                body.appendChild(row("step", inputNum(p.step, v => {
-                    p.step = v;
-                    rebuildPreviewAndKotlin();
-                })));
-                body.appendChild(row("模式", select([["fixed", "固定点数"], ["range", "区间点数"]], p.mode, v => {
-                    p.mode = v;
-                    renderAll();
-                })));
-                if (p.mode === "range") {
-                    body.appendChild(row("min", inputNum(p.minCircleCount, v => {
-                        p.minCircleCount = v;
-                        rebuildPreviewAndKotlin();
-                    })));
-                    body.appendChild(row("max", inputNum(p.maxCircleCount, v => {
-                        p.maxCircleCount = v;
-                        rebuildPreviewAndKotlin();
-                    })));
-                } else {
-                    body.appendChild(row("preCount", inputNum(p.preCircleCount, v => {
-                        p.preCircleCount = v;
-                        rebuildPreviewAndKotlin();
-                    })));
-                }
-                break;
-
-            case "add_bezier_curve":
-                body.appendChild(row("target(x,y)", (() => {
-                    const box = document.createElement("div");
-                    box.className = "mini";
-                    const ix = inputNum(p.tx, v => {
-                        p.tx = v;
-                        rebuildPreviewAndKotlin();
-                    });
-                    const iy = inputNum(p.ty, v => {
-                        p.ty = v;
-                        rebuildPreviewAndKotlin();
-                    });
-                    ix.style.width = iy.style.width = "120px";
-                    box.appendChild(ix);
-                    box.appendChild(iy);
-                    return box;
-                })()));
-                body.appendChild(row("startHandle(x,y)", (() => {
-                    const box = document.createElement("div");
-                    box.className = "mini";
-                    const ix = inputNum(p.shx, v => {
-                        p.shx = v;
-                        rebuildPreviewAndKotlin();
-                    });
-                    const iy = inputNum(p.shy, v => {
-                        p.shy = v;
-                        rebuildPreviewAndKotlin();
-                    });
-                    ix.style.width = iy.style.width = "120px";
-                    box.appendChild(ix);
-                    box.appendChild(iy);
-                    return box;
-                })()));
-                body.appendChild(row("endHandle(x,y)", (() => {
-                    const box = document.createElement("div");
-                    box.className = "mini";
-                    const ix = inputNum(p.ehx, v => {
-                        p.ehx = v;
-                        rebuildPreviewAndKotlin();
-                    });
-                    const iy = inputNum(p.ehy, v => {
-                        p.ehy = v;
-                        rebuildPreviewAndKotlin();
-                    });
-                    ix.style.width = iy.style.width = "120px";
-                    box.appendChild(ix);
-                    box.appendChild(iy);
-                    return box;
-                })()));
-                body.appendChild(row("count", inputNum(p.count, v => {
-                    p.count = v;
-                    rebuildPreviewAndKotlin();
-                })));
-                break;
-
-            case "add_line":
-                body.appendChild(row("start", makeVec3Editor(p, "s", rebuildPreviewAndKotlin, "start")));
-                body.appendChild(row("end", makeVec3Editor(p, "e", rebuildPreviewAndKotlin, "end")));
-                body.appendChild(row("count", inputNum(p.count, v => {
-                    p.count = v;
-                    rebuildPreviewAndKotlin();
-                })));
-                break;
-
-            case "add_lightning_points":
-                body.appendChild(row("使用start", checkbox(p.useStart, v => {
-                    p.useStart = v;
-                    renderAll();
-                })));
-                if (p.useStart) body.appendChild(row("start", makeVec3Editor(p, "s", rebuildPreviewAndKotlin, "start")));
-                body.appendChild(row("end(偏移)", makeVec3Editor(p, "e", rebuildPreviewAndKotlin, "end")));
-                body.appendChild(row("count", inputNum(p.count, v => {
-                    p.count = v;
-                    rebuildPreviewAndKotlin();
-                })));
-                body.appendChild(row("preLineCount", inputNum(p.preLineCount, v => {
-                    p.preLineCount = v;
-                    rebuildPreviewAndKotlin();
-                })));
-                body.appendChild(row("offsetRange", checkbox(p.useOffsetRange, v => {
-                    p.useOffsetRange = v;
-                    renderAll();
-                })));
-                if (p.useOffsetRange) body.appendChild(row("range值", inputNum(p.offsetRange, v => {
-                    p.offsetRange = v;
-                    rebuildPreviewAndKotlin();
-                })));
-                break;
-            case "add_lightning_nodes_attenuation": {
-                const p = node.params;
-                body.appendChild(row("使用start", checkbox(p.useStart, v => {
-                    p.useStart = v;
-                    renderAll();
-                })));
-                if (p.useStart) body.appendChild(row("start", makeVec3Editor(p, "s", rebuildPreviewAndKotlin, "start")));
-                body.appendChild(row("end", makeVec3Editor(p, "e", rebuildPreviewAndKotlin, "end")));
-                body.appendChild(row("counts", inputNum(p.counts, v => {
-                    p.counts = v;
-                    rebuildPreviewAndKotlin();
-                })));
-                body.appendChild(row("maxOffset", inputNum(p.maxOffset, v => {
-                    p.maxOffset = v;
-                    rebuildPreviewAndKotlin();
-                })));
-                body.appendChild(row("attenuation", inputNum(p.attenuation, v => {
-                    p.attenuation = v;
-                    rebuildPreviewAndKotlin();
-                })));
-
-                body.appendChild(row("seed", checkbox(p.seedEnabled, v => {
-                    p.seedEnabled = v;
-                    renderAll();
-                })));
-                if (p.seedEnabled) body.appendChild(row("seed值", inputNum(p.seed, v => {
-                    p.seed = v;
-                    rebuildPreviewAndKotlin();
-                })));
-                break;
-            }
-
-            case "apply_noise_offset":
-                body.appendChild(row("noiseX", inputNum(p.noiseX, v => {
-                    p.noiseX = v;
-                    rebuildPreviewAndKotlin();
-                })));
-                body.appendChild(row("noiseY", inputNum(p.noiseY, v => {
-                    p.noiseY = v;
-                    rebuildPreviewAndKotlin();
-                })));
-                body.appendChild(row("noiseZ", inputNum(p.noiseZ, v => {
-                    p.noiseZ = v;
-                    rebuildPreviewAndKotlin();
-                })));
-                body.appendChild(row("mode", select(
-                    [["AXIS_UNIFORM", "AXIS_UNIFORM"], ["SPHERE_UNIFORM", "SPHERE_UNIFORM"], ["SHELL_UNIFORM", "SHELL_UNIFORM"]],
-                    p.mode,
-                    v => {
-                        p.mode = v;
-                        rebuildPreviewAndKotlin();
-                    }
-                )));
-                body.appendChild(row("seed", checkbox(p.seedEnabled, v => {
-                    p.seedEnabled = v;
-                    renderAll();
-                })));
-                if (p.seedEnabled) body.appendChild(row("seed值", inputNum(p.seed, v => {
-                    p.seed = v;
-                    rebuildPreviewAndKotlin();
-                })));
-                body.appendChild(row("lenMin", checkbox(p.lenMinEnabled, v => {
-                    p.lenMinEnabled = v;
-                    renderAll();
-                })));
-                if (p.lenMinEnabled) body.appendChild(row("min值", inputNum(p.offsetLenMin, v => {
-                    p.offsetLenMin = v;
-                    rebuildPreviewAndKotlin();
-                })));
-                body.appendChild(row("lenMax", checkbox(p.lenMaxEnabled, v => {
-                    p.lenMaxEnabled = v;
-                    renderAll();
-                })));
-                if (p.lenMaxEnabled) body.appendChild(row("max值", inputNum(p.offsetLenMax, v => {
-                    p.offsetLenMax = v;
-                    rebuildPreviewAndKotlin();
-                })));
-                break;
-
-            case "points_on_each_offset":
-                body.appendChild(row("offX", inputNum(p.offX, v => {
-                    p.offX = v;
-                    rebuildPreviewAndKotlin();
-                })));
-                body.appendChild(row("offY", inputNum(p.offY, v => {
-                    p.offY = v;
-                    rebuildPreviewAndKotlin();
-                })));
-                body.appendChild(row("offZ", inputNum(p.offZ, v => {
-                    p.offZ = v;
-                    rebuildPreviewAndKotlin();
-                })));
-                body.appendChild(row("输出形式", select(
-                    [["direct3", "it.add(x,y,z)"], ["newRel", "it.add(RelativeLocation)"], ["valRel", "val rel; it.add(rel)"]],
-                    p.kotlinMode,
-                    v => {
-                        p.kotlinMode = v;
-                        rebuildPreviewAndKotlin();
-                    }
-                )));
-                break;
-
-            case "add_with":
-                if (!Array.isArray(node.children)) node.children = [];
-                body.appendChild(row("旋转半径 r", inputNum(p.r, v => {
-                    p.r = v;
-                    rebuildPreviewAndKotlin();
-                })));
-                body.appendChild(row("置换个数 c", inputNum(p.c, v => {
-                    p.c = v;
-                    rebuildPreviewAndKotlin();
-                })));
-                body.appendChild(row("rotateToCenter", checkbox(p.rotateToCenter, v => {
-                    p.rotateToCenter = v;
-                    renderAll();
-                })));
-                if (p.rotateToCenter) {
-                    body.appendChild(row("反向", checkbox(p.rotateReverse, v => {
-                        p.rotateReverse = v;
-                        rebuildPreviewAndKotlin();
-                    })));
-                }
-                body.appendChild(row("旋转偏移", checkbox(p.rotateOffsetEnabled, v => {
-                    p.rotateOffsetEnabled = v;
-                    renderAll();
-                })));
-                if (p.rotateOffsetEnabled) {
-                    body.appendChild(row("偏移", makeVec3Editor(p, "ro", rebuildPreviewAndKotlin, "offset")));
-                }
-                body.appendChild(row("折叠子卡片", checkbox(node.folded, v => {
-                    node.folded = v;
-                    renderAll();
-                })));
-                if (!node.folded) {
-                    const block = document.createElement("div");
-                    block.className = "subblock";
-                    if (Number.isFinite(node.subWidth)) {
-                        const w = Math.max(240, node.subWidth);
-                        node.subWidth = w;
-                        block.style.width = `${w}px`;
-                    }
-
-                    const head = document.createElement("div");
-                    head.className = "subblock-head";
-
-                    const title = document.createElement("div");
-                    title.className = "subblock-title";
-                    title.textContent = "子 PointsBuilder（addWith）";
-
-                    const actions = document.createElement("div");
-                    actions.className = "mini";
-
-                    const addBtn = document.createElement("button");
-                    addBtn.className = "btn small primary";
-                    addBtn.textContent = "添加卡片";
-                    addBtn.addEventListener("click", () => openModal(node.children, (node.children || []).length, "子Builder", node.id));
-
-                    const offBtn = document.createElement("button");
-                    offBtn.className = "btn small";
-                    offBtn.textContent = "快捷Offset";
-                    offBtn.addEventListener("click", () => addQuickOffsetTo(node.children));
-
-                    const pickBtn = document.createElement("button");
-                    pickBtn.className = "btn small";
-                    pickBtn.textContent = "XZ拾取直线";
-                    pickBtn.dataset.pickLineBtn = "1";
-                    pickBtn.addEventListener("click", () => {
-                        if (linePickMode) stopLinePick();
-                        else {
-                            if (pointPickMode) stopPointPick();
-                            startLinePick(node.children, "子Builder", (node.children || []).length);
-                        }
-                    });
-
-                    const exportBtn = document.createElement("button");
-                    exportBtn.className = "btn small";
-                    exportBtn.textContent = "导出JSON";
-                    exportBtn.addEventListener("click", () => {
-                        const out = {root: {id: "root", kind: "ROOT", children: deepClone(node.children || [])}};
-                        downloadText("addWithBuilder.json", JSON.stringify(out, null, 2), "application/json");
-                    });
-
-                    const importBtn = document.createElement("button");
-                    importBtn.className = "btn small";
-                    importBtn.textContent = "导入JSON";
-                    importBtn.addEventListener("click", () => {
-                        if (!fileBuilderJson) return;
-                        builderJsonTargetNode = node;
-                        fileBuilderJson.click();
-                    });
-
-                    const clearBtn = document.createElement("button");
-                    clearBtn.className = "btn small danger";
-                    clearBtn.textContent = "清空";
-                    clearBtn.addEventListener("click", () => {
-                        historyCapture("clear_add_with");
-                        node.children.splice(0);
-                        ensureAxisInList(node.children);
-                        renderAll();
-                    });
-
-                    actions.appendChild(addBtn);
-                    actions.appendChild(offBtn);
-                    actions.appendChild(pickBtn);
-                    actions.appendChild(exportBtn);
-                    actions.appendChild(importBtn);
-                    actions.appendChild(clearBtn);
-
-                    head.appendChild(title);
-                    head.appendChild(actions);
-
-                    const sub = document.createElement("div");
-                    sub.className = "subcards";
-                    if (Number.isFinite(node.subHeight)) {
-                        const h = Math.max(120, node.subHeight);
-                        node.subHeight = h;
-                        sub.style.height = `${h}px`;
-                        sub.style.maxHeight = `${h}px`;
-                    }
-                    setupListDropZone(sub, () => node.children, () => node);
-
-                    const list = node.children || [];
-                    for (let i = 0; i < list.length; i++) {
-                        sub.appendChild(renderNodeCard(list[i], list, i, "子Builder", node));
-                    }
-
-                    block.appendChild(head);
-                    block.appendChild(sub);
-
-                    const zone = document.createElement("div");
-                    zone.className = "dropzone";
-                    zone.textContent = "拖拽卡片到这里：放入该 addWith 的子卡片（也可拖到主列表把子卡片拖出来）";
-                    bindSubDropZone(zone, node.children, node);
-                    block.appendChild(zone);
-
-                    const heightResizer = document.createElement("div");
-                    heightResizer.className = "subblock-resizer-y";
-                    bindSubblockHeightResizer(heightResizer, sub, node);
-                    block.appendChild(heightResizer);
-
-                    const widthResizer = document.createElement("div");
-                    widthResizer.className = "subblock-resizer";
-                    bindSubblockWidthResizer(widthResizer, block, node);
-                    block.appendChild(widthResizer);
-
-                    body.appendChild(block);
-                } else {
-                    const zone = document.createElement("div");
-                    zone.className = "dropzone";
-                    zone.textContent = "拖拽卡片到这里：放入该 addWith 的子卡片（折叠状态）";
-                    bindSubDropZone(zone, node.children, node);
-                    body.appendChild(zone);
-                }
-                break;
-
-            case "with_builder":
-                body.appendChild(row("折叠子卡片", checkbox(node.folded, v => {
-                    node.folded = v;
-                    renderAll();
-                })));
-                if (!node.folded) {
-                    const block = document.createElement("div");
-                    block.className = "subblock";
-                    if (Number.isFinite(node.subWidth)) {
-                        const w = Math.max(240, node.subWidth);
-                        node.subWidth = w;
-                        block.style.width = `${w}px`;
-                    }
-
-                    const head = document.createElement("div");
-                    head.className = "subblock-head";
-
-                    const title = document.createElement("div");
-                    title.className = "subblock-title";
-                    title.textContent = `子 PointsBuilder（${ownerLabel}）`;
-
-                    const actions = document.createElement("div");
-                    actions.className = "mini";
-
-                    // ✅ 内部控制与外部一致：添加卡片 / 快捷Offset / XZ拾取直线
-                    const addBtn = document.createElement("button");
-                    addBtn.className = "btn small primary";
-                    addBtn.textContent = "添加卡片";
-                    addBtn.addEventListener("click", () => openModal(node.children, (node.children || []).length, "子Builder", node.id));
-
-                    const offBtn = document.createElement("button");
-                    offBtn.className = "btn small";
-                    offBtn.textContent = "快捷Offset";
-                    offBtn.addEventListener("click", () => addQuickOffsetTo(node.children));
-
-                    const pickBtn = document.createElement("button");
-                    pickBtn.className = "btn small";
-                    pickBtn.textContent = "XZ拾取直线";
-                    pickBtn.dataset.pickLineBtn = "1";
-                    pickBtn.addEventListener("click", () => {
-                        if (linePickMode) stopLinePick();
-                        else {
-                            if (pointPickMode) stopPointPick();
-                            startLinePick(node.children, "子Builder", (node.children || []).length);
-                        }
-                    });
-
-                    const exportBtn = document.createElement("button");
-                    exportBtn.className = "btn small";
-                    exportBtn.textContent = "导出JSON";
-                    exportBtn.addEventListener("click", () => {
-                        const out = {root: {id: "root", kind: "ROOT", children: deepClone(node.children || [])}};
-                        downloadText("withBuilder.json", JSON.stringify(out, null, 2), "application/json");
-                    });
-
-                    const importBtn = document.createElement("button");
-                    importBtn.className = "btn small";
-                    importBtn.textContent = "导入JSON";
-                    importBtn.addEventListener("click", () => {
-                        if (!fileBuilderJson) return;
-                        builderJsonTargetNode = node;
-                        fileBuilderJson.click();
-                    });
-
-                    const clearBtn = document.createElement("button");
-                    clearBtn.className = "btn small danger";
-                    clearBtn.textContent = "清空";
-                    clearBtn.addEventListener("click", () => {
-                        historyCapture("clear_withBuilder");
-                        node.children.splice(0);
-                        ensureAxisInList(node.children);
-                        renderAll();
-                    });
-
-                    actions.appendChild(addBtn);
-                    actions.appendChild(offBtn);
-                    actions.appendChild(pickBtn);
-                    actions.appendChild(exportBtn);
-                    actions.appendChild(importBtn);
-                    actions.appendChild(clearBtn);
-
-                    head.appendChild(title);
-                    head.appendChild(actions);
-
-                    const sub = document.createElement("div");
-                    sub.className = "subcards";
-                    if (Number.isFinite(node.subHeight)) {
-                        const h = Math.max(120, node.subHeight);
-                        node.subHeight = h;
-                        sub.style.height = `${h}px`;
-                        sub.style.maxHeight = `${h}px`;
-                    }
-                    setupListDropZone(sub, () => node.children, () => node);
-
-                    const list = node.children || [];
-                    for (let i = 0; i < list.length; i++) {
-                        sub.appendChild(renderNodeCard(list[i], list, i, "子Builder", node));
-                    }
-
-                    block.appendChild(head);
-                    block.appendChild(sub);
-
-                    const zone = document.createElement("div");
-                    zone.className = "dropzone";
-                    zone.textContent = "拖拽卡片到这里：放入该 withBuilder 的子卡片（也可拖到主列表把子卡片拖出来）";
-                    bindSubDropZone(zone, node.children, node);
-                    block.appendChild(zone);
-
-                    const heightResizer = document.createElement("div");
-                    heightResizer.className = "subblock-resizer-y";
-                    bindSubblockHeightResizer(heightResizer, sub, node);
-                    block.appendChild(heightResizer);
-
-                    const widthResizer = document.createElement("div");
-                    widthResizer.className = "subblock-resizer";
-                    bindSubblockWidthResizer(widthResizer, block, node);
-                    block.appendChild(widthResizer);
-
-                    body.appendChild(block);
-                } else {
-                    const zone = document.createElement("div");
-                    zone.className = "dropzone";
-                    zone.textContent = "拖拽卡片到这里：放入该 withBuilder 的子卡片（折叠状态）";
-                    bindSubDropZone(zone, node.children, node);
-                    body.appendChild(zone);
-                }
-                break;
-
-            case "add_fourier_series":
-                body.appendChild(row("折叠", checkbox(node.folded, v => {
-                    node.folded = v;
-                    renderAll();
-                })));
-                body.appendChild(row("count", inputNum(p.count, v => {
-                    p.count = v;
-                    rebuildPreviewAndKotlin();
-                })));
-                body.appendChild(row("scale", inputNum(p.scale, v => {
-                    p.scale = v;
-                    rebuildPreviewAndKotlin();
-                })));
-                if (!node.folded) {
-                    const block = document.createElement("div");
-                    block.className = "subblock";
-
-                    const head = document.createElement("div");
-                    head.className = "subblock-head";
-
-                    const title = document.createElement("div");
-                    title.className = "subblock-title";
-                    title.textContent = "Fourier 项（addFourier）";
-
-                    const actions = document.createElement("div");
-                    actions.className = "mini";
-
-                    const addBtn = document.createElement("button");
-                    addBtn.className = "btn small primary";
-                    addBtn.textContent = "添加 Fourier 项";
-                    addBtn.addEventListener("click", () => {
-                        historyCapture("add_fourier_term");
-                        node.terms.push({id: uid(), r: 1, w: 1, startAngle: 0, collapsed: false, bodyHeight: null});
-                        renderAll();
-                    });
-
-                    const clearBtn = document.createElement("button");
-                    clearBtn.className = "btn small danger";
-                    clearBtn.textContent = "清空";
-                    clearBtn.addEventListener("click", () => {
-                        historyCapture("clear_fourier_terms");
-                        node.terms.splice(0);
-                        renderAll();
-                    });
-
-                    actions.appendChild(addBtn);
-                    actions.appendChild(clearBtn);
-
-                    head.appendChild(title);
-                    head.appendChild(actions);
-
-                    const sub = document.createElement("div");
-                    sub.className = "subcards";
-
-                    for (let i = 0; i < node.terms.length; i++) {
-                        sub.appendChild(renderFourierTermCard(node, i));
-                    }
-
-                    block.appendChild(head);
-                    block.appendChild(sub);
-                    body.appendChild(block);
-                }
-                break;
-
-            default:
-                break;
-        }
-    }
-
-    function renderFourierTermCard(parentNode, idx) {
-        const t = parentNode.terms[idx];
-
-        const card = document.createElement("div");
-        card.className = "card";
-        card.dataset.id = t.id;
-        if (t.id === focusedNodeId) card.classList.add("focused");
-        if (t.collapsed) card.classList.add("collapsed");
-
-        const head = document.createElement("div");
-        head.className = "card-head";
-
-        const title = document.createElement("div");
-        title.className = "card-title";
-
-        const handle = document.createElement("div");
-        handle.className = "handle";
-        handle.textContent = "≡";
-
-        const ttext = document.createElement("div");
-        ttext.className = "title-text";
-        ttext.textContent = `Fourier #${idx + 1}`;
-
-        const badge = document.createElement("div");
-        badge.className = "badge2";
-        badge.textContent = "addFourier";
-
-        title.appendChild(handle);
-        title.appendChild(ttext);
-        title.appendChild(badge);
-
-        const actions = document.createElement("div");
-        actions.className = "card-actions";
-
-        const collapseBtn = iconBtn(t.collapsed ? "▸" : "▾", (e) => {
-            e.stopPropagation();
-            historyCapture("toggle_term_collapse");
-            t.collapsed = !t.collapsed;
-            card.classList.toggle("collapsed", t.collapsed);
-            collapseBtn.textContent = t.collapsed ? "▸" : "▾";
-            collapseBtn.title = t.collapsed ? "展开" : "收起";
-        });
-        collapseBtn.title = t.collapsed ? "展开" : "收起";
-        actions.appendChild(collapseBtn);
-
-        actions.appendChild(iconBtn("↑", () => {
-            if (idx > 0) {
-                historyCapture("move_fourier_term_up");
-                historyCapture("move_up");
-                const tmp = parentNode.terms[idx - 1];
-                parentNode.terms[idx - 1] = parentNode.terms[idx];
-                parentNode.terms[idx] = tmp;
-                renderAll();
-            }
-        }));
-        actions.appendChild(iconBtn("↓", () => {
-            if (idx < parentNode.terms.length - 1) {
-                historyCapture("move_fourier_term_down");
-                const tmp = parentNode.terms[idx + 1];
-                parentNode.terms[idx + 1] = parentNode.terms[idx];
-                parentNode.terms[idx] = tmp;
-                renderAll();
-            }
-        }));
-        actions.appendChild(iconBtn("🗑", () => {
-            historyCapture("delete_fourier_term");
-            const wasFocused = (focusedNodeId === t.id);
-            parentNode.terms.splice(idx, 1);
-            if (wasFocused) {
-                const next = pickReasonableFocusAfterDelete({ parentList: parentNode.terms, index: idx, parentNode });
-                setFocusedNode(next, false);
-            }
-            renderAll();
-        }, true));
-
-        head.appendChild(title);
-        head.appendChild(actions);
-
-        const body = document.createElement("div");
-        body.className = "card-body";
-        if (Number.isFinite(t.bodyHeight)) {
-            body.style.height = `${t.bodyHeight}px`;
-            body.style.maxHeight = `${t.bodyHeight}px`;
-        }
-        const desc = document.createElement("div");
-        desc.className = "pill";
-        desc.textContent = "r, w, startAngle(度)";
-        body.appendChild(desc);
-
-        body.appendChild(row("r", inputNum(t.r, v => {
-            t.r = v;
-            rebuildPreviewAndKotlin();
-        })));
-        body.appendChild(row("w", inputNum(t.w, v => {
-            t.w = v;
-            rebuildPreviewAndKotlin();
-        })));
-        body.appendChild(row("startAngle", inputNum(t.startAngle, v => {
-            t.startAngle = v;
-            rebuildPreviewAndKotlin();
-        })));
-
-        card.appendChild(head);
-        card.appendChild(body);
-        const resizer = document.createElement("div");
-        resizer.className = "card-resizer";
-        bindCardBodyResizer(resizer, body, t);
-        card.appendChild(resizer);
-
-        // ✅ 同样处理焦点：避免焦点落在 Fourier 子卡片时仍残留上一张卡的高亮
-        card.tabIndex = 0;
-        card.addEventListener("pointerdown", (e) => {
-            if (isRenderingCards) return;
-            if (e.button !== 0) return;
-            // ✅ 避免父卡片接管子卡片的点击：只响应“事件发生在当前卡片自身区域”
-            const inner = e.target && e.target.closest ? e.target.closest(".card") : null;
-            if (inner && inner !== card) return;
-            setFocusedNode(t.id);
-        });
-        card.addEventListener("focusin", (e) => {
-            if (isRenderingCards) return;
-            // ✅ focusin 会冒泡：子卡片获得焦点时，父卡片不应抢走高亮
-            const inner = e.target && e.target.closest ? e.target.closest(".card") : null;
-            if (inner && inner !== card) return;
-            setFocusedNode(t.id);
-        });
-        card.addEventListener("focusout", (e) => {
-            if (isRenderingCards) return;
-            if (suppressCardFocusOutClear) return;
-            const next = e.relatedTarget;
-            if (next && card.contains(next)) return;
-            requestAnimationFrame(() => {
-                const ae = document.activeElement;
-                if (ae && card.contains(ae)) return;
-                clearFocusedNodeIf(t.id);
-            });
-        });
-
-        setupDrag(handle, card, parentNode.terms, () => idx, () => renderAll());
-        return card;
-    }
-
-    function renderNodeCard(node, siblings, idx, ownerLabel, ownerNode = null) {
-        const def = KIND[node.kind];
-        const card = document.createElement("div");
-        card.className = "card";
-        card.dataset.id = node.id;
-        if (node.id === focusedNodeId) card.classList.add("focused");
-        if (node.id === focusedNodeId) card.classList.add("focused");
-        if (node.collapsed) card.classList.add("collapsed");
-
-        const head = document.createElement("div");
-        head.className = "card-head";
-
-        const title = document.createElement("div");
-        title.className = "card-title";
-
-        const handle = document.createElement("div");
-        handle.className = "handle";
-        handle.textContent = "≡";
-
-        const ttext = document.createElement("div");
-        ttext.className = "title-text";
-        ttext.textContent = def ? def.title : node.kind;
-
-        const badge = document.createElement("div");
-        badge.className = "badge2";
-        badge.textContent = node.kind;
-
-        title.appendChild(handle);
-        title.appendChild(ttext);
-        title.appendChild(badge);
-
-        const actions = document.createElement("div");
-        actions.className = "card-actions";
-
-        const collapseBtn = iconBtn(node.collapsed ? "▸" : "▾", (e) => {
-            e.stopPropagation();
-            historyCapture("toggle_card_collapse");
-            node.collapsed = !node.collapsed;
-            card.classList.toggle("collapsed", node.collapsed);
-            collapseBtn.textContent = node.collapsed ? "▸" : "▾";
-            collapseBtn.title = node.collapsed ? "展开" : "收起";
-        });
-        collapseBtn.title = node.collapsed ? "展开" : "收起";
-        actions.appendChild(collapseBtn);
-
-        // ✅ 快捷添加：在当前卡片下方插入（若选中 withBuilder 卡片则插入到子Builder）
-        const addBtn = iconBtn("＋", () => {
-            if (isBuilderContainerKind(node.kind)) {
-                openModal(node.children, (node.children || []).length, "子Builder", node.id);
-            } else {
-                openModal(siblings, idx + 1, ownerLabel);
-            }
-        });
-        addBtn.title = "在下方新增";
-        actions.appendChild(addBtn);
-
-        const toTopBtn = iconBtn("⇡", () => {
-            if (idx > 0) {
-                historyCapture("move_top");
-                const n = siblings.splice(idx, 1)[0];
-                siblings.unshift(n);
-                renderAll();
-            }
-        });
-        toTopBtn.title = "置顶";
-        actions.appendChild(toTopBtn);
-
-        const upBtn = iconBtn("↑", () => {
-            if (idx > 0) {
-                historyCapture("move_up");
-                const t = siblings[idx - 1];
-                siblings[idx - 1] = siblings[idx];
-                siblings[idx] = t;
-                renderAll();
-            }
-        });
-        upBtn.title = "上移";
-        actions.appendChild(upBtn);
-
-        const downBtn = iconBtn("↓", () => {
-            if (idx < siblings.length - 1) {
-                historyCapture("move_down");
-                const t = siblings[idx + 1];
-                siblings[idx + 1] = siblings[idx];
-                siblings[idx] = t;
-                renderAll();
-            }
-        });
-        downBtn.title = "下移";
-        actions.appendChild(downBtn);
-
-        const toBottomBtn = iconBtn("⇣", () => {
-            if (idx < siblings.length - 1) {
-                historyCapture("move_bottom");
-                const n = siblings.splice(idx, 1)[0];
-                siblings.push(n);
-                renderAll();
-            }
-        });
-        toBottomBtn.title = "置底";
-        actions.appendChild(toBottomBtn);
-
-        if (node.kind === "add_line" || node.kind === "points_on_each_offset") {
-            const mirrorBtn = iconBtn("⇋", () => {
-                const cloned = mirrorCopyNode(node, mirrorPlane);
-                if (!cloned) return;
-                historyCapture("mirror_copy");
-                siblings.splice(idx + 1, 0, cloned);
-                renderAll();
-                requestAnimationFrame(() => {
-                    const el = elCardsRoot.querySelector(`.card[data-id="${cloned.id}"]`);
-                    if (el) {
-                        try { el.focus(); } catch {}
-                        try { el.scrollIntoView({ block: "nearest" }); } catch {}
-                        setFocusedNode(cloned.id, false);
-                    }
-                });
-            });
-            mirrorBtn.dataset.mirrorBtn = "1";
-            mirrorBtn.title = `镜像复制（${getMirrorPlaneInfo().label}）`;
-            actions.appendChild(mirrorBtn);
-        }
-
-        // ✅ 复制卡片：在当前卡片下方插入一张一模一样的（含子卡片/terms）
-        const copyBtn = iconBtn("⧉", () => {
-            historyCapture("copy_card");
-            const cloned = cloneNodeDeep(node);
-            siblings.splice(idx + 1, 0, cloned);
-            renderAll();
-
-            // 尝试把焦点放到新卡片，方便继续编辑
-            requestAnimationFrame(() => {
-                const el = elCardsRoot.querySelector(`.card[data-id="${cloned.id}"]`);
-                if (el) {
-                    el.focus();
-                    try { el.scrollIntoView({ block: "nearest" }); } catch {}
-                }
-            });
-        });
-        copyBtn.title = "复制";
-        actions.appendChild(copyBtn);
-
-        const delBtn = iconBtn("🗑", () => {
-            historyCapture("delete_card");
-            siblings.splice(idx, 1);
-            // 如果删的是当前聚焦卡片：把焦点挪到更合理的位置（不额外写历史）
-            if (focusedNodeId === node.id) {
-                const next = pickReasonableFocusAfterDelete({ parentList: siblings, index: idx, parentNode: ownerNode });
-                setFocusedNode(next, false);
-            }
-            ensureAxisEverywhere();
-            renderAll();
-        }, true);
-        delBtn.title = "删除";
-        actions.appendChild(delBtn);
-
-        head.appendChild(title);
-        head.appendChild(actions);
-
-        const body = document.createElement("div");
-        body.className = "card-body";
-        if (Number.isFinite(node.bodyHeight)) {
-            body.style.height = `${node.bodyHeight}px`;
-            body.style.maxHeight = `${node.bodyHeight}px`;
-        }
-
-        if (def?.desc) {
-            const d = document.createElement("div");
-            d.className = "pill";
-            d.textContent = def.desc;
-            body.appendChild(d);
-        }
-
-        renderParamsEditors(body, node, ownerLabel);
-
-        card.appendChild(head);
-        card.appendChild(body);
-        const resizer = document.createElement("div");
-        resizer.className = "card-resizer";
-        bindCardBodyResizer(resizer, body, node);
-        card.appendChild(resizer);
-
-        // ✅ 聚焦高亮：卡片获得焦点时，让对应新增的粒子变色
-        card.tabIndex = 0; // 让卡片标题区也可获得焦点（点击空白处也算聚焦）
-        card.addEventListener("pointerdown", (e) => {
-            if (e.button !== 0) return;
-            // ✅ 避免 withBuilder 父卡片接管子卡片：只响应“事件发生在当前卡片自身区域”
-            const inner = e.target && e.target.closest ? e.target.closest(".card") : null;
-            if (inner && inner !== card) return;
-            setFocusedNode(node.id);
-        });
-        card.addEventListener("focusin", (e) => {
-            // ✅ focusin 会冒泡：子卡片获得焦点时，父卡片不应抢走高亮
-            const inner = e.target && e.target.closest ? e.target.closest(".card") : null;
-            if (inner && inner !== card) return;
-            setFocusedNode(node.id);
-        });
-        card.addEventListener("focusout", (e) => {
-            if (isRenderingCards) return;
-            if (suppressCardFocusOutClear) return;
-            const next = e.relatedTarget;
-            if (next && card.contains(next)) return;
-            // 延迟一帧：避免同卡片内切换焦点时误清空
-            requestAnimationFrame(() => {
-                const ae = document.activeElement;
-                if (ae && card.contains(ae)) return;
-                clearFocusedNodeIf(node.id);
-            });
-        });
-
-        setupDnD(handle, card, node, siblings, () => idx, ownerNode);
-        return card;
-    }
+    const cardSystem = initCardSystem({
+        KIND,
+        elCardsRoot,
+        row,
+        inputNum,
+        select,
+        checkbox,
+        makeVec3Editor,
+        historyCapture,
+        rebuildPreviewAndKotlin,
+        openModal,
+        mirrorCopyNode,
+        cloneNodeDeep,
+        cloneNodeListDeep,
+        makeNode,
+        ensureAxisEverywhere,
+        ensureAxisInList,
+        isBuilderContainerKind,
+        showToast,
+        pickReasonableFocusAfterDelete,
+        bindCardBodyResizer,
+        bindSubblockWidthResizer,
+        bindSubblockHeightResizer,
+        handleBuilderDrop,
+        tryCopyWithBuilderIntoAddWith,
+        moveNodeById,
+        downloadText,
+        deepClone,
+        fileBuilderJson,
+        stopLinePick,
+        startLinePick,
+        stopPointPick,
+        uid,
+        getState: () => state,
+        getRenderAll: () => renderAll,
+        getFocusedNodeId: () => focusedNodeId,
+        setFocusedNode,
+        clearFocusedNodeIf,
+        updateFocusCardUI,
+        getIsRenderingCards: () => isRenderingCards,
+        setIsRenderingCards: (v) => { isRenderingCards = v; },
+        getSuppressCardFocusOutClear: () => suppressCardFocusOutClear,
+        getMirrorPlaneInfo,
+        getMirrorPlane: () => mirrorPlane,
+        getVisibleEntries: () => getVisibleEntries,
+        getCleanupFilterMenus: () => cleanupFilterMenus,
+        getIsFilterActive: () => isFilterActive,
+        getFindVisibleSwapIndex: () => findVisibleSwapIndex,
+        getSwapInList: () => swapInList,
+        getCreateFilterControls: () => createFilterControls,
+        getCreateParamSyncControls: () => createParamSyncControls,
+        getParamSync: () => paramSync,
+        getIsSyncSelectableEvent: () => isSyncSelectableEvent,
+        getToggleSyncTarget: () => toggleSyncTarget,
+        getBuilderJsonTargetNode: () => builderJsonTargetNode,
+        setBuilderJsonTargetNode: (node) => { builderJsonTargetNode = node; },
+        getLinePickMode: () => linePickMode,
+        getPointPickMode: () => pointPickMode,
+        isCollapseAllActive,
+        getCollapseScope,
+        collapseAllInScope,
+        expandAllInScope
+    });
+    ({
+        renderCards,
+        renderParamsEditors,
+        layoutActionOverflow,
+        initCollapseAllControls,
+        setupListDropZone,
+        addQuickOffsetTo
+    } = cardSystem);
+
+    const filterSystem = initFilterSystem({
+        KIND,
+        showToast,
+        elCardsRoot,
+        deepClone,
+        findNodeContextById,
+        renderCards: () => renderCards(),
+        rebuildPreviewAndKotlin: () => rebuildPreviewAndKotlin(),
+        renderParamsEditors: (...args) => renderParamsEditors(...args)
+    });
+    ({
+        getFilterScope,
+        saveRootFilter,
+        isFilterActive,
+        filterAllows,
+        getVisibleEntries,
+        getVisibleIndices,
+        swapInList,
+        findVisibleSwapIndex,
+        cleanupFilterMenus,
+        createFilterControls,
+        createParamSyncControls,
+        renderSyncMenu,
+        bindParamSyncListeners,
+        isSyncSelectableEvent,
+        toggleSyncTarget,
+        paramSync
+    } = filterSystem);
 
     // -------------------------
     // Top buttons
     // -------------------------
+    function triggerImportJson() {
+        if (focusedNodeId) {
+            const ctx = findNodeContextById(focusedNodeId);
+            if (ctx && ctx.node && isBuilderContainerKind(ctx.node.kind)) {
+                builderJsonTargetNode = ctx.node;
+                fileBuilderJson && fileBuilderJson.click();
+                return;
+            }
+        }
+        fileJson && fileJson.click();
+    }
+
     function doExportKotlin() {
         setKotlinOut(emitKotlin());
     }
@@ -4737,18 +2518,34 @@ function addQuickOffsetTo(list) {
         const blob = new Blob([text], { type: "text/plain;charset=utf-8" });
         const a = document.createElement("a");
         a.href = URL.createObjectURL(blob);
-        a.download = "PointsBuilder_Generated.kt";
+        a.download = makeExportFileName("kt", "PointsBuilder_Generated");
         a.click();
         setTimeout(() => URL.revokeObjectURL(a.href), 200);
     }
 
     btnExportKotlin.addEventListener("click", doExportKotlin);
     btnExportKotlin2.addEventListener("click", doExportKotlin);
-    btnToggleKotlin && btnToggleKotlin.addEventListener("click", () => setKotlinHidden(!layoutState.kotlinHidden));
+    btnToggleKotlin && btnToggleKotlin.addEventListener("click", () => setKotlinHidden(!isKotlinHidden()));
     btnCopyKotlin.addEventListener("click", doCopyKotlin);
     btnCopyKotlin2.addEventListener("click", doCopyKotlin);
     btnDownloadKotlin && btnDownloadKotlin.addEventListener("click", doDownloadKotlin);
     btnDownloadKotlin2 && btnDownloadKotlin2.addEventListener("click", doDownloadKotlin);
+    if (selKotlinEnd) {
+        selKotlinEnd.value = kotlinEndMode;
+        selKotlinEnd.addEventListener("change", () => {
+            kotlinEndMode = selKotlinEnd.value || "builder";
+            saveKotlinEndMode(kotlinEndMode);
+            setKotlinOut(emitKotlin());
+        });
+    }
+    if (inpProjectName) {
+        inpProjectName.value = projectName || "";
+        inpProjectName.addEventListener("input", () => {
+            projectName = sanitizeFileBase(inpProjectName.value || "");
+            saveProjectName(projectName);
+            if (inpProjectName.value !== projectName) inpProjectName.value = projectName;
+        });
+    }
 
     btnAddCard.addEventListener("click", () => {
             const ctx = getInsertContextFromFocus();
@@ -4777,11 +2574,7 @@ function addQuickOffsetTo(list) {
         }
     });
 
-    btnFullscreen.addEventListener("click", () => {
-        const host = document.querySelector(".viewer");
-        if (!document.fullscreenElement) host.requestFullscreen?.();
-        else document.exitFullscreen?.();
-    });
+    btnFullscreen.addEventListener("click", toggleFullscreen);
 
     btnSaveJson.addEventListener("click", async () => {
         const text = JSON.stringify(state, null, 2);
@@ -4789,7 +2582,7 @@ function addQuickOffsetTo(list) {
         if (window.showSaveFilePicker) {
             try {
                 const handle = await window.showSaveFilePicker({
-                    suggestedName: "shape.json",
+                    suggestedName: makeExportFileName("json", "shape"),
                     types: [{ description: "JSON", accept: {"application/json": [".json"]} }]
                 });
                 const writable = await handle.createWritable();
@@ -4808,7 +2601,7 @@ function addQuickOffsetTo(list) {
             }
         }
         try {
-            downloadText("shape.json", text, "application/json");
+            downloadText(makeExportFileName("json", "shape"), text, "application/json");
             showToast("保存成功", "success");
         } catch (e) {
             showToast(`保存失败：${e.message || e}`, "error");
@@ -4868,12 +2661,18 @@ function addQuickOffsetTo(list) {
     // Boot
     // -------------------------
     applyLayoutState(false);
-    bindResizer(resizerLeft, "left");
-    bindResizer(resizerRight, "right");
+    bindResizers();
     updateKotlinToggleText();
     window.addEventListener("resize", () => applyLayoutState(true));
+    window.addEventListener("beforeunload", () => {
+        const json = safeStringifyState(state);
+        if (json && json !== lastSavedStateJson) saveAutoState(state);
+    });
     initThree();
     setupListDropZone(elCardsRoot, () => state.root.children, () => null);
-    refreshHotkeyHints();
+    initCollapseAllControls();
+    if (typeof bindParamSyncListeners === "function") bindParamSyncListeners();
+    if (typeof refreshHotkeyHints === "function") refreshHotkeyHints();
     renderAll();
 })();
+

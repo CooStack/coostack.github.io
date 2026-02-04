@@ -1,4 +1,4 @@
-:root {
+﻿:root {
     --bg: #0b1020;
     --panel: #0f1630;
     --panel2: #0c1329;
@@ -86,6 +86,30 @@ body {
     align-items: center;
     gap: 8px;
     flex-wrap: wrap
+}
+
+.proj-name {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 0 8px;
+    height: 34px;
+    border-radius: 10px;
+    border: 1px solid var(--line2);
+    background: rgba(255, 255, 255, .03);
+}
+
+.proj-name span {
+    font-size: 12px;
+    color: var(--muted);
+    white-space: nowrap;
+}
+
+.proj-input {
+    height: 24px;
+    width: 140px;
+    padding: 0 8px;
+    flex: 0 0 auto;
 }
 
 .sep {
@@ -226,6 +250,287 @@ body {
     padding: 12px 12px 8px;
     font-weight: 700;
     border-bottom: 1px solid var(--line);
+}
+
+.panel-tools {
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--line);
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    background: rgba(0, 0, 0, .08);
+}
+
+.kotlin-tools {
+    align-items: center;
+    gap: 8px;
+}
+
+.kotlin-tools-label {
+    font-size: 12px;
+    color: var(--muted);
+}
+
+.kotlin-end {
+    height: 28px;
+    min-width: 160px;
+    flex: 0 0 auto;
+}
+
+.filter-wrap {
+    position: relative;
+}
+
+.filter-portal {
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    z-index: 9999;
+}
+
+.filter-menu {
+    position: absolute;
+    left: 0;
+    top: calc(100% + 6px);
+    min-width: 260px;
+    max-width: 320px;
+    background: linear-gradient(180deg, rgba(22, 30, 60, .94), rgba(8, 10, 18, .9));
+    border: 1px solid var(--line2);
+    border-radius: 12px;
+    padding: 8px;
+    box-shadow: var(--shadow2);
+    display: none;
+    z-index: 9999;
+    pointer-events: auto;
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+}
+
+.filter-menu.open {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.filter-menu .mode {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.filter-menu .mode span {
+    font-size: 12px;
+    color: var(--muted);
+    white-space: nowrap;
+}
+
+.filter-menu .input {
+    background: rgba(12, 18, 34, .88);
+    border: 1px solid rgba(255, 255, 255, .14);
+    color: var(--text);
+}
+
+.filter-menu .input::placeholder {
+    color: var(--muted2);
+}
+
+.filter-menu .input:focus {
+    outline: none;
+    border-color: rgba(255, 255, 255, .32);
+    box-shadow: 0 0 0 2px rgba(78, 161, 255, .18);
+}
+
+.filter-search-row {
+    display: flex;
+    align-items: center;
+}
+
+.filter-search {
+    width: 100%;
+    height: 30px;
+    font-size: 12px;
+}
+
+.filter-list {
+    max-height: 240px;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding-right: 4px;
+    scrollbar-color: rgba(255, 255, 255, .25) transparent;
+    scrollbar-width: thin;
+}
+
+.filter-list::-webkit-scrollbar {
+    width: 8px;
+}
+
+.filter-list::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, .18);
+    border-radius: 10px;
+    border: 2px solid transparent;
+    background-clip: content-box;
+}
+
+.filter-list::-webkit-scrollbar-thumb:hover {
+    background: rgba(255, 255, 255, .3);
+}
+
+.filter-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 12px;
+    color: var(--text);
+    padding: 6px 8px;
+    border-radius: 8px;
+    border: 1px solid rgba(255, 255, 255, .06);
+    background: rgba(255, 255, 255, .03);
+    cursor: pointer;
+    transition: border-color .18s ease, background .18s ease;
+}
+
+.filter-item:hover {
+    background: rgba(255, 255, 255, .08);
+    border-color: rgba(255, 255, 255, .14);
+}
+
+.filter-item input[type="checkbox"] {
+    width: 14px;
+    height: 14px;
+    accent-color: var(--accent);
+}
+
+.filter-sync {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 12px;
+    color: var(--text);
+}
+
+.filter-sync input[type="checkbox"] {
+    width: 14px;
+    height: 14px;
+    accent-color: var(--accent);
+}
+
+.filter-actions {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+}
+
+.sync-wrap {
+    position: relative;
+}
+
+.sync-menu {
+    position: absolute;
+    left: 0;
+    top: calc(100% + 6px);
+    min-width: 280px;
+    max-width: 360px;
+    background: linear-gradient(180deg, rgba(22, 30, 60, .94), rgba(8, 10, 18, .9));
+    border: 1px solid var(--line2);
+    border-radius: 12px;
+    padding: 8px;
+    box-shadow: var(--shadow2);
+    display: none;
+    z-index: 9999;
+    pointer-events: auto;
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+}
+
+.sync-wrap.open .sync-menu,
+.sync-menu.open {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.sync-hint,
+.sync-empty {
+    font-size: 12px;
+    color: var(--muted);
+}
+
+.sync-list {
+    max-height: 180px;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding-right: 4px;
+    scrollbar-width: thin;
+    scrollbar-color: rgba(255, 255, 255, .25) transparent;
+}
+
+.sync-list::-webkit-scrollbar {
+    width: 8px;
+}
+
+.sync-list::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, .18);
+    border-radius: 10px;
+    border: 2px solid transparent;
+    background-clip: content-box;
+}
+
+.sync-kind {
+    font-size: 12px;
+    color: var(--text);
+    padding: 6px 8px;
+    border-radius: 8px;
+    background: rgba(255, 255, 255, .08);
+    border: 1px solid rgba(255, 255, 255, .12);
+}
+
+.sync-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    font-size: 12px;
+    color: var(--text);
+    padding: 6px 8px;
+    border-radius: 8px;
+    border: 1px solid rgba(255, 255, 255, .08);
+    background: rgba(255, 255, 255, .04);
+}
+
+.sync-item-title {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    flex: 1 1 auto;
+}
+
+.sync-editor {
+    border-top: 1px dashed rgba(255, 255, 255, .12);
+    padding-top: 8px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.sync-editor .row .label {
+    font-size: 11px;
+}
+
+.sync-actions {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+}
+
+.card.sync-target {
+    border-color: rgba(78, 161, 255, .55);
+    box-shadow: 0 0 0 1px rgba(78, 161, 255, .35), var(--shadow);
 }
 
 .panel-footnote {
@@ -548,6 +853,14 @@ body.resizing-panels .panel.right {
     flex: 0 0 auto;
 }
 
+.drag-handle {
+    cursor: grab;
+}
+
+.drag-handle:active {
+    cursor: grabbing;
+}
+
 .title-text {
     font-weight: 700;
     font-size: 13px;
@@ -840,6 +1153,21 @@ select.input {
     font-size: 12px;
     color: rgba(255, 255, 255, .86);
     flex: 1 1 100%;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+}
+
+.subblock-title-text {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.subblock-handle {
+    flex: 0 0 auto;
 }
 
 /* ✅ 子Builder操作按钮：占满整行并可换行 */

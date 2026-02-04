@@ -18,7 +18,7 @@
         </div>
 
         <div class="topbar-right">
-            <button id="btnAddCard" class="btn primary">添加卡片</button>
+            <button id="btnAddCard" class="btn primary">添加元素</button>
             <button id="btnQuickOffset" class="btn">快捷 Offset</button>
             <button id="btnPickLine" class="btn">XZ 拾取直线</button>
             <button id="btnPickPoint" class="btn">点拾取</button>
@@ -39,15 +39,19 @@
             <input id="fileJson" type="file" accept="application/json" hidden />
             <input id="fileBuilderJson" type="file" accept="application/json" hidden />
             <button id="btnReset" class="btn danger">重置</button>
+            <div class="proj-name">
+                <span>项目名</span>
+                <input id="inpProjectName" class="input proj-input" placeholder="未命名" />
+            </div>
         </div>
     </header>
 
     <main class="layout">
         <aside class="panel left">
-            <div class="panel-title">构建卡片</div>
+            <div class="panel-title">构建列</div>
             <div id="cardsRoot" class="cards"></div>
             <div class="panel-footnote">
-                提示：拖拽“≡”可排序；嵌套卡片在父卡片内；右侧输出 Kotlin。
+                拖拽 ≡ 排序；子元素放在父卡片里；右侧是 Kotlin 输出。
             </div>
         </aside>
 
@@ -112,6 +116,14 @@
             <div class="panel-title kotlin-title">
                 <span>Kotlin 代码</span>
             </div>
+            <div class="panel-tools kotlin-tools">
+                <span class="kotlin-tools-label">结尾</span>
+                <select id="selKotlinEnd" class="input kotlin-end">
+                    <option value="builder">构建器结尾</option>
+                    <option value="list">列表结尾</option>
+                    <option value="clone">克隆列表结尾</option>
+                </select>
+            </div>
             <pre id="kotlinOut" class="code code-highlight" aria-readonly="true"></pre>
 
             <div class="panel-actions">
@@ -131,8 +143,8 @@
     <div id="modalMask" class="modal-mask hidden"></div>
     <div id="modal" class="modal hidden" role="dialog" aria-modal="true">
         <div class="modal-head">
-            <div class="modal-title">添加卡片</div>
-            <input id="cardSearch" class="input" placeholder="搜索：addCircle / rotateTo / Fourier ..." />
+            <div class="modal-title">添加元素</div>
+            <input id="cardSearch" class="input" placeholder="搜索元素：addCircle / rotateTo / Fourier ..." />
             <button id="btnCloseModal" class="btn icon">✕</button>
         </div>
         <div class="modal-body">
@@ -148,7 +160,7 @@
     <div id="hkModal" class="modal hidden" role="dialog" aria-modal="true">
         <div class="modal-head">
             <div class="modal-title">快捷键设置</div>
-            <input id="hkSearch" class="input" placeholder="搜索：撤销 / 添加卡片 / addCircle ..." />
+            <input id="hkSearch" class="input" placeholder="搜索：撤销 / 添加元素 / addCircle ..." />
             <button id="btnCloseHotkeys" class="btn icon">✕</button>
         </div>
         <div class="modal-body">

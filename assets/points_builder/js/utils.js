@@ -1,4 +1,4 @@
-// utils.js（无 export，兼容普通 script / module script）
+﻿// utils.js（无 export，兼容普通 script / module script）
 // 会挂到 globalThis.Utils
 
 (function () {
