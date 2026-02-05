@@ -9,7 +9,8 @@
     <script type="importmap">
       {
         "imports": {
-          "three": "https://cdn.jsdelivr.net/npm/three@0.182.0/build/three.module.min.js"
+          "three": "https://cdn.jsdelivr.net/npm/three@0.182.0/build/three.module.min.js",
+          "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.182.0/examples/jsm/"
         }
       }
     </script>
@@ -36,17 +37,7 @@
           <button class="btn" id="btnPlay">▶ 预览</button>
           <button class="btn" id="btnPause">⏸ 暂停</button>
           <button class="btn" id="btnClear">🧹 清空粒子</button>
-          <div class="theme-switch">
-            <span>主题</span>
-            <select id="themeSelect" class="theme-select" title="Alt+[ / Alt+] 切换">
-              <option value="dark-1">夜岚</option>
-              <option value="dark-2">深潮</option>
-              <option value="dark-3">焰砂</option>
-              <option value="light-1">雾蓝</option>
-              <option value="light-2">杏露</option>
-              <option value="light-3">薄荷</option>
-            </select>
-          </div>
+          <button class="btn" id="btnSettings">设置</button>
           <button class="btn" id="btnUndo" title="撤回 (Ctrl+Z / ⌘Z)">↶ 撤回</button>
           <button class="btn" id="btnRedo" title="重做 (Ctrl+Y / ⌘⇧Z)">↷ 重做</button>
           <div class="sep"></div>
@@ -54,8 +45,8 @@
           <button class="btn" id="btnExportJson" title="导出为 JSON">📤 导出为 JSON</button>
           <button class="btn danger" id="btnResetAll" title="重置为默认">⟲ 重置</button>
           <div class="sep"></div>
-          <button class="btn primary" id="btnGen">🧾 生成 Kotlin</button>
-          <button class="btn" id="btnCopy">📋 复制代码</button>
+          <button class="btn primary" id="btnGen" style="display:none;">🧾 生成 Kotlin</button>
+          <button class="btn" id="btnCopy" style="display:none;">📋 复制代码</button>
         </div>
       </header>
 
@@ -73,6 +64,10 @@
                 <option value="sphere">球 (Sphere 体积)</option>
                 <option value="sphere_surface">球面 (Sphere Surface)</option>
                 <option value="ring">环 (Ring)</option>
+                <option value="line">直线 (Line)</option>
+                <option value="circle">圆 (Circle)</option>
+                <option value="arc">弧 (Arc)</option>
+                <option value="spiral">螺旋 (Spiral)</option>
               </select>
             </div>
 
@@ -85,6 +80,29 @@
                 min="1"
                 max="200"
                 value="20"
+                data-step-fixed="1"
+              />
+            </div>
+          </div>
+
+          <div class="panel-subtitle">发射方式</div>
+          <div class="grid2">
+            <div class="field">
+              <label>发射模式</label>
+              <select id="emissionMode">
+                <option value="continuous">持续（每 tick）</option>
+                <option value="burst">爆发（间隔）</option>
+                <option value="once">一次性</option>
+              </select>
+            </div>
+            <div class="field emission-field" data-emission="burst">
+              <label>爆发间隔（秒）</label>
+              <input
+                id="burstInterval"
+                type="number"
+                step="0.01"
+                min="0.01"
+                value="0.5"
               />
             </div>
           </div>
@@ -120,11 +138,11 @@
           <div class="grid2">
             <div class="field">
               <label>生命周期 min</label>
-              <input id="lifeMin" type="number" step="1" min="1" value="40" />
+              <input id="lifeMin" type="number" step="1" min="1" value="40" data-step-fixed="1" />
             </div>
             <div class="field">
               <label>生命周期 max</label>
-              <input id="lifeMax" type="number" step="1" min="1" value="120" />
+              <input id="lifeMax" type="number" step="1" min="1" value="120" data-step-fixed="1" />
             </div>
           </div>
 
@@ -136,7 +154,7 @@
                 type="number"
                 step="0.01"
                 min="0.01"
-                value="0.8"
+                value="0.08"
               />
             </div>
             <div class="field">
@@ -146,19 +164,19 @@
                 type="number"
                 step="0.01"
                 min="0.01"
-                value="0.9"
+                value="0.18"
               />
             </div>
           </div>
 
           <div class="grid2">
             <div class="field">
-              <label>数量 min / tick</label>
-              <input id="countMin" type="number" step="1" min="0" value="2" />
+              <label>数量 min / 发射</label>
+              <input id="countMin" type="number" step="1" min="0" value="2" data-step-fixed="1" />
             </div>
             <div class="field">
-              <label>数量 max / tick</label>
-              <input id="countMax" type="number" step="1" min="0" value="6" />
+              <label>数量 max / 发射</label>
+              <input id="countMax" type="number" step="1" min="0" value="6" data-step-fixed="1" />
             </div>
           </div>
 
@@ -173,15 +191,28 @@
 
           <div class="grid2">
             <div class="field">
-              <label>速度倍率（预览）</label>
+              <label>速度倍率 min</label>
               <input
-                id="velSpeed"
+                id="velSpeedMin"
                 type="number"
                 step="0.01"
                 min="0"
                 value="1.0"
               />
             </div>
+            <div class="field">
+              <label>速度倍率 max</label>
+              <input
+                id="velSpeedMax"
+                type="number"
+                step="0.01"
+                min="0"
+                value="1.2"
+              />
+            </div>
+          </div>
+
+          <div class="grid1">
             <div class="field">
               <label>可见范围（预览）</label>
               <input
@@ -190,6 +221,7 @@
                 step="1"
                 min="1"
                 value="128"
+                data-step-fixed="1"
               />
             </div>
           </div>
@@ -284,6 +316,114 @@
             </div>
           </div>
 
+          <div id="emitLine" class="emitBox emitSection">
+            <div class="grid2">
+              <div class="field">
+                <label>步长</label>
+                <input id="lineStep" type="number" step="0.01" min="0.001" value="0.2" />
+              </div>
+              <div class="field">
+                <label>方向 Vec3</label>
+                <div class="vec3">
+                  <input id="lineDirX" type="number" step="0.01" value="1" />
+                  <input id="lineDirY" type="number" step="0.01" value="0" />
+                  <input id="lineDirZ" type="number" step="0.01" value="0" />
+                </div>
+              </div>
+            </div>
+            <div class="hint">直线发射：数量使用「粒子随机范围」里的数量区间。</div>
+          </div>
+
+          <div id="emitCircle" class="emitBox emitSection">
+            <div class="grid2">
+              <div class="field">
+                <label>半径</label>
+                <input id="circleR" type="number" step="0.01" min="0.001" value="2.5" />
+              </div>
+              <div class="field">
+                <label>轴 Axis Vec3</label>
+                <div class="vec3">
+                  <input id="circleAx" type="number" step="0.01" value="0" />
+                  <input id="circleAy" type="number" step="0.01" value="1" />
+                  <input id="circleAz" type="number" step="0.01" value="0" />
+                </div>
+              </div>
+            </div>
+            <div class="hint">圆发射：数量使用「粒子随机范围」里的数量区间。</div>
+          </div>
+
+          <div id="emitArc" class="emitBox emitSection">
+            <div class="grid3">
+              <div class="field">
+                <label>半径</label>
+                <input id="arcR" type="number" step="0.01" min="0.001" value="2.5" />
+              </div>
+              <div class="field">
+                <label>起始角度</label>
+                <input id="arcStart" type="number" step="0.01" value="0" />
+              </div>
+              <div class="field">
+                <label>结束角度</label>
+                <input id="arcEnd" type="number" step="0.01" value="180" />
+              </div>
+            </div>
+            <div class="grid2">
+              <div class="field">
+                <label>旋转偏移（角度）</label>
+                <input id="arcRotate" type="number" step="0.01" value="0" />
+              </div>
+              <div class="field">
+                <label>轴 Axis Vec3</label>
+                <div class="vec3">
+                  <input id="arcAx" type="number" step="0.01" value="0" />
+                  <input id="arcAy" type="number" step="0.01" value="1" />
+                  <input id="arcAz" type="number" step="0.01" value="0" />
+                </div>
+              </div>
+            </div>
+            <div class="hint">弧发射：角度单位为度，数量使用「粒子随机范围」里的数量区间。</div>
+          </div>
+
+          <div id="emitSpiral" class="emitBox emitSection">
+            <div class="grid3">
+              <div class="field">
+                <label>起始半径</label>
+                <input id="spiralStartR" type="number" step="0.01" min="0.001" value="0.5" />
+              </div>
+              <div class="field">
+                <label>结束半径</label>
+                <input id="spiralEndR" type="number" step="0.01" min="0.001" value="2.5" />
+              </div>
+              <div class="field">
+                <label>高度</label>
+                <input id="spiralH" type="number" step="0.01" value="2.0" />
+              </div>
+            </div>
+            <div class="grid3">
+              <div class="field">
+                <label>旋转速度（弧度/步）</label>
+                <input id="spiralSpeed" type="number" step="0.01" value="0.35" />
+              </div>
+              <div class="field">
+                <label>半径曲线</label>
+                <input id="spiralRBias" type="number" step="0.01" min="0.1" value="1.0" />
+              </div>
+              <div class="field">
+                <label>高度曲线</label>
+                <input id="spiralHBias" type="number" step="0.01" min="0.1" value="1.0" />
+              </div>
+            </div>
+            <div class="vec3Row">
+              <div class="miniLabel">轴 Axis Vec3</div>
+              <div class="vec3">
+                <input id="spiralAx" type="number" step="0.01" value="0" />
+                <input id="spiralAy" type="number" step="0.01" value="1" />
+                <input id="spiralAz" type="number" step="0.01" value="0" />
+              </div>
+            </div>
+            <div class="hint">螺旋发射：数量使用「粒子随机范围」里的数量区间。</div>
+          </div>
+
           <div class="panel-subtitle">Kotlin 生成选项</div>
           <div class="grid2">
             <div class="field">
@@ -295,14 +435,26 @@
               <input id="kRefName" type="text" value="emitter" />
             </div>
           </div>
+          <div class="grid2">
+            <div class="field">
+              <label>模板变量名 (template)</label>
+              <input id="kTemplateName" type="text" value="template" />
+            </div>
+            <div class="field">
+              <label>Emitter 数据名 (emitterData)</label>
+              <input id="kEmitterDataName" type="text" value="emitterData" />
+            </div>
+          </div>
 
           <div class="hint">
-            预览相机操作：<strong>左键旋转</strong> /
-            <strong>右键平移</strong> / <strong>滚轮缩放</strong>。<br />
-            本页只生成命令队列代码（<code>ParticleCommandQueue()</code> +
-            <code>.add(...)</code>）。
+            预览相机操作：<strong>中键旋转</strong> /
+            <strong>右键平移</strong> / <strong>方向键平移</strong> /
+            <strong>滚轮缩放</strong>。<br />
+            可生成命令队列代码与发射器参数代码（Emitter 输出）。
           </div>
         </section>
+
+        <div class="resizer resizer-left" data-resizer="left" aria-hidden="true"></div>
 
         <!-- 中间预览 -->
         <section class="panel center">
@@ -310,7 +462,7 @@
           <div id="viewportWrap" class="viewport-wrap">
             <div id="viewport" class="viewport"></div>
             <div class="overlay">
-              <div class="chip">左键旋转 / 右键平移 / 滚轮缩放</div>
+              <div class="chip">中键旋转 / 右键平移 / 方向键平移 / 滚轮缩放</div>
               <div class="chip" id="statChip">Particles: 0</div>
             </div>
             <div class="fsBtn">
@@ -320,10 +472,30 @@
               </button>
             </div>
           </div>
+          <div id="previewResizer" class="preview-resizer" aria-hidden="true"></div>
 
-          <div class="panel-title" style="margin-top: 12px">Kotlin 输出</div>
-          <textarea id="kotlinOut" spellcheck="false"></textarea>
+          <div class="panel-title kotlin-title" style="margin-top: 12px">
+            <span>Kotlin 输出</span>
+            <div class="kotlin-tabs">
+              <button class="kotlin-tab active" data-tab="command">Command</button>
+              <button class="kotlin-tab" data-tab="emitter">Emitter</button>
+            </div>
+          </div>
+          <div class="kotlin-toolbar">
+            <div class="kotlin-actions">
+              <button class="btn primary" id="btnGenKotlin">🧾 生成 Kotlin</button>
+              <button class="btn" id="btnCopyKotlin">📋 复制代码</button>
+            </div>
+            <div class="kotlin-note">代码高亮已启用，复制会按当前页面输出。</div>
+          </div>
+          <div id="kotlinBody" class="kotlin-body">
+            <pre id="kotlinOutCmd" class="kotlin-out code code-highlight" aria-readonly="true"></pre>
+            <pre id="kotlinOutEmitter" class="kotlin-out code code-highlight hidden" aria-readonly="true"></pre>
+          </div>
+          <div id="kotlinResizer" class="kotlin-resizer" aria-hidden="true"></div>
         </section>
+
+        <div class="resizer resizer-right" data-resizer="right" aria-hidden="true"></div>
 
         <!-- 右侧命令队列 -->
         <section class="panel right">
@@ -357,15 +529,100 @@
         </section>
       </main>
 
+      <!-- 设置 -->
+      <div id="settingsMask" class="modal-mask hidden"></div>
+      <div id="settingsModal" class="modal hidden" role="dialog" aria-modal="true">
+        <div class="modal-head">
+          <div class="modal-title">设置</div>
+          <button id="btnCloseSettings" class="btn icon">✕</button>
+        </div>
+        <div class="modal-body">
+          <div class="settings-layout">
+            <div class="settings-panel">
+              <div class="settings-panel-title">数值</div>
+              <div class="settings-form">
+                <div class="settings-row">
+                  <div class="settings-label">参数步长</div>
+                  <input id="inpParamStep" class="input" type="number" value="0.1" step="0.01" min="0.000001" />
+                </div>
+                <div class="settings-row">
+                  <div class="settings-label">预览粒子大小倍率</div>
+                  <input id="inpPointSize" class="input" type="number" value="1.0" step="0.01" min="0.01" />
+                </div>
+              </div>
+            </div>
+            <div class="settings-panel">
+              <div class="settings-panel-title">显示</div>
+              <div class="settings-form">
+                <div class="settings-row">
+                  <div class="settings-label">主题</div>
+                  <select id="themeSelect" class="input theme-select" title="Alt+[ / Alt+] 切换">
+                    <option value="dark-1">夜岚</option>
+                    <option value="dark-2">深潮</option>
+                    <option value="dark-3">焰砂</option>
+                    <option value="light-1">雾蓝</option>
+                    <option value="light-2">杏露</option>
+                    <option value="light-3">薄荷</option>
+                  </select>
+                </div>
+                <div class="settings-toggles">
+                  <label class="chk settings-toggle">
+                    <input id="chkAxes" type="checkbox" checked />
+                    <span>显示坐标轴</span>
+                  </label>
+                  <label class="chk settings-toggle">
+                    <input id="chkGrid" type="checkbox" checked />
+                    <span>显示网格</span>
+                  </label>
+                </div>
+              </div>
+            </div>
+            <div class="settings-panel settings-panel-wide">
+              <div class="settings-panel-title">快捷键</div>
+              <div class="settings-actions">
+                <button id="btnOpenHotkeys" class="btn primary">打开快捷键设置</button>
+                <div class="settings-note">点击配置快捷键。</div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="modal-foot" style="display:flex; gap:8px; align-items:center;">
+          <button id="btnHotkeysExport" class="btn">导出设置</button>
+          <button id="btnHotkeysImport" class="btn">导入设置</button>
+          <input id="fileHotkeys" type="file" accept="application/json" hidden />
+          <span style="flex:1 1 auto;"></span>
+        </div>
+      </div>
+
+      <!-- 快捷键设置（二级菜单） -->
+      <div id="hkMask" class="modal-mask hidden"></div>
+      <div id="hkModal" class="modal hidden" role="dialog" aria-modal="true">
+        <div class="modal-head">
+          <div class="modal-title">快捷键设置</div>
+          <input id="hkSearch" class="input" placeholder="搜索快捷键：播放 / 导出 / 全屏 ..." />
+          <button id="btnCloseHotkeys" class="btn icon">✕</button>
+        </div>
+        <div class="modal-body">
+          <div id="hkHint" style="margin:0 0 10px; opacity:.8; font-size:12px;">点击“设置”后按下你想要的按键（Esc 取消，Backspace 清空）。</div>
+          <div id="hkList" class="hk-list"></div>
+        </div>
+        <div class="modal-foot" style="display:flex; gap:8px; align-items:center;">
+          <button id="btnHotkeysReset" class="btn">恢复默认</button>
+          <span style="flex:1 1 auto;"></span>
+          <button id="btnCloseHotkeys2" class="btn primary">关闭</button>
+        </div>
+      </div>
+
       <footer class="footer">
         <div>Depend：<code>CooParticlesAPI</code></div>
       </footer>
     </div>
     <!-- app -->
+    <script src="./assets/blog/js/codehighlight.js"></script>
     <script type="module" src="./assets/emitter_generator/js/generate.js"></script>
 
   <!-- modal / file input -->
-  <div id="modalMask" class="modal-mask" aria-hidden="true">
+  <div id="modalMask" class="modal-mask hidden" aria-hidden="true">
     <div class="modal" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
       <div class="modal-head">
         <div class="modal-title" id="modalTitle">确认</div>
