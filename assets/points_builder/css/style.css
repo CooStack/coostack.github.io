@@ -839,6 +839,39 @@ body {
     transition: margin-right .32s cubic-bezier(.22, .8, .2, 1);
 }
 
+/* ✅ Fullscreen 背景兜底：有些浏览器/版本不支持 color-mix，导致 :fullscreen 背景声明失效，
+   再加上 ::backdrop 默认黑色，会看起来“全屏后变黑”。
+   这里给 ::backdrop 和 :fullscreen 都加一个不依赖 color-mix 的 fallback。 */
+.viewer::backdrop,
+.viewer::-webkit-backdrop {
+    background: var(--bg);
+}
+
+.viewer:fullscreen,
+.viewer:-webkit-full-screen,
+.viewer:-moz-full-screen,
+.viewer:-ms-fullscreen {
+    /* fallback（无 color-mix） */
+    background: linear-gradient(180deg, rgba(255, 255, 255, .02), rgba(0, 0, 0, .12));
+    background-color: var(--bg);
+
+    background:
+        radial-gradient(
+            1200px 700px at 20% 10%,
+            color-mix(in srgb, var(--accent) 18%, transparent),
+            transparent 55%
+        ),
+        radial-gradient(
+            900px 500px at 90% 20%,
+            color-mix(in srgb, var(--ok) 12%, transparent),
+            transparent 55%
+        ),
+        var(--bg);
+    border: 0;
+    border-radius: 0;
+    margin: 0;
+}
+
 .resizer {
     width: 6px;
     border-radius: 999px;
@@ -1116,6 +1149,8 @@ body.resizing-panels .panel.right {
     box-shadow: var(--shadow2), inset 0 1px 0 rgba(255, 255, 255, .06);
     backdrop-filter: blur(12px) saturate(1.15);
     overflow: hidden;
+    transition: transform 0.16s ease;
+    will-change: transform;
 }
 
 /* ✅ 聚焦高亮：让用户一眼看出当前聚焦的卡片 */
@@ -1137,6 +1172,33 @@ body.resizing-panels .panel.right {
 
 .card.dragging {
     opacity: .75
+}
+
+.card.drag-over {
+    outline: 1px solid rgba(78, 161, 255, .45);
+    outline-offset: -1px;
+}
+
+.dropzone-active {
+    outline: 1px dashed rgba(78, 161, 255, .45);
+    outline-offset: -3px;
+    background: rgba(78, 161, 255, .08);
+}
+
+.sub-dropzone {
+    margin-top: 8px;
+    padding: 8px 10px;
+    border: 1px dashed var(--line2);
+    border-radius: 10px;
+    color: var(--muted);
+    text-align: center;
+    background: rgba(0, 0, 0, .12);
+}
+
+.sub-dropzone.active {
+    border-color: rgba(78, 161, 255, .55);
+    background: rgba(78, 161, 255, .12);
+    color: rgba(255, 255, 255, .9);
 }
 
 .card-head {

@@ -19,9 +19,39 @@ export function initPreview(ctx = {}) {
         tickAcc: 0,
         lastTime: performance.now(),
         particles: [],
-        burstTick: 1e9,
-        emittedOnce: false,
+        emitRuntime: new Map(), // emitterId -> { burstTick:number, emittedOnce:boolean }
     };
+
+
+    function getEmittersFromState(state) {
+        const arr = Array.isArray(state?.emitters) ? state.emitters : null;
+        if (arr && arr.length) return arr;
+        // legacy fallback (older schema: state.emitter/state.emission/state.particle)
+        if (state && state.emitter && state.particle) {
+            return [{
+                id: "legacy_emitter",
+                emission: state.emission || { mode: "continuous", burstInterval: 0.5 },
+                emitter: state.emitter,
+                particle: state.particle,
+            }];
+        }
+        return [];
+    }
+
+    function ensureEmitterRuntime(emitters) {
+        const alive = new Set();
+        for (const c of emitters || []) {
+            const id = c && c.id != null ? String(c.id) : null;
+            if (!id) continue;
+            alive.add(id);
+            if (!sim.emitRuntime.has(id)) {
+                sim.emitRuntime.set(id, { burstTick: 1e9, emittedOnce: false });
+            }
+        }
+        for (const id of Array.from(sim.emitRuntime.keys())) {
+            if (!alive.has(id)) sim.emitRuntime.delete(id);
+        }
+    }
 
     const shouldIgnoreArrowPan = (typeof ctx.shouldIgnoreArrowPan === "function")
         ? ctx.shouldIgnoreArrowPan
@@ -84,7 +114,9 @@ export function initPreview(ctx = {}) {
     function makePointShaderMaterial() {
         return new THREE.ShaderMaterial({
             transparent: true,
-            depthWrite: false,
+            depthWrite: true,
+            depthTest: true,
+            alphaTest: 0.05,
             uniforms: {
                 uViewportY: {value: 600.0},
             },
@@ -111,15 +143,16 @@ export function initPreview(ctx = {}) {
         }
       `,
             fragmentShader: `
-        varying vec3 vColor;
+          varying vec3 vColor;
 
-        void main() {
-          vec2 uv = gl_PointCoord - vec2(0.5);
-          float d = length(uv);
-          float alpha = 1.0 - smoothstep(0.45, 0.5, d);
-          gl_FragColor = vec4(vColor, alpha);
-        }
-      `
+          void main() {
+            vec2 uv = gl_PointCoord - vec2(0.5);
+            float d = length(uv);
+            float alpha = 1.0 - smoothstep(0.45, 0.5, d);
+            if (alpha < 0.02) discard;
+            gl_FragColor = vec4(vColor, alpha);
+          }
+        `
         });
     }
 
@@ -210,8 +243,8 @@ export function initPreview(ctx = {}) {
         const alpha = clamp(sim.tickAcc, 0, 1);
 
         const n = Math.min(pArr.length, MAX_POINTS);
-        const c0 = hexToRgb01(state.particle.colorStart);
-        const c1 = hexToRgb01(state.particle.colorEnd);
+
+        const white = {r: 1, g: 1, b: 1};
 
         for (let i = 0; i < n; i++) {
             const p = pArr[i];
@@ -225,7 +258,7 @@ export function initPreview(ctx = {}) {
             posAttr.array[i * 3 + 2] = iz;
 
             const t = clamp(p.age / Math.max(1, p.life), 0, 1);
-            const c = lerp3(c0, c1, t);
+            const c = lerp3(p.c0 || white, p.c1 || white, t);
             colAttr.array[i * 3 + 0] = c.r;
             colAttr.array[i * 3 + 1] = c.g;
             colAttr.array[i * 3 + 2] = c.b;
@@ -269,60 +302,96 @@ export function initPreview(ctx = {}) {
         }
     }
 
-    function tickOnce() {
+        function tickOnce() {
         const state = getState();
-        const mode = (state.emission && state.emission.mode) || "continuous";
-        const spawn = () => {
-            const cnt = randInt(state.particle.countMin, state.particle.countMax);
+        const emitters = getEmittersFromState(state);
+        ensureEmitterRuntime(emitters);
+
+        const tps = Math.max(1, Number(state.ticksPerSecond) || 20);
+
+        const spawnFor = (card) => {
+            const pp = (card && card.particle) ? card.particle : {};
+            const minC = Math.max(0, Math.trunc(Number(pp.countMin) || 0));
+            const maxC = Math.max(minC, Math.trunc(Number(pp.countMax) || 0));
+            const cnt = randInt(minC, maxC);
             for (let i = 0; i < cnt; i++) {
                 if (sim.particles.length >= MAX_POINTS) break;
-                sim.particles.push(makeParticle());
+                sim.particles.push(makeParticle(card));
             }
         };
 
-        if (mode === "once") {
-            if (!sim.emittedOnce) {
-                spawn();
-                sim.emittedOnce = true;
+        for (const card of emitters) {
+            const id = card && card.id != null ? String(card.id) : null;
+            if (!id) continue;
+            const mode = (card.emission && card.emission.mode) || "continuous";
+            const rt = sim.emitRuntime.get(id);
+            if (!rt) continue;
+
+            if (mode === "once") {
+                if (!rt.emittedOnce) {
+                    spawnFor(card);
+                    rt.emittedOnce = true;
+                }
+            } else if (mode === "burst") {
+                const intervalSec = Math.max(0.01, safeNum(card.emission?.burstInterval, 0.5));
+                const intervalTicks = Math.max(1, Math.round(intervalSec * tps));
+                if (rt.burstTick >= intervalTicks) {
+                    spawnFor(card);
+                    rt.burstTick = 0;
+                }
+                rt.burstTick += 1;
+            } else {
+                spawnFor(card);
             }
-        } else if (mode === "burst") {
-            const intervalSec = Math.max(0.01, safeNum(state.emission.burstInterval, 0.5));
-            const intervalTicks = Math.max(1, Math.round(intervalSec * Math.max(1, state.ticksPerSecond)));
-            if (sim.burstTick >= intervalTicks) {
-                spawn();
-                sim.burstTick = 0;
-            }
-            sim.burstTick += 1;
-        } else {
-            spawn();
         }
 
-        const cmds = state.commands.filter(c => c.enabled);
+        const cmds = (state.commands || []).filter(c => c && c.enabled);
         for (let i = sim.particles.length - 1; i >= 0; i--) {
             const p = sim.particles[i];
             p.age++;
 
-            for (const c of cmds) applyCommandJS(c, p, 1);
+            for (const c of cmds) {
+                const signs = c && c.signs;
+                if (Array.isArray(signs) && signs.length) {
+                    const ps = Math.trunc(Number(p.sign) || 0);
+                    let ok = false;
+                    for (const s of signs) {
+                        if (Math.trunc(Number(s)) === ps) { ok = true; break; }
+                    }
+                    if (!ok) continue;
+                }
+                applyCommandJS(c, p, 1);
+            }
             p.prevPos = p.pos;
             p.pos = p.pos.clone().add(p.vel);
             if (p.age >= p.life) sim.particles.splice(i, 1);
         }
     }
 
-    function makeParticle() {
-        const state = getState();
-        const pos = sampleEmitterPosition();
-        const life = randInt(state.particle.lifeMin, state.particle.lifeMax);
-        const size = rand(state.particle.sizeMin, state.particle.sizeMax);
+        function makeParticle(card) {
+        const pp = (card && card.particle) ? card.particle : {};
+        const pos = sampleEmitterPosition(card);
 
-        const vdir = new THREE.Vector3(state.particle.vel.x, state.particle.vel.y, state.particle.vel.z);
+        const lifeMin = Math.max(1, Math.trunc(Number(pp.lifeMin) || 40));
+        const lifeMax = Math.max(lifeMin, Math.trunc(Number(pp.lifeMax) || 120));
+        const life = randInt(lifeMin, lifeMax);
+
+        const sizeMin = Math.max(0.001, Number(pp.sizeMin) || 0.08);
+        const sizeMax = Math.max(sizeMin, Number(pp.sizeMax) || 0.18);
+        const size = rand(sizeMin, sizeMax);
+
+        const v0 = pp.vel || {};
+        const vdir = new THREE.Vector3(Number(v0.x) || 0, Number(v0.y) || 0, Number(v0.z) || 0);
         if (vdir.lengthSq() < 1e-10) vdir.set(0, 0, 0);
         else {
-            const minSpeed = Math.max(0, state.particle.velSpeedMin);
-            const maxSpeed = Math.max(minSpeed, state.particle.velSpeedMax);
+            const minSpeed = Math.max(0, Number(pp.velSpeedMin) || 0);
+            const maxSpeed = Math.max(minSpeed, Number(pp.velSpeedMax) || minSpeed);
             const speed = rand(minSpeed, maxSpeed);
             vdir.normalize().multiplyScalar(speed);
         }
+
+        const c0 = hexToRgb01(pp.colorStart || "#ffffff");
+        const c1 = hexToRgb01(pp.colorEnd || "#ffffff");
 
         return {
             pos,
@@ -331,7 +400,10 @@ export function initPreview(ctx = {}) {
             age: 0,
             life,
             size,
-            seed: (Math.random() * 1e9) | 0
+            c0,
+            c1,
+            sign: Math.trunc(Number(card?.template?.sign) || 0),
+            seed: (Math.random() * 1e9) | 0,
         };
     }
 
@@ -344,27 +416,30 @@ export function initPreview(ctx = {}) {
         return vec.applyQuaternion(q);
     }
 
-    function sampleEmitterPosition() {
-        const state = getState();
-        const t = state.emitter.type;
+        function sampleEmitterPosition(card) {
+        const e = (card && card.emitter) ? card.emitter : {};
+        const pp = (card && card.particle) ? card.particle : {};
+        const t = e.type || "point";
         const off = new THREE.Vector3(
-            state.emitter.offset?.x || 0,
-            state.emitter.offset?.y || 0,
-            state.emitter.offset?.z || 0
+            Number(e.offset?.x) || 0,
+            Number(e.offset?.y) || 0,
+            Number(e.offset?.z) || 0
         );
         if (t === "point") return new THREE.Vector3(0, 0, 0).add(off);
 
         if (t === "box") {
-            const bx = state.emitter.box.x, by = state.emitter.box.y, bz = state.emitter.box.z;
-            const surface = !!state.emitter.box.surface;
-            const density = clamp(state.emitter.box.density, 0, 1);
+            const bx = Number(e.box?.x) || 1;
+            const by = Number(e.box?.y) || 1;
+            const bz = Number(e.box?.z) || 1;
+            const surface = !!e.box?.surface;
+            const density = clamp(Number(e.box?.density) || 0, 0, 1);
 
             function biased(u) {
                 if (density <= 0) return u;
-                const s = Math.sign(u);
+                const s = Math.sign(u) || 1;
                 const a = Math.abs(u);
-                const pow = lerp(1.0, 4.0, density);
-                return s * Math.pow(a, pow);
+                const pw = lerp(1.0, 4.0, density);
+                return s * Math.pow(a, pw);
             }
 
             let x = biased(rand(-0.5, 0.5)) * bx;
@@ -381,7 +456,7 @@ export function initPreview(ctx = {}) {
         }
 
         if (t === "sphere") {
-            const r = Math.max(0.001, state.emitter.sphere.r);
+            const r = Math.max(0.001, Number(e.sphere?.r) || 1);
             const u = Math.random();
             const v = Math.random();
             const theta = 2 * Math.PI * u;
@@ -396,7 +471,7 @@ export function initPreview(ctx = {}) {
         }
 
         if (t === "sphere_surface") {
-            const r = Math.max(0.001, state.emitter.sphereSurface.r);
+            const r = Math.max(0.001, Number(e.sphereSurface?.r) || 1);
             const u = Math.random();
             const v = Math.random();
             const theta = 2 * Math.PI * u;
@@ -410,13 +485,10 @@ export function initPreview(ctx = {}) {
         }
 
         if (t === "line") {
-            const dir = new THREE.Vector3(
-                state.emitter.line.dir.x,
-                state.emitter.line.dir.y,
-                state.emitter.line.dir.z
-            );
-            const step = Math.max(0.0001, state.emitter.line.step);
-            const count = Math.max(1, state.particle.countMax || 1);
+            const d = e.line?.dir || {x: 1, y: 0, z: 0};
+            const dir = new THREE.Vector3(Number(d.x) || 0, Number(d.y) || 0, Number(d.z) || 0);
+            const step = Math.max(0.0001, Number(e.line?.step) || 0.25);
+            const count = Math.max(1, Math.trunc(Number(pp.countMax) || 1));
             if (dir.lengthSq() < 1e-8) dir.set(1, 0, 0);
             dir.normalize();
             const idx = randInt(0, Math.max(0, count - 1));
@@ -424,50 +496,46 @@ export function initPreview(ctx = {}) {
         }
 
         if (t === "circle") {
-            const r = Math.max(0.001, state.emitter.circle.r);
+            const r = Math.max(0.001, Number(e.circle?.r) || 1);
             const a = rand(0, Math.PI * 2);
             const vec = new THREE.Vector3(Math.cos(a) * r, 0, Math.sin(a) * r);
-            const axis = new THREE.Vector3(
-                state.emitter.circle.axis.x,
-                state.emitter.circle.axis.y,
-                state.emitter.circle.axis.z
-            );
+            const ax0 = e.circle?.axis || {x: 0, y: 1, z: 0};
+            const axis = new THREE.Vector3(safeNum(ax0.x, 0), safeNum(ax0.y, 1), safeNum(ax0.z, 0));
             return rotateToAxis(vec, axis).add(off);
         }
 
         if (t === "arc") {
-            const r = Math.max(0.001, state.emitter.arc.r);
-            let a0 = safeNum(state.emitter.arc.start, 0) * DEG_TO_RAD;
-            let a1 = safeNum(state.emitter.arc.end, 0) * DEG_TO_RAD;
+            const r = Math.max(0.001, Number(e.arc?.r) || 1);
+            let a0 = safeNum(e.arc?.start, 0) * DEG_TO_RAD;
+            let a1 = safeNum(e.arc?.end, 0) * DEG_TO_RAD;
             if (a1 < a0) [a0, a1] = [a1, a0];
-            const rot = safeNum(state.emitter.arc.rotate, 0) * DEG_TO_RAD;
+            const rot = safeNum(e.arc?.rotate, 0) * DEG_TO_RAD;
             const a = rand(a0, a1) + rot;
             const vec = new THREE.Vector3(Math.cos(a) * r, 0, Math.sin(a) * r);
-            const axis = new THREE.Vector3(
-                state.emitter.arc.axis.x,
-                state.emitter.arc.axis.y,
-                state.emitter.arc.axis.z
-            );
+            const ax0 = e.arc?.axis || {x: 0, y: 1, z: 0};
+            const axis = new THREE.Vector3(safeNum(ax0.x, 0), safeNum(ax0.y, 1), safeNum(ax0.z, 0));
             return rotateToAxis(vec, axis).add(off);
         }
 
         if (t === "spiral") {
-            const s = state.emitter.spiral;
-            const count = Math.max(2, state.particle.countMax || 2);
+            const s = e.spiral || {};
+            const count = Math.max(2, Math.trunc(Number(pp.countMax) || 2));
             const idx = randInt(0, count - 1);
             const process = idx / Math.max(1, count - 1);
-            const rBias = Math.pow(process, Math.max(0.01, s.rBias || 1.0));
-            const hBias = Math.pow(process, Math.max(0.01, s.hBias || 1.0));
-            const radius = lerp(s.startR, s.endR, rBias);
-            const height = lerp(0, s.height, hBias);
-            const angle = idx * (s.rotateSpeed || 0);
+            const rBias = Math.pow(process, Math.max(0.01, Number(s.rBias) || 1.0));
+            const hBias = Math.pow(process, Math.max(0.01, Number(s.hBias) || 1.0));
+            const radius = lerp(Number(s.startR) || 0.5, Number(s.endR) || 2.5, rBias);
+            const height = lerp(0, Number(s.height) || 2.0, hBias);
+            const angle = idx * (Number(s.rotateSpeed) || 0);
             const vec = new THREE.Vector3(Math.cos(angle) * radius, height, Math.sin(angle) * radius);
-            const axis = new THREE.Vector3(s.axis.x, s.axis.y, s.axis.z);
+            const ax0 = s.axis || {x: 0, y: 1, z: 0};
+            const axis = new THREE.Vector3(safeNum(ax0.x, 0), safeNum(ax0.y, 1), safeNum(ax0.z, 0));
             return rotateToAxis(vec, axis).add(off);
         }
 
-        const rr = Math.max(0.001, state.emitter.ring.r);
-        const th = Math.max(0, state.emitter.ring.thickness);
+        // ring fallback
+        const rr = Math.max(0.001, Number(e.ring?.r) || 1);
+        const th = Math.max(0, Number(e.ring?.thickness) || 0);
         const a = rand(0, Math.PI * 2);
         let x = Math.cos(a) * rr;
         let z = Math.sin(a) * rr;
@@ -481,8 +549,9 @@ export function initPreview(ctx = {}) {
             z += j.z;
         }
 
-        const ax = new THREE.Vector3(state.emitter.ring.axis.x, state.emitter.ring.axis.y, state.emitter.ring.axis.z);
-        return rotateToAxis(new THREE.Vector3(x, y, z), ax).add(off);
+        const ax0 = e.ring?.axis || {x: 0, y: 1, z: 0};
+        const axis = new THREE.Vector3(safeNum(ax0.x, 0), safeNum(ax0.y, 1), safeNum(ax0.z, 0));
+        return rotateToAxis(new THREE.Vector3(x, y, z), axis).add(off);
     }
 
     function expDampFactor(damping, dt) {
@@ -796,6 +865,83 @@ export function initPreview(ctx = {}) {
                 break;
             }
 
+            case "ParticleDistortionCommand": {
+                const cx = Number(p.centerX) || 0;
+                const cy = Number(p.centerY) || 0;
+                const cz = Number(p.centerZ) || 0;
+
+                const ax0 = Number(p.axisX) || 0;
+                const ay0 = Number(p.axisY) || 1;
+                const az0 = Number(p.axisZ) || 0;
+                const axis = new THREE.Vector3(ax0, ay0, az0);
+                const axisLen = axis.length();
+                if (axisLen < 1e-9) {
+                    axis.set(0, 1, 0);
+                } else {
+                    axis.multiplyScalar(1.0 / axisLen);
+                }
+
+                const radius = Number(p.radius) || 0;
+                const radialStrength = Number(p.radialStrength) || 0;
+                const axialStrength = Number(p.axialStrength) || 0;
+                const tangentialStrength = Number(p.tangentialStrength) || 0;
+                const frequency = Number(p.frequency) || 0;
+                const timeScale = Number(p.timeScale) || 0;
+                const phaseOffset = Number(p.phaseOffset) || 0;
+                const followStrength = Number(p.followStrength) || 0;
+                const maxStep = Number(p.maxStep) || 0;
+                const baseAxial = Number(p.baseAxial) || 0;
+                const seedOffset = Math.trunc(Number(p.seedOffset) || 0);
+                const useLifeCurve = !!p.useLifeCurve;
+
+                const center = new THREE.Vector3(cx, cy, cz);
+                const r = particle.pos.clone().sub(center);
+                const axialComp = axis.clone().multiplyScalar(r.dot(axis));
+                let radial = r.clone().sub(axialComp);
+                let radialLen = radial.length();
+                if (radialLen < 1e-9) {
+                    radial = anyPerpToAxis(axis);
+                    radialLen = 1.0;
+                } else {
+                    radial.multiplyScalar(1.0 / radialLen);
+                }
+
+                let tangent = axis.clone().cross(radial);
+                const tLen = tangent.length();
+                if (tLen < 1e-9) tangent = anyPerpToAxis(axis);
+                else tangent.multiplyScalar(1.0 / tLen);
+
+                const lifeT = (particle.life > 0) ? (particle.age / particle.life) : 0.0;
+                const lifeMul = useLifeCurve ? clamp(1.0 - lifeT, 0, 1) : 1.0;
+
+                const time = particle.age * timeScale + phaseOffset;
+                const local = particle.pos.clone().sub(center);
+                const samplePos = local.multiplyScalar(frequency)
+                    .add(new THREE.Vector3(time, time * 0.7, time * 1.3));
+                const seed = (particle.seed | 0) + seedOffset;
+
+                const nr = valueNoise3K(samplePos, seed + 11) * 2 - 1;
+                const na = valueNoise3K(samplePos, seed + 23) * 2 - 1;
+                const nt = valueNoise3K(samplePos, seed + 37) * 2 - 1;
+
+                const targetRadius = Math.max(0.0, radius + nr * radialStrength * lifeMul);
+                const targetAxial = baseAxial + na * axialStrength * lifeMul;
+                const targetTangential = nt * tangentialStrength * lifeMul;
+
+                const targetPos = center.clone()
+                    .add(axis.clone().multiplyScalar(targetAxial))
+                    .add(radial.clone().multiplyScalar(targetRadius))
+                    .add(tangent.clone().multiplyScalar(targetTangential));
+
+                let dv = targetPos.sub(particle.pos).multiplyScalar(followStrength);
+                const dvLen = dv.length();
+                if (maxStep > 0.0 && dvLen > maxStep) {
+                    dv.multiplyScalar(maxStep / dvLen);
+                }
+                particle.vel.add(dv);
+                break;
+            }
+
             case "ParticleGravityCommand": {
                 const g = 0.8;
                 particle.vel.y -= g * dt;
@@ -813,9 +959,14 @@ export function initPreview(ctx = {}) {
         if (resetEmit) resetEmission();
     }
 
-    function resetEmission() {
-        sim.emittedOnce = false;
-        sim.burstTick = 1e9;
+        function resetEmission() {
+        const state = getState();
+        const emitters = getEmittersFromState(state);
+        ensureEmitterRuntime(emitters);
+        for (const rt of sim.emitRuntime.values()) {
+            rt.emittedOnce = false;
+            rt.burstTick = 1e9;
+        }
     }
 
     function setShowAxes(show) {

@@ -2,6 +2,105 @@
 
 export function createKindDefs(ctx) {
     const { U, num, int, relExpr, rotatePointsToPointUpright } = ctx || {};
+
+    function cubicBezierPoint(t, p0, p1, p2, p3) {
+        const u = 1 - t;
+        const u2 = u * u;
+        const t2 = t * t;
+        const u3 = u2 * u;
+        const t3 = t2 * t;
+        return {
+            x: u3 * p0.x + 3 * u2 * t * p1.x + 3 * u * t2 * p2.x + t3 * p3.x,
+            y: u3 * p0.y + 3 * u2 * t * p1.y + 3 * u * t2 * p2.y + t3 * p3.y,
+            z: u3 * p0.z + 3 * u2 * t * p1.z + 3 * u * t2 * p2.z + t3 * p3.z,
+        };
+    }
+
+    function buildCubicBezier(p0, p1, p2, p3, count) {
+        const c = Math.max(1, int(count));
+        const res = [];
+        for (let i = 0; i < c; i++) {
+            const t = (c === 1) ? 1.0 : i / (c - 1);
+            res.push(cubicBezierPoint(t, p0, p1, p2, p3));
+        }
+        return res;
+    }
+
+    function quadToCubic(p0, p1, p2) {
+        const c1 = U.add(p0, U.mul(U.sub(p1, p0), 2 / 3));
+        const c2 = U.add(p2, U.mul(U.sub(p1, p2), 2 / 3));
+        return { c1, c2 };
+    }
+
+    function distortionSafeNormalize(v) {
+        const len = U.len(v);
+        if (len < 1e-9) return { x: 0, y: 1, z: 0 };
+        return { x: v.x / len, y: v.y / len, z: v.z / len };
+    }
+
+    function distortionAnyPerp(axis) {
+        const ref = (Math.abs(axis.y) < 0.9)
+            ? { x: 0, y: 1, z: 0 }
+            : { x: 1, y: 0, z: 0 };
+        const perp = U.cross(axis, ref);
+        const len = U.len(perp);
+        if (len < 1e-9) return { x: 0, y: 0, z: 1 };
+        return { x: perp.x / len, y: perp.y / len, z: perp.z / len };
+    }
+
+    function distortionFade(t) {
+        return t * t * t * (t * (t * 6 - 15) + 10);
+    }
+
+    function distortionLerp(a, b, t) {
+        return a + (b - a) * t;
+    }
+
+    function distortionHash3(ix, iy, iz, seed) {
+        let n = Math.imul(ix, 374761393) + Math.imul(iy, 668265263) + Math.imul(iz, 2147483647) + Math.imul(seed, 374761);
+        n = (n ^ (n >>> 13)) | 0;
+        n = Math.imul(n, 1274126177);
+        n = (n ^ (n >>> 16)) | 0;
+        return ((n & 0x7fffffff) >>> 0) / 2147483647.0;
+    }
+
+    function distortionValueNoise3(p, seed) {
+        const x0 = Math.floor(p.x);
+        const y0 = Math.floor(p.y);
+        const z0 = Math.floor(p.z);
+        const fx = p.x - x0;
+        const fy = p.y - y0;
+        const fz = p.z - z0;
+
+        const u = distortionFade(fx);
+        const v = distortionFade(fy);
+        const w = distortionFade(fz);
+
+        const h = (dx, dy, dz) => distortionHash3(x0 + dx, y0 + dy, z0 + dz, seed);
+
+        const n000 = h(0, 0, 0);
+        const n100 = h(1, 0, 0);
+        const n010 = h(0, 1, 0);
+        const n110 = h(1, 1, 0);
+        const n001 = h(0, 0, 1);
+        const n101 = h(1, 0, 1);
+        const n011 = h(0, 1, 1);
+        const n111 = h(1, 1, 1);
+
+        const nx00 = distortionLerp(n000, n100, u);
+        const nx10 = distortionLerp(n010, n110, u);
+        const nx01 = distortionLerp(n001, n101, u);
+        const nx11 = distortionLerp(n011, n111, u);
+
+        const nxy0 = distortionLerp(nx00, nx10, v);
+        const nxy1 = distortionLerp(nx01, nx11, v);
+
+        return distortionLerp(nxy0, nxy1, w);
+    }
+
+    function distortionNoise(p, seed) {
+        return distortionValueNoise3(p, seed) * 2.0 - 1.0;
+    }
     // -------------------------
     // KIND
     // -------------------------
@@ -227,6 +326,18 @@ export function createKindDefs(ctx) {
             }
         },
 
+        add_polygon: {
+            title: "addPolygon(正多边形边点)",
+            desc: "添加正多边形边点（addPolygon）",
+            defaultParams: {r: 2, sideCount: 5, count: 30},
+            apply(ctx, node) {
+                ctx.points.push(...U.getPolygonInCircleLocations(int(node.params.sideCount) || 3, int(node.params.count) || 1, num(node.params.r)));
+            },
+            kotlin(node) {
+                return `.addPolygonInCircle(${int(node.params.sideCount)}, ${int(node.params.count)}, ${U.fmt(num(node.params.r))})`;
+            }
+        },
+
         add_polygon_in_circle: {
             title: "addPolygonInCircle(内接正多边形边点)",
             desc: "添加内接多边形边点（addPolygonInCircle）",
@@ -264,6 +375,69 @@ export function createKindDefs(ctx) {
                     return `.addRoundShape(${r}, ${step}, ${int(node.params.minCircleCount)}, ${int(node.params.maxCircleCount)})`;
                 }
                 return `.addRoundShape(${r}, ${step}, ${int(node.params.preCircleCount)})`;
+            }
+        },
+
+        add_bezier: {
+            title: "addBezier(三点贝塞尔)",
+            desc: "添加三点贝塞尔曲线点（addBezier）",
+            defaultParams: {
+                p1x: 0, p1y: 0, p1z: 0,
+                p2x: 2, p2y: 2, p2z: 0,
+                p3x: 4, p3y: 0, p3z: 0,
+                count: 80
+            },
+            apply(ctx, node) {
+                const p = node.params;
+                const p0 = U.v(num(p.p1x), num(p.p1y), num(p.p1z));
+                const p1 = U.v(num(p.p2x), num(p.p2y), num(p.p2z));
+                const p2 = U.v(num(p.p3x), num(p.p3y), num(p.p3z));
+                const cubic = quadToCubic(p0, p1, p2);
+                ctx.points.push(...buildCubicBezier(p0, cubic.c1, cubic.c2, p2, int(p.count)));
+            },
+            kotlin(node) {
+                const p = node.params;
+                const p0 = U.v(num(p.p1x), num(p.p1y), num(p.p1z));
+                const p1 = U.v(num(p.p2x), num(p.p2y), num(p.p2z));
+                const p2 = U.v(num(p.p3x), num(p.p3y), num(p.p3z));
+                const cubic = quadToCubic(p0, p1, p2);
+                const target = U.sub(p2, p0);
+                const startHandle = U.sub(cubic.c1, p0);
+                const endHandle = U.sub(cubic.c2, p2);
+                const startExpr = relExpr(p0.x, p0.y, p0.z);
+                return `.addWith { generateBezierCurve(${relExpr(target.x, target.y, target.z)}, ${relExpr(startHandle.x, startHandle.y, startHandle.z)}, ${relExpr(endHandle.x, endHandle.y, endHandle.z)}, ${int(p.count)}).onEach { it.add(${startExpr}) } }`;
+            }
+        },
+
+        add_bezier_4: {
+            title: "addBezier4(四点贝塞尔)",
+            desc: "添加四点贝塞尔曲线点（addBezier4）",
+            defaultParams: {
+                p1x: 0, p1y: 0, p1z: 0,
+                p2x: 2, p2y: 2, p2z: 0,
+                p3x: 4, p3y: -2, p3z: 0,
+                p4x: 6, p4y: 0, p4z: 0,
+                count: 80
+            },
+            apply(ctx, node) {
+                const p = node.params;
+                const p0 = U.v(num(p.p1x), num(p.p1y), num(p.p1z));
+                const p1 = U.v(num(p.p2x), num(p.p2y), num(p.p2z));
+                const p2 = U.v(num(p.p3x), num(p.p3y), num(p.p3z));
+                const p3 = U.v(num(p.p4x), num(p.p4y), num(p.p4z));
+                ctx.points.push(...buildCubicBezier(p0, p1, p2, p3, int(p.count)));
+            },
+            kotlin(node) {
+                const p = node.params;
+                const p0 = U.v(num(p.p1x), num(p.p1y), num(p.p1z));
+                const c1 = U.v(num(p.p2x), num(p.p2y), num(p.p2z));
+                const c2 = U.v(num(p.p3x), num(p.p3y), num(p.p3z));
+                const p3 = U.v(num(p.p4x), num(p.p4y), num(p.p4z));
+                const target = U.sub(p3, p0);
+                const startHandle = U.sub(c1, p0);
+                const endHandle = U.sub(c2, p3);
+                const startExpr = relExpr(p0.x, p0.y, p0.z);
+                return `.addWith { generateBezierCurve(${relExpr(target.x, target.y, target.z)}, ${relExpr(startHandle.x, startHandle.y, startHandle.z)}, ${relExpr(endHandle.x, endHandle.y, endHandle.z)}, ${int(p.count)}).onEach { it.add(${startExpr}) } }`;
             }
         },
 
@@ -330,6 +504,45 @@ export function createKindDefs(ctx) {
                     }
                     return `.addLightningPoints(${start}, ${end}, ${counts}, ${plc})`;
                 }
+            }
+        },
+        add_lightning_nodes: {
+            title: "addLightningNodes(闪电节点)",
+            desc: "添加闪电节点（addLightningNodes）",
+            defaultParams: {
+                useStart: false,
+                sx: 0, sy: 0, sz: 0,
+                ex: 6, ey: 2, ez: 0,
+                count: 6,
+                useOffsetRange: false,
+                offsetRange: 1.2
+            },
+            apply(ctx, node) {
+                const p = node.params;
+                const start = p.useStart ? U.v(num(p.sx), num(p.sy), num(p.sz)) : U.v(0, 0, 0);
+                const end = U.v(num(p.ex), num(p.ey), num(p.ez));
+                const count = int(p.count);
+                if (p.useOffsetRange) {
+                    ctx.points.push(...U.getLightningEffectNodes(start, end, count, num(p.offsetRange)));
+                } else {
+                    ctx.points.push(...U.getLightningEffectNodes(start, end, count));
+                }
+            },
+            kotlin(node) {
+                const p = node.params;
+                const end = relExpr(p.ex, p.ey, p.ez);
+                const count = int(p.count);
+                if (!p.useStart) {
+                    if (p.useOffsetRange) {
+                        return `.addLightningNodes(${end}, ${count}, ${U.fmt(num(p.offsetRange))})`;
+                    }
+                    return `.addLightningNodes(${end}, ${count})`;
+                }
+                const start = relExpr(p.sx, p.sy, p.sz);
+                if (p.useOffsetRange) {
+                    return `.addLightningNodes(${start}, ${end}, ${count}, ${U.fmt(num(p.offsetRange))})`;
+                }
+                return `.addLightningNodes(${start}, ${end}, ${count})`;
             }
         },
         add_lightning_nodes_attenuation: {

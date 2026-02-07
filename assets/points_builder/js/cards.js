@@ -345,6 +345,11 @@ export function initCardSystem(ctx = {}) {
     const DRAG_TYPE_NODE = "application/x-pb-node";
     const DRAG_TYPE_BUILDER = "application/x-pb-builder";
     let draggingBuilder = null;
+    let pendingCardSwapAnim = false;
+    let dragPreview = null;
+    const requestCardSwapAnim = () => {
+        pendingCardSwapAnim = true;
+    };
 
     function getDragNodeId(e) {
         try {
@@ -368,12 +373,53 @@ export function initCardSystem(ctx = {}) {
         return draggingBuilder;
     }
 
+    function startDragPreview(cardEl, listRef, ownerNode) {
+        if (!cardEl) return;
+        const container = cardEl.parentElement;
+        dragPreview = {
+            id: cardEl.dataset.id,
+            cardEl,
+            listRef,
+            ownerNode,
+            container,
+            originalOrder: container ? Array.from(container.querySelectorAll(".card[data-id]")) : [],
+            dirty: false,
+            didDrop: false,
+            lastTargetId: null,
+            lastMode: null,
+            lastAfter: null,
+        };
+    }
+
+    function markDragPreviewDrop() {
+        if (dragPreview) dragPreview.didDrop = true;
+    }
+
+    function finishDragPreview() {
+        if (!dragPreview) return;
+        const shouldRevert = dragPreview.dirty && !dragPreview.didDrop;
+        dragPreview = null;
+        if (shouldRevert) renderAll();
+    }
+
+
     function setupDnD(handleEl, cardEl, node, listRef, getIdx, ownerNode = null) {
         handleEl.setAttribute("draggable", "true");
+        handleEl.addEventListener("pointerdown", () => {
+            if (typeof ctx.setDraggingState === "function") ctx.setDraggingState(true);
+        });
+        handleEl.addEventListener("pointerup", () => {
+            if (typeof ctx.setDraggingState === "function") ctx.setDraggingState(false);
+        });
+        handleEl.addEventListener("pointercancel", () => {
+            if (typeof ctx.setDraggingState === "function") ctx.setDraggingState(false);
+        });
         handleEl.addEventListener("dragstart", (e) => {
             draggingId = node?.id || cardEl.dataset.id;
             draggingBuilder = null;
             cardEl.classList.add("dragging");
+            startDragPreview(cardEl, listRef, ownerNode);
+            if (typeof ctx.setDraggingState === "function") ctx.setDraggingState(true);
             e.dataTransfer.effectAllowed = "move";
             try { e.dataTransfer.setData(DRAG_TYPE_NODE, draggingId); } catch {}
             e.dataTransfer.setData("text/plain", draggingId);
@@ -383,6 +429,8 @@ export function initCardSystem(ctx = {}) {
             draggingBuilder = null;
             cardEl.classList.remove("dragging");
             cardEl.classList.remove("drag-over");
+            finishDragPreview();
+            if (typeof ctx.setDraggingState === "function") ctx.setDraggingState(false);
         });
 
         cardEl.addEventListener("dragover", (e) => {
@@ -390,6 +438,44 @@ export function initCardSystem(ctx = {}) {
             const builderInfo = getDragBuilderInfo(e);
             e.dataTransfer.dropEffect = builderInfo ? "copy" : "move";
             cardEl.classList.add("drag-over");
+
+            if (builderInfo) return;
+            const id = getDragNodeId(e);
+            if (!id || !dragPreview || dragPreview.id !== id) return;
+            if (dragPreview.listRef !== listRef) return;
+            if (dragPreview.cardEl === cardEl) return;
+            if (!cardEl.parentElement || cardEl.parentElement !== dragPreview.container) return;
+
+            const scopeId = ownerNode ? ownerNode.id : null;
+            const mode = isFilterActive(scopeId) ? "swap" : "insert";
+            const rect = cardEl.getBoundingClientRect();
+            const after = (mode === "insert") && (e.clientY > rect.top + rect.height / 2);
+            if (dragPreview.lastTargetId === cardEl.dataset.id
+                && dragPreview.lastMode === mode
+                && (mode === "swap" || dragPreview.lastAfter === after)) {
+                return;
+            }
+
+            const prevPositions = captureCardPositionsIn(cardEl.parentElement);
+            if (mode === "swap") {
+                const baseOrder = Array.isArray(dragPreview.originalOrder) ? dragPreview.originalOrder : [];
+                const fromIdx = baseOrder.indexOf(dragPreview.cardEl);
+                const toIdx = baseOrder.indexOf(cardEl);
+                if (fromIdx < 0 || toIdx < 0 || fromIdx === toIdx) return;
+                const nextOrder = baseOrder.slice();
+                nextOrder[fromIdx] = baseOrder[toIdx];
+                nextOrder[toIdx] = baseOrder[fromIdx];
+                nextOrder.forEach((el) => cardEl.parentElement.appendChild(el));
+            } else {
+                const ref = after ? cardEl.nextElementSibling : cardEl;
+                if (ref === dragPreview.cardEl) return;
+                cardEl.parentElement.insertBefore(dragPreview.cardEl, ref);
+            }
+            dragPreview.dirty = true;
+            dragPreview.lastTargetId = cardEl.dataset.id;
+            dragPreview.lastMode = mode;
+            dragPreview.lastAfter = after;
+            applyCardSwapAnimationIn(cardEl.parentElement, prevPositions);
         });
         cardEl.addEventListener("dragleave", () => cardEl.classList.remove("drag-over"));
         cardEl.addEventListener("drop", (e) => {
@@ -398,21 +484,56 @@ export function initCardSystem(ctx = {}) {
             cardEl.classList.remove("drag-over");
             const builderInfo = getDragBuilderInfo(e);
             if (builderInfo) {
-                if (handleBuilderDrop(builderInfo, listRef, getIdx(), ownerNode)) renderAll();
+                if (handleBuilderDrop(builderInfo, listRef, getIdx(), ownerNode)) {
+                    markDragPreviewDrop();
+                    requestCardSwapAnim();
+                    renderAll();
+                }
                 return;
             }
 
             const id = getDragNodeId(e);
             if (!id) return;
 
+            if (dragPreview && dragPreview.dirty && dragPreview.id === id) {
+                const scopeId = ownerNode ? ownerNode.id : null;
+                const useSwap = isFilterActive(scopeId);
+                const targetId = dragPreview.lastTargetId;
+                if (targetId && targetId !== id) {
+                    const targetIdx = listRef.findIndex((it) => it && it.id === targetId);
+                    if (targetIdx >= 0) {
+                        historyCapture("drag_drop");
+                        const targetIndex = targetIdx + (!useSwap && dragPreview.lastAfter ? 1 : 0);
+                        const ok = moveNodeById(id, listRef, targetIndex, ownerNode);
+                        if (ok) {
+                            markDragPreviewDrop();
+                            requestCardSwapAnim();
+                            renderAll();
+                        }
+                        return;
+                    }
+                }
+            }
+
             // drop 在卡片上：插入到该卡片之前（同列表=排序，跨列表=移动）
             if (tryCopyWithBuilderIntoAddWith(id, ownerNode)) {
+                markDragPreviewDrop();
+                requestCardSwapAnim();
                 renderAll();
                 return;
             }
             historyCapture("drag_drop");
-            const ok = moveNodeById(id, listRef, getIdx(), ownerNode);
-            if (ok) renderAll();
+            const scopeId = ownerNode ? ownerNode.id : null;
+            const useSwap = isFilterActive(scopeId);
+            const rect = cardEl.getBoundingClientRect();
+            const after = !useSwap && (e.clientY > rect.top + rect.height / 2);
+            const targetIndex = getIdx() + (after ? 1 : 0);
+            const ok = moveNodeById(id, listRef, targetIndex, ownerNode);
+            if (ok) {
+                markDragPreviewDrop();
+                requestCardSwapAnim();
+                renderAll();
+            }
         });
     }
 
@@ -420,10 +541,20 @@ export function initCardSystem(ctx = {}) {
     function setupDrag(handleEl, cardEl, listRef, getIdx, onRender) {
         if (!handleEl || !cardEl || !Array.isArray(listRef)) return;
         handleEl.setAttribute("draggable", "true");
+        handleEl.addEventListener("pointerdown", () => {
+            if (typeof ctx.setDraggingState === "function") ctx.setDraggingState(true);
+        });
+        handleEl.addEventListener("pointerup", () => {
+            if (typeof ctx.setDraggingState === "function") ctx.setDraggingState(false);
+        });
+        handleEl.addEventListener("pointercancel", () => {
+            if (typeof ctx.setDraggingState === "function") ctx.setDraggingState(false);
+        });
         handleEl.addEventListener("dragstart", (e) => {
             draggingId = cardEl.dataset.id;
             draggingBuilder = null;
             cardEl.classList.add("dragging");
+            if (typeof ctx.setDraggingState === "function") ctx.setDraggingState(true);
             e.dataTransfer.effectAllowed = "move";
             e.dataTransfer.setData("text/plain", draggingId);
         });
@@ -432,6 +563,7 @@ export function initCardSystem(ctx = {}) {
             draggingBuilder = null;
             cardEl.classList.remove("dragging");
             cardEl.classList.remove("drag-over");
+            if (typeof ctx.setDraggingState === "function") ctx.setDraggingState(false);
         });
 
         cardEl.addEventListener("dragover", (e) => {
@@ -453,6 +585,7 @@ export function initCardSystem(ctx = {}) {
             const item = listRef.splice(fromIdx, 1)[0];
             const insertAt = (fromIdx < toIdx) ? Math.max(0, toIdx - 1) : toIdx;
             listRef.splice(insertAt, 0, item);
+            requestCardSwapAnim();
             if (typeof onRender === "function") onRender();
             else renderAll();
         });
@@ -462,11 +595,21 @@ export function initCardSystem(ctx = {}) {
         if (!handleEl || !ownerNode) return;
         handleEl.setAttribute("draggable", "true");
         handleEl.classList.add("drag-handle");
+        handleEl.addEventListener("pointerdown", () => {
+            if (typeof ctx.setDraggingState === "function") ctx.setDraggingState(true);
+        });
+        handleEl.addEventListener("pointerup", () => {
+            if (typeof ctx.setDraggingState === "function") ctx.setDraggingState(false);
+        });
+        handleEl.addEventListener("pointercancel", () => {
+            if (typeof ctx.setDraggingState === "function") ctx.setDraggingState(false);
+        });
         handleEl.addEventListener("dragstart", (e) => {
             const payload = { type: "add_with_builder", ownerId: ownerNode.id };
             draggingId = null;
             draggingBuilder = payload;
             handleEl.classList.add("dragging");
+            if (typeof ctx.setDraggingState === "function") ctx.setDraggingState(true);
             e.dataTransfer.effectAllowed = "copy";
             try { e.dataTransfer.setData(DRAG_TYPE_BUILDER, JSON.stringify(payload)); } catch {}
             try { e.dataTransfer.setData("text/plain", "pb_builder"); } catch {}
@@ -474,6 +617,7 @@ export function initCardSystem(ctx = {}) {
         handleEl.addEventListener("dragend", () => {
             draggingBuilder = null;
             handleEl.classList.remove("dragging");
+            if (typeof ctx.setDraggingState === "function") ctx.setDraggingState(false);
         });
     }
 
@@ -504,7 +648,11 @@ export function initCardSystem(ctx = {}) {
 
             const builderInfo = getDragBuilderInfo(e);
             if (builderInfo) {
-                if (handleBuilderDrop(builderInfo, listRef, listRef.length, owner)) renderAll();
+                if (handleBuilderDrop(builderInfo, listRef, listRef.length, owner)) {
+                    markDragPreviewDrop();
+                    requestCardSwapAnim();
+                    renderAll();
+                }
                 return;
             }
 
@@ -512,12 +660,18 @@ export function initCardSystem(ctx = {}) {
             if (!id) return;
 
             if (tryCopyWithBuilderIntoAddWith(id, owner)) {
+                markDragPreviewDrop();
+                requestCardSwapAnim();
                 renderAll();
                 return;
             }
             historyCapture("drag_drop_end");
             const ok = moveNodeById(id, listRef, listRef.length, owner);
-            if (ok) renderAll();
+            if (ok) {
+                markDragPreviewDrop();
+                requestCardSwapAnim();
+                renderAll();
+            }
         });
     }
 
@@ -541,7 +695,11 @@ export function initCardSystem(ctx = {}) {
             }
             const builderInfo = getDragBuilderInfo(e);
             if (builderInfo) {
-                if (handleBuilderDrop(builderInfo, listRef, listRef.length, ownerNode)) renderAll();
+                if (handleBuilderDrop(builderInfo, listRef, listRef.length, ownerNode)) {
+                    markDragPreviewDrop();
+                    requestCardSwapAnim();
+                    renderAll();
+                }
                 return;
             }
 
@@ -549,12 +707,18 @@ export function initCardSystem(ctx = {}) {
             if (!id) return;
 
             if (tryCopyWithBuilderIntoAddWith(id, ownerNode)) {
+                markDragPreviewDrop();
+                requestCardSwapAnim();
                 renderAll();
                 return;
             }
             historyCapture("drag_drop_sub");
             const ok = moveNodeById(id, listRef, listRef.length, ownerNode);
-            if (ok) renderAll();
+            if (ok) {
+                markDragPreviewDrop();
+                requestCardSwapAnim();
+                renderAll();
+            }
         });
     }
 
@@ -983,8 +1147,51 @@ export function initCardSystem(ctx = {}) {
         return card;
     }
 
+    function captureCardPositionsIn(containerEl) {
+        const map = new Map();
+        if (!containerEl) return map;
+        containerEl.querySelectorAll(".card[data-id]").forEach((el) => {
+            map.set(el.dataset.id, el.getBoundingClientRect());
+        });
+        return map;
+    }
+
+    function applyCardSwapAnimationIn(containerEl, prevPositions) {
+        if (!prevPositions || !prevPositions.size || !containerEl) return;
+        const moving = [];
+        containerEl.querySelectorAll(".card[data-id]").forEach((el) => {
+            if (el.classList.contains("dragging")) return;
+            const prev = prevPositions.get(el.dataset.id);
+            if (!prev) return;
+            const next = el.getBoundingClientRect();
+            const dx = prev.left - next.left;
+            const dy = prev.top - next.top;
+            if (dx || dy) {
+                el.style.transform = `translate(${dx}px, ${dy}px)`;
+                el.style.transition = "transform 0s";
+                moving.push(el);
+            }
+        });
+        if (!moving.length) return;
+        requestAnimationFrame(() => {
+            moving.forEach((el) => {
+                el.style.transition = "";
+                el.style.transform = "";
+            });
+        });
+    }
+
+    function captureCardPositions() {
+        return captureCardPositionsIn(elCardsRoot);
+    }
+
+    function applyCardSwapAnimation(prevPositions) {
+        applyCardSwapAnimationIn(elCardsRoot, prevPositions);
+    }
+
     function renderCards() {
         setIsRenderingCards(true);
+        const prevPositions = pendingCardSwapAnim ? captureCardPositions() : null;
         try {
             elCardsRoot.innerHTML = "";
             cleanupFilterMenus();
@@ -999,7 +1206,11 @@ export function initCardSystem(ctx = {}) {
         }
         // DOM 重建后重新标记聚焦高亮
         updateFocusCardUI();
-        requestAnimationFrame(() => layoutActionOverflow());
+        requestAnimationFrame(() => {
+            if (prevPositions) applyCardSwapAnimation(prevPositions);
+            layoutActionOverflow();
+        });
+        pendingCardSwapAnim = false;
     }
     function renderParamsEditors(body, node, ownerLabel, options = null) {
         const p = node.params;
@@ -1204,6 +1415,37 @@ export function initCardSystem(ctx = {}) {
                 })));
                 break;
 
+            case "add_bezier_curve":
+                body.appendChild(row("target.x", inputNum(p.tx, v => {
+                    p.tx = v;
+                    rebuildPreviewAndKotlin();
+                })));
+                body.appendChild(row("target.y", inputNum(p.ty, v => {
+                    p.ty = v;
+                    rebuildPreviewAndKotlin();
+                })));
+                body.appendChild(row("startHandle.x", inputNum(p.shx, v => {
+                    p.shx = v;
+                    rebuildPreviewAndKotlin();
+                })));
+                body.appendChild(row("startHandle.y", inputNum(p.shy, v => {
+                    p.shy = v;
+                    rebuildPreviewAndKotlin();
+                })));
+                body.appendChild(row("endHandle.x", inputNum(p.ehx, v => {
+                    p.ehx = v;
+                    rebuildPreviewAndKotlin();
+                })));
+                body.appendChild(row("endHandle.y", inputNum(p.ehy, v => {
+                    p.ehy = v;
+                    rebuildPreviewAndKotlin();
+                })));
+                body.appendChild(row("count", inputNum(p.count, v => {
+                    p.count = v;
+                    rebuildPreviewAndKotlin();
+                })));
+                break;
+
             case "add_bezier":
                 body.appendChild(row("p1", makeVec3Editor(p, "p1", rebuildPreviewAndKotlin, "p1")));
                 body.appendChild(row("p2", makeVec3Editor(p, "p2", rebuildPreviewAndKotlin, "p2")));
@@ -1254,6 +1496,55 @@ export function initCardSystem(ctx = {}) {
                 })));
                 break;
 
+            case "add_polygon_in_circle":
+                body.appendChild(row("n", inputNum(p.n, v => {
+                    p.n = v;
+                    rebuildPreviewAndKotlin();
+                })));
+                body.appendChild(row("edgeCount", inputNum(p.edgeCount, v => {
+                    p.edgeCount = v;
+                    rebuildPreviewAndKotlin();
+                })));
+                body.appendChild(row("r", inputNum(p.r, v => {
+                    p.r = v;
+                    rebuildPreviewAndKotlin();
+                })));
+                break;
+
+            case "add_round_shape":
+                body.appendChild(row("r", inputNum(p.r, v => {
+                    p.r = v;
+                    rebuildPreviewAndKotlin();
+                })));
+                body.appendChild(row("step", inputNum(p.step, v => {
+                    p.step = v;
+                    rebuildPreviewAndKotlin();
+                })));
+                body.appendChild(row("mode", select(
+                    [["fixed", "fixed"], ["range", "range"]],
+                    p.mode,
+                    v => {
+                        p.mode = v;
+                        renderAll();
+                    }
+                )));
+                if (p.mode === "range") {
+                    body.appendChild(row("minCircleCount", inputNum(p.minCircleCount, v => {
+                        p.minCircleCount = v;
+                        rebuildPreviewAndKotlin();
+                    })));
+                    body.appendChild(row("maxCircleCount", inputNum(p.maxCircleCount, v => {
+                        p.maxCircleCount = v;
+                        rebuildPreviewAndKotlin();
+                    })));
+                } else {
+                    body.appendChild(row("preCircleCount", inputNum(p.preCircleCount, v => {
+                        p.preCircleCount = v;
+                        rebuildPreviewAndKotlin();
+                    })));
+                }
+                break;
+
             case "add_rect":
                 body.appendChild(row("w", inputNum(p.w, v => {
                     p.w = v;
@@ -1291,6 +1582,93 @@ export function initCardSystem(ctx = {}) {
                     p.count = v;
                     rebuildPreviewAndKotlin();
                 })));
+                break;
+
+            case "add_lightning_points":
+                body.appendChild(row("useStart", checkbox(p.useStart, v => {
+                    p.useStart = v;
+                    renderAll();
+                })));
+                if (p.useStart) {
+                    body.appendChild(row("start", makeVec3Editor(p, "s", rebuildPreviewAndKotlin, "start")));
+                }
+                body.appendChild(row("end", makeVec3Editor(p, "e", rebuildPreviewAndKotlin, "end")));
+                body.appendChild(row("count", inputNum(p.count, v => {
+                    p.count = v;
+                    rebuildPreviewAndKotlin();
+                })));
+                body.appendChild(row("preLineCount", inputNum(p.preLineCount, v => {
+                    p.preLineCount = v;
+                    rebuildPreviewAndKotlin();
+                })));
+                body.appendChild(row("useOffsetRange", checkbox(p.useOffsetRange, v => {
+                    p.useOffsetRange = v;
+                    renderAll();
+                })));
+                if (p.useOffsetRange) {
+                    body.appendChild(row("offsetRange", inputNum(p.offsetRange, v => {
+                        p.offsetRange = v;
+                        rebuildPreviewAndKotlin();
+                    })));
+                }
+                break;
+
+            case "add_lightning_nodes":
+                body.appendChild(row("useStart", checkbox(p.useStart, v => {
+                    p.useStart = v;
+                    renderAll();
+                })));
+                if (p.useStart) {
+                    body.appendChild(row("start", makeVec3Editor(p, "s", rebuildPreviewAndKotlin, "start")));
+                }
+                body.appendChild(row("end", makeVec3Editor(p, "e", rebuildPreviewAndKotlin, "end")));
+                body.appendChild(row("count", inputNum(p.count, v => {
+                    p.count = v;
+                    rebuildPreviewAndKotlin();
+                })));
+                body.appendChild(row("useOffsetRange", checkbox(p.useOffsetRange, v => {
+                    p.useOffsetRange = v;
+                    renderAll();
+                })));
+                if (p.useOffsetRange) {
+                    body.appendChild(row("offsetRange", inputNum(p.offsetRange, v => {
+                        p.offsetRange = v;
+                        rebuildPreviewAndKotlin();
+                    })));
+                }
+                break;
+
+            case "add_lightning_nodes_attenuation":
+                body.appendChild(row("useStart", checkbox(p.useStart, v => {
+                    p.useStart = v;
+                    renderAll();
+                })));
+                if (p.useStart) {
+                    body.appendChild(row("start", makeVec3Editor(p, "s", rebuildPreviewAndKotlin, "start")));
+                }
+                body.appendChild(row("end", makeVec3Editor(p, "e", rebuildPreviewAndKotlin, "end")));
+                body.appendChild(row("counts", inputNum(p.counts, v => {
+                    p.counts = v;
+                    rebuildPreviewAndKotlin();
+                })));
+                body.appendChild(row("maxOffset", inputNum(p.maxOffset, v => {
+                    p.maxOffset = v;
+                    rebuildPreviewAndKotlin();
+                })));
+                body.appendChild(row("attenuation", inputNum(p.attenuation, v => {
+                    p.attenuation = v;
+                    rebuildPreviewAndKotlin();
+                })));
+                body.appendChild(row("seed", checkbox(p.seedEnabled, v => {
+                    p.seedEnabled = v;
+                    renderAll();
+                })));
+                if (p.seedEnabled) {
+                    body.appendChild(row("seed值", inputNum(p.seed, v => {
+                        p.seed = v;
+                        rebuildPreviewAndKotlin();
+                    })));
+                }
                 break;
 
             case "apply_rotate":

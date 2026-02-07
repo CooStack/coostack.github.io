@@ -318,10 +318,11 @@ import {
     }
 
     let getFilterScope, saveRootFilter, isFilterActive, filterAllows, getVisibleEntries, getVisibleIndices, swapInList, findVisibleSwapIndex, cleanupFilterMenus;
-    let renderCards, renderParamsEditors, layoutActionOverflow, initCollapseAllControls, setupListDropZone, addQuickOffsetTo;
-    let createFilterControls, createParamSyncControls, renderSyncMenu, bindParamSyncListeners, isSyncSelectableEvent, toggleSyncTarget, setSyncEnabled, paramSync;
-    let hotkeys, hotkeyToHuman, hotkeyMatchEvent, normalizeHotkey, shouldIgnorePlainHotkeys;
-    let openHotkeysModal, hideHotkeysModal, beginHotkeyCapture, refreshHotkeyHints, handleHotkeyCaptureKeydown;
+      let renderCards, renderParamsEditors, layoutActionOverflow, initCollapseAllControls, setupListDropZone, addQuickOffsetTo;
+      let createFilterControls, createParamSyncControls, renderSyncMenu, bindParamSyncListeners, isSyncSelectableEvent, toggleSyncTarget, setSyncEnabled, paramSync;
+      let hotkeys, hotkeyToHuman, hotkeyMatchEvent, normalizeHotkey, shouldIgnorePlainHotkeys;
+      let openHotkeysModal, hideHotkeysModal, beginHotkeyCapture, refreshHotkeyHints, handleHotkeyCaptureKeydown;
+      let isDraggingCard = false;
 
 
     let toastTimer = 0;
@@ -602,12 +603,98 @@ import {
             children: []}
     };
 
+    function normalizeLegacyVecParams(p, prefix, objKey = null) {
+        if (!p || typeof p !== "object") return;
+        const px = `${prefix}x`;
+        const py = `${prefix}y`;
+        const pz = `${prefix}z`;
+        if (p[px] !== undefined || p[py] !== undefined || p[pz] !== undefined) return;
+        const key = objKey || prefix;
+        const raw = p[key];
+        if (!raw) return;
+        if (Array.isArray(raw)) {
+            if (raw[0] !== undefined) p[px] = raw[0];
+            if (raw[1] !== undefined) p[py] = raw[1];
+            if (raw[2] !== undefined) p[pz] = raw[2];
+            return;
+        }
+        if (typeof raw === "object") {
+            if (raw.x !== undefined) p[px] = raw.x;
+            if (raw.y !== undefined) p[py] = raw.y;
+            if (raw.z !== undefined) p[pz] = raw.z;
+        }
+    }
+
+    function normalizeNodeParams(node) {
+        if (!node || !node.kind || !node.params) return;
+        const p = node.params;
+        switch (node.kind) {
+            case "add_bezier":
+                normalizeLegacyVecParams(p, "p1");
+                normalizeLegacyVecParams(p, "p2");
+                normalizeLegacyVecParams(p, "p3");
+                if (p.count === undefined && p.counts !== undefined) p.count = p.counts;
+                break;
+            case "add_bezier_4":
+                normalizeLegacyVecParams(p, "p1");
+                normalizeLegacyVecParams(p, "p2");
+                normalizeLegacyVecParams(p, "p3");
+                normalizeLegacyVecParams(p, "p4");
+                if (p.count === undefined && p.counts !== undefined) p.count = p.counts;
+                break;
+            case "add_bezier_curve":
+                if (p.tx === undefined && p.target && typeof p.target === "object") p.tx = p.target.x ?? p.target[0];
+                if (p.ty === undefined && p.target && typeof p.target === "object") p.ty = p.target.y ?? p.target[1];
+                if (p.shx === undefined && p.startHandle && typeof p.startHandle === "object") p.shx = p.startHandle.x ?? p.startHandle[0];
+                if (p.shy === undefined && p.startHandle && typeof p.startHandle === "object") p.shy = p.startHandle.y ?? p.startHandle[1];
+                if (p.ehx === undefined && p.endHandle && typeof p.endHandle === "object") p.ehx = p.endHandle.x ?? p.endHandle[0];
+                if (p.ehy === undefined && p.endHandle && typeof p.endHandle === "object") p.ehy = p.endHandle.y ?? p.endHandle[1];
+                break;
+            case "add_polygon":
+                if (p.count === undefined && p.edgeCount !== undefined) p.count = p.edgeCount;
+                if (p.sideCount === undefined && p.n !== undefined) p.sideCount = p.n;
+                break;
+            case "add_polygon_in_circle":
+                if (p.edgeCount === undefined && p.count !== undefined) p.edgeCount = p.count;
+                if (p.n === undefined && p.sideCount !== undefined) p.n = p.sideCount;
+                break;
+            case "add_round_shape":
+                if (p.preCircleCount === undefined && p.circleCount !== undefined) p.preCircleCount = p.circleCount;
+                if (p.minCircleCount === undefined && p.minCount !== undefined) p.minCircleCount = p.minCount;
+                if (p.maxCircleCount === undefined && p.maxCount !== undefined) p.maxCircleCount = p.maxCount;
+                break;
+            case "add_lightning_points":
+            case "add_lightning_nodes":
+            case "add_lightning_nodes_attenuation":
+                normalizeLegacyVecParams(p, "s", "start");
+                normalizeLegacyVecParams(p, "e", "end");
+                if (p.useStart === undefined && (p.start || p.sx !== undefined || p.sy !== undefined || p.sz !== undefined)) p.useStart = true;
+                if (p.useOffsetRange === undefined && p.offsetRange !== undefined) p.useOffsetRange = true;
+                break;
+            default:
+                break;
+        }
+    }
+
+    function normalizeNodeTree(node) {
+        if (!node) return;
+        if (Array.isArray(node)) {
+            for (const n of node) normalizeNodeTree(n);
+            return;
+        }
+        normalizeNodeParams(node);
+        if (Array.isArray(node.children)) {
+            for (const c of node.children) normalizeNodeTree(c);
+        }
+    }
+
     function normalizeState(obj) {
         if (!obj || typeof obj !== "object") return null;
         if (!obj.root || typeof obj.root !== "object") return null;
         if (!Array.isArray(obj.root.children)) obj.root.children = [];
         if (!obj.root.id) obj.root.id = "root";
         if (!obj.root.kind) obj.root.kind = "ROOT";
+        normalizeNodeTree(obj.root);
         return obj;
     }
 
@@ -995,6 +1082,7 @@ import {
     }
 
     function handleCollapseAllFocusChange(prevId, nextId) {
+        if (isDraggingCard) return;
         const nextPath = nextId ? buildFocusPathIds(nextId) : null;
         if (prevId && prevId !== nextId) {
             const scopeId = getScopeIdForNodeId(prevId);
@@ -1166,11 +1254,11 @@ import {
         return false;
     }
 
-    function moveNodeById(dragId, targetList, targetIndex, targetOwnerNode = null) {
-        if (!dragId || !Array.isArray(targetList)) return false;
-
-        const from = findNodeContextById(dragId);
-        if (!from) return false;
+      function moveNodeById(dragId, targetList, targetIndex, targetOwnerNode = null) {
+          if (!dragId || !Array.isArray(targetList)) return false;
+  
+          const from = findNodeContextById(dragId);
+          if (!from) return false;
 
         // 不能把节点拖进自己的子树（目标 owner 在拖拽节点子树中）
         if (targetOwnerNode && nodeContainsId(from.node, targetOwnerNode.id)) return false;
@@ -1188,11 +1276,12 @@ import {
             return true;
         }
 
-        const [moved] = fromList.splice(fromIndex, 1);
-
-        let idx = Math.max(0, Math.min(targetIndex, targetList.length));
-        if (fromList === targetList && fromIndex < idx) idx -= 1;
-        targetList.splice(idx, 0, moved);
+          const originalLength = targetList.length;
+          const [moved] = fromList.splice(fromIndex, 1);
+  
+          let idx = Math.max(0, Math.min(targetIndex, targetList.length));
+          if (fromList === targetList && fromIndex < idx && targetIndex < originalLength) idx -= 1;
+          targetList.splice(idx, 0, moved);
 
         ensureAxisEverywhere();
         return true;
@@ -2829,11 +2918,11 @@ function onCanvasClick(ev) {
         panKeyState.ArrowRight = false;
     });
 
-    const cardSystem = initCardSystem({
-        KIND,
-        elCardsRoot,
-        row,
-        inputNum,
+      const cardSystem = initCardSystem({
+          KIND,
+          elCardsRoot,
+          row,
+          inputNum,
         select,
         checkbox,
         makeVec3Editor,
@@ -2885,12 +2974,13 @@ function onCanvasClick(ev) {
         getToggleSyncTarget: () => toggleSyncTarget,
         getBuilderJsonTargetNode: () => builderJsonTargetNode,
         setBuilderJsonTargetNode: (node) => { builderJsonTargetNode = node; },
-        getLinePickMode: () => linePickMode,
-        getPointPickMode: () => pointPickMode,
-        syncCardCollapseUI,
-        isCollapseAllActive,
-        getCollapseScope,
-        collapseAllInScope,
+          getLinePickMode: () => linePickMode,
+          getPointPickMode: () => pointPickMode,
+          setDraggingState: (v) => { isDraggingCard = !!v; },
+          syncCardCollapseUI,
+          isCollapseAllActive,
+          getCollapseScope,
+          collapseAllInScope,
         expandAllInScope
     });
     ({
@@ -3070,6 +3160,7 @@ function onCanvasClick(ev) {
             if (!obj || !obj.root || !Array.isArray(obj.root.children)) throw new Error("invalid json");
             historyCapture("import_json");
             state = obj;
+            normalizeNodeTree(state.root);
             ensureAxisEverywhere();
             resetCollapseScopes();
             collapseAllNodes(state.root.children);
@@ -3100,6 +3191,7 @@ function onCanvasClick(ev) {
             if (!target) throw new Error("no target");
             historyCapture("import_with_builder_json");
             target.children = obj.root.children;
+            normalizeNodeTree(target.children);
             ensureAxisInList(target.children);
             resetCollapseScopes();
             collapseAllNodes(target.children);
