@@ -972,10 +972,10 @@ function setFaceToCameraSection($card, faceToCamera) {
 `      </div>`,
 `    </div>`,
 `    <div class="grid2">`,
-`      <div class="field">`,
-`        <label>speedLimit</label>`,
-`        <input class="emitInput" data-key="template.speedLimit" data-type="number" type="number" step="0.1" min="0.01" value="${esc((card.template && card.template.speedLimit !== undefined) ? card.template.speedLimit : 32.0)}" />`,
-`      </div>`,
+                `      <div class="field">`,
+                `        <label>speedLimit</label>`,
+                `        <input class="emitInput" data-key="template.speedLimit" data-type="number" type="number" step="any" data-step-fixed="1" value="${esc((card.template && card.template.speedLimit !== undefined) ? card.template.speedLimit : 32.0)}" />`,
+                `      </div>`,
 `      <div class="field">`,
 `        <label>faceToCamera</label>`,
 `        <select class="emitInput" data-key="template.faceToCamera" data-type="bool">`,
@@ -1192,6 +1192,7 @@ function setFaceToCameraSection($card, faceToCamera) {
             setEmitterSection($card, card.emitter.type);
             setEmissionSection($card, card.emission.mode);
             setFaceToCameraSection($card, (card.template && card.template.faceToCamera === false) ? false : true);
+            applyEmitterTips($card);
 
             if (emitterSync && emitterSync.selectedIds && emitterSync.selectedIds.has(card.id)) {
                 $card.addClass("sync-target");
@@ -1729,7 +1730,6 @@ function setFaceToCameraSection($card, faceToCamera) {
         scheduleHistoryPush();
         scheduleSave();
         autoGenKotlin();
-        if (preview) preview.resetEmission();
 
         if (syncChanged) {
             renderEmitterList();
@@ -1772,7 +1772,6 @@ function setFaceToCameraSection($card, faceToCamera) {
         scheduleHistoryPush();
         scheduleSave();
         autoGenKotlin();
-        if (preview) preview.resetEmission();
 
         if (syncChanged) {
             renderCommandList();
@@ -2391,6 +2390,7 @@ function setFaceToCameraSection($card, faceToCamera) {
         }
 
         applyEmitterInputValues($(wrap), source);
+        applyEmitterTips($(wrap));
         editor.appendChild(wrap);
     }
 
@@ -2431,7 +2431,6 @@ function setFaceToCameraSection($card, faceToCamera) {
                 renderCommandSyncMenu();
                 scheduleSave();
                 autoGenKotlin();
-                if (preview) preview.resetEmission();
                 return;
             }
 
@@ -2443,7 +2442,6 @@ function setFaceToCameraSection($card, faceToCamera) {
                 renderCommandSyncMenu();
                 scheduleSave();
                 autoGenKotlin();
-                if (preview) preview.resetEmission();
                 return;
             }
 
@@ -2458,7 +2456,6 @@ function setFaceToCameraSection($card, faceToCamera) {
                 renderCommandSyncMenu();
                 scheduleSave();
                 autoGenKotlin();
-                if (preview) preview.resetEmission();
             }
         });
     }
@@ -2792,7 +2789,6 @@ function setFaceToCameraSection($card, faceToCamera) {
         renderCommandList();
         scheduleSave();
         autoGenKotlin();
-        if (preview) preview.resetEmission();
         if (opts.keepFocus) {
             setTimeout(() => focusCmdSignInputById(id), 0);
         }
@@ -3059,7 +3055,6 @@ function setFaceToCameraSection($card, faceToCamera) {
             renderCommandList();
             scheduleSave();
             autoGenKotlin();
-            if (preview) preview.resetEmission();
         });
 
         $("#cmdList").on("click", ".cmdBtnDel", function (e) {
@@ -3075,7 +3070,6 @@ function setFaceToCameraSection($card, faceToCamera) {
             renderCommandList();
             scheduleSave();
             autoGenKotlin();
-            if (preview) preview.resetEmission();
         });
 
         $("#cmdList").on("click", ".cmdBtnFold", function (e) {
@@ -3136,7 +3130,6 @@ function setFaceToCameraSection($card, faceToCamera) {
             renderCommandList();
             scheduleSave();
             autoGenKotlin();
-            if (preview) preview.resetEmission();
         });
 
         $("#cmdList").on("click", ".cmdSignDel", function (e) {
@@ -3152,7 +3145,6 @@ function setFaceToCameraSection($card, faceToCamera) {
             renderCommandList();
             scheduleSave();
             autoGenKotlin();
-            if (preview) preview.resetEmission();
         });
 
         $("#emitList").on("input change", ".emitInput", function () {
@@ -3446,7 +3438,28 @@ function setFaceToCameraSection($card, faceToCamera) {
         });
     }
 
-    function bindEvents() {}
+    function bindEvents() {
+        $("#ticksPerSecond").on("input change", function () {
+            const raw = $(this).val();
+            if (raw === "" || raw == null) return;
+            const next = Math.max(1, safeNum(raw, state.ticksPerSecond));
+            if (next === state.ticksPerSecond) return;
+            state.ticksPerSecond = next;
+            scheduleHistoryPush();
+            scheduleSave();
+        });
+
+        $("#kVarName, #kRefName").on("input change", function () {
+            const nextVar = ($("#kVarName").val() || "command").trim() || "command";
+            const nextRef = ($("#kRefName").val() || "emitter").trim() || "emitter";
+            if (nextVar === state.kotlin.varName && nextRef === state.kotlin.kRefName) return;
+            state.kotlin.varName = nextVar;
+            state.kotlin.kRefName = nextRef;
+            scheduleHistoryPush();
+            scheduleSave();
+            autoGenKotlin();
+        });
+    }
 
     let preview = null;
     let settingsSystem = null;
