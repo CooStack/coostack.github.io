@@ -113,10 +113,9 @@ export function initPreview(ctx = {}) {
 
     function makePointShaderMaterial() {
         return new THREE.ShaderMaterial({
-            transparent: true,
+            transparent: false,
             depthWrite: true,
             depthTest: true,
-            alphaTest: 0.05,
             uniforms: {
                 uViewportY: {value: 600.0},
             },
@@ -143,16 +142,15 @@ export function initPreview(ctx = {}) {
         }
       `,
             fragmentShader: `
-          varying vec3 vColor;
+            varying vec3 vColor;
 
-          void main() {
-            vec2 uv = gl_PointCoord - vec2(0.5);
-            float d = length(uv);
-            float alpha = 1.0 - smoothstep(0.45, 0.5, d);
-            if (alpha < 0.02) discard;
-            gl_FragColor = vec4(vColor, alpha);
-          }
-        `
+            void main() {
+              vec2 uv = gl_PointCoord - vec2(0.5);
+              float d = length(uv);
+              if (d > 0.5) discard;
+              gl_FragColor = vec4(vColor, 1.0);
+            }
+          `
         });
     }
 

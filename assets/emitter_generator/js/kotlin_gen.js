@@ -306,17 +306,28 @@ export function genEmitterKotlin(state, settings = {}) {
     return safeIdent(raw || fallback, fallback);
   }
 
-  const extUsed = new Set();
   const extResolved = new Map(); // id -> { template, data }
+  const extTemplateNames = new Set();
 
-  function uniqueExt(name) {
-    let n = String(name || "").trim() || "v";
-    let i = 2;
-    while (extUsed.has(n)) {
-      n = `${name}_${i}`;
-      i += 1;
+  for (let i = 0; i < emitters.length; i++) {
+    const card = emitters[i];
+    const t0 = baseVar(card, i, "template");
+    if (card?.externalTemplate) extTemplateNames.add(t0);
+  }
+
+  const dataNameMap = new Map();
+  function resolveDataName(name) {
+    const raw = String(name || "").trim() || "v";
+    if (dataNameMap.has(raw)) return dataNameMap.get(raw);
+    let n = raw;
+    if (extTemplateNames.has(n)) {
+      let i = 2;
+      while (extTemplateNames.has(n)) {
+        n = `${raw}_${i}`;
+        i += 1;
+      }
     }
-    extUsed.add(n);
+    dataNameMap.set(raw, n);
     return n;
   }
 
@@ -326,8 +337,8 @@ export function genEmitterKotlin(state, settings = {}) {
     const t0 = baseVar(card, i, "template");
     const d0 = baseVar(card, i, "data");
     const r = { template: t0, data: d0 };
-    if (card?.externalTemplate) r.template = uniqueExt(t0);
-    if (card?.externalData) r.data = uniqueExt(d0);
+    if (card?.externalTemplate) r.template = t0;
+    if (card?.externalData) r.data = resolveDataName(d0);
     extResolved.set(id, r);
   }
 
@@ -590,23 +601,27 @@ function buildLocalDataApplyLines(card) {
   const push = (s = "") => out.push(s);
 
   // 外置 var 参数（启用外放时输出；参数默认值通过 .apply 写入）
+  const declaredTemplate = new Set();
+  const declaredData = new Set();
   emitters.forEach((card, i) => {
     const tVar = cardVar(card, i, "template");
     const dVar = cardVar(card, i, "data");
 
-    if (card.externalTemplate) {
+    if (card.externalTemplate && !declaredTemplate.has(tVar)) {
       push("@CodecField");
       push(`var ${tVar} = ControlableParticleData().apply {`);
       buildBaseTemplateAssignLines(card).forEach((line) => push(`    ${line}`));
       push("}");
       push("");
+      declaredTemplate.add(tVar);
     }
-    if (card.externalData) {
+    if (card.externalData && !declaredData.has(dVar)) {
       push("@CodecField");
       push(`var ${dVar} = SimpleRandomParticleData().apply {`);
       buildLocalDataApplyLines(card).forEach((line) => push(`    ${line}`));
       push("}");
       push("");
+      declaredData.add(dVar);
     }
   });
 

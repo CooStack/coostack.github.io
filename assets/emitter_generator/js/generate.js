@@ -28,8 +28,8 @@ import { clamp, safeNum, escapeHtml, deepCopy, deepAssign } from "./utils.js";
         "emission.burstInterval": "爆发间隔（秒），必须为 0.05s 的倍数。",
         "externalTemplate": "外放模板参数：生成 Kotlin 时将模板参数提升到 @CodecField 外层。",
         "externalData": "外放数据参数：生成 Kotlin 时将数据参数提升到 @CodecField 外层。",
-        "vars.template": "模板变量名（留空自动 templateN）。外放时需全局唯一。",
-        "vars.data": "数据变量名（留空自动 dataN）。外放时需全局唯一。",
+        "vars.template": "模板变量名（留空自动 templateN）。外放同类型可同名（共享参数），但 template/data 不可重名。",
+        "vars.data": "数据变量名（留空自动 dataN）。外放同类型可同名（共享参数），但 template/data 不可重名。",
 
         "emitter.offset.x": "预览偏移 X（整体平移，不改变形状）。",
         "emitter.offset.y": "预览偏移 Y（整体平移，不改变形状）。",
@@ -183,6 +183,10 @@ import { clamp, safeNum, escapeHtml, deepCopy, deepAssign } from "./utils.js";
     const DEFAULT_BASE_STATE = deepCopy(state);
     let emitterSync = null;
     let commandSync = null;
+    const emitterCollapseScope = { active: false, manualOpen: new Set() };
+    const commandCollapseScope = { active: false, manualOpen: new Set() };
+    let focusedEmitterId = null;
+    let focusedCommandId = null;
 
     function makeDefaultCommands() {
         return cloneDefaultCommands();
@@ -874,7 +878,7 @@ function setFaceToCameraSection($card, faceToCamera) {
                 `        <input class="emitInput" data-key="vars.data" data-type="kident" type="text" value="${esc(card.vars && card.vars.data ? card.vars.data : "")}" placeholder="${esc(`data${index + 1}`)}" />`,
                 `      </div>`,
                 `    </div>`,
-                `    <div class="hint">留空则自动使用 <code>${esc(`template${index + 1}`)}</code> / <code>${esc(`data${index + 1}`)}</code>。每张卡片可单独指定变量名；仅当启用外放时需保证全局唯一（同名会提示并回退）。</div>`,
+                `    <div class="hint">留空则自动使用 <code>${esc(`template${index + 1}`)}</code> / <code>${esc(`data${index + 1}`)}</code>。每张卡片可单独指定变量名；外放同类型允许同名（共享参数），但 template 与 data 不可重名。</div>`,
                 `    <div class="panel-subtitle">发射器位置（偏移量）</div>`,
                 `    <div class="vec3Row">`,
                 `      <div class="miniLabel">Offset Vec3</div>`,
@@ -1178,6 +1182,7 @@ function setFaceToCameraSection($card, faceToCamera) {
 
             const $card = $(lines.join("\n"));
             $card.find('[data-key="emitter.type"]').val(card.emitter.type);
+            $card.find('[data-key="emitter.type"]').val(card.emitter.type);
             $card.find('[data-key="emission.mode"]').val(card.emission.mode);
             $card.find('[data-key="externalTemplate"]').val(card.externalTemplate ? "1" : "0");
             $card.find('[data-key="externalData"]').val(card.externalData ? "1" : "0");
@@ -1242,6 +1247,50 @@ function setFaceToCameraSection($card, faceToCamera) {
         if ($btn.length) $btn.text(collapsed ? "▸" : "▾");
     }
 
+    function setEmitterCardCollapsedById(id, collapsed, opts = {}) {
+        const card = state.emitters.find((it) => it.id === id);
+        if (!card) return false;
+        if (!card.ui || typeof card.ui !== "object") card.ui = { collapsed: false };
+        if (card.ui.collapsed === collapsed) return false;
+        card.ui.collapsed = collapsed;
+        const $card = $(`#emitList .emitCard[data-id="${id}"]`);
+        if ($card.length) applyEmitterCollapseUI($card, collapsed);
+        if (!opts.skipSave) scheduleSave();
+        return true;
+    }
+
+    function setCommandCardCollapsedById(id, collapsed, opts = {}) {
+        const cmd = state.commands.find((it) => it.id === id);
+        if (!cmd) return false;
+        if (!cmd.ui || typeof cmd.ui !== "object") cmd.ui = { collapsed: false };
+        if (cmd.ui.collapsed === collapsed) return false;
+        cmd.ui.collapsed = collapsed;
+        const $card = $(`#cmdList .cmdCard[data-id="${id}"]`);
+        if ($card.length) applyCommandCollapseUI($card, collapsed);
+        if (!opts.skipSave) scheduleSave();
+        return true;
+    }
+
+    function handleEmitterCollapseFocusChange(prevId, nextId) {
+        if (!emitterCollapseScope.active) return;
+        if (prevId && prevId !== nextId && !emitterCollapseScope.manualOpen.has(prevId)) {
+            setEmitterCardCollapsedById(prevId, true);
+        }
+        if (nextId && prevId !== nextId) {
+            setEmitterCardCollapsedById(nextId, false);
+        }
+    }
+
+    function handleCommandCollapseFocusChange(prevId, nextId) {
+        if (!commandCollapseScope.active) return;
+        if (prevId && prevId !== nextId && !commandCollapseScope.manualOpen.has(prevId)) {
+            setCommandCardCollapsedById(prevId, true);
+        }
+        if (nextId && prevId !== nextId) {
+            setCommandCardCollapsedById(nextId, false);
+        }
+    }
+
     function applyEmitterTips($card) {
         if (!$card || !$card.length) return;
         $card.find(".emitInput").each((_, el) => {
@@ -1253,12 +1302,32 @@ function setFaceToCameraSection($card, faceToCamera) {
         });
     }
 
+    function applyEmitterInputValues($root, card) {
+        if (!$root || !$root.length || !card) return;
+        $root.find(".emitInput").each((_, el) => {
+            const key = el && el.dataset ? el.dataset.key : "";
+            if (!key) return;
+            const type = el && el.dataset ? String(el.dataset.type || "") : "";
+            let val = getByPath(card, key);
+            if (type === "bool") $(el).val(val ? "1" : "0");
+            else if (type === "color") $(el).val(val || "#ffffff");
+            else $(el).val(val ?? "");
+        });
+        setEmitterSection($root, card.emitter.type);
+        setEmissionSection($root, card.emission.mode);
+        setFaceToCameraSection($root, (card.template && card.template.faceToCamera === false) ? false : true);
+    }
+
     function setAllEmittersCollapsed(collapsed) {
+        emitterCollapseScope.active = !!collapsed;
+        emitterCollapseScope.manualOpen.clear();
+        const keepId = collapsed ? focusedEmitterId : null;
         let changed = false;
         for (const card of state.emitters) {
             if (!card.ui || typeof card.ui !== "object") card.ui = { collapsed: false };
-            if (card.ui.collapsed !== collapsed) {
-                card.ui.collapsed = collapsed;
+            const nextCollapsed = (keepId && card.id === keepId) ? false : collapsed;
+            if (card.ui.collapsed !== nextCollapsed) {
+                card.ui.collapsed = nextCollapsed;
                 changed = true;
             }
         }
@@ -1281,11 +1350,15 @@ function setFaceToCameraSection($card, faceToCamera) {
     }
 
     function setAllCommandsCollapsed(collapsed) {
+        commandCollapseScope.active = !!collapsed;
+        commandCollapseScope.manualOpen.clear();
+        const keepId = collapsed ? focusedCommandId : null;
         let changed = false;
         for (const cmd of state.commands) {
             if (!cmd.ui || typeof cmd.ui !== "object") cmd.ui = { collapsed: false };
-            if (cmd.ui.collapsed !== collapsed) {
-                cmd.ui.collapsed = collapsed;
+            const nextCollapsed = (keepId && cmd.id === keepId) ? false : collapsed;
+            if (cmd.ui.collapsed !== nextCollapsed) {
+                cmd.ui.collapsed = nextCollapsed;
                 changed = true;
             }
         }
@@ -1344,12 +1417,117 @@ function setFaceToCameraSection($card, faceToCamera) {
         return kind === "template" ? `template${n}` : `data${n}`;
     }
 
+    const EXTERNAL_TEMPLATE_SYNC_FIELDS = [
+        "template.alpha",
+        "template.light",
+        "template.faceToCamera",
+        "template.yaw",
+        "template.pitch",
+        "template.roll",
+        "template.speedLimit",
+        "template.sign",
+        "particle.vel.x",
+        "particle.vel.y",
+        "particle.vel.z",
+        "particle.visibleRange",
+        "particle.colorStart",
+        "particle.colorEnd",
+    ];
+    const EXTERNAL_DATA_SYNC_FIELDS = [
+        "particle.lifeMin",
+        "particle.lifeMax",
+        "particle.sizeMin",
+        "particle.sizeMax",
+        "particle.countMin",
+        "particle.countMax",
+        "particle.velSpeedMin",
+        "particle.velSpeedMax",
+    ];
+    const EXTERNAL_TEMPLATE_FIELD_SET = new Set(EXTERNAL_TEMPLATE_SYNC_FIELDS);
+    const EXTERNAL_DATA_FIELD_SET = new Set(EXTERNAL_DATA_SYNC_FIELDS);
+
+    function getExternalSyncKindByPath(path) {
+        const key = String(path || "");
+        if (key.startsWith("template.")) return "template";
+        if (EXTERNAL_TEMPLATE_FIELD_SET.has(key)) return "template";
+        if (EXTERNAL_DATA_FIELD_SET.has(key)) return "data";
+        return null;
+    }
+
+    function updateEmitterInputValue(id, path, value) {
+        if (!id || !path) return;
+        const $card = $(`#emitList .emitCard[data-id="${id}"]`);
+        if (!$card.length) return;
+        const $input = $card.find(`.emitInput[data-key="${path}"]`);
+        if (!$input.length) return;
+        const type = String($input.data("type") || "");
+        if (type === "bool") $input.val(value ? "1" : "0");
+        else $input.val(value ?? "");
+    }
+
+    function syncSharedExternalEmitterGroup(sourceId, kind) {
+        if (!sourceId || !kind) return false;
+        const sourceIndex = state.emitters.findIndex((it) => it.id === sourceId);
+        if (sourceIndex < 0) return false;
+        const source = state.emitters[sourceIndex];
+        if (!source) return false;
+        const useExternal = (kind === "template") ? source.externalTemplate : source.externalData;
+        if (!useExternal) return false;
+        const varName = resolveEmitterVarName(source, sourceIndex, kind);
+        if (!varName) return false;
+
+        const fields = (kind === "template") ? EXTERNAL_TEMPLATE_SYNC_FIELDS : EXTERNAL_DATA_SYNC_FIELDS;
+        let changed = false;
+
+        for (let i = 0; i < state.emitters.length; i++) {
+            const target = state.emitters[i];
+            if (!target || target.id === sourceId) continue;
+            if (kind === "template" && !target.externalTemplate) continue;
+            if (kind === "data" && !target.externalData) continue;
+            if (resolveEmitterVarName(target, i, kind) !== varName) continue;
+
+            for (const field of fields) {
+                const nextVal = getByPath(source, field);
+                if (getByPath(target, field) !== nextVal) {
+                    setByPath(target, field, nextVal);
+                    changed = true;
+                }
+            }
+
+            sanitizeEmitterCard(target);
+
+            const $targetCard = $(`#emitList .emitCard[data-id="${target.id}"]`);
+            if ($targetCard.length) {
+                for (const field of fields) {
+                    updateEmitterInputValue(target.id, field, getByPath(target, field));
+                }
+                if (kind === "template") {
+                    setFaceToCameraSection($targetCard, (target.template && target.template.faceToCamera === false) ? false : true);
+                }
+            }
+        }
+
+        return changed;
+    }
+
+    function syncExternalSharedByPath(sourceId, path) {
+        const key = String(path || "");
+        if (key === "vars.template" || key === "externalTemplate") {
+            return syncSharedExternalEmitterGroup(sourceId, "template");
+        }
+        if (key === "vars.data" || key === "externalData") {
+            return syncSharedExternalEmitterGroup(sourceId, "data");
+        }
+        const kind = getExternalSyncKindByPath(key);
+        if (!kind) return false;
+        return syncSharedExternalEmitterGroup(sourceId, kind);
+    }
+
     function validateEmitterVarNames(nextEmitters, nextKotlin) {
         // 规则：
         // - 每个卡片的本地变量会被 Kotlin 生成器用 run { } 包裹，所以不同卡片之间允许同名。
-        // - 仅当 externalTemplate/externalData 启用时，该变量会作为 @CodecField 字段输出到类作用域，必须全局唯一。
-        // - 同一张卡片的 template 与 data 不允许同名（同一作用域内）。
-        const kotlin = nextKotlin || state.kotlin;
+        // - externalTemplate/externalData 启用时才会输出到类作用域，同类型外放允许同名（共享参数）。
+        // - template 与 data 不允许同名（同卡片/外放字段交叉）。
         const reserved = new Set([
             "res",
             "tick",
@@ -1359,17 +1537,8 @@ function setFaceToCameraSection($card, faceToCamera) {
             "it",
             "this",
         ]);
-
-        const usedExternal = new Map(); // name -> where
-
-        const putExternal = (name, where) => {
-            if (usedExternal.has(name)) {
-                const prev = usedExternal.get(name);
-                return { ok: false, msg: `外放变量名重复：${name}（${prev} / ${where}）` };
-            }
-            usedExternal.set(name, where);
-            return { ok: true };
-        };
+        const externalTemplateNames = new Set();
+        const externalDataNames = new Set();
 
         for (let i = 0; i < nextEmitters.length; i++) {
             const c = nextEmitters[i];
@@ -1394,14 +1563,17 @@ function setFaceToCameraSection($card, faceToCamera) {
                 return { ok: false, msg: `同一张卡片 template/data 变量名不能相同：${t}` };
             }
 
-            // Only validate uniqueness among external fields
             if (c?.externalTemplate) {
-                const r = putExternal(t, `发射器#${i + 1} template`);
-                if (!r.ok) return r;
+                externalTemplateNames.add(t);
             }
             if (c?.externalData) {
-                const r = putExternal(d, `发射器#${i + 1} data`);
-                if (!r.ok) return r;
+                externalDataNames.add(d);
+            }
+        }
+
+        for (const name of externalTemplateNames) {
+            if (externalDataNames.has(name)) {
+                return { ok: false, msg: `外放 template/data 变量名不能重名：${name}` };
             }
         }
 
@@ -1433,12 +1605,27 @@ function setFaceToCameraSection($card, faceToCamera) {
         else $mirror.val(value ?? "");
     }
 
+    function buildEmitterVarSyncPreview(path, value) {
+        const preview = state.emitters.slice();
+        if (!emitterSync || !emitterSync.selectedIds) return preview;
+        for (let i = 0; i < preview.length; i++) {
+            const card = preview[i];
+            if (!card || !emitterSync.selectedIds.has(card.id)) continue;
+            const vars = (card.vars && typeof card.vars === "object") ? card.vars : { template: "", data: "" };
+            const next = { ...card, vars: { ...vars } };
+            setByPath(next, path, value);
+            preview[i] = next;
+        }
+        return preview;
+    }
+
     function handleEmitterInputChange(inputEl, sourceId = null) {
         const $input = $(inputEl);
         const id = sourceId || $input.closest(".emitCard").data("id");
         if (!id) return;
         const card = state.emitters.find((it) => it.id === id);
         if (!card) return;
+        const editingSync = !!sourceId;
         const path = $input.data("key");
         if (!path) return;
         const type = String($input.data("type") || "");
@@ -1476,7 +1663,7 @@ function setFaceToCameraSection($card, faceToCamera) {
             setByPath(card, path, value);
             sanitizeEmitterCard(card);
 
-            // external 开关变化时，需要校验外放字段全局唯一
+            // external 开关变化时，需要校验外放 template/data 不可重名
             if (path === "externalData" || path === "externalTemplate") {
                 const chk = validateEmitterVarNames(state.emitters, state.kotlin);
                 if (!chk.ok) {
@@ -1493,26 +1680,51 @@ function setFaceToCameraSection($card, faceToCamera) {
         if (sourceId) mirrorEmitterInputValue(id, path, type, value);
 
         const $card = sourceId ? $(`#emitList .emitCard[data-id="${id}"]`) : $input.closest(".emitCard");
+        const $syncWrap = editingSync ? $input.closest(".sync-editor-inner") : null;
         if (path === "emitter.type") {
             setEmitterSection($card, card.emitter.type);
             $card.find(".emitTitle .sub").text(getEmitterTypeLabel(card.emitter.type));
             if (typeof filterAllowsEmitter === "function") {
                 $card.toggleClass("filter-hidden", !filterAllowsEmitter(card.emitter.type));
             }
+            if ($syncWrap && $syncWrap.length) {
+                setEmitterSection($syncWrap, card.emitter.type);
+            }
         }
         if (path === "emission.mode") {
             setEmissionSection($card, card.emission.mode);
+            if ($syncWrap && $syncWrap.length) {
+                setEmissionSection($syncWrap, card.emission.mode);
+            }
         }
         if (path === "template.faceToCamera") {
             setFaceToCameraSection($card, (card.template && card.template.faceToCamera === false) ? false : true);
+            if ($syncWrap && $syncWrap.length) {
+                setFaceToCameraSection($syncWrap, (card.template && card.template.faceToCamera === false) ? false : true);
+            }
         }
 
         const canSync = emitterSync && emitterSync.open && emitterSync.selectedIds
             && emitterSync.selectedIds.has(id)
-            && !String(path).startsWith("vars.")
             && path !== "externalTemplate"
             && path !== "externalData";
-        const syncChanged = canSync ? syncEmitterField(id, path, value) : false;
+        let syncChanged = false;
+        if (canSync) {
+            if (String(path).startsWith("vars.")) {
+                const chkSync = validateEmitterVarNames(buildEmitterVarSyncPreview(path, value), state.kotlin);
+                if (!chkSync.ok) {
+                    toast(`${chkSync.msg}，已回退`, "error");
+                    setByPath(card, path, oldValue ?? "");
+                    sanitizeEmitterCard(card);
+                    $input.val(oldValue ?? "");
+                    if (sourceId) mirrorEmitterInputValue(id, path, type, oldValue ?? "");
+                    return;
+                }
+            }
+            syncChanged = syncEmitterField(id, path, value);
+        }
+
+        syncExternalSharedByPath(id, path);
 
         scheduleHistoryPush();
         scheduleSave();
@@ -1521,8 +1733,8 @@ function setFaceToCameraSection($card, faceToCamera) {
 
         if (syncChanged) {
             renderEmitterList();
-            renderEmitterSyncMenu();
-        } else if (emitterSync && emitterSync.open && (path === "externalData" || path === "externalTemplate")) {
+            if (!editingSync) renderEmitterSyncMenu();
+        } else if (!editingSync && emitterSync && emitterSync.open && (path === "externalData" || path === "externalTemplate")) {
             renderEmitterSyncMenu();
         }
     }
@@ -2178,20 +2390,7 @@ function setFaceToCameraSection($card, faceToCamera) {
             wrap.appendChild(hint);
         }
 
-        const lockVarInput = (key, reason) => {
-            const input = wrap.querySelector(`.emitInput[data-key="${key}"]`);
-            if (!input) return;
-            input.disabled = true;
-            input.classList.add("sync-locked");
-            if (reason) input.setAttribute("data-tip", reason);
-        };
-        if (source && source.externalTemplate) {
-            lockVarInput("vars.template", "已外放模板参数：变量名请在卡片内修改（同步菜单禁用）。");
-        }
-        if (source && source.externalData) {
-            lockVarInput("vars.data", "已外放数据参数：变量名请在卡片内修改（同步菜单禁用）。");
-        }
-
+        applyEmitterInputValues($(wrap), source);
         editor.appendChild(wrap);
     }
 
@@ -2405,6 +2604,23 @@ function setFaceToCameraSection($card, faceToCamera) {
             if (!target) continue;
             setByPath(target, path, value);
             sanitizeEmitterCard(target);
+            updateEmitterInputValue(id, path, getByPath(target, path));
+            const $card = $(`#emitList .emitCard[data-id="${id}"]`);
+            if ($card.length) {
+                if (path === "emitter.type") {
+                    setEmitterSection($card, target.emitter.type);
+                    $card.find(".emitTitle .sub").text(getEmitterTypeLabel(target.emitter.type));
+                    if (typeof filterAllowsEmitter === "function") {
+                        $card.toggleClass("filter-hidden", !filterAllowsEmitter(target.emitter.type));
+                    }
+                }
+                if (path === "emission.mode") {
+                    setEmissionSection($card, target.emission.mode);
+                }
+                if (path === "template.faceToCamera") {
+                    setFaceToCameraSection($card, (target.template && target.template.faceToCamera === false) ? false : true);
+                }
+            }
             changed = true;
         }
         if (path === "emitter.type") emitterSync.kind = String(value);
@@ -2796,6 +3012,40 @@ function setFaceToCameraSection($card, faceToCamera) {
         if (renderCommandList._eventsBound) return;
         renderCommandList._eventsBound = true;
 
+        $("#cmdList").on("focusin", ".cmdInput, .cmdSignInput", function () {
+            const id = $(this).closest(".cmdCard").data("id");
+            if (!id) return;
+            if (focusedCommandId !== id) {
+                handleCommandCollapseFocusChange(focusedCommandId, id);
+                focusedCommandId = id;
+            }
+        });
+
+        $("#cmdList").on("focusout", ".cmdInput, .cmdSignInput", function (e) {
+            const to = e.relatedTarget;
+            if (to && $(to).closest("#cmdList .cmdCard").length) return;
+            if (!focusedCommandId) return;
+            handleCommandCollapseFocusChange(focusedCommandId, null);
+            focusedCommandId = null;
+        });
+
+        $("#cmdList").on("click", ".cmdHead", function (e) {
+            if (!commandCollapseScope.active) return;
+            if ($(e.target).closest(".cmdBtnFold, .cmdBtnDup, .cmdBtnDel, .dragHandle, .cmdToggles").length) return;
+            const $card = $(this).closest(".cmdCard");
+            const id = $card.data("id");
+            const cmd = state.commands.find((it) => it.id === id);
+            if (!cmd) return;
+            if (!cmd.ui || typeof cmd.ui !== "object") cmd.ui = { collapsed: false };
+            if (cmd.ui.collapsed) {
+                cmd.ui.collapsed = false;
+                applyCommandCollapseUI($card, false);
+                scheduleSave();
+                const $first = $card.find(".cmdInput, .cmdSignInput").first();
+                if ($first.length) $first.trigger("focus");
+            }
+        });
+
         // Command 卡片：复制/删除（避免与发射器按钮类名冲突，使用委托）
         $("#cmdList").on("click", ".cmdBtnDup", function (e) {
             e.stopPropagation();
@@ -2835,7 +3085,12 @@ function setFaceToCameraSection($card, faceToCamera) {
             const cmd = state.commands.find((it) => it.id === id);
             if (!cmd) return;
             if (!cmd.ui || typeof cmd.ui !== "object") cmd.ui = { collapsed: false };
-            cmd.ui.collapsed = !cmd.ui.collapsed;
+            const nextCollapsed = !cmd.ui.collapsed;
+            cmd.ui.collapsed = nextCollapsed;
+            if (commandCollapseScope.active) {
+                if (nextCollapsed) commandCollapseScope.manualOpen.delete(id);
+                else commandCollapseScope.manualOpen.add(id);
+            }
             cardHistory.push();
             applyCommandCollapseUI($card, cmd.ui.collapsed);
             scheduleSave();
@@ -2904,6 +3159,40 @@ function setFaceToCameraSection($card, faceToCamera) {
             handleEmitterInputChange(this);
         });
 
+        $("#emitList").on("focusin", ".emitInput", function () {
+            const id = $(this).closest(".emitCard").data("id");
+            if (!id) return;
+            if (focusedEmitterId !== id) {
+                handleEmitterCollapseFocusChange(focusedEmitterId, id);
+                focusedEmitterId = id;
+            }
+        });
+
+        $("#emitList").on("focusout", ".emitInput", function (e) {
+            const to = e.relatedTarget;
+            if (to && $(to).closest("#emitList .emitCard").length) return;
+            if (!focusedEmitterId) return;
+            handleEmitterCollapseFocusChange(focusedEmitterId, null);
+            focusedEmitterId = null;
+        });
+
+        $("#emitList").on("click", ".emitHead", function (e) {
+            if (!emitterCollapseScope.active) return;
+            if ($(e.target).closest(".btnFold, .btnDup, .btnDel, .dragHandle").length) return;
+            const $card = $(this).closest(".emitCard");
+            const id = $card.data("id");
+            const card = state.emitters.find((it) => it.id === id);
+            if (!card) return;
+            if (!card.ui || typeof card.ui !== "object") card.ui = { collapsed: false };
+            if (card.ui.collapsed) {
+                card.ui.collapsed = false;
+                applyEmitterCollapseUI($card, false);
+                scheduleSave();
+                const $first = $card.find(".emitInput").first();
+                if ($first.length) $first.trigger("focus");
+            }
+        });
+
         $("#emitList").on("click", ".btnDup", function (e) {
             e.stopPropagation();
             const id = $(this).closest(".emitCard").data("id");
@@ -2947,7 +3236,12 @@ function setFaceToCameraSection($card, faceToCamera) {
             const card = state.emitters.find((it) => it.id === id);
             if (!card) return;
             if (!card.ui || typeof card.ui !== "object") card.ui = { collapsed: false };
-            card.ui.collapsed = !card.ui.collapsed;
+            const nextCollapsed = !card.ui.collapsed;
+            card.ui.collapsed = nextCollapsed;
+            if (emitterCollapseScope.active) {
+                if (nextCollapsed) emitterCollapseScope.manualOpen.delete(id);
+                else emitterCollapseScope.manualOpen.add(id);
+            }
             cardHistory.push();
             applyEmitterCollapseUI($card, card.ui.collapsed);
             scheduleSave();
