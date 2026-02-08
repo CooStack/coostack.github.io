@@ -404,6 +404,11 @@ export function initCardSystem(ctx = {}) {
 
 
     function setupDnD(handleEl, cardEl, node, listRef, getIdx, ownerNode = null) {
+        const isNestedDropTarget = (target) => {
+            if (!target || !target.closest) return false;
+            const zone = target.closest(".subcards, .dropzone");
+            return !!zone && cardEl.contains(zone);
+        };
         handleEl.setAttribute("draggable", "true");
         handleEl.addEventListener("pointerdown", () => {
             if (typeof ctx.setDraggingState === "function") ctx.setDraggingState(true);
@@ -434,6 +439,7 @@ export function initCardSystem(ctx = {}) {
         });
 
         cardEl.addEventListener("dragover", (e) => {
+            if (isNestedDropTarget(e.target)) return;
             e.preventDefault();
             const builderInfo = getDragBuilderInfo(e);
             e.dataTransfer.dropEffect = builderInfo ? "copy" : "move";
@@ -479,6 +485,10 @@ export function initCardSystem(ctx = {}) {
         });
         cardEl.addEventListener("dragleave", () => cardEl.classList.remove("drag-over"));
         cardEl.addEventListener("drop", (e) => {
+            if (isNestedDropTarget(e.target)) {
+                cardEl.classList.remove("drag-over");
+                return;
+            }
             e.preventDefault();
             e.stopPropagation();
             cardEl.classList.remove("drag-over");
@@ -627,6 +637,7 @@ export function initCardSystem(ctx = {}) {
 
         containerEl.addEventListener("dragover", (e) => {
             e.preventDefault();
+            e.stopPropagation();
             const builderInfo = getDragBuilderInfo(e);
             e.dataTransfer.dropEffect = builderInfo ? "copy" : "move";
             containerEl.classList.add("dropzone-active");
@@ -636,6 +647,7 @@ export function initCardSystem(ctx = {}) {
 
         containerEl.addEventListener("drop", (e) => {
             e.preventDefault();
+            e.stopPropagation();
             containerEl.classList.remove("dropzone-active");
             const listRef = getListRef();
             const owner = getOwnerNode ? getOwnerNode() : null;
@@ -679,6 +691,7 @@ export function initCardSystem(ctx = {}) {
         if (!zoneEl) return;
         zoneEl.addEventListener("dragover", (e) => {
             e.preventDefault();
+            e.stopPropagation();
             const builderInfo = getDragBuilderInfo(e);
             e.dataTransfer.dropEffect = builderInfo ? "copy" : "move";
             zoneEl.classList.add("active");
