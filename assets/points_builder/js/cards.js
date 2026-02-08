@@ -612,6 +612,7 @@ export function initCardSystem(ctx = {}) {
         handleBuilderDrop,
         tryCopyWithBuilderIntoAddWith,
         moveNodeById,
+        moveNodesByIds,
         downloadText,
         deepClone,
         fileBuilderJson,
@@ -771,6 +772,17 @@ export function initCardSystem(ctx = {}) {
         const fn = ctx.getToggleSyncTarget ? ctx.getToggleSyncTarget() : ctx.toggleSyncTarget;
         if (typeof fn === "function") fn(node);
     };
+    const setSyncTargetsByIds = (ids, options) => {
+        const fn = ctx.getSetSyncTargetsByIds ? ctx.getSetSyncTargetsByIds() : ctx.setSyncTargetsByIds;
+        return (typeof fn === "function") ? fn(ids, options) : [];
+    };
+    const notifyCardSelectionChange = () => {
+        if (typeof ctx.onCardSelectionChange === "function") ctx.onCardSelectionChange();
+    };
+    const findNodeContextById = (...args) => {
+        const fn = ctx.findNodeContextById;
+        return (typeof fn === "function") ? fn(...args) : null;
+    };
 
     function iconBtn(text, onClick, danger = false) {
         const b = document.createElement("button");
@@ -892,8 +904,259 @@ export function initCardSystem(ctx = {}) {
         title.insertAdjacentElement("afterend", tools);
     }
 
+    const selectedNodeIds = new Set();
+    const CARD_BOX_DELAY_MS = 220;
+    let cardBoxEl = null;
+    let cardBoxTimer = 0;
+    let cardBoxPending = null; // { pointerId,startX,startY,ctrlKey,shiftKey }
+    let cardBoxSelecting = false;
+    let cardBoxRect = null; // {left,top,right,bottom}
+    let cardBoxBound = false;
+
+    function pruneSelectedNodeIds() {
+        if (!selectedNodeIds.size) return false;
+        let changed = false;
+        for (const id of Array.from(selectedNodeIds)) {
+            if (!id || !findNodeContextById(id)) {
+                selectedNodeIds.delete(id);
+                changed = true;
+            }
+        }
+        return changed;
+    }
+
+    function getSelectedNodeIds() {
+        pruneSelectedNodeIds();
+        return selectedNodeIds;
+    }
+
+    function setSelectedNodeIds(ids, options = {}) {
+        const replace = options.replace !== false;
+        const focus = !!options.focus;
+        const recordHistory = options.recordHistory !== false;
+        const allowSync = options.syncWithParamSync !== false;
+        const syncStrictKind = !!options.syncStrictKind;
+        const src = Array.isArray(ids) ? ids : [];
+        const valid = [];
+        const seen = new Set();
+        for (const id of src) {
+            if (!id || seen.has(id)) continue;
+            seen.add(id);
+            if (findNodeContextById(id)) valid.push(id);
+        }
+
+        let changed = false;
+        if (replace) {
+            if (selectedNodeIds.size !== valid.length || valid.some(id => !selectedNodeIds.has(id))) changed = true;
+            selectedNodeIds.clear();
+        }
+        for (const id of valid) {
+            if (!selectedNodeIds.has(id)) changed = true;
+            selectedNodeIds.add(id);
+        }
+
+        if (replace && valid.length === 0 && selectedNodeIds.size !== 0) {
+            changed = true;
+            selectedNodeIds.clear();
+        }
+
+        if (allowSync) {
+            const sync = getParamSync();
+            if (sync && sync.open) setSyncTargetsByIds(valid, { replace, strictKind: syncStrictKind });
+        }
+
+        if (focus) {
+            const focusId = options.focusId || valid[0] || null;
+            setFocusedNode(focusId, recordHistory);
+        }
+        if (changed || focus) {
+            updateFocusCardUI();
+            notifyCardSelectionChange();
+        }
+        return Array.from(selectedNodeIds);
+    }
+
+    function clearSelectedNodeIds() {
+        if (!selectedNodeIds.size) return;
+        selectedNodeIds.clear();
+        updateFocusCardUI();
+        notifyCardSelectionChange();
+    }
+
+    function getDragIdsForNode(nodeId, listRef, containerEl = null) {
+        if (!nodeId || !Array.isArray(listRef)) return [];
+        const sel = getSelectedNodeIds();
+        if (!sel.has(nodeId)) return [nodeId];
+        const inList = [];
+        for (const n of listRef) {
+            if (!n || !n.id) continue;
+            if (containerEl && !containerEl.querySelector(`.card[data-id="${n.id}"]`)) continue;
+            if (sel.has(n.id)) inList.push(n.id);
+        }
+        if (inList.length <= 1) return [nodeId];
+        return inList;
+    }
+
+    function ensureCardBoxEl() {
+        if (cardBoxEl) return cardBoxEl;
+        const el = document.createElement("div");
+        el.className = "pb-select-box pb-select-box-card hidden";
+        document.body.appendChild(el);
+        cardBoxEl = el;
+        return el;
+    }
+
+    function hideCardBoxEl() {
+        if (!cardBoxEl) return;
+        cardBoxEl.classList.add("hidden");
+    }
+
+    function releaseCardBoxPointer(pointerId) {
+        if (!elCardsRoot || pointerId === null || pointerId === undefined) return;
+        try {
+            if (elCardsRoot.hasPointerCapture && elCardsRoot.hasPointerCapture(pointerId)) {
+                elCardsRoot.releasePointerCapture(pointerId);
+            }
+        } catch {}
+    }
+
+    function setCardBoxRect(startX, startY, endX, endY) {
+        const left = Math.min(startX, endX);
+        const right = Math.max(startX, endX);
+        const top = Math.min(startY, endY);
+        const bottom = Math.max(startY, endY);
+        cardBoxRect = { left, right, top, bottom };
+        const el = ensureCardBoxEl();
+        el.style.left = `${Math.round(left)}px`;
+        el.style.top = `${Math.round(top)}px`;
+        el.style.width = `${Math.round(Math.max(0, right - left))}px`;
+        el.style.height = `${Math.round(Math.max(0, bottom - top))}px`;
+        el.classList.remove("hidden");
+    }
+
+    function clearCardBoxState(pointerId = null) {
+        if (cardBoxTimer) {
+            clearTimeout(cardBoxTimer);
+            cardBoxTimer = 0;
+        }
+        cardBoxPending = null;
+        cardBoxSelecting = false;
+        cardBoxRect = null;
+        hideCardBoxEl();
+        if (pointerId !== null && pointerId !== undefined) releaseCardBoxPointer(pointerId);
+    }
+
+    function shouldStartCardBox(ev) {
+        if (!ev || ev.button !== 0) return false;
+        const t = ev.target;
+        if (!t || !t.closest) return false;
+        if (t.closest("input, select, textarea, button, .iconbtn, .handle, .card-actions, .card-resizer, .subblock-resizer, .subblock-resizer-y")) return false;
+        return true;
+    }
+
+    function collectCardIdsInRect(rect) {
+        if (!rect || !elCardsRoot) return [];
+        const hits = [];
+        const cards = elCardsRoot.querySelectorAll(".card[data-id]");
+        cards.forEach((card) => {
+            const r = card.getBoundingClientRect();
+            if (r.width <= 0 || r.height <= 0) return;
+            const overlap = !(r.right < rect.left || r.left > rect.right || r.bottom < rect.top || r.top > rect.bottom);
+            if (!overlap) return;
+            hits.push({ id: card.dataset.id, top: r.top, left: r.left });
+        });
+        hits.sort((a, b) => (a.top - b.top) || (a.left - b.left));
+        return hits.map(it => it.id).filter(Boolean);
+    }
+
+    function startCardBoxSelecting(ev) {
+        if (!cardBoxPending || !ev || ev.pointerId !== cardBoxPending.pointerId) return;
+        cardBoxSelecting = true;
+        setCardBoxRect(cardBoxPending.startX, cardBoxPending.startY, ev.clientX, ev.clientY);
+    }
+
+    function updateCardBoxSelecting(ev) {
+        if (!cardBoxPending || !ev || ev.pointerId !== cardBoxPending.pointerId) return false;
+        if (!cardBoxSelecting) return false;
+        setCardBoxRect(cardBoxPending.startX, cardBoxPending.startY, ev.clientX, ev.clientY);
+        return true;
+    }
+
+    function finishCardBoxSelection(ev) {
+        if (!cardBoxPending || !ev || ev.pointerId !== cardBoxPending.pointerId) return false;
+        const pointerId = cardBoxPending.pointerId;
+        const active = cardBoxSelecting;
+        const rect = cardBoxRect;
+        const additive = !!(cardBoxPending.ctrlKey || cardBoxPending.shiftKey);
+        clearCardBoxState(pointerId);
+        if (!active || !rect) return false;
+        if ((rect.right - rect.left) < 3 && (rect.bottom - rect.top) < 3) return false;
+
+        const ids = collectCardIdsInRect(rect);
+        if (ids.length) {
+            setSelectedNodeIds(ids, { replace: !additive, focus: true, syncStrictKind: true });
+        } else if (!additive) {
+            clearSelectedNodeIds();
+            const sync = getParamSync();
+            if (sync && sync.open) setSyncTargetsByIds([], { replace: true });
+        }
+        return true;
+    }
+
+    function bindCardBoxSelection() {
+        if (!elCardsRoot || cardBoxBound) return;
+        cardBoxBound = true;
+
+        elCardsRoot.addEventListener("pointerdown", (ev) => {
+            if (!shouldStartCardBox(ev)) return;
+            clearCardBoxState();
+            cardBoxPending = {
+                pointerId: ev.pointerId,
+                startX: ev.clientX,
+                startY: ev.clientY,
+                ctrlKey: !!ev.ctrlKey,
+                shiftKey: !!ev.shiftKey
+            };
+            if (elCardsRoot.setPointerCapture) {
+                try { elCardsRoot.setPointerCapture(ev.pointerId); } catch {}
+            }
+            cardBoxTimer = setTimeout(() => {
+                cardBoxTimer = 0;
+                if (!cardBoxPending) return;
+                startCardBoxSelecting({
+                    pointerId: cardBoxPending.pointerId,
+                    clientX: cardBoxPending.startX,
+                    clientY: cardBoxPending.startY
+                });
+            }, CARD_BOX_DELAY_MS);
+        }, true);
+
+        window.addEventListener("pointermove", (ev) => {
+            if (updateCardBoxSelecting(ev)) ev.preventDefault();
+        }, true);
+
+        window.addEventListener("pointerup", (ev) => {
+            if (!finishCardBoxSelection(ev) && cardBoxPending && ev.pointerId === cardBoxPending.pointerId) {
+                clearCardBoxState(ev.pointerId);
+            }
+        }, true);
+
+        window.addEventListener("pointercancel", (ev) => {
+            if (cardBoxPending && ev.pointerId === cardBoxPending.pointerId) {
+                clearCardBoxState(ev.pointerId);
+            }
+        }, true);
+
+        window.addEventListener("blur", () => {
+            const pid = cardBoxPending ? cardBoxPending.pointerId : null;
+            clearCardBoxState(pid);
+        }, true);
+    }
+
     let draggingId = null;
+    let draggingIds = null;
     const DRAG_TYPE_NODE = "application/x-pb-node";
+    const DRAG_TYPE_NODE_MULTI = "application/x-pb-node-multi";
     const DRAG_TYPE_BUILDER = "application/x-pb-builder";
     let draggingBuilder = null;
     let pendingCardSwapAnim = false;
@@ -902,16 +1165,31 @@ export function initCardSystem(ctx = {}) {
         pendingCardSwapAnim = true;
     };
 
-    function getDragNodeId(e) {
+    function getDragNodeIds(e) {
         try {
             if (e?.dataTransfer) {
+                const byMulti = e.dataTransfer.getData(DRAG_TYPE_NODE_MULTI);
+                if (byMulti) {
+                    try {
+                        const arr = JSON.parse(byMulti);
+                        if (Array.isArray(arr) && arr.length) {
+                            return arr.map(v => String(v || "").trim()).filter(Boolean);
+                        }
+                    } catch {}
+                }
                 const byType = e.dataTransfer.getData(DRAG_TYPE_NODE);
-                if (byType) return byType;
+                if (byType) return [byType];
                 const plain = e.dataTransfer.getData("text/plain");
-                if (plain) return plain;
+                if (plain && plain !== "pb_builder") return [plain];
             }
         } catch {}
-        return draggingId;
+        if (Array.isArray(draggingIds) && draggingIds.length) return draggingIds.slice();
+        return draggingId ? [draggingId] : [];
+    }
+
+    function getDragNodeId(e) {
+        const ids = getDragNodeIds(e);
+        return ids.length ? ids[0] : null;
     }
 
     function getDragBuilderInfo(e) {
@@ -924,12 +1202,18 @@ export function initCardSystem(ctx = {}) {
         return draggingBuilder;
     }
 
-    function startDragPreview(cardEl, listRef, ownerNode) {
+    function startDragPreview(cardEl, listRef, ownerNode, dragIds = null) {
         if (!cardEl) return;
         const container = cardEl.parentElement;
+        const ids = (Array.isArray(dragIds) && dragIds.length) ? dragIds.slice() : [cardEl.dataset.id];
+        const cardEls = container
+            ? ids.map((id) => container.querySelector(`.card[data-id="${id}"]`)).filter(Boolean)
+            : [cardEl];
         dragPreview = {
             id: cardEl.dataset.id,
+            ids,
             cardEl,
+            cardEls,
             listRef,
             ownerNode,
             container,
@@ -972,18 +1256,33 @@ export function initCardSystem(ctx = {}) {
         });
         handleEl.addEventListener("dragstart", (e) => {
             draggingId = node?.id || cardEl.dataset.id;
+            const dragIds = getDragIdsForNode(draggingId, listRef, cardEl.parentElement);
+            draggingIds = (dragIds.length > 1) ? dragIds.slice() : null;
             draggingBuilder = null;
-            cardEl.classList.add("dragging");
-            startDragPreview(cardEl, listRef, ownerNode);
+            startDragPreview(cardEl, listRef, ownerNode, dragIds);
+            const dragEls = (dragPreview && Array.isArray(dragPreview.cardEls) && dragPreview.cardEls.length)
+                ? dragPreview.cardEls
+                : [cardEl];
+            dragEls.forEach((el) => el.classList.add("dragging"));
             if (typeof ctx.setDraggingState === "function") ctx.setDraggingState(true);
             e.dataTransfer.effectAllowed = "move";
+            if (dragIds.length > 1) {
+                try { e.dataTransfer.setData(DRAG_TYPE_NODE_MULTI, JSON.stringify(dragIds)); } catch {}
+            }
             try { e.dataTransfer.setData(DRAG_TYPE_NODE, draggingId); } catch {}
             e.dataTransfer.setData("text/plain", draggingId);
         });
         handleEl.addEventListener("dragend", () => {
             draggingId = null;
+            draggingIds = null;
             draggingBuilder = null;
-            cardEl.classList.remove("dragging");
+            const dragEls = (dragPreview && Array.isArray(dragPreview.cardEls) && dragPreview.cardEls.length)
+                ? dragPreview.cardEls
+                : [cardEl];
+            dragEls.forEach((el) => {
+                el.classList.remove("dragging");
+                el.classList.remove("drag-over");
+            });
             cardEl.classList.remove("drag-over");
             finishDragPreview();
             if (typeof ctx.setDraggingState === "function") ctx.setDraggingState(false);
@@ -997,7 +1296,10 @@ export function initCardSystem(ctx = {}) {
             cardEl.classList.add("drag-over");
 
             if (builderInfo) return;
-            const id = getDragNodeId(e);
+            const dragIds = getDragNodeIds(e);
+            if (!dragIds.length) return;
+            if (dragIds.length > 1) return;
+            const id = dragIds[0];
             if (!id || !dragPreview || dragPreview.id !== id) return;
             if (dragPreview.listRef !== listRef) return;
             if (dragPreview.cardEl === cardEl) return;
@@ -1053,8 +1355,32 @@ export function initCardSystem(ctx = {}) {
                 return;
             }
 
-            const id = getDragNodeId(e);
-            if (!id) return;
+            const dragIds = getDragNodeIds(e);
+            if (!dragIds.length) return;
+            const isMulti = dragIds.length > 1;
+            const id = dragIds[0];
+
+            if (isMulti) {
+                const scopeId = ownerNode ? ownerNode.id : null;
+                const useSwap = isFilterActive(scopeId);
+                if (useSwap) {
+                    showToast("过滤中暂不支持多卡片拖拽", "info");
+                    return;
+                }
+                historyCapture("drag_drop_multi");
+                const rect = cardEl.getBoundingClientRect();
+                const after = (e.clientY > rect.top + rect.height / 2);
+                const targetIndex = getIdx() + (after ? 1 : 0);
+                if (typeof moveNodesByIds === "function") {
+                    const ok = moveNodesByIds(dragIds, listRef, targetIndex, ownerNode);
+                    if (ok) {
+                        markDragPreviewDrop();
+                        requestCardSwapAnim();
+                        renderAll();
+                    }
+                }
+                return;
+            }
 
             if (dragPreview && dragPreview.dirty && dragPreview.id === id) {
                 const scopeId = ownerNode ? ownerNode.id : null;
@@ -1113,6 +1439,7 @@ export function initCardSystem(ctx = {}) {
         });
         handleEl.addEventListener("dragstart", (e) => {
             draggingId = cardEl.dataset.id;
+            draggingIds = null;
             draggingBuilder = null;
             cardEl.classList.add("dragging");
             if (typeof ctx.setDraggingState === "function") ctx.setDraggingState(true);
@@ -1121,6 +1448,7 @@ export function initCardSystem(ctx = {}) {
         });
         handleEl.addEventListener("dragend", () => {
             draggingId = null;
+            draggingIds = null;
             draggingBuilder = null;
             cardEl.classList.remove("dragging");
             cardEl.classList.remove("drag-over");
@@ -1168,6 +1496,7 @@ export function initCardSystem(ctx = {}) {
         handleEl.addEventListener("dragstart", (e) => {
             const payload = { type: "add_with_builder", ownerId: ownerNode.id };
             draggingId = null;
+            draggingIds = null;
             draggingBuilder = payload;
             handleEl.classList.add("dragging");
             if (typeof ctx.setDraggingState === "function") ctx.setDraggingState(true);
@@ -1219,8 +1548,22 @@ export function initCardSystem(ctx = {}) {
                 return;
             }
 
-            const id = getDragNodeId(e);
-            if (!id) return;
+            const dragIds = getDragNodeIds(e);
+            if (!dragIds.length) return;
+            const id = dragIds[0];
+
+            if (dragIds.length > 1) {
+                historyCapture("drag_drop_multi_end");
+                if (typeof moveNodesByIds === "function") {
+                    const ok = moveNodesByIds(dragIds, listRef, listRef.length, owner);
+                    if (ok) {
+                        markDragPreviewDrop();
+                        requestCardSwapAnim();
+                        renderAll();
+                    }
+                }
+                return;
+            }
 
             if (tryCopyWithBuilderIntoAddWith(id, owner)) {
                 markDragPreviewDrop();
@@ -1267,8 +1610,22 @@ export function initCardSystem(ctx = {}) {
                 return;
             }
 
-            const id = getDragNodeId(e);
-            if (!id) return;
+            const dragIds = getDragNodeIds(e);
+            if (!dragIds.length) return;
+            const id = dragIds[0];
+
+            if (dragIds.length > 1) {
+                historyCapture("drag_drop_multi_sub");
+                if (typeof moveNodesByIds === "function") {
+                    const ok = moveNodesByIds(dragIds, listRef, listRef.length, ownerNode);
+                    if (ok) {
+                        markDragPreviewDrop();
+                        requestCardSwapAnim();
+                        renderAll();
+                    }
+                }
+                return;
+            }
 
             if (tryCopyWithBuilderIntoAddWith(id, ownerNode)) {
                 markDragPreviewDrop();
@@ -1440,6 +1797,7 @@ export function initCardSystem(ctx = {}) {
         const scopeId = ownerNode ? ownerNode.id : null;
         const useFilterSwap = isFilterActive(scopeId);
         if (node.id === getFocusedNodeId()) card.classList.add("focused");
+        if (selectedNodeIds.has(node.id)) card.classList.add("multi-selected");
         const sync = getParamSync();
         if (sync && sync.selectedIds && sync.selectedIds.has(node.id)) card.classList.add("sync-target");
         if (node.collapsed) card.classList.add("collapsed");
@@ -1684,12 +2042,13 @@ export function initCardSystem(ctx = {}) {
             // ✅ 避免 addBuilder 父卡片接管子卡片：只响应“事件发生在当前卡片自身区域”
             const inner = e.target && e.target.closest ? e.target.closest(".card") : null;
             if (inner && inner !== card) return;
+            const additive = !!(e.ctrlKey || e.shiftKey);
+            setSelectedNodeIds([node.id], { replace: !additive, focus: false, syncWithParamSync: false });
             if (isSyncSelectableEvent(e)) toggleSyncTarget(node);
             setFocusedNode(node.id);
         });
         card.addEventListener("dblclick", (e) => {
             if (getIsRenderingCards()) return;
-            if (typeof startOffsetMode !== "function") return;
             const inner = e.target && e.target.closest ? e.target.closest(".card") : null;
             if (inner && inner !== card) return;
             const tag = e.target && e.target.tagName ? String(e.target.tagName).toUpperCase() : "";
@@ -1697,7 +2056,6 @@ export function initCardSystem(ctx = {}) {
             if (e.target && e.target.isContentEditable) return;
             if (e.target && e.target.closest && e.target.closest(".card-actions")) return;
             setFocusedNode(node.id);
-            startOffsetMode(node.id);
         });
         card.addEventListener("focusin", (e) => {
             // ✅ focusin 会冒泡：子卡片获得焦点时，父卡片不应抢走高亮
@@ -1765,6 +2123,7 @@ export function initCardSystem(ctx = {}) {
     }
 
     function renderCards() {
+        const pruned = pruneSelectedNodeIds();
         setIsRenderingCards(true);
         const prevPositions = pendingCardSwapAnim ? captureCardPositions() : null;
         try {
@@ -1781,6 +2140,7 @@ export function initCardSystem(ctx = {}) {
         }
         // DOM 重建后重新标记聚焦高亮
         updateFocusCardUI();
+        if (pruned) notifyCardSelectionChange();
         requestAnimationFrame(() => {
             if (prevPositions) applyCardSwapAnimation(prevPositions);
             layoutActionOverflow();
@@ -2405,56 +2765,18 @@ export function initCardSystem(ctx = {}) {
 
                     const title = document.createElement("div");
                     title.className = "subblock-title";
-                    const dragHandle = document.createElement("div");
-                    dragHandle.className = "handle subblock-handle";
-                    dragHandle.textContent = "≡";
-                    dragHandle.title = "拖到外部生成 addBuilder";
-                    bindAddWithBuilderDrag(dragHandle, node);
                     const titleText = document.createElement("div");
                     titleText.className = "subblock-title-text";
                     titleText.textContent = "子 PointsBuilder（addWith）";
-                    title.appendChild(dragHandle);
                     title.appendChild(titleText);
 
                     const actions = document.createElement("div");
                     actions.className = "mini";
 
-                    const addBtn = document.createElement("button");
-                    addBtn.className = "btn small primary";
-                    addBtn.textContent = "添加元素";
-                    addBtn.addEventListener("click", () => openModal(node.children, (node.children || []).length, "子Builder", node.id));
-
-                    const dragOutBtn = document.createElement("div");
-                    dragOutBtn.className = "btn small drag-handle";
-                    dragOutBtn.textContent = "拖出Builder";
-                    dragOutBtn.setAttribute("role", "button");
-                    dragOutBtn.tabIndex = 0;
-                    dragOutBtn.title = "拖到外部生成 addBuilder";
-                    bindAddWithBuilderDrag(dragOutBtn, node);
-
-                    const { collapseBtn: collapseAllBtn, expandBtn: expandAllBtn } = makeCollapseAllButtons(node.id, () => node.children, true);
-                    const filterUi = createFilterControls(node.id, renderCards, true);
-
-                    const offBtn = document.createElement("button");
-                    offBtn.className = "btn small";
-                    offBtn.textContent = "快捷Offset";
-                    offBtn.addEventListener("click", () => addQuickOffsetTo(node.children));
-
-                    const pickBtn = document.createElement("button");
-                    pickBtn.className = "btn small";
-                    pickBtn.textContent = "XZ拾取直线";
-                    pickBtn.dataset.pickLineBtn = "1";
-                    pickBtn.addEventListener("click", () => {
-                        if (getLinePickMode()) stopLinePick();
-                        else {
-                            if (getPointPickMode()) stopPointPick();
-                            startLinePick(node.children, "子Builder", (node.children || []).length);
-                        }
-                    });
-
                     const exportBtn = document.createElement("button");
                     exportBtn.className = "btn small";
                     exportBtn.textContent = "导出JSON";
+                    exportBtn.title = "导出当前子 Builder 的 JSON";
                     exportBtn.addEventListener("click", () => {
                         const out = {root: {id: "root", kind: "ROOT", children: deepClone(node.children || [])}};
                         downloadText("addWithBuilder.json", JSON.stringify(out, null, 2), "application/json");
@@ -2463,32 +2785,21 @@ export function initCardSystem(ctx = {}) {
                     const importBtn = document.createElement("button");
                     importBtn.className = "btn small";
                     importBtn.textContent = "导入JSON";
+                    importBtn.title = "导入后将覆盖当前子 Builder 内容";
                     importBtn.addEventListener("click", () => {
                         if (!fileBuilderJson) return;
                         setBuilderJsonTargetNode(node);
                         fileBuilderJson.click();
                     });
+                    const ioHint = document.createElement("span");
+                    ioHint.style.fontSize = "11px";
+                    ioHint.style.opacity = ".72";
+                    ioHint.textContent = "提示：先点击该卡片，再点“添加卡片”可在此卡片内新增";
+                    ioHint.title = "点击卡片后再点击添加卡片，即可在当前子 Builder 内添加卡片";
 
-                    const clearBtn = document.createElement("button");
-                    clearBtn.className = "btn small danger";
-                    clearBtn.textContent = "清空";
-                    clearBtn.addEventListener("click", () => {
-                        historyCapture("clear_add_with");
-                        node.children.splice(0);
-                        ensureAxisInList(node.children);
-                        renderAll();
-                    });
-
-                    actions.appendChild(addBtn);
-                    actions.appendChild(dragOutBtn);
-                    actions.appendChild(collapseAllBtn);
-                    actions.appendChild(expandAllBtn);
-                    if (filterUi && filterUi.wrap) actions.appendChild(filterUi.wrap);
-                    actions.appendChild(offBtn);
-                    actions.appendChild(pickBtn);
                     actions.appendChild(exportBtn);
                     actions.appendChild(importBtn);
-                    actions.appendChild(clearBtn);
+                    actions.appendChild(ioHint);
 
                     head.appendChild(title);
                     head.appendChild(actions);
@@ -2532,14 +2843,31 @@ export function initCardSystem(ctx = {}) {
                 } else if (!opts.paramsOnly) {
                     const mini = document.createElement("div");
                     mini.className = "mini";
-                    const dragOutBtn = document.createElement("div");
-                    dragOutBtn.className = "btn small drag-handle";
-                    dragOutBtn.textContent = "拖出Builder";
-                    dragOutBtn.setAttribute("role", "button");
-                    dragOutBtn.tabIndex = 0;
-                    dragOutBtn.title = "拖到外部生成 addBuilder";
-                    bindAddWithBuilderDrag(dragOutBtn, node);
-                    mini.appendChild(dragOutBtn);
+                    const exportBtn = document.createElement("button");
+                    exportBtn.className = "btn small";
+                    exportBtn.textContent = "导出JSON";
+                    exportBtn.title = "导出当前子 Builder 的 JSON";
+                    exportBtn.addEventListener("click", () => {
+                        const out = {root: {id: "root", kind: "ROOT", children: deepClone(node.children || [])}};
+                        downloadText("addWithBuilder.json", JSON.stringify(out, null, 2), "application/json");
+                    });
+                    const importBtn = document.createElement("button");
+                    importBtn.className = "btn small";
+                    importBtn.textContent = "导入JSON";
+                    importBtn.title = "导入后将覆盖当前子 Builder 内容";
+                    importBtn.addEventListener("click", () => {
+                        if (!fileBuilderJson) return;
+                        setBuilderJsonTargetNode(node);
+                        fileBuilderJson.click();
+                    });
+                    const ioHint = document.createElement("span");
+                    ioHint.style.fontSize = "11px";
+                    ioHint.style.opacity = ".72";
+                    ioHint.textContent = "提示：先点击该卡片，再点“添加卡片”可在此卡片内新增";
+                    ioHint.title = "点击卡片后再点击添加卡片，即可在当前子 Builder 内添加卡片";
+                    mini.appendChild(exportBtn);
+                    mini.appendChild(importBtn);
+                    mini.appendChild(ioHint);
                     body.appendChild(mini);
 
                     const zone = document.createElement("div");
@@ -2572,35 +2900,10 @@ export function initCardSystem(ctx = {}) {
                     const actions = document.createElement("div");
                     actions.className = "mini";
 
-                    // ✅ 内部控制与外部一致：添加元素 / 快捷Offset / XZ拾取直线
-                    const addBtn = document.createElement("button");
-                    addBtn.className = "btn small primary";
-                    addBtn.textContent = "添加元素";
-                    addBtn.addEventListener("click", () => openModal(node.children, (node.children || []).length, "子Builder", node.id));
-
-                    const { collapseBtn: collapseAllBtn, expandBtn: expandAllBtn } = makeCollapseAllButtons(node.id, () => node.children, true);
-                    const filterUi = createFilterControls(node.id, renderCards, true);
-
-                    const offBtn = document.createElement("button");
-                    offBtn.className = "btn small";
-                    offBtn.textContent = "快捷Offset";
-                    offBtn.addEventListener("click", () => addQuickOffsetTo(node.children));
-
-                    const pickBtn = document.createElement("button");
-                    pickBtn.className = "btn small";
-                    pickBtn.textContent = "XZ拾取直线";
-                    pickBtn.dataset.pickLineBtn = "1";
-                    pickBtn.addEventListener("click", () => {
-                        if (getLinePickMode()) stopLinePick();
-                        else {
-                            if (getPointPickMode()) stopPointPick();
-                            startLinePick(node.children, "子Builder", (node.children || []).length);
-                        }
-                    });
-
                     const exportBtn = document.createElement("button");
                     exportBtn.className = "btn small";
                     exportBtn.textContent = "导出JSON";
+                    exportBtn.title = "导出当前子 Builder 的 JSON";
                     exportBtn.addEventListener("click", () => {
                         const out = {root: {id: "root", kind: "ROOT", children: deepClone(node.children || [])}};
                         downloadText("addBuilder.json", JSON.stringify(out, null, 2), "application/json");
@@ -2609,31 +2912,21 @@ export function initCardSystem(ctx = {}) {
                     const importBtn = document.createElement("button");
                     importBtn.className = "btn small";
                     importBtn.textContent = "导入JSON";
+                    importBtn.title = "导入后将覆盖当前子 Builder 内容";
                     importBtn.addEventListener("click", () => {
                         if (!fileBuilderJson) return;
                         setBuilderJsonTargetNode(node);
                         fileBuilderJson.click();
                     });
+                    const ioHint = document.createElement("span");
+                    ioHint.style.fontSize = "11px";
+                    ioHint.style.opacity = ".72";
+                    ioHint.textContent = "提示：先点击该卡片，再点“添加卡片”可在此卡片内新增";
+                    ioHint.title = "点击卡片后再点击添加卡片，即可在当前子 Builder 内添加卡片";
 
-                    const clearBtn = document.createElement("button");
-                    clearBtn.className = "btn small danger";
-                    clearBtn.textContent = "清空";
-                    clearBtn.addEventListener("click", () => {
-                        historyCapture("clear_addBuilder");
-                        node.children.splice(0);
-                        ensureAxisInList(node.children);
-                        renderAll();
-                    });
-
-                    actions.appendChild(addBtn);
-                    actions.appendChild(collapseAllBtn);
-                    actions.appendChild(expandAllBtn);
-                    if (filterUi && filterUi.wrap) actions.appendChild(filterUi.wrap);
-                    actions.appendChild(offBtn);
-                    actions.appendChild(pickBtn);
                     actions.appendChild(exportBtn);
                     actions.appendChild(importBtn);
-                    actions.appendChild(clearBtn);
+                    actions.appendChild(ioHint);
 
                     head.appendChild(title);
                     head.appendChild(actions);
@@ -2730,12 +3023,16 @@ export function initCardSystem(ctx = {}) {
     }
 
     bindInputTips();
+    bindCardBoxSelection();
     return {
         renderCards,
         renderParamsEditors,
         layoutActionOverflow,
         initCollapseAllControls,
         setupListDropZone,
-        addQuickOffsetTo
+        addQuickOffsetTo,
+        getSelectedNodeIds,
+        setSelectedNodeIds,
+        clearSelectedNodeIds
     };
 }

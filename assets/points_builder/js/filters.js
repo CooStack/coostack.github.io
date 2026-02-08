@@ -504,6 +504,75 @@
         else addSyncTarget(node);
     }
 
+    function setSyncTargetsByIds(ids, options = {}) {
+        const replace = options.replace !== false;
+        const strictKind = !!options.strictKind;
+        const list = Array.isArray(ids) ? ids : [];
+        const dedup = [];
+        const seen = new Set();
+        for (const id of list) {
+            if (!id || seen.has(id)) continue;
+            seen.add(id);
+            dedup.push(id);
+        }
+
+        const candidates = [];
+        for (const id of dedup) {
+            const ctxNode = findNodeContextById && findNodeContextById(id);
+            if (!ctxNode || !ctxNode.node) continue;
+            candidates.push(ctxNode.node);
+        }
+
+        if (strictKind && candidates.length) {
+            const baseKind = (!replace && paramSync.kind) ? paramSync.kind : candidates[0].kind;
+            const hasMismatch = candidates.some((n) => !n || n.kind !== baseKind);
+            if (hasMismatch) {
+                showToast && showToast("参数同步框选失败：必须框选同类型卡片", "error");
+                return Array.from(paramSync.selectedIds);
+            }
+        }
+
+        if (replace) {
+            const old = Array.from(paramSync.selectedIds);
+            paramSync.selectedIds.clear();
+            paramSync.snapshots.clear();
+            old.forEach(updateSyncCardUI);
+            paramSync.kind = null;
+        }
+
+        if (!candidates.length) {
+            renderSyncMenu();
+            if (typeof onSyncSelectionChange === "function") onSyncSelectionChange();
+            return [];
+        }
+
+        if (!paramSync.kind) paramSync.kind = candidates[0].kind;
+        const kind = paramSync.kind;
+        const accepted = [];
+        let skipped = 0;
+        for (const n of candidates) {
+            if (!n || !n.id) continue;
+            if (n.kind !== kind) {
+                skipped++;
+                continue;
+            }
+            accepted.push(n);
+            if (!paramSync.selectedIds.has(n.id)) {
+                paramSync.selectedIds.add(n.id);
+                updateSyncCardUI(n.id);
+            }
+            paramSync.snapshots.set(n.id, deepClone ? deepClone(n.params || {}) : JSON.parse(JSON.stringify(n.params || {})));
+        }
+
+        if (!paramSync.selectedIds.size) paramSync.kind = null;
+        renderSyncMenu();
+        if (typeof onSyncSelectionChange === "function") onSyncSelectionChange();
+        if (skipped > 0) {
+            showToast && showToast("参数同步仅保留同类型卡片", "info");
+        }
+        return accepted.map(n => n.id);
+    }
+
     function diffParams(prev, next) {
         const diffs = [];
         const isObj = (v) => v && typeof v === "object" && !Array.isArray(v);
@@ -645,7 +714,7 @@
         menu.className = "sync-menu";
         const hint = document.createElement("div");
         hint.className = "sync-hint";
-        hint.textContent = "打开后点击卡片加入/移除（同类型）";
+        hint.textContent = "打开后点击或框选卡片加入/移除（同类型）";
         const list = document.createElement("div");
         list.className = "sync-list";
         const editor = document.createElement("div");
@@ -730,6 +799,7 @@
         bindParamSyncListeners,
         isSyncSelectableEvent,
         toggleSyncTarget,
+        setSyncTargetsByIds,
         setSyncEnabled,
         updateSyncCardUI,
         syncFromNodeId,

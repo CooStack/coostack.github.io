@@ -45,7 +45,7 @@
             <div class="panel-title">构建列</div>
             <div id="cardsRoot" class="cards"></div>
             <div class="panel-footnote">
-                拖拽 ≡ 排序；子元素放在父卡片里；右侧是 Kotlin 输出。
+                拖拽 ≡ 排序；长按左键可框选多卡片；子元素可放入父卡片。
             </div>
         </aside>
 
@@ -190,6 +190,14 @@
                             <label class="chk settings-toggle">
                                 <input id="chkGrid" type="checkbox" checked />
                                 <span>显示网格</span>
+                            </label>
+                            <label class="chk settings-toggle">
+                                <input id="chkRealtimeKotlin" type="checkbox" />
+                                <span>实时更新 Kotlin</span>
+                            </label>
+                            <label class="chk settings-toggle">
+                                <input id="chkPointPickPreview" type="checkbox" checked />
+                                <span>点拾取效果预览</span>
                             </label>
                         </div>
                     </div>

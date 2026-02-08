@@ -55,6 +55,7 @@
             mirrorPlaneZY: "Shift+KeyD", // Shift + D
             copyFocused: "Mod+KeyD",     // Ctrl/Cmd + D
             mirrorCopy: "Mod+Shift+KeyM",// Ctrl/Cmd + Shift + M
+            triggerFocusedMove: "KeyT",  // T
             undo: "Mod+KeyZ",            // Ctrl/Cmd + Z
             redo: "Mod+Shift+KeyZ",      // Ctrl/Cmd + Shift + Z
             // 删除聚焦卡片（Mac 键盘上的“Delete”通常对应 Backspace；更通用）
@@ -240,6 +241,7 @@
         {id: "mirrorPlaneZY", title: "切换镜像平面：ZY", desc: "默认 Shift+D"},
         {id: "copyFocused", title: "复制当前聚焦卡片", desc: "默认 Ctrl/Cmd + D"},
         {id: "mirrorCopy", title: "镜像复制（直线/Offset）", desc: "默认 Ctrl/Cmd + Shift + M"},
+        {id: "triggerFocusedMove", title: "触发聚焦卡片移动", desc: "默认 T"},
         {id: "deleteFocused", title: "删除当前聚焦卡片", desc: "默认 Backspace"},
         {id: "undo", title: "撤销", desc: "默认 Ctrl/Cmd + Z"},
         {id: "redo", title: "恢复", desc: "默认 Ctrl/Cmd + Shift + Z"},
