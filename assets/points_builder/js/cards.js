@@ -15,6 +15,317 @@
         return dec;
     }
 
+    function formatAngleValue(value) {
+        const n = Number(value);
+        if (!Number.isFinite(n)) return "0";
+        const fixed = Math.abs(n) < 1e-12 ? 0 : Number(n.toFixed(6));
+        return String(fixed);
+    }
+
+    function normalizeAngleUnit(unit) {
+        return unit === "rad" ? "rad" : "deg";
+    }
+
+    function convertAngleValue(value, fromUnit, toUnit) {
+        const v = Number(value) || 0;
+        const from = normalizeAngleUnit(fromUnit);
+        const to = normalizeAngleUnit(toUnit);
+        if (from === to) return v;
+        if (from === "deg" && to === "rad") return v * Math.PI / 180;
+        return v * 180 / Math.PI;
+    }
+
+    const TIP_MAP = {
+        generic: {
+            seed: "启用随机种子，固定结果可复现。",
+            "seed值": "随机种子数值。",
+            rotate: "启用整体旋转/角度偏移。",
+            "rotate角度": "整体旋转角度。",
+            r: "半径，决定图形大小。",
+            count: "采样点数量，越大越密。",
+            w: "宽度/尺度，影响图形横向尺寸。",
+            h: "高度/尺度，影响图形纵向尺寸。",
+            step: "步进间距，越小越密。",
+            thickness: "环宽/厚度，决定内外差。",
+            scale: "缩放倍数，>1 放大，<1 缩小。",
+            height: "高度范围。",
+            min: "最小偏移长度。",
+            max: "最大偏移长度。",
+            xOffset: "X 方向偏移。",
+            zOffset: "Z 方向偏移。",
+            offX: "X 方向偏移分量。",
+            offY: "Y 方向偏移分量。",
+            offZ: "Z 方向偏移分量。",
+            countW: "宽方向采样点数量。",
+            countH: "高方向采样点数量。",
+            sideCount: "边数。",
+            edgeCount: "每条边采样点数量。",
+            n: "边数。",
+            mode: "采样/噪声模式。",
+            "输出形式": "Kotlin 输出方式。"
+        },
+        kinds: {
+            fourier_term: {
+                r: "该项振幅，决定这条谐波的半径大小。",
+                w: "该项频率（倍频），决定波形振荡速度。",
+                startAngle: "相位起始角，整体相位偏移。"
+            },
+            axis: {
+                axis: "对称轴方向，影响旋转/指向操作。"
+            },
+            scale: {
+                factor: "整体缩放倍数，>1 放大，<1 缩小。"
+            },
+            rotate_as_axis: {
+                "角度": "绕当前轴旋转的角度。",
+                "自定义轴": "启用自定义轴向量。",
+                ax: "自定义轴 X 分量。",
+                ay: "自定义轴 Y 分量。",
+                az: "自定义轴 Z 分量。"
+            },
+            rotate_to: {
+                "模式": "选择目标向量或起止点计算朝向。",
+                origin: "起点坐标，用于计算朝向向量。",
+                end: "终点坐标，与起点形成朝向。",
+                to: "目标朝向向量（从原点指向）。"
+            },
+            add_point: {
+                point: "点的位置坐标。"
+            },
+            add_line: {
+                start: "线段起点坐标。",
+                end: "线段终点坐标。",
+                count: "线段采样点数量。"
+            },
+            add_circle: {
+                r: "圆半径。",
+                count: "圆周采样点数量。"
+            },
+            add_discrete_circle_xz: {
+                r: "圆环半径。",
+                count: "圆环采样点数量。",
+                discrete: "离散间距，越大越稀疏。",
+                seed: "启用随机种子（固定结果）。",
+                "seed值": "随机种子数值。"
+            },
+            add_half_circle: {
+                r: "半圆半径。",
+                count: "半圆采样点数量。",
+                rotate: "是否整体旋转半圆。",
+                "角度": "半圆整体旋转角度。"
+            },
+            add_radian_center: {
+                r: "弧线半径。",
+                count: "弧线采样点数量。",
+                radian: "弧线总角度（中心对称）。",
+                rotate: "是否整体旋转弧线。",
+                "rotate角度": "弧线整体旋转角度。"
+            },
+            add_radian: {
+                r: "弧线半径。",
+                count: "弧线采样点数量。",
+                start: "弧线起始角。",
+                end: "弧线结束角。",
+                rotate: "是否整体旋转弧线。",
+                "rotate角度": "弧线整体旋转角度。"
+            },
+            add_ball: {
+                r: "球半径。",
+                count: "采样点数量（越大越密）。",
+                discrete: "离散间距（影响稀疏度）。"
+            },
+            add_ring: {
+                r: "外环半径。",
+                thickness: "环宽/厚度，决定内外差。",
+                count: "环面采样点数量。",
+                discrete: "离散间距。"
+            },
+            add_rect: {
+                w: "矩形宽度。",
+                h: "矩形高度。",
+                countW: "宽方向采样点数量。",
+                countH: "高方向采样点数量。"
+            },
+            add_arc: {
+                r: "弧线半径。",
+                center: "圆心位置。",
+                start: "起始角。",
+                end: "结束角。",
+                count: "弧线采样点数量。"
+            },
+            add_lightning_points: {
+                useStart: "是否自定义起点。",
+                start: "起点坐标（未启用则从原点开始）。",
+                end: "终点向量/位置。",
+                count: "折线段数量。",
+                preLineCount: "每段插值点数量。",
+                useOffsetRange: "启用随机偏移。",
+                offsetRange: "随机偏移幅度。"
+            },
+            add_lightning_nodes: {
+                useStart: "是否自定义起点。",
+                start: "起点坐标。",
+                end: "终点坐标。",
+                count: "节点数量。",
+                useOffsetRange: "启用随机偏移。",
+                offsetRange: "随机偏移幅度。"
+            },
+            add_lightning_nodes_attenuation: {
+                useStart: "是否自定义起点。",
+                start: "起点坐标。",
+                end: "终点坐标。",
+                counts: "节点数量。",
+                maxOffset: "最大偏移幅度。",
+                attenuation: "衰减系数（越小收束更快）。",
+                seed: "启用随机种子。",
+                "seed值": "随机种子数值。"
+            },
+            add_bezier: {
+                p1: "起点坐标。",
+                p2: "控制点坐标（影响曲线弯曲）。",
+                p3: "终点坐标。",
+                count: "采样点数量。"
+            },
+            add_bezier_4: {
+                p1: "起点坐标。",
+                p2: "控制点 1。",
+                p3: "控制点 2。",
+                p4: "终点坐标。",
+                count: "采样点数量。"
+            },
+            add_bezier_curve: {
+                "target.x": "终点向量 X（相对起点）。",
+                "target.y": "终点向量 Y（相对起点）。",
+                "startHandle.x": "起点控制柄 X。",
+                "startHandle.y": "起点控制柄 Y。",
+                "endHandle.x": "终点控制柄 X。",
+                "endHandle.y": "终点控制柄 Y。",
+                count: "采样点数量。"
+            },
+            add_broken_line: {
+                p1: "起点坐标。",
+                p2: "折点坐标。",
+                p3: "终点坐标。",
+                count1: "第一段采样点数量。",
+                count2: "第二段采样点数量。"
+            },
+            add_polygon: {
+                r: "外接圆半径。",
+                sideCount: "边数。",
+                count: "每条边采样点数量。"
+            },
+            add_polygon_in_circle: {
+                n: "边数。",
+                edgeCount: "每条边采样点数量。",
+                r: "内接圆半径。"
+            },
+            add_round_shape: {
+                r: "圆面半径。",
+                step: "圆环步进间距，越小越密。",
+                mode: "采样模式：固定 / 范围。",
+                minCircleCount: "最小圆环点数量。",
+                maxCircleCount: "最大圆环点数量。",
+                preCircleCount: "固定模式下每圈点数量。"
+            },
+            apply_rotate: {
+                angle: "整体旋转角度。",
+                axis: "旋转轴方向。",
+                rotateAsAxis: "启用自定义旋转轴。",
+                rotateAxis: "自定义旋转轴向量。"
+            },
+            apply_move: {
+                offset: "整体平移偏移量。"
+            },
+            apply_rel_move: {
+                offset: "相对平移偏移量。"
+            },
+            apply_per_point_offset: {
+                offset: "对每个点追加偏移量。"
+            },
+            apply_scale: {
+                scale: "整体缩放倍数。"
+            },
+            apply_spiral_offset: {
+                count: "螺旋采样段数量。",
+                r: "螺旋半径。",
+                height: "螺旋高度。",
+                rotate: "是否整体旋转螺旋。",
+                "rotate角度": "螺旋整体旋转角度。"
+            },
+            apply_random_offset: {
+                min: "随机偏移最小长度。",
+                max: "随机偏移最大长度。",
+                seed: "启用随机种子。",
+                "seed值": "随机种子数值。"
+            },
+            apply_noise_offset: {
+                noiseX: "X 轴噪声强度。",
+                noiseY: "Y 轴噪声强度。",
+                noiseZ: "Z 轴噪声强度。",
+                mode: "噪声分布模式。",
+                seed: "启用随机种子。",
+                "seed值": "随机种子数值。",
+                lenMin: "启用最小偏移限制。",
+                "min值": "最小偏移长度。",
+                lenMax: "启用最大偏移限制。",
+                "max值": "最大偏移长度。"
+            },
+            points_on_each_offset: {
+                offX: "X 方向追加偏移分量。",
+                offY: "Y 方向追加偏移分量。",
+                offZ: "Z 方向追加偏移分量。",
+                "输出形式": "Kotlin 输出方式。"
+            },
+            add_with: {
+                "旋转半径 r": "复制布局半径。",
+                "置换个数 c": "复制数量（围成多边形）。",
+                rotateToCenter: "是否朝向中心。",
+                "反向": "朝向反转。",
+                "旋转偏移": "启用中心偏移。",
+                "偏移": "中心偏移量。",
+                "折叠子卡片": "折叠/展开子 Builder。"
+            },
+            add_fourier_series: {
+                "折叠": "折叠/展开 term 列表。",
+                angle: "整体相位旋转。",
+                xOffset: "整体 X 方向偏移。",
+                zOffset: "整体 Z 方向偏移。",
+                count: "采样点数量。"
+            }
+        }
+    };
+
+    let activeTipKind = null;
+    function setTipKind(kind) {
+        activeTipKind = kind || null;
+    }
+
+    function getTipForLabel(label) {
+        const key = String(label || "").trim();
+        if (!key) return "";
+        if (activeTipKind && TIP_MAP.kinds[activeTipKind] && TIP_MAP.kinds[activeTipKind][key]) {
+            return TIP_MAP.kinds[activeTipKind][key];
+        }
+        if (TIP_MAP.generic && TIP_MAP.generic[key]) return TIP_MAP.generic[key];
+        return "";
+    }
+
+    function applyRowTips(editorEl, label) {
+        const tip = getTipForLabel(label);
+        if (!tip || !editorEl) return;
+        const applyTip = (el) => {
+            if (!el || el.dataset?.tipSkip) return;
+            if (el.getAttribute && el.getAttribute("data-tip")) return;
+            el.setAttribute && el.setAttribute("data-tip", tip);
+        };
+        if (editorEl.matches && editorEl.matches("input.input, select.input")) {
+            applyTip(editorEl);
+        }
+        if (editorEl.querySelectorAll) {
+            editorEl.querySelectorAll("input.input, select.input").forEach(applyTip);
+        }
+    }
+
     function row(label, editorEl) {
         const r = document.createElement("div");
         r.className = "row";
@@ -23,6 +334,7 @@
         l.textContent = label;
         r.appendChild(l);
         r.appendChild(editorEl);
+        applyRowTips(editorEl, label);
         return r;
     }
 
@@ -104,6 +416,12 @@
         box.appendChild(ix);
         box.appendChild(iy);
         box.appendChild(iz);
+        const tipBase = getTipForLabel(label) || getTipForLabel(prefix);
+        if (tipBase) {
+            ix.setAttribute("data-tip", `${tipBase}（X）`);
+            iy.setAttribute("data-tip", `${tipBase}（Y）`);
+            iz.setAttribute("data-tip", `${tipBase}（Z）`);
+        }
         const target = {
             obj: p,
             keys: {x: prefix + "x", y: prefix + "y", z: prefix + "z"},
@@ -123,7 +441,143 @@
         return box;
     }
 
-    return { row, inputNum, select, checkbox, makeVec3Editor };
+    let anglePiBound = false;
+    function bindAnglePiClose() {
+        if (anglePiBound) return;
+        anglePiBound = true;
+        document.addEventListener("click", (e) => {
+            const target = e.target;
+            if (target && target.closest && target.closest(".angle-pi")) return;
+            document.querySelectorAll(".angle-pi-panel.open").forEach((panel) => {
+                panel.classList.remove("open");
+                const btn = panel.__toggle || panel.closest(".angle-pi")?.querySelector(".angle-pi-toggle");
+                if (btn) btn.classList.remove("active");
+            });
+        });
+    }
+
+    function angleInput(obj, key, onChange, options = {}) {
+        const wrap = document.createElement("div");
+        wrap.className = "angle-control";
+
+        const main = document.createElement("div");
+        main.className = "angle-control-main";
+
+        const unitKey = options.unitKey || `${key}Unit`;
+        const unit = normalizeAngleUnit(obj[unitKey]);
+        obj[unitKey] = unit;
+
+        const input = inputNum(obj[key], v => {
+            obj[key] = v;
+            if (typeof onChange === "function") onChange();
+        });
+        input.classList.add("angle-value");
+
+        const unitSelect = select([["deg", "度"], ["rad", "弧度"]], unit, (val) => {
+            const prevUnit = normalizeAngleUnit(obj[unitKey]);
+            const nextUnit = normalizeAngleUnit(val);
+            if (prevUnit === nextUnit) return;
+            obj[unitKey] = nextUnit;
+            const converted = convertAngleValue(input.value, prevUnit, nextUnit);
+            input.value = formatAngleValue(converted);
+            input.dispatchEvent(new Event("input", { bubbles: true }));
+        });
+        unitSelect.classList.add("angle-unit");
+        unitSelect.setAttribute("data-tip", "单位切换：度 / 弧度");
+
+        const piWrap = document.createElement("div");
+        piWrap.className = "angle-pi";
+
+        const piToggle = document.createElement("button");
+        piToggle.type = "button";
+        piToggle.className = "btn small angle-pi-toggle";
+        piToggle.textContent = "nπ";
+        piToggle.title = "n×PI 转换";
+
+        const piPanel = document.createElement("div");
+        piPanel.className = "angle-pi-panel";
+
+        const piField = document.createElement("div");
+        piField.className = "angle-pi-field";
+        const piLabel = document.createElement("div");
+        piLabel.className = "angle-pi-label";
+        piLabel.textContent = "n×π";
+        const piInput = document.createElement("input");
+        piInput.className = "input angle-pi-input";
+        piInput.type = "number";
+        const piStep = (typeof getParamStep === "function") ? getParamStep() : null;
+        piInput.step = Number.isFinite(piStep) ? String(piStep) : "0.1";
+        piInput.value = "1";
+        piInput.dataset.tipSkip = "1";
+        piField.appendChild(piLabel);
+        piField.appendChild(piInput);
+
+        const piInfo = document.createElement("div");
+        piInfo.className = "angle-pi-info";
+        const degLine = document.createElement("div");
+        const radLine = document.createElement("div");
+        piInfo.appendChild(degLine);
+        piInfo.appendChild(radLine);
+
+        const updatePiInfo = () => {
+            const n = Number(piInput.value);
+            const safe = Number.isFinite(n) ? n : 0;
+            const deg = safe * 180;
+            const rad = safe * Math.PI;
+            degLine.textContent = `角度: ${formatAngleValue(deg)}°`;
+            radLine.textContent = `弧度: ${formatAngleValue(rad)}`;
+        };
+        updatePiInfo();
+        piInput.addEventListener("input", updatePiInfo);
+
+        const applyBtn = document.createElement("button");
+        applyBtn.type = "button";
+        applyBtn.className = "btn small primary angle-pi-apply";
+        applyBtn.textContent = "应用";
+        applyBtn.addEventListener("click", () => {
+            historyCapture && historyCapture("angle_pi_apply");
+            const n = Number(piInput.value);
+            const safe = Number.isFinite(n) ? n : 0;
+            const rad = safe * Math.PI;
+            const deg = safe * 180;
+            const curUnit = normalizeAngleUnit(unitSelect.value);
+            const nextVal = curUnit === "rad" ? rad : deg;
+            input.value = formatAngleValue(nextVal);
+            input.dispatchEvent(new Event("input", { bubbles: true }));
+        });
+
+        piPanel.appendChild(piField);
+        piPanel.appendChild(piInfo);
+        piPanel.appendChild(applyBtn);
+        piPanel.__toggle = piToggle;
+
+        piToggle.addEventListener("click", (e) => {
+            e.stopPropagation();
+            document.querySelectorAll(".angle-pi-panel.open").forEach((panel) => {
+                if (panel !== piPanel) {
+                    panel.classList.remove("open");
+                    const btn = panel.__toggle || panel.closest(".angle-pi")?.querySelector(".angle-pi-toggle");
+                    if (btn) btn.classList.remove("active");
+                }
+            });
+            const next = !piPanel.classList.contains("open");
+            piPanel.classList.toggle("open", next);
+            piToggle.classList.toggle("active", next);
+        });
+        piPanel.addEventListener("click", (e) => e.stopPropagation());
+        piWrap.appendChild(piToggle);
+
+        main.appendChild(input);
+        main.appendChild(unitSelect);
+        main.appendChild(piWrap);
+        wrap.appendChild(main);
+        wrap.appendChild(piPanel);
+
+        bindAnglePiClose();
+        return wrap;
+    }
+
+    return { row, inputNum, select, checkbox, makeVec3Editor, angleInput, setTipKind };
 }
 
 export function initCardSystem(ctx = {}) {
@@ -135,6 +589,8 @@ export function initCardSystem(ctx = {}) {
         select,
         checkbox,
         makeVec3Editor,
+        angleInput,
+        setTipKind,
         historyCapture,
         rebuildPreviewAndKotlin,
         openModal,
@@ -177,6 +633,97 @@ export function initCardSystem(ctx = {}) {
     const getLinePickMode = ctx.getLinePickMode || (() => false);
     const getPointPickMode = ctx.getPointPickMode || (() => false);
     const makeUid = ctx.uid || (() => (Math.random().toString(16).slice(2) + Date.now().toString(16)).slice(0, 16));
+
+    const INPUT_TIP_DELAY = 650;
+    const inputTipState = { timer: 0, el: null, target: null };
+    let inputTipBound = false;
+
+    function ensureInputTipEl() {
+        if (inputTipState.el) return inputTipState.el;
+        const el = document.createElement("div");
+        el.className = "pb-tooltip";
+        el.setAttribute("role", "tooltip");
+        el.style.display = "none";
+        document.body.appendChild(el);
+        inputTipState.el = el;
+        return el;
+    }
+
+    function hideInputTip() {
+        if (inputTipState.timer) {
+            clearTimeout(inputTipState.timer);
+            inputTipState.timer = 0;
+        }
+        inputTipState.target = null;
+        const el = inputTipState.el;
+        if (!el) return;
+        el.classList.remove("show");
+        el.style.display = "none";
+    }
+
+    function positionInputTip(target, el) {
+        const rect = target.getBoundingClientRect();
+        const margin = 10;
+        const gap = 8;
+        const tipRect = el.getBoundingClientRect();
+
+        let x = rect.left + rect.width / 2 - tipRect.width / 2;
+        x = Math.max(margin, Math.min(x, window.innerWidth - margin - tipRect.width));
+
+        let y = rect.bottom + gap;
+        if (y + tipRect.height + margin > window.innerHeight) {
+            y = rect.top - gap - tipRect.height;
+        }
+        if (y < margin) y = margin;
+
+        el.style.left = `${Math.round(x)}px`;
+        el.style.top = `${Math.round(y)}px`;
+    }
+
+    function showInputTip(target, text) {
+        if (!text) return;
+        const el = ensureInputTipEl();
+        el.textContent = text;
+        el.style.display = "block";
+        el.style.visibility = "hidden";
+        positionInputTip(target, el);
+        el.style.visibility = "visible";
+        requestAnimationFrame(() => el.classList.add("show"));
+    }
+
+    function scheduleInputTip(target) {
+        if (!target) return;
+        const tip = String(target.getAttribute("data-tip") || "").trim();
+        if (!tip) return;
+        if (inputTipState.timer) clearTimeout(inputTipState.timer);
+        inputTipState.target = target;
+        inputTipState.timer = setTimeout(() => {
+            if (inputTipState.target !== target) return;
+            showInputTip(target, tip);
+        }, INPUT_TIP_DELAY);
+    }
+
+    function bindInputTips() {
+        if (inputTipBound) return;
+        inputTipBound = true;
+        document.addEventListener("mouseover", (e) => {
+            const target = e.target;
+            const input = target && target.closest ? target.closest(".input[data-tip]") : null;
+            if (!input) return;
+            scheduleInputTip(input);
+        });
+        document.addEventListener("mouseout", (e) => {
+            const target = e.target;
+            const input = target && target.closest ? target.closest(".input[data-tip]") : null;
+            if (!input) return;
+            if (e.relatedTarget && input.contains(e.relatedTarget)) return;
+            hideInputTip();
+        });
+        document.addEventListener("mousedown", hideInputTip);
+        window.addEventListener("scroll", hideInputTip, true);
+        window.addEventListener("resize", hideInputTip);
+        document.addEventListener("keydown", hideInputTip);
+    }
 
     const renderAll = () => {
         const fn = getRenderAll();
@@ -746,6 +1293,7 @@ export function initCardSystem(ctx = {}) {
     function renderFourierTermCard(parentNode, idx) {
         const t = parentNode.terms[idx];
         if (!t) return document.createElement("div");
+        if (typeof setTipKind === "function") setTipKind("fourier_term");
         const card = document.createElement("div");
         card.className = "card subcard";
         card.dataset.id = t.id;
@@ -826,7 +1374,7 @@ export function initCardSystem(ctx = {}) {
         }
         const desc = document.createElement("div");
         desc.className = "pill";
-        desc.textContent = "r, w, startAngle(度)";
+        desc.textContent = "r, w, startAngle";
         body.appendChild(desc);
 
         body.appendChild(row("r", inputNum(t.r, v => {
@@ -837,10 +1385,7 @@ export function initCardSystem(ctx = {}) {
             t.w = v;
             rebuildPreviewAndKotlin();
         })));
-        body.appendChild(row("startAngle", inputNum(t.startAngle, v => {
-            t.startAngle = v;
-            rebuildPreviewAndKotlin();
-        })));
+        body.appendChild(row("startAngle", angleInput(t, "startAngle", rebuildPreviewAndKotlin)));
 
         card.appendChild(head);
         card.appendChild(body);
@@ -879,6 +1424,7 @@ export function initCardSystem(ctx = {}) {
         });
 
         setupDrag(handle, card, parentNode.terms, () => idx, () => renderAll());
+        if (typeof setTipKind === "function") setTipKind(null);
         return card;
     }
 
@@ -1228,6 +1774,7 @@ export function initCardSystem(ctx = {}) {
     function renderParamsEditors(body, node, ownerLabel, options = null) {
         const p = node.params;
         const opts = options || {};
+        if (typeof setTipKind === "function") setTipKind(node.kind);
         switch (node.kind) {
             case "axis":
                 body.appendChild(row("axis", makeVec3Editor(p, "", rebuildPreviewAndKotlin, "axis")));
@@ -1241,10 +1788,7 @@ export function initCardSystem(ctx = {}) {
                 break;
 
             case "rotate_as_axis":
-                body.appendChild(row("角度(度)", inputNum(p.deg, v => {
-                    p.deg = v;
-                    rebuildPreviewAndKotlin();
-                })));
+                body.appendChild(row("角度", angleInput(p, "deg", rebuildPreviewAndKotlin)));
                 body.appendChild(row("自定义轴", checkbox(p.useCustomAxis, v => {
                     p.useCustomAxis = v;
                     renderAll();
@@ -1329,10 +1873,7 @@ export function initCardSystem(ctx = {}) {
                     p.useRotate = v;
                     renderAll();
                 })));
-                if (p.useRotate) body.appendChild(row("角度(度)", inputNum(p.rotateDeg, v => {
-                    p.rotateDeg = v;
-                    rebuildPreviewAndKotlin();
-                })));
+                if (p.useRotate) body.appendChild(row("角度", angleInput(p, "rotateDeg", rebuildPreviewAndKotlin)));
                 break;
 
             case "add_radian_center":
@@ -1344,18 +1885,12 @@ export function initCardSystem(ctx = {}) {
                     p.count = v;
                     rebuildPreviewAndKotlin();
                 })));
-                body.appendChild(row("radian(度)", inputNum(p.radianDeg, v => {
-                    p.radianDeg = v;
-                    rebuildPreviewAndKotlin();
-                })));
+                body.appendChild(row("radian", angleInput(p, "radianDeg", rebuildPreviewAndKotlin)));
                 body.appendChild(row("rotate", checkbox(p.useRotate, v => {
                     p.useRotate = v;
                     renderAll();
                 })));
-                if (p.useRotate) body.appendChild(row("rotate角度(度)", inputNum(p.rotateDeg, v => {
-                    p.rotateDeg = v;
-                    rebuildPreviewAndKotlin();
-                })));
+                if (p.useRotate) body.appendChild(row("rotate角度", angleInput(p, "rotateDeg", rebuildPreviewAndKotlin)));
                 break;
 
             case "add_radian":
@@ -1367,22 +1902,13 @@ export function initCardSystem(ctx = {}) {
                     p.count = v;
                     rebuildPreviewAndKotlin();
                 })));
-                body.appendChild(row("start(度)", inputNum(p.startDeg, v => {
-                    p.startDeg = v;
-                    rebuildPreviewAndKotlin();
-                })));
-                body.appendChild(row("end(度)", inputNum(p.endDeg, v => {
-                    p.endDeg = v;
-                    rebuildPreviewAndKotlin();
-                })));
+                body.appendChild(row("start", angleInput(p, "startDeg", rebuildPreviewAndKotlin)));
+                body.appendChild(row("end", angleInput(p, "endDeg", rebuildPreviewAndKotlin)));
                 body.appendChild(row("rotate", checkbox(p.useRotate, v => {
                     p.useRotate = v;
                     renderAll();
                 })));
-                if (p.useRotate) body.appendChild(row("rotate角度(度)", inputNum(p.rotateDeg, v => {
-                    p.rotateDeg = v;
-                    rebuildPreviewAndKotlin();
-                })));
+                if (p.useRotate) body.appendChild(row("rotate角度", angleInput(p, "rotateDeg", rebuildPreviewAndKotlin)));
                 break;
 
             case "add_ball":
@@ -1583,14 +2109,8 @@ export function initCardSystem(ctx = {}) {
                     rebuildPreviewAndKotlin();
                 })));
                 body.appendChild(row("center", makeVec3Editor(p, "c", rebuildPreviewAndKotlin, "center")));
-                body.appendChild(row("startDeg", inputNum(p.startDeg, v => {
-                    p.startDeg = v;
-                    rebuildPreviewAndKotlin();
-                })));
-                body.appendChild(row("endDeg", inputNum(p.endDeg, v => {
-                    p.endDeg = v;
-                    rebuildPreviewAndKotlin();
-                })));
+                body.appendChild(row("start", angleInput(p, "startDeg", rebuildPreviewAndKotlin)));
+                body.appendChild(row("end", angleInput(p, "endDeg", rebuildPreviewAndKotlin)));
                 body.appendChild(row("count", inputNum(p.count, v => {
                     p.count = v;
                     rebuildPreviewAndKotlin();
@@ -1685,10 +2205,7 @@ export function initCardSystem(ctx = {}) {
                 break;
 
             case "apply_rotate":
-                body.appendChild(row("angleDeg", inputNum(p.angleDeg, v => {
-                    p.angleDeg = v;
-                    rebuildPreviewAndKotlin();
-                })));
+                body.appendChild(row("angle", angleInput(p, "angleDeg", rebuildPreviewAndKotlin)));
                 body.appendChild(row("axis", makeVec3Editor(p, "axis", rebuildPreviewAndKotlin, "axis")));
                 body.appendChild(row("rotateAsAxis", checkbox(p.rotateAsAxis, v => {
                     p.rotateAsAxis = v;
@@ -1733,10 +2250,7 @@ export function initCardSystem(ctx = {}) {
                     p.useRotate = v;
                     renderAll();
                 })));
-                if (p.useRotate) body.appendChild(row("rotate角度(度)", inputNum(p.rotateDeg, v => {
-                    p.rotateDeg = v;
-                    rebuildPreviewAndKotlin();
-                })));
+                if (p.useRotate) body.appendChild(row("rotate角度", angleInput(p, "rotateDeg", rebuildPreviewAndKotlin)));
                 break;
 
             case "apply_random_offset":
@@ -2165,10 +2679,7 @@ export function initCardSystem(ctx = {}) {
                         renderAll();
                     })));
                 }
-                body.appendChild(row("angle(度)", inputNum(p.angle, v => {
-                    p.angle = v;
-                    rebuildPreviewAndKotlin();
-                })));
+                body.appendChild(row("angle", angleInput(p, "angle", rebuildPreviewAndKotlin)));
                 body.appendChild(row("xOffset", inputNum(p.xOffset, v => {
                     p.xOffset = v;
                     rebuildPreviewAndKotlin();
@@ -2195,7 +2706,7 @@ export function initCardSystem(ctx = {}) {
                     btn.textContent = "添加 term";
                     btn.addEventListener("click", () => {
                         historyCapture("add_fourier_term");
-                        node.terms.push({id: makeUid(), r: 1, w: 1, startAngle: 0, collapsed: false, bodyHeight: null});
+                        node.terms.push({id: makeUid(), r: 1, w: 1, startAngle: 0, startAngleUnit: "deg", collapsed: false, bodyHeight: null});
                         renderAll();
                     });
                     body.appendChild(btn);
@@ -2204,8 +2715,10 @@ export function initCardSystem(ctx = {}) {
             default:
                 break;
         }
+        if (typeof setTipKind === "function") setTipKind(null);
     }
 
+    bindInputTips();
     return {
         renderCards,
         renderParamsEditors,

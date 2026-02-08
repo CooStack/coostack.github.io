@@ -120,16 +120,16 @@ export function createKindDefs(ctx) {
         rotate_as_axis: {
             title: "rotateAsAxis(绕轴旋转)",
             desc: "绕当前轴旋转已有点（不新增点）",
-            defaultParams: {deg: 90, useCustomAxis: false, ax: 0, ay: 1, az: 0},
+            defaultParams: {deg: 90, degUnit: "deg", useCustomAxis: false, ax: 0, ay: 1, az: 0},
             apply(ctx, node) {
-                const rad = U.degToRad(num(node.params.deg));
+                const rad = U.angleToRad(num(node.params.deg), node.params.degUnit);
                 const axis = node.params.useCustomAxis
                     ? U.v(num(node.params.ax), num(node.params.ay), num(node.params.az))
                     : ctx.axis;
                 ctx.points = ctx.points.map(p => U.rotateAroundAxis(p, axis, rad));
             },
             kotlin(node) {
-                const radExpr = U.degToKotlinRadExpr(num(node.params.deg));
+                const radExpr = U.angleToKotlinRadExpr(num(node.params.deg), node.params.degUnit);
                 if (node.params.useCustomAxis) {
                     return `.rotateAsAxis(${radExpr}, ${relExpr(node.params.ax, node.params.ay, node.params.az)})`;
                 }
@@ -260,16 +260,16 @@ export function createKindDefs(ctx) {
         add_half_circle: {
             title: "addHalfCircle(半圆XZ)",
             desc: "添加半圆弧点（addHalfCircle）",
-            defaultParams: {r: 2, count: 80, useRotate: false, rotateDeg: 0},
+            defaultParams: {r: 2, count: 80, useRotate: false, rotateDeg: 0, rotateDegUnit: "deg"},
             apply(ctx, node) {
-                const rot = node.params.useRotate ? U.degToRad(num(node.params.rotateDeg)) : 0;
+                const rot = node.params.useRotate ? U.angleToRad(num(node.params.rotateDeg), node.params.rotateDegUnit) : 0;
                 ctx.points.push(...U.getHalfCircleXZ(num(node.params.r), int(node.params.count), rot));
             },
             kotlin(node) {
                 const r = U.fmt(num(node.params.r));
                 const c = int(node.params.count);
                 if (!node.params.useRotate) return `.addHalfCircle(${r}, ${c})`;
-                const radExpr = U.degToKotlinRadExpr(num(node.params.rotateDeg));
+                const radExpr = U.angleToKotlinRadExpr(num(node.params.rotateDeg), node.params.rotateDegUnit);
                 return `.addHalfCircle(${r}, ${c}, ${radExpr})`;
             }
         },
@@ -277,18 +277,18 @@ export function createKindDefs(ctx) {
         add_radian_center: {
             title: "addRadianCenter(弧线中心XZ)",
             desc: "添加居中弧线点（addRadianCenter）",
-            defaultParams: {r: 2, count: 80, radianDeg: 120, useRotate: false, rotateDeg: 0},
+            defaultParams: {r: 2, count: 80, radianDeg: 120, radianDegUnit: "deg", useRotate: false, rotateDeg: 0, rotateDegUnit: "deg"},
             apply(ctx, node) {
-                const radian = U.degToRad(num(node.params.radianDeg));
-                const rot = node.params.useRotate ? U.degToRad(num(node.params.rotateDeg)) : 0;
+                const radian = U.angleToRad(num(node.params.radianDeg), node.params.radianDegUnit);
+                const rot = node.params.useRotate ? U.angleToRad(num(node.params.rotateDeg), node.params.rotateDegUnit) : 0;
                 ctx.points.push(...U.getRadianXZCenter(num(node.params.r), int(node.params.count), radian, rot));
             },
             kotlin(node) {
                 const r = U.fmt(num(node.params.r));
                 const c = int(node.params.count);
-                const radianExpr = U.degToKotlinRadExpr(num(node.params.radianDeg));
+                const radianExpr = U.angleToKotlinRadExpr(num(node.params.radianDeg), node.params.radianDegUnit);
                 if (!node.params.useRotate) return `.addRadianCenter(${r}, ${c}, ${radianExpr})`;
-                const rotExpr = U.degToKotlinRadExpr(num(node.params.rotateDeg));
+                const rotExpr = U.angleToKotlinRadExpr(num(node.params.rotateDeg), node.params.rotateDegUnit);
                 return `.addRadianCenter(${r}, ${c}, ${radianExpr}, ${rotExpr})`;
             }
         },
@@ -296,20 +296,20 @@ export function createKindDefs(ctx) {
         add_radian: {
             title: "addRadian(弧线XZ)",
             desc: "添加起止角弧线点（addRadian）",
-            defaultParams: {r: 2, count: 80, startDeg: 0, endDeg: 120, useRotate: false, rotateDeg: 0},
+            defaultParams: {r: 2, count: 80, startDeg: 0, startDegUnit: "deg", endDeg: 120, endDegUnit: "deg", useRotate: false, rotateDeg: 0, rotateDegUnit: "deg"},
             apply(ctx, node) {
-                const sr = U.degToRad(num(node.params.startDeg));
-                const er = U.degToRad(num(node.params.endDeg));
-                const rot = node.params.useRotate ? U.degToRad(num(node.params.rotateDeg)) : 0;
+                const sr = U.angleToRad(num(node.params.startDeg), node.params.startDegUnit);
+                const er = U.angleToRad(num(node.params.endDeg), node.params.endDegUnit);
+                const rot = node.params.useRotate ? U.angleToRad(num(node.params.rotateDeg), node.params.rotateDegUnit) : 0;
                 ctx.points.push(...U.getRadianXZ(num(node.params.r), int(node.params.count), sr, er, rot));
             },
             kotlin(node) {
                 const r = U.fmt(num(node.params.r));
                 const c = int(node.params.count);
-                const srExpr = U.degToKotlinRadExpr(num(node.params.startDeg));
-                const erExpr = U.degToKotlinRadExpr(num(node.params.endDeg));
+                const srExpr = U.angleToKotlinRadExpr(num(node.params.startDeg), node.params.startDegUnit);
+                const erExpr = U.angleToKotlinRadExpr(num(node.params.endDeg), node.params.endDegUnit);
                 if (!node.params.useRotate) return `.addRadian(${r}, ${c}, ${srExpr}, ${erExpr})`;
-                const rotExpr = U.degToKotlinRadExpr(num(node.params.rotateDeg));
+                const rotExpr = U.angleToKotlinRadExpr(num(node.params.rotateDeg), node.params.rotateDegUnit);
                 return `.addRadian(${r}, ${c}, ${srExpr}, ${erExpr}, ${rotExpr})`;
             }
         },
@@ -753,7 +753,12 @@ export function createKindDefs(ctx) {
             desc: "添加傅里叶级数曲线点（addFourierSeries）",
             defaultParams: {count: 360, scale: 1.0, folded: false},
             apply(ctx, node) {
-                const terms = (node.terms || []).map(t => ({r: num(t.r), w: num(t.w), startAngle: num(t.startAngle)}));
+                const terms = (node.terms || []).map(t => ({
+                    r: num(t.r),
+                    w: num(t.w),
+                    startAngle: num(t.startAngle),
+                    startAngleUnit: t.startAngleUnit
+                }));
                 const pts = U.buildFourierSeries(terms, int(node.params.count), num(node.params.scale));
                 ctx.points.push(...pts);
             },
@@ -765,7 +770,8 @@ export function createKindDefs(ctx) {
                 lines.push(`${indent}    .scale(${U.fmt(num(node.params.scale))})`);
                 for (const t of (node.terms || [])) {
                     // Kotlin: addFourier(r, w, startAngle)
-                    lines.push(`${indent}    .addFourier(${U.fmt(num(t.r))}, ${U.fmt(num(t.w))}, ${U.fmt(num(t.startAngle))})`);
+                    const startAngleDeg = U.angleToDeg(num(t.startAngle), t.startAngleUnit);
+                    lines.push(`${indent}    .addFourier(${U.fmt(num(t.r))}, ${U.fmt(num(t.w))}, ${U.fmt(startAngleDeg)})`);
                 }
                 lines.push(`${indent}  )`);
                 return lines;

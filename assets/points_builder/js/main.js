@@ -875,7 +875,7 @@ import {
         });
     }
 
-    const { row, inputNum, select, checkbox, makeVec3Editor } = createCardInputs({
+    const { row, inputNum, select, checkbox, makeVec3Editor, angleInput, setTipKind } = createCardInputs({
         num,
         armHistoryOnFocus,
         historyCapture,
@@ -2920,12 +2920,14 @@ function onCanvasClick(ev) {
 
       const cardSystem = initCardSystem({
           KIND,
-          elCardsRoot,
-          row,
-          inputNum,
+        elCardsRoot,
+        row,
+        inputNum,
         select,
         checkbox,
         makeVec3Editor,
+        angleInput,
+        setTipKind,
         historyCapture,
         rebuildPreviewAndKotlin,
         openModal,

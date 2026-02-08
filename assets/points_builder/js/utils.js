@@ -54,6 +54,23 @@
         },
 
         degToRad(deg) { return (Number(deg) || 0) * Math.PI / 180; },
+        radToDeg(rad) { return (Number(rad) || 0) * 180 / Math.PI; },
+
+        normalizeAngleUnit(unit) {
+            return unit === "rad" ? "rad" : "deg";
+        },
+
+        angleToRad(value, unit) {
+            const u = Utils.normalizeAngleUnit(unit);
+            if (u === "rad") return Number(value) || 0;
+            return Utils.degToRad(value);
+        },
+
+        angleToDeg(value, unit) {
+            const u = Utils.normalizeAngleUnit(unit);
+            if (u === "deg") return Number(value) || 0;
+            return Utils.radToDeg(value);
+        },
 
         // Kotlin：角度(度) -> 系数*PI（系数数值先算好）
         degToKotlinRadExpr(deg) {
@@ -61,6 +78,17 @@
             const coef = d / 180;
             if (Math.abs(coef) < 1e-12) return "0.0";
             return `${Utils.fmt(coef)}*PI`;
+        },
+
+        angleToKotlinRadExpr(value, unit) {
+            const u = Utils.normalizeAngleUnit(unit);
+            if (u === "rad") {
+                const v = Number(value) || 0;
+                const coef = v / Math.PI;
+                if (Math.abs(coef) < 1e-12) return "0.0";
+                return `${Utils.fmt(coef)}*PI`;
+            }
+            return Utils.degToKotlinRadExpr(value);
         },
 
         // ---------- 旋转 ----------
@@ -516,8 +544,8 @@
                 for (const term of terms) {
                     const w = Number(term.w) || 0;
                     const r = Number(term.r) || 0;
-                    const startAngleDeg = Number(term.startAngle) || 0;
-                    const angle = Utils.degToRad(startAngleDeg) + w * t;
+                    const startAngleVal = Number(term.startAngle) || 0;
+                    const angle = Utils.angleToRad(startAngleVal, term.startAngleUnit) + w * t;
                     const px = r * Math.cos(angle) * s;
                     const pz = r * Math.sin(angle) * s;
                     x += px; z += pz;

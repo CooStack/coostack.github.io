@@ -1680,6 +1680,106 @@ select optgroup {
     flex: 0 0 110px
 }
 
+.angle-control {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    flex: 1 1 auto;
+    min-width: 0;
+}
+
+.angle-control-main {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+}
+
+.angle-value {
+    flex: 1 1 120px;
+    min-width: 0;
+}
+
+.angle-unit {
+    width: 78px;
+    height: 30px;
+    flex: 0 0 auto;
+    font-size: 12px;
+}
+
+.angle-pi {
+    display: flex;
+    align-items: center;
+}
+
+.angle-pi-toggle {
+    height: 30px;
+    padding: 0 8px;
+}
+
+.angle-pi-toggle.active {
+    border-color: color-mix(in srgb, var(--accent) 55%, transparent);
+    background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+
+.angle-pi-panel {
+    display: none;
+    align-items: center;
+    gap: 8px;
+    padding: 8px;
+    width: 100%;
+    border-radius: 12px;
+    border: 1px solid var(--line2);
+    background: linear-gradient(
+        180deg,
+        color-mix(in srgb, var(--panel) 92%, transparent),
+        color-mix(in srgb, var(--panel2) 90%, transparent)
+    );
+    box-shadow: var(--shadow2);
+}
+
+.angle-pi-panel.open {
+    display: flex;
+    flex-wrap: wrap;
+}
+
+.angle-pi-field {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.angle-pi-label {
+    font-size: 11px;
+    color: var(--muted);
+    padding: 4px 8px;
+    border-radius: 999px;
+    border: 1px solid var(--line2);
+    background: rgba(0, 0, 0, .18);
+}
+
+.angle-pi-input {
+    width: 90px;
+    height: 28px;
+    font-size: 12px;
+}
+
+.angle-pi-info {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    font-size: 11px;
+    color: var(--muted);
+    min-width: 120px;
+}
+
+.angle-pi-apply {
+    height: 26px;
+    padding: 0 10px;
+    border-radius: 9px;
+    font-size: 12px;
+}
+
 .pill {
     display: inline-flex;
     align-items: center;
@@ -1690,6 +1790,34 @@ select optgroup {
     background: rgba(0, 0, 0, .18);
     color: var(--muted);
     font-size: 12px;
+}
+
+.pb-tooltip {
+    position: fixed;
+    z-index: 100200;
+    max-width: 320px;
+    padding: 8px 10px;
+    border-radius: 12px;
+    border: 1px solid var(--line2);
+    background: linear-gradient(
+        180deg,
+        color-mix(in srgb, var(--panel) 92%, transparent),
+        color-mix(in srgb, var(--panel2) 90%, transparent)
+    );
+    color: var(--text);
+    font-size: 12px;
+    line-height: 1.45;
+    box-shadow: var(--shadow);
+    opacity: 0;
+    transform: translateY(6px) scale(0.98);
+    pointer-events: none;
+    white-space: pre-line;
+    transition: opacity 0.12s ease, transform 0.12s ease;
+}
+
+.pb-tooltip.show {
+    opacity: 1;
+    transform: translateY(0) scale(1);
 }
 
 .subblock {
