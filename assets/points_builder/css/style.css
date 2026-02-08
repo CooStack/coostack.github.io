@@ -21,6 +21,7 @@
     --point-color: #f2f6ff;
     --point-focus: #ffcc33;
     --point-sync: #5dd6ff;
+    --point-offset: #ff6ad5;
     --input-text-focus: rgba(255, 255, 255, .96);
     --code-kw: #ffbd7a;
     --code-str: #9be8c2;
@@ -48,6 +49,7 @@ body[data-theme^="light"] {
     --input-text-focus: rgba(24, 34, 48, .92);
     --point-focus: #b85a6e;
     --point-sync: #0ea5e9;
+    --point-offset: #b4237a;
 }
 
 body[data-theme="dark-1"] {
@@ -1209,7 +1211,7 @@ body.resizing-panels .panel.right {
     border-bottom: 1px solid var(--line);
     background: rgba(0, 0, 0, .16);
     min-width: 0;
-    /* ✅ 嵌套 withBuilder 宽度变窄时：允许换行，避免右侧按钮拥挤 */
+/* ✅ 嵌套 addBuilder 宽度变窄时：允许换行，避免右侧按钮拥挤 */
     flex-wrap: wrap;
 }
 
@@ -2180,7 +2182,7 @@ body.resizing-subblock-y * {
     flex: 0 0 auto !important;   /* 不增长不压缩 */
 }
 
-/* 3) withBuilder / Fourier 内部的子卡片区域也启用滚动（避免内部也挤压） */
+/* 3) addBuilder / Fourier 内部的子卡片区域也启用滚动（避免内部也挤压） */
 .subblock{
     min-height: 0 !important;
 }

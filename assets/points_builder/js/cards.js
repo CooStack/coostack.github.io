@@ -285,6 +285,9 @@
                 "偏移": "中心偏移量。",
                 "折叠子卡片": "折叠/展开子 Builder。"
             },
+            add_builder: {
+                offset: "子 Builder 的整体偏移量。"
+            },
             add_fourier_series: {
                 "折叠": "折叠/展开 term 列表。",
                 angle: "整体相位旋转。",
@@ -614,7 +617,8 @@ export function initCardSystem(ctx = {}) {
         fileBuilderJson,
         stopLinePick,
         startLinePick,
-        stopPointPick
+        stopPointPick,
+        startOffsetMode
     } = ctx;
 
     const getState = ctx.getState || (() => ctx.state);
@@ -1500,7 +1504,7 @@ export function initCardSystem(ctx = {}) {
         collapseBtn.title = node.collapsed ? "展开" : "收起";
         actions.appendChild(collapseBtn);
 
-        // ✅ 快捷添加：在当前卡片下方插入（若选中 withBuilder 卡片则插入到子Builder）
+        // ✅ 快捷添加：在当前卡片下方插入（若选中 addBuilder 卡片则插入到子Builder）
         const addBtn = iconBtn("＋", () => {
             if (isBuilderContainerKind(node.kind)) {
                 openModal(node.children, (node.children || []).length, "子Builder", node.id);
@@ -1677,11 +1681,23 @@ export function initCardSystem(ctx = {}) {
         card.tabIndex = 0; // 让卡片标题区也可获得焦点（点击空白处也算聚焦）
         card.addEventListener("pointerdown", (e) => {
             if (e.button !== 0) return;
-            // ✅ 避免 withBuilder 父卡片接管子卡片：只响应“事件发生在当前卡片自身区域”
+            // ✅ 避免 addBuilder 父卡片接管子卡片：只响应“事件发生在当前卡片自身区域”
             const inner = e.target && e.target.closest ? e.target.closest(".card") : null;
             if (inner && inner !== card) return;
             if (isSyncSelectableEvent(e)) toggleSyncTarget(node);
             setFocusedNode(node.id);
+        });
+        card.addEventListener("dblclick", (e) => {
+            if (getIsRenderingCards()) return;
+            if (typeof startOffsetMode !== "function") return;
+            const inner = e.target && e.target.closest ? e.target.closest(".card") : null;
+            if (inner && inner !== card) return;
+            const tag = e.target && e.target.tagName ? String(e.target.tagName).toUpperCase() : "";
+            if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || tag === "BUTTON") return;
+            if (e.target && e.target.isContentEditable) return;
+            if (e.target && e.target.closest && e.target.closest(".card-actions")) return;
+            setFocusedNode(node.id);
+            startOffsetMode(node.id);
         });
         card.addEventListener("focusin", (e) => {
             // ✅ focusin 会冒泡：子卡片获得焦点时，父卡片不应抢走高亮
@@ -2392,7 +2408,7 @@ export function initCardSystem(ctx = {}) {
                     const dragHandle = document.createElement("div");
                     dragHandle.className = "handle subblock-handle";
                     dragHandle.textContent = "≡";
-                    dragHandle.title = "拖到外部生成 withBuilder";
+                    dragHandle.title = "拖到外部生成 addBuilder";
                     bindAddWithBuilderDrag(dragHandle, node);
                     const titleText = document.createElement("div");
                     titleText.className = "subblock-title-text";
@@ -2413,7 +2429,7 @@ export function initCardSystem(ctx = {}) {
                     dragOutBtn.textContent = "拖出Builder";
                     dragOutBtn.setAttribute("role", "button");
                     dragOutBtn.tabIndex = 0;
-                    dragOutBtn.title = "拖到外部生成 withBuilder";
+                    dragOutBtn.title = "拖到外部生成 addBuilder";
                     bindAddWithBuilderDrag(dragOutBtn, node);
 
                     const { collapseBtn: collapseAllBtn, expandBtn: expandAllBtn } = makeCollapseAllButtons(node.id, () => node.children, true);
@@ -2521,7 +2537,7 @@ export function initCardSystem(ctx = {}) {
                     dragOutBtn.textContent = "拖出Builder";
                     dragOutBtn.setAttribute("role", "button");
                     dragOutBtn.tabIndex = 0;
-                    dragOutBtn.title = "拖到外部生成 withBuilder";
+                    dragOutBtn.title = "拖到外部生成 addBuilder";
                     bindAddWithBuilderDrag(dragOutBtn, node);
                     mini.appendChild(dragOutBtn);
                     body.appendChild(mini);
@@ -2534,14 +2550,9 @@ export function initCardSystem(ctx = {}) {
                 }
                 break;
 
-            case "with_builder":
-                if (opts.paramsOnly) {
-                    const tip = document.createElement("div");
-                    tip.className = "pill";
-                    tip.textContent = "该类型只有子 Builder，没有可同步参数";
-                    body.appendChild(tip);
-                    break;
-                }
+            case "add_builder":
+                body.appendChild(row("offset", makeVec3Editor(p, "o", rebuildPreviewAndKotlin, "offset")));
+                if (opts.paramsOnly) break;
                 if (!node.folded) {
                     const block = document.createElement("div");
                     block.className = "subblock";
@@ -2592,7 +2603,7 @@ export function initCardSystem(ctx = {}) {
                     exportBtn.textContent = "导出JSON";
                     exportBtn.addEventListener("click", () => {
                         const out = {root: {id: "root", kind: "ROOT", children: deepClone(node.children || [])}};
-                        downloadText("withBuilder.json", JSON.stringify(out, null, 2), "application/json");
+                        downloadText("addBuilder.json", JSON.stringify(out, null, 2), "application/json");
                     });
 
                     const importBtn = document.createElement("button");
@@ -2608,7 +2619,7 @@ export function initCardSystem(ctx = {}) {
                     clearBtn.className = "btn small danger";
                     clearBtn.textContent = "清空";
                     clearBtn.addEventListener("click", () => {
-                        historyCapture("clear_withBuilder");
+                        historyCapture("clear_addBuilder");
                         node.children.splice(0);
                         ensureAxisInList(node.children);
                         renderAll();
@@ -2648,7 +2659,7 @@ export function initCardSystem(ctx = {}) {
 
                     const zone = document.createElement("div");
                     zone.className = "dropzone";
-                    zone.textContent = "拖到这里 → 放进 withBuilder 子列表（可拖回主列表）";
+                    zone.textContent = "拖到这里 → 放进 addBuilder 子列表（可拖回主列表）";
                     bindSubDropZone(zone, node.children, node);
                     block.appendChild(zone);
 
@@ -2666,7 +2677,7 @@ export function initCardSystem(ctx = {}) {
                 } else {
                     const zone = document.createElement("div");
                     zone.className = "dropzone";
-                    zone.textContent = "拖到这里 → 放进 withBuilder 子列表";
+                    zone.textContent = "拖到这里 → 放进 addBuilder 子列表";
                     bindSubDropZone(zone, node.children, node);
                     body.appendChild(zone);
                 }

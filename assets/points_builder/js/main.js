@@ -102,6 +102,7 @@ import {
     const selMirrorPlane = document.getElementById("selMirrorPlane");
     const inpPointSize = document.getElementById("inpPointSize");
     const inpParamStep = document.getElementById("inpParamStep");
+    const inpOffsetPreviewLimit = document.getElementById("inpOffsetPreviewLimit");
     const inpSnapStep = document.getElementById("inpSnapStep");
     const statusLinePick = document.getElementById("statusLinePick");
     const statusPoints = document.getElementById("statusPoints");
@@ -143,10 +144,12 @@ import {
         const pointColor = readCssColor("--point-color", "#ffffff");
         const focusColor = readCssColor("--point-focus", "#ffcc33");
         const syncColor = readCssColor("--point-sync", "#5dd6ff");
+        const offsetColor = readCssColor("--point-offset", "#ff6ad5");
 
         defaultPointColor.set(pointColor);
         focusPointColor.set(focusColor);
         syncPointColor.set(syncColor);
+        offsetPointColor.set(offsetColor);
 
         if (gridHelper && scene) {
             const wasVisible = gridHelper.visible;
@@ -229,11 +232,19 @@ import {
 
     const SETTINGS_STORAGE_KEY = "pb_settings_v1";
     let paramStep = 0.1;
+    let offsetPreviewLimit = -1;
 
     function normalizeParamStep(v) {
         const n = parseFloat(v);
         if (!Number.isFinite(n) || n <= 0) return 0.1;
         return Math.max(0.000001, n);
+    }
+
+    function normalizeOffsetPreviewLimit(v) {
+        const n = Math.trunc(Number(v));
+        if (!Number.isFinite(n)) return -1;
+        if (n < -1) return -1;
+        return n;
     }
 
     function applyParamStepToInputs() {
@@ -256,6 +267,16 @@ import {
         if (!opts.skipSave) saveSettingsToStorage();
     }
 
+    function setOffsetPreviewLimit(v, opts = {}) {
+        const next = normalizeOffsetPreviewLimit(v);
+        offsetPreviewLimit = next;
+        if (inpOffsetPreviewLimit && inpOffsetPreviewLimit.value !== String(next)) {
+            inpOffsetPreviewLimit.value = String(next);
+        }
+        if (!opts.skipSave) saveSettingsToStorage();
+        updateOffsetPreview(offsetHoverPoint);
+    }
+
     function collectSettingsPayload() {
         const currentTheme = normalizeTheme(
             (themeSelect && themeSelect.value) ||
@@ -268,7 +289,8 @@ import {
             showAxes: chkAxes ? !!chkAxes.checked : true,
             showGrid: chkGrid ? !!chkGrid.checked : true,
             theme: currentTheme,
-            pointSize
+            pointSize,
+            offsetPreviewLimit
         };
     }
 
@@ -284,6 +306,9 @@ import {
         if (!payload || typeof payload !== "object") return;
         if (payload.paramStep !== undefined) {
             setParamStep(payload.paramStep, { skipSave: true });
+        }
+        if (payload.offsetPreviewLimit !== undefined) {
+            setOffsetPreviewLimit(payload.offsetPreviewLimit, { skipSave: true });
         }
         if (payload.theme) {
             const next = normalizeTheme(payload.theme);
@@ -626,7 +651,14 @@ import {
     }
 
     function normalizeNodeParams(node) {
-        if (!node || !node.kind || !node.params) return;
+        if (!node || !node.kind) return;
+        if (!node.params || typeof node.params !== "object") node.params = {};
+        if (node.kind === "with_builder") node.kind = "add_builder";
+        if (node.kind === "add_builder") {
+            if (node.params.ox === undefined) node.params.ox = 0;
+            if (node.params.oy === undefined) node.params.oy = 0;
+            if (node.params.oz === undefined) node.params.oz = 0;
+        }
         const p = node.params;
         switch (node.kind) {
             case "add_bezier":
@@ -894,7 +926,7 @@ import {
     }
 
     function isBuilderContainerKind(kind) {
-        return kind === "with_builder" || kind === "add_with";
+        return kind === "add_builder" || kind === "with_builder" || kind === "add_with";
     }
 
     function forEachNode(list, fn) {
@@ -1138,6 +1170,22 @@ import {
         return null;
     }
 
+    function findNodePathById(id, list = state.root.children, parentNode = null) {
+        const arr = list || [];
+        for (let i = 0; i < arr.length; i++) {
+            const n = arr[i];
+            if (!n) continue;
+            if (n.id === id) return [{ node: n, parentList: arr, index: i, parentNode }];
+            if (isBuilderContainerKind(n.kind) && Array.isArray(n.children)) {
+                const childPath = findNodePathById(id, n.children, n);
+                if (childPath) {
+                    return [{ node: n, parentList: arr, index: i, parentNode }, ...childPath];
+                }
+            }
+        }
+        return null;
+    }
+
     // ✅ 支持“删除聚焦卡片”：不仅能找到普通卡片，也能找到 add_fourier_series 的 term 子卡片
     function findAnyCardContextById(id, list = state.root.children, parentNode = null) {
         const arr = list || [];
@@ -1290,9 +1338,9 @@ import {
     function tryCopyWithBuilderIntoAddWith(dragId, targetOwnerNode) {
         if (!dragId || !targetOwnerNode || targetOwnerNode.kind !== "add_with") return false;
         const from = findNodeContextById(dragId);
-        if (!from || !from.node || from.node.kind !== "with_builder") return false;
+        if (!from || !from.node || (from.node.kind !== "add_builder" && from.node.kind !== "with_builder")) return false;
 
-        historyCapture("copy_withBuilder_into_addWith");
+        historyCapture("copy_addBuilder_into_addWith");
         if (!Array.isArray(targetOwnerNode.children)) targetOwnerNode.children = [];
         const cloned = cloneNodeListDeep(from.node.children || []);
         replaceListContents(targetOwnerNode.children, cloned);
@@ -1307,7 +1355,7 @@ import {
         if (targetOwnerNode && targetOwnerNode.id === srcCtx.node.id) return false;
 
         historyCapture("drag_out_addWith_builder");
-        const node = makeNode("with_builder");
+        const node = makeNode("add_builder");
         node.children = cloneNodeListDeep(srcCtx.node.children || []);
 
         const idx = Math.max(0, Math.min(targetIndex, targetList.length));
@@ -1322,6 +1370,9 @@ import {
     let renderer, scene, camera, controls;
     let initialCameraState = null;
     let pointsObj = null;
+    let offsetPreviewObj = null;
+    let offsetPreviewBuf = null;
+    let offsetPreviewCount = 0;
     let axesHelper, gridHelper, axisLabelGroup;
     let raycaster, mouse;
     let pickPlane;
@@ -1344,9 +1395,13 @@ import {
     const DEFAULT_POINT_HEX = 0xffffff;
     const FOCUS_POINT_HEX = 0xffcc33;
     const SYNC_POINT_HEX = 0x5dd6ff;
+    const OFFSET_POINT_HEX = 0xff6ad5;
+    const OFFSET_PREVIEW_HEX = 0x8a8a8a;
     const defaultPointColor = new THREE.Color(DEFAULT_POINT_HEX);
     const focusPointColor = new THREE.Color(FOCUS_POINT_HEX);
     const syncPointColor = new THREE.Color(SYNC_POINT_HEX);
+    const offsetPointColor = new THREE.Color(OFFSET_POINT_HEX);
+    const offsetPreviewColor = new THREE.Color(OFFSET_PREVIEW_HEX);
 
     let pickMarkers = [];
     let pointSize = 0.2;     // ✅ 粒子大小（PointsMaterial.size）
@@ -1355,7 +1410,7 @@ import {
     let picked = [];
     let linePickTargetList = null;
     let linePickTargetLabel = "主Builder";
-    // 插入位置（用于：在某个卡片后/某个 withBuilder 子列表末尾连续插入）
+    // 插入位置（用于：在某个卡片后/某个 addBuilder 子列表末尾连续插入）
     let linePickInsertIndex = null;
     // 进入拾取前的聚焦卡片（用于：拾取新增后保持聚焦不丢失）
     let linePickKeepFocusId = null;
@@ -1366,6 +1421,10 @@ import {
     let pointPickTarget = null;
     let pointPickKeepFocusId = null;
     let activeVecTarget = null;
+    let offsetMode = false;
+    let offsetTargetId = null;
+    let offsetRefPoint = null;
+    let offsetHoverPoint = null;
     const panKeyState = {ArrowUp: false, ArrowDown: false, ArrowLeft: false, ArrowRight: false};
     const PAN_KEY_SPEED = 0.0025;
     const _panDir = new THREE.Vector3();
@@ -1499,6 +1558,10 @@ import {
         if (pointsObj && pointsObj.material) {
             pointsObj.material.size = pointSize;
             pointsObj.material.needsUpdate = true;
+        }
+        if (offsetPreviewObj && offsetPreviewObj.material) {
+            offsetPreviewObj.material.size = pointSize;
+            offsetPreviewObj.material.needsUpdate = true;
         }
 
     }
@@ -1747,6 +1810,7 @@ import {
         renderer.domElement.addEventListener("pointermove", onPointerMove);
         renderer.domElement.addEventListener("pointerup", onPointerUp);
         renderer.domElement.addEventListener("click", onCanvasClick);
+        renderer.domElement.addEventListener("dblclick", onCanvasDblClick);
 
         chkAxes.addEventListener("change", () => {
             axesHelper.visible = chkAxes.checked;
@@ -1854,6 +1918,7 @@ import {
         lastPoints = points ? points.map(p => ({ x: p.x, y: p.y, z: p.z })) : [];
         if (!points || points.length === 0) {
             defaultColorBuf = null;
+            hideOffsetPreview();
             return;
         }
 
@@ -1892,6 +1957,7 @@ import {
 
         // ✅ 根据当前聚焦的卡片，重新着色
         updateFocusColors();
+        updateOffsetPreview(offsetHoverPoint);
 
         // 不自动重置镜头：由用户手动点击“重置镜头”
     }
@@ -1944,7 +2010,99 @@ import {
             }
         }
 
+        const offsetSeg = offsetTargetId ? nodePointSegments.get(offsetTargetId) : null;
+        if (offsetSeg && offsetSeg.end > offsetSeg.start) {
+            const c2 = offsetPointColor;
+            for (let i = offsetSeg.start; i < offsetSeg.end; i++) {
+                const k = i * 3;
+                attr.array[k + 0] = c2.r;
+                attr.array[k + 1] = c2.g;
+                attr.array[k + 2] = c2.b;
+            }
+        }
+
         attr.needsUpdate = true;
+    }
+
+    function shouldShowOffsetPreview(count) {
+        if (offsetPreviewLimit === 0) return false;
+        if (offsetPreviewLimit < 0) return true;
+        return count <= offsetPreviewLimit;
+    }
+
+    function ensureOffsetPreviewObj() {
+        if (offsetPreviewObj || !scene) return;
+        const geom = new THREE.BufferGeometry();
+        const mat = new THREE.PointsMaterial({
+            size: pointSize,
+            sizeAttenuation: true,
+            color: offsetPreviewColor.getHex(),
+            transparent: true,
+            opacity: 0.55,
+            depthWrite: false
+        });
+        offsetPreviewObj = new THREE.Points(geom, mat);
+        offsetPreviewObj.visible = false;
+        scene.add(offsetPreviewObj);
+    }
+
+    function hideOffsetPreview() {
+        if (offsetPreviewObj) offsetPreviewObj.visible = false;
+    }
+
+    function updateOffsetPreview(targetPoint) {
+        if (!offsetMode || !offsetTargetId || !offsetRefPoint || !targetPoint || !scene) {
+            hideOffsetPreview();
+            return;
+        }
+        const seg = nodePointSegments.get(offsetTargetId);
+        if (!seg || seg.end <= seg.start || !lastPoints || !lastPoints.length) {
+            hideOffsetPreview();
+            return;
+        }
+        const count = seg.end - seg.start;
+        if (!shouldShowOffsetPreview(count)) {
+            hideOffsetPreview();
+            return;
+        }
+        const dx = targetPoint.x - offsetRefPoint.x;
+        const dy = targetPoint.y - offsetRefPoint.y;
+        const dz = targetPoint.z - offsetRefPoint.z;
+        if (!Number.isFinite(dx) || !Number.isFinite(dy) || !Number.isFinite(dz)) {
+            hideOffsetPreview();
+            return;
+        }
+        if (Math.abs(dx) + Math.abs(dy) + Math.abs(dz) < 1e-9) {
+            hideOffsetPreview();
+            return;
+        }
+
+        ensureOffsetPreviewObj();
+        if (!offsetPreviewObj) return;
+
+        const geom = offsetPreviewObj.geometry;
+        if (!offsetPreviewBuf || offsetPreviewCount !== count) {
+            offsetPreviewBuf = new Float32Array(count * 3);
+            offsetPreviewCount = count;
+            geom.setAttribute("position", new THREE.BufferAttribute(offsetPreviewBuf, 3));
+        }
+        let o = 0;
+        for (let i = seg.start; i < seg.end; i++) {
+            const p = lastPoints[i];
+            if (!p) {
+                offsetPreviewBuf[o++] = 0;
+                offsetPreviewBuf[o++] = 0;
+                offsetPreviewBuf[o++] = 0;
+                continue;
+            }
+            offsetPreviewBuf[o++] = p.x + dx;
+            offsetPreviewBuf[o++] = p.y + dy;
+            offsetPreviewBuf[o++] = p.z + dz;
+        }
+        const posAttr = geom.getAttribute("position");
+        if (posAttr) posAttr.needsUpdate = true;
+        geom.computeBoundingSphere();
+        offsetPreviewObj.visible = true;
     }
 
     // ✅ 左侧卡片聚焦高亮（UI）
@@ -2016,6 +2174,133 @@ function ownerIdForPointIndex(i) {
     return best;
 }
 
+function getNodeSegmentCenter(id) {
+    if (!id) return null;
+    const seg = nodePointSegments.get(id);
+    if (!seg || !lastPoints || !lastPoints.length) return null;
+    const start = Math.max(0, seg.start | 0);
+    const end = Math.min(lastPoints.length, seg.end | 0);
+    if (end <= start) return null;
+    let sx = 0, sy = 0, sz = 0;
+    for (let i = start; i < end; i++) {
+        const p = lastPoints[i];
+        if (!p) continue;
+        sx += p.x;
+        sy += p.y;
+        sz += p.z;
+    }
+    const count = end - start;
+    if (!count) return null;
+    return { x: sx / count, y: sy / count, z: sz / count };
+}
+
+function buildAxisFromParams(p) {
+    if (!p) return U.v(0, 1, 0);
+    return U.v(num(p.x), num(p.y), num(p.z));
+}
+
+function makeInverseAxisAngleQuat(axis, rad) {
+    if (!Number.isFinite(rad) || Math.abs(rad) < 1e-12) return null;
+    const n = U.norm(axis);
+    if (U.len(n) <= 1e-9) return null;
+    const q = new THREE.Quaternion();
+    q.setFromAxisAngle(new THREE.Vector3(n.x, n.y, n.z), rad);
+    q.invert();
+    return q;
+}
+
+function makeInverseRotateToQuat(node, axisVec) {
+    const axisN = U.norm(axisVec);
+    if (U.len(axisN) <= 1e-9) return null;
+    const p = node.params || {};
+    let to;
+    if (p.mode === "originEnd") {
+        const origin = U.v(num(p.ox), num(p.oy), num(p.oz));
+        const end = U.v(num(p.ex), num(p.ey), num(p.ez));
+        to = U.sub(end, origin);
+    } else {
+        to = U.v(num(p.tox), num(p.toy), num(p.toz));
+    }
+    const toN = U.norm(to);
+    if (U.len(toN) <= 1e-9) return null;
+    const q = new THREE.Quaternion();
+    q.setFromUnitVectors(
+        new THREE.Vector3(axisN.x, axisN.y, axisN.z),
+        new THREE.Vector3(toN.x, toN.y, toN.z)
+    );
+    q.invert();
+    return q;
+}
+
+function collectPostLinearTransformsForList(list, afterIndex) {
+    const arr = list || [];
+    const transforms = [];
+    let axis = U.v(0, 1, 0);
+
+    for (let i = 0; i < arr.length; i++) {
+        const n = arr[i];
+        if (!n || !n.kind || !KIND[n.kind]) continue;
+
+        if (n.kind === "axis") {
+            axis = buildAxisFromParams(n.params);
+            continue;
+        }
+
+        if (i <= afterIndex) continue;
+
+        if (n.kind === "rotate_as_axis") {
+            const rad = U.angleToRad(num(n.params?.deg), n.params?.degUnit);
+            const axisVec = n.params?.useCustomAxis
+                ? U.v(num(n.params?.ax), num(n.params?.ay), num(n.params?.az))
+                : axis;
+            const inv = makeInverseAxisAngleQuat(axisVec, rad);
+            if (inv) transforms.push({ type: "rot", inv });
+            continue;
+        }
+
+        if (n.kind === "rotate_to") {
+            const inv = makeInverseRotateToQuat(n, axis);
+            if (inv) transforms.push({ type: "rot", inv });
+            continue;
+        }
+
+        if (n.kind === "scale") {
+            const f = num(n.params?.factor);
+            if (Number.isFinite(f) && f > 0 && Math.abs(f - 1) > 1e-12) {
+                transforms.push({ type: "scale", inv: 1 / f });
+            }
+        }
+    }
+    return transforms;
+}
+
+function applyInverseTransformsToDelta(delta, transforms) {
+    if (!delta || !transforms || transforms.length === 0) return delta;
+    const v = new THREE.Vector3(delta.x, delta.y, delta.z);
+    for (let i = transforms.length - 1; i >= 0; i--) {
+        const t = transforms[i];
+        if (t.type === "scale") {
+            v.multiplyScalar(t.inv);
+        } else if (t.type === "rot") {
+            v.applyQuaternion(t.inv);
+        }
+    }
+    return { x: v.x, y: v.y, z: v.z };
+}
+
+function mapWorldDeltaToLocalDelta(worldDelta, path, pathIndex) {
+    if (!worldDelta) return worldDelta;
+    if (!Array.isArray(path) || pathIndex < 0 || pathIndex >= path.length) return worldDelta;
+    const transforms = [];
+    for (let i = pathIndex; i >= 0; i--) {
+        const ctx = path[i];
+        if (!ctx || !Array.isArray(ctx.parentList)) continue;
+        const post = collectPostLinearTransformsForList(ctx.parentList, ctx.index);
+        if (post.length) transforms.push(...post);
+    }
+    return applyInverseTransformsToDelta(worldDelta, transforms);
+}
+
 function pickPointIndexFromEvent(ev) {
     if (!pointsObj || !renderer || !camera || !raycaster) return null;
     const rect = renderer.domElement.getBoundingClientRect();
@@ -2047,6 +2332,18 @@ function getParticleSnapFromEvent(ev) {
     if (idx === null || idx === undefined) return null;
     if (!lastPoints || !lastPoints[idx]) return null;
     return lastPoints[idx];
+}
+
+function getMappedPointFromEvent(ev) {
+    if (!renderer || !camera || !raycaster || !pickPlane) return null;
+    const rect = renderer.domElement.getBoundingClientRect();
+    mouse.x = ((ev.clientX - rect.left) / rect.width) * 2 - 1;
+    mouse.y = -(((ev.clientY - rect.top) / rect.height) * 2 - 1);
+    raycaster.setFromCamera(mouse, camera);
+    const particle = getParticleSnapFromEvent(ev);
+    const hit = new THREE.Vector3();
+    if (!raycaster.ray.intersectPlane(pickPlane, hit)) return null;
+    return mapPickPoint(hit, particle);
 }
 
 function scrollCardToTop(cardEl) {
@@ -2148,6 +2445,12 @@ function onCanvasClick(ev) {
     } catch {}
     suppressCardFocusOutClear = false;
 
+    if (offsetMode) {
+        const mapped = getMappedPointFromEvent(ev);
+        if (mapped) applyOffsetAtPoint(mapped);
+        return;
+    }
+
     const idx = pickPointIndexFromEvent(ev);
     if (idx !== null) {
         const ownerId = ownerIdForPointIndex(idx);
@@ -2166,6 +2469,24 @@ function onCanvasClick(ev) {
         const scopeId = getScopeIdForNodeId(focusedNodeId);
         if (isCollapseAllActive(scopeId)) return;
         setFocusedNode(null, true);
+    }
+}
+
+function onCanvasDblClick(ev) {
+    if (linePickMode || pointPickMode) return;
+    const idx = pickPointIndexFromEvent(ev);
+    if (idx === null) return;
+    const ownerId = ownerIdForPointIndex(idx);
+    if (!ownerId) return;
+    focusCardById(ownerId, true, true, true);
+    startOffsetMode(ownerId);
+    if (offsetMode) {
+        const mapped = getMappedPointFromEvent(ev);
+        if (mapped) {
+            offsetHoverPoint = mapped;
+            showHoverMarker(mapped);
+            updateOffsetPreview(mapped);
+        }
     }
 }
 
@@ -2194,6 +2515,7 @@ function onCanvasClick(ev) {
     }
 
     function startLinePick(targetList, label, insertIndex = null) {
+        if (offsetMode) stopOffsetMode();
         _rClickT = 0;
         clearPickMarkers();
         ensureHoverMarker();
@@ -2227,6 +2549,7 @@ function onCanvasClick(ev) {
             setTimeout(() => hideLinePickStatus(), 900);
             return;
         }
+        if (offsetMode) stopOffsetMode();
         activeVecTarget = target;
         if (linePickMode) stopLinePick();
         _rClickT = 0;
@@ -2246,6 +2569,138 @@ function onCanvasClick(ev) {
         pointPickKeepFocusId = null;
         _rClickT = 0;
         hideLinePickStatus();
+    }
+
+    const OFFSET_PARAM_GROUPS = {
+        add_point: [["x", "y", "z"]],
+        add_line: [["sx", "sy", "sz"], ["ex", "ey", "ez"]],
+        add_bezier: [
+            ["p1x", "p1y", "p1z"],
+            ["p2x", "p2y", "p2z"],
+            ["p3x", "p3y", "p3z"]
+        ],
+        add_bezier_4: [
+            ["p1x", "p1y", "p1z"],
+            ["p2x", "p2y", "p2z"],
+            ["p3x", "p3y", "p3z"],
+            ["p4x", "p4y", "p4z"]
+        ]
+    };
+
+    function applyOffsetDeltaToNode(node, delta) {
+        if (!node || !node.kind) return false;
+        const groups = OFFSET_PARAM_GROUPS[node.kind];
+        if (!groups) return false;
+        const p = node.params || (node.params = {});
+        for (const g of groups) {
+            const kx = g[0], ky = g[1], kz = g[2];
+            if (kx) p[kx] = num(p[kx]) + delta.x;
+            if (ky) p[ky] = num(p[ky]) + delta.y;
+            if (kz) p[kz] = num(p[kz]) + delta.z;
+        }
+        return true;
+    }
+
+    function startOffsetMode(nodeId) {
+        if (!nodeId) return;
+        const center = getNodeSegmentCenter(nodeId);
+        if (!center) {
+            showToast("无法进入偏移模式：该图形没有点", "error");
+            return;
+        }
+        if (linePickMode) stopLinePick();
+        if (pointPickMode) stopPointPick();
+        offsetMode = true;
+        offsetTargetId = nodeId;
+        offsetRefPoint = center;
+        offsetHoverPoint = null;
+        hideOffsetPreview();
+        setLinePickStatus(`${getPlaneInfo().label} 偏移模式：左键确定位置，Esc 退出`);
+        ensureHoverMarker();
+        setHoverMarkerColor(offsetPointColor.getHex());
+        hoverMarker.visible = false;
+        updateFocusColors();
+    }
+
+    function stopOffsetMode() {
+        if (!offsetMode) return;
+        offsetMode = false;
+        offsetTargetId = null;
+        offsetRefPoint = null;
+        offsetHoverPoint = null;
+        hideHoverMarker();
+        hideOffsetPreview();
+        hideLinePickStatus();
+        updateFocusColors();
+    }
+
+    function applyOffsetAtPoint(target) {
+        if (!offsetMode || !offsetTargetId || !offsetRefPoint || !target) return;
+        const dx = target.x - offsetRefPoint.x;
+        const dy = target.y - offsetRefPoint.y;
+        const dz = target.z - offsetRefPoint.z;
+        if (!Number.isFinite(dx) || !Number.isFinite(dy) || !Number.isFinite(dz)) return;
+        if (Math.abs(dx) + Math.abs(dy) + Math.abs(dz) < 1e-9) {
+            stopOffsetMode();
+            return;
+        }
+
+        const ctx = findNodeContextById(offsetTargetId);
+        if (!ctx || !ctx.node) {
+            stopOffsetMode();
+            return;
+        }
+        const worldDelta = { x: dx, y: dy, z: dz };
+        const path = findNodePathById(offsetTargetId);
+        const localDeltaRaw = mapWorldDeltaToLocalDelta(worldDelta, path, path ? path.length - 1 : -1);
+        const localDelta = (localDeltaRaw
+            && Number.isFinite(localDeltaRaw.x)
+            && Number.isFinite(localDeltaRaw.y)
+            && Number.isFinite(localDeltaRaw.z))
+            ? localDeltaRaw
+            : worldDelta;
+        historyCapture("offset_move");
+
+        if (ctx.node.kind === "add_builder" || ctx.node.kind === "with_builder") {
+            const p = ctx.node.params || (ctx.node.params = {});
+            p.ox = num(p.ox) + localDelta.x;
+            p.oy = num(p.oy) + localDelta.y;
+            p.oz = num(p.oz) + localDelta.z;
+            renderAll();
+            stopOffsetMode();
+            return;
+        }
+
+        if (applyOffsetDeltaToNode(ctx.node, localDelta)) {
+            renderAll();
+            stopOffsetMode();
+            return;
+        }
+
+        if (ctx.parentNode && ctx.parentNode.kind === "add_builder"
+            && Array.isArray(ctx.parentNode.children)
+            && ctx.parentNode.children.length === 1) {
+            const parentDeltaRaw = mapWorldDeltaToLocalDelta(worldDelta, path, path ? path.length - 2 : -1);
+            const parentDelta = (parentDeltaRaw
+                && Number.isFinite(parentDeltaRaw.x)
+                && Number.isFinite(parentDeltaRaw.y)
+                && Number.isFinite(parentDeltaRaw.z))
+                ? parentDeltaRaw
+                : localDelta;
+            const p = ctx.parentNode.params || (ctx.parentNode.params = {});
+            p.ox = num(p.ox) + parentDelta.x;
+            p.oy = num(p.oy) + parentDelta.y;
+            p.oz = num(p.oz) + parentDelta.z;
+            renderAll();
+            stopOffsetMode();
+            return;
+        }
+
+        const wrapper = makeNode("add_builder", { params: { ox: localDelta.x, oy: localDelta.y, oz: localDelta.z } });
+        wrapper.children = [ctx.node];
+        ctx.parentList.splice(ctx.index, 1, wrapper);
+        renderAll();
+        stopOffsetMode();
     }
 
     function applyPointToTarget(p) {
@@ -2270,7 +2725,7 @@ function onCanvasClick(ev) {
     }
 
     function onPointerMove(ev) {
-        if (!linePickMode && !pointPickMode) return;
+        if (!linePickMode && !pointPickMode && !offsetMode) return;
         if ((linePickMode || pointPickMode) && _rDown) {
             const d = Math.hypot(ev.clientX - _rDownX, ev.clientY - _rDownY);
             if (d > 6) _rMoved = true; // 视为拖动
@@ -2290,12 +2745,20 @@ function onCanvasClick(ev) {
             const mapped = mapPickPoint(hit, particle);
             if (linePickMode) {
                 setHoverMarkerColor(colorForPickIndex((picked?.length || 0) >= 1 ? 1 : 0));
-            } else {
+            } else if (pointPickMode) {
                 setHoverMarkerColor(0xffcc33);
+            } else if (offsetMode) {
+                setHoverMarkerColor(offsetPointColor.getHex());
+                offsetHoverPoint = mapped;
+                updateOffsetPreview(mapped);
             }
             showHoverMarker(mapped);
         } else {
             hideHoverMarker();
+            if (offsetMode) {
+                offsetHoverPoint = null;
+                updateOffsetPreview(null);
+            }
         }
     }
 
@@ -2384,7 +2847,7 @@ function onCanvasClick(ev) {
                     params: {sx: a.x, sy: a.y, sz: a.z, ex: b.x, ey: b.y, ez: b.z, count: 30}
                 });
 
-                // ✅ 支持插入位置：如果是从 withBuilder 或某张卡片后进入拾取，则按 insertIndex 插入并可连续插入
+                // ✅ 支持插入位置：如果是从 addBuilder 或某张卡片后进入拾取，则按 insertIndex 插入并可连续插入
                 if (linePickInsertIndex === null || linePickInsertIndex === undefined) {
                     list.push(nn);
                 } else {
@@ -2403,7 +2866,7 @@ function onCanvasClick(ev) {
                 clearPickMarkers();
                 const keepId = linePickKeepFocusId;
                 renderAll();
-                // 用户要求：若进入拾取前聚焦在 withBuilder，则拾取新增后仍保持聚焦在原卡片上
+                // 用户要求：若进入拾取前聚焦在 addBuilder，则拾取新增后仍保持聚焦在原卡片上
                 if (keepId) {
                     requestAnimationFrame(() => {
                         suppressFocusHistory = true;
@@ -2439,7 +2902,7 @@ function onCanvasClick(ev) {
     }
 
     function renderAll() {
-        // 保持选中卡片：用于高亮 & 插入规则（withBuilder 内新增等）
+        // 保持选中卡片：用于高亮 & 插入规则（addBuilder 内新增等）
         applyCollapseAllStates();
         renderCards();
         if (paramSync && paramSync.open && typeof renderSyncMenu === "function") renderSyncMenu();
@@ -2491,7 +2954,7 @@ function onCanvasClick(ev) {
     }
 
     function openModal(targetList, insertIndex = null, ownerLabel = "主Builder", ownerNodeId = null) {
-        // ✅ 记录插入目标 + 需要保持的焦点（在子 builder 内新增后，默认保持聚焦在 withBuilder 上）
+        // ✅ 记录插入目标 + 需要保持的焦点（在子 builder 内新增后，默认保持聚焦在 addBuilder 上）
         addTarget = {
             list: targetList || null,
             insertIndex: insertIndex,
@@ -2583,7 +3046,7 @@ function onCanvasClick(ev) {
                     addTarget.insertIndex = at + 1;
                 }
                 ensureAxisEverywhere();
-                // ✅ 子 builder 内新增：默认保持聚焦在 withBuilder 上；否则聚焦到新卡片
+                // ✅ 子 builder 内新增：默认保持聚焦在 addBuilder 上；否则聚焦到新卡片
                 const focusAfter = (addTarget.keepFocusId && findNodeContextById(addTarget.keepFocusId))
                     ? addTarget.keepFocusId
                     : nn.id;
@@ -2636,7 +3099,7 @@ function onCanvasClick(ev) {
         ensureAxisEverywhere();
         renderAll();
 
-        // ✅ 若是在 withBuilder 内新增，则保持聚焦在 withBuilder；否则聚焦新卡片
+        // ✅ 若是在 addBuilder 内新增，则保持聚焦在 addBuilder；否则聚焦新卡片
         const focusAfter = (ctx && ctx.ownerNode && isBuilderContainerKind(ctx.ownerNode.kind)) ? ctx.ownerNode.id : nn.id;
         requestAnimationFrame(() => {
             suppressFocusHistory = true;
@@ -2663,6 +3126,11 @@ function onCanvasClick(ev) {
 
         // Esc closes modal / hotkeys menu
         if (e.code === "Escape") {
+            if (offsetMode) {
+                e.preventDefault();
+                stopOffsetMode();
+                return;
+            }
             if (hkModal && !hkModal.classList.contains("hidden")) {
                 e.preventDefault();
                 hideHotkeysModal();
@@ -2952,6 +3420,7 @@ function onCanvasClick(ev) {
         stopLinePick,
         startLinePick,
         stopPointPick,
+        startOffsetMode,
         uid,
         getState: () => state,
         getRenderAll: () => renderAll,
@@ -3087,6 +3556,12 @@ function onCanvasClick(ev) {
             setParamStep(inpParamStep.value);
         });
     }
+    if (inpOffsetPreviewLimit) {
+        if (inpOffsetPreviewLimit.value === "") inpOffsetPreviewLimit.value = String(offsetPreviewLimit);
+        inpOffsetPreviewLimit.addEventListener("input", () => {
+            setOffsetPreviewLimit(inpOffsetPreviewLimit.value);
+        });
+    }
     btnHotkeys && btnHotkeys.addEventListener("click", showSettingsModal);
     btnCloseSettings && btnCloseSettings.addEventListener("click", hideSettingsModal);
     settingsMask && settingsMask.addEventListener("click", hideSettingsModal);
@@ -3191,7 +3666,7 @@ function onCanvasClick(ev) {
             const obj = JSON.parse(text);
             if (!obj || !obj.root || !Array.isArray(obj.root.children)) throw new Error("invalid json");
             if (!target) throw new Error("no target");
-            historyCapture("import_with_builder_json");
+            historyCapture("import_add_builder_json");
             target.children = obj.root.children;
             normalizeNodeTree(target.children);
             ensureAxisInList(target.children);

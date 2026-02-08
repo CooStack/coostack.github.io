@@ -11,11 +11,27 @@
             for (const n of arr) {
                 if (!n) continue;
 
-                // 特殊：withBuilder 需要递归并把子段位移到父数组区间
-                if (n.kind === "with_builder") {
+                // 特殊：addBuilder/withBuilder 需要递归并把子段位移到父数组区间
+                if (n.kind === "add_builder" || n.kind === "with_builder") {
                     const before = targetCtx.points.length;
                     const child = evalBuilderWithMeta(n.children || [], U.v(0, 1, 0));
-                    targetCtx.points.push(...child.points);
+                    const useOffset = n.kind === "add_builder";
+                    let ox = 0, oy = 0, oz = 0;
+                    if (useOffset) {
+                        const rx = Number(n.params?.ox);
+                        const ry = Number(n.params?.oy);
+                        const rz = Number(n.params?.oz);
+                        ox = Number.isFinite(rx) ? rx : 0;
+                        oy = Number.isFinite(ry) ? ry : 0;
+                        oz = Number.isFinite(rz) ? rz : 0;
+                    }
+                    if (useOffset) {
+                        for (const p of (child.points || [])) {
+                            targetCtx.points.push({ x: p.x + ox, y: p.y + oy, z: p.z + oz });
+                        }
+                    } else {
+                        targetCtx.points.push(...child.points);
+                    }
                     const after = targetCtx.points.length;
 
                     if (after > before) segments.set(n.id, { start: before + baseOffset, end: after + baseOffset });
@@ -56,7 +72,7 @@
             const def = KIND && KIND[n.kind];
             if (!def || !def.kotlin) continue;
 
-            if (n.kind === "with_builder" || n.kind === "add_with") {
+            if (n.kind === "add_builder" || n.kind === "with_builder" || n.kind === "add_with") {
                 lines.push(...def.kotlin(n, emitCtx, indent, emitNodesKotlinLines));
                 continue;
             }

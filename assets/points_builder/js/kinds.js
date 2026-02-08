@@ -723,21 +723,29 @@ export function createKindDefs(ctx) {
             }
         },
 
-        with_builder: {
-            title: "withBuilder(子PointsBuilder)",
-            desc: "拼接子 Builder 的点（withBuilder）",
-            defaultParams: {folded: false},
+        add_builder: {
+            title: "addBuilder(子PointsBuilder)",
+            desc: "拼接子 Builder 的点并整体偏移（addBuilder）",
+            defaultParams: {ox: 0, oy: 0, oz: 0, folded: false},
             apply(ctx, node) {
+                const ox = num(node.params.ox);
+                const oy = num(node.params.oy);
+                const oz = num(node.params.oz);
                 const childCtx = {points: [], axis: U.v(0, 1, 0)};
                 for (const ch of (node.children || [])) {
                     const def = KIND[ch.kind];
                     if (def && def.apply) def.apply(childCtx, ch);
                 }
-                ctx.points.push(...childCtx.points);
+                for (const p of (childCtx.points || [])) {
+                    ctx.points.push({x: p.x + ox, y: p.y + oy, z: p.z + oz});
+                }
             },
             kotlin(node, emitCtx, indent, emitNodesKotlinLines) {
                 const lines = [];
-                lines.push(`${indent}.withBuilder(`);
+                const ox = num(node.params.ox);
+                const oy = num(node.params.oy);
+                const oz = num(node.params.oz);
+                lines.push(`${indent}.addBuilder(${relExpr(ox, oy, oz)},`);
                 lines.push(`${indent}  PointsBuilder()`);
 
                 const childLines = emitNodesKotlinLines(node.children || [], indent + "    ", emitCtx);
