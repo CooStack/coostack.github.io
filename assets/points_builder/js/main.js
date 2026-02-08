@@ -3685,57 +3685,182 @@ function startMoveForTargetIds(ids) {
     else startOffsetMode(focusId);
 }
 
+function normalizeAxisForRotate(axis, fallback = null) {
+    const fb = fallback || U.v(0, 1, 0);
+    let out = axis;
+    if (!out || !Number.isFinite(out.x) || !Number.isFinite(out.y) || !Number.isFinite(out.z)) out = fb;
+    out = U.norm(out || fb);
+    if (U.len(out) <= 1e-9) out = U.v(0, 1, 0);
+    return out;
+}
+
+function resolveAxisFromRotateNodeId(rotateId, fallbackSourceId = null) {
+    const rotateCtx = findNodeContextById(rotateId);
+    if (!rotateCtx || !rotateCtx.node || rotateCtx.node.kind !== "rotate_as_axis") {
+        return normalizeAxisForRotate(resolveAxisForNodeId(fallbackSourceId || null));
+    }
+    const p = rotateCtx.node.params || {};
+    if (p.useCustomAxis) {
+        return normalizeAxisForRotate(U.v(num(p.ax), num(p.ay), num(p.az)));
+    }
+    return normalizeAxisForRotate(resolveAxisForNodeId(fallbackSourceId || null));
+}
+
+function resolveReusableTailRotateForRows(rows) {
+    const src = Array.isArray(rows) ? rows.filter(Boolean) : [];
+    if (!src.length) return null;
+
+    // 选中的是一个子 builder 卡片，且其子卡片末尾已是 rotate_as_axis：直接复用
+    if (src.length === 1) {
+        const ctx = src[0].ctx;
+        const node = ctx && ctx.node;
+        const children = node && Array.isArray(node.children) ? node.children : null;
+        if (node && isBuilderContainerKind(node.kind) && children && children.length >= 1) {
+            const tail = children[children.length - 1];
+            if (tail && tail.kind === "rotate_as_axis") {
+                return {
+                    rotateId: tail.id,
+                    sourceIds: [src[0].id]
+                };
+            }
+        }
+    }
+
+    // 选中的是同一子 builder 下的全部子卡片（末尾 rotate_as_axis 之外）
+    const firstCtx = src[0].ctx;
+    if (!firstCtx || !firstCtx.parentNode || !isBuilderContainerKind(firstCtx.parentNode.kind)) return null;
+    const parentNode = firstCtx.parentNode;
+    const parentList = firstCtx.parentList;
+    if (!Array.isArray(parentList) || parentList.length < 2) return null;
+    for (const row of src) {
+        const ctx = row && row.ctx;
+        if (!ctx || ctx.parentNode !== parentNode || ctx.parentList !== parentList) return null;
+    }
+    const tailIndex = parentList.length - 1;
+    const tail = parentList[tailIndex];
+    if (!tail || tail.kind !== "rotate_as_axis") return null;
+    if (src.length !== tailIndex) return null;
+    const idxSet = new Set();
+    for (const row of src) {
+        const idx = row.ctx.index;
+        if (!Number.isInteger(idx) || idx < 0 || idx >= tailIndex) return null;
+        idxSet.add(idx);
+    }
+    if (idxSet.size !== src.length) return null;
+    for (let i = 0; i < tailIndex; i++) {
+        if (!idxSet.has(i)) return null;
+    }
+    const ordered = src.slice().sort((a, b) => a.ctx.index - b.ctx.index).map((r) => r.id);
+    return {
+        rotateId: tail.id,
+        sourceIds: ordered
+    };
+}
+
 function addRotateForTargetIds(ids) {
     const validBase = normalizeActionTargetIds(ids);
     const valid = normalizeOffsetTargetIds(validBase);
     if (!valid.length) return;
-    const usable = [];
+    const usableRows = [];
     for (const id of valid) {
+        const ctx = findNodeContextById(id);
+        if (!ctx || !ctx.node) continue;
         const center = getNodeSegmentCenter(id);
         if (!center) continue;
-        usable.push(id);
+        usableRows.push({ id, ctx });
     }
-    if (!usable.length) {
+    if (!usableRows.length) {
         showToast("所选卡片没有可旋转的点", "error");
         return;
     }
-    const centerSeed = averageSegmentCenterForNodeIds(usable);
-    const axisSeed = resolveAxisForNodeId(usable[0]);
+    const usable = usableRows.map((r) => r.id);
 
-    historyCapture(usable.length > 1 ? "add_rotate_as_axis_multi" : "add_rotate_as_axis");
-    const rotateIds = [];
-    for (const id of usable) {
-        const ctx = findNodeContextById(id);
-        if (!ctx || !ctx.node || !Array.isArray(ctx.parentList)) continue;
-        let axisForNode = resolveAxisForNodeId(id);
-        if (!axisForNode || !Number.isFinite(axisForNode.x) || !Number.isFinite(axisForNode.y) || !Number.isFinite(axisForNode.z)) {
-            axisForNode = axisSeed;
+    const reusable = resolveReusableTailRotateForRows(usableRows);
+    if (reusable && reusable.rotateId) {
+        const sourceIds = Array.isArray(reusable.sourceIds) && reusable.sourceIds.length ? reusable.sourceIds : usable;
+        const centerSeed = averageSegmentCenterForNodeIds(sourceIds) || averageSegmentCenterForNodeIds(usable);
+        const axisSeed = resolveAxisFromRotateNodeId(reusable.rotateId, sourceIds[0] || usable[0]);
+        if (typeof setCardSelectionIds === "function") {
+            setCardSelectionIds(sourceIds, { replace: true, focus: false, syncWithParamSync: false });
         }
-        axisForNode = U.norm(axisForNode || axisSeed || U.v(0, 1, 0));
-        if (U.len(axisForNode) <= 1e-9) axisForNode = U.v(0, 1, 0);
+        focusCardById(sourceIds[0], false, false, true);
+        startRotateMode([reusable.rotateId], { sourceIds, center: centerSeed, axis: axisSeed });
+        return;
+    }
+
+    if (usable.length > 1) {
+        const firstList = usableRows[0].ctx.parentList;
+        if (!Array.isArray(firstList)) {
+            showToast("多选旋转失败：目标列表无效", "error");
+            return;
+        }
+        for (const row of usableRows) {
+            if (row.ctx.parentList !== firstList) {
+                showToast("多选旋转仅支持同一层级卡片", "error");
+                return;
+            }
+        }
+
+        const orderedRows = usableRows.slice().sort((a, b) => a.ctx.index - b.ctx.index);
+        const orderedIds = orderedRows.map((r) => r.id);
+        const centerSeed = averageSegmentCenterForNodeIds(orderedIds);
+        const axisSeed = normalizeAxisForRotate(resolveAxisForNodeId(orderedIds[0]));
+
+        historyCapture("add_rotate_as_axis_multi");
         const rotateNode = makeNode("rotate_as_axis", {
             params: {
                 deg: 0,
                 degUnit: "deg",
                 useCustomAxis: true,
-                ax: axisForNode.x,
-                ay: axisForNode.y,
-                az: axisForNode.z
+                ax: axisSeed.x,
+                ay: axisSeed.y,
+                az: axisSeed.z
             }
         });
         const wrapper = makeNode("add_builder", { params: { ox: 0, oy: 0, oz: 0 } });
-        wrapper.children = [ctx.node, rotateNode];
-        ctx.parentList.splice(ctx.index, 1, wrapper);
-        rotateIds.push(rotateNode.id);
+        wrapper.children = orderedRows.map((r) => r.ctx.node);
+
+        const removeRows = orderedRows.slice().sort((a, b) => b.ctx.index - a.ctx.index);
+        for (const row of removeRows) {
+            firstList.splice(row.ctx.index, 1);
+        }
+        const insertIndex = orderedRows[0].ctx.index;
+        wrapper.children.push(rotateNode);
+        firstList.splice(insertIndex, 0, wrapper);
+
+        if (typeof setCardSelectionIds === "function") {
+            setCardSelectionIds(orderedIds, { replace: true, focus: false, syncWithParamSync: false });
+        }
+        focusCardById(orderedIds[0], false, false, true);
+        renderAll();
+        startRotateMode([rotateNode.id], { sourceIds: orderedIds, center: centerSeed, axis: axisSeed });
+        return;
     }
-    if (!rotateIds.length) return;
+
+    const row = usableRows[0];
+    const centerSeed = averageSegmentCenterForNodeIds([row.id]);
+    const axisSeed = normalizeAxisForRotate(resolveAxisForNodeId(row.id));
+    historyCapture("add_rotate_as_axis");
+    const rotateNode = makeNode("rotate_as_axis", {
+        params: {
+            deg: 0,
+            degUnit: "deg",
+            useCustomAxis: true,
+            ax: axisSeed.x,
+            ay: axisSeed.y,
+            az: axisSeed.z
+        }
+    });
+    const wrapper = makeNode("add_builder", { params: { ox: 0, oy: 0, oz: 0 } });
+    wrapper.children = [row.ctx.node, rotateNode];
+    row.ctx.parentList.splice(row.ctx.index, 1, wrapper);
 
     if (typeof setCardSelectionIds === "function") {
-        setCardSelectionIds(usable, { replace: true, focus: false, syncWithParamSync: false });
+        setCardSelectionIds([row.id], { replace: true, focus: false, syncWithParamSync: false });
     }
-    focusCardById(usable[0], false, false, true);
+    focusCardById(row.id, false, false, true);
     renderAll();
-    startRotateMode(rotateIds, { sourceIds: usable, center: centerSeed, axis: axisSeed });
+    startRotateMode([rotateNode.id], { sourceIds: [row.id], center: centerSeed, axis: axisSeed });
 }
 
 function deleteTargetIds(ids) {
@@ -4796,6 +4921,18 @@ function onCanvasDblClick(ev) {
         return out;
     }
 
+    function syncRotateCardUiForTarget(targetId, degValue, unitValue = "deg") {
+        if (!targetId || !elCardsRoot) return false;
+        const card = elCardsRoot.querySelector(`.card[data-id="${targetId}"]`);
+        if (!card) return false;
+        const input = card.querySelector("input.angle-value");
+        const unitSelect = card.querySelector("select.angle-unit");
+        if (!input && !unitSelect) return false;
+        if (input && input.value !== String(degValue)) input.value = String(degValue);
+        if (unitSelect && unitSelect.value !== unitValue) unitSelect.value = unitValue;
+        return true;
+    }
+
     function setRotateDegForTargets(nextDeg) {
         if (!Number.isFinite(nextDeg)) return false;
         const ids = getActiveRotateTargetIds();
@@ -4810,6 +4947,7 @@ function onCanvasDblClick(ev) {
             if (p.degUnit !== "deg") changed = true;
             p.deg = nextDeg;
             p.degUnit = "deg";
+            syncRotateCardUiForTarget(id, nextDeg, "deg");
         }
         rotateCurrentDeg = nextDeg;
         if (changed) rebuildPreviewAndKotlin();
