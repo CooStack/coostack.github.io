@@ -104,6 +104,7 @@ import {
     const inpParamStep = document.getElementById("inpParamStep");
     const inpOffsetPreviewLimit = document.getElementById("inpOffsetPreviewLimit");
     const inpSnapStep = document.getElementById("inpSnapStep");
+    const inpSnapParticleRange = document.getElementById("inpSnapParticleRange");
     const statusLinePick = document.getElementById("statusLinePick");
     const statusPoints = document.getElementById("statusPoints");
 
@@ -232,6 +233,8 @@ import {
 
     const SETTINGS_STORAGE_KEY = "pb_settings_v1";
     let paramStep = 0.1;
+    let snapStep = 1;
+    let particleSnapRange = 0.35;
     let offsetPreviewLimit = -1;
 
     function normalizeParamStep(v) {
@@ -240,11 +243,27 @@ import {
         return Math.max(0.000001, n);
     }
 
+    function normalizeSnapStep(v) {
+        const n = parseFloat(v);
+        if (!Number.isFinite(n) || n <= 0) return 1;
+        return Math.max(0.000001, n);
+    }
+
+    function normalizeParticleSnapRange(v) {
+        const n = parseFloat(v);
+        if (!Number.isFinite(n) || n <= 0) return 0.35;
+        return Math.max(0.000001, n);
+    }
+
     function normalizeOffsetPreviewLimit(v) {
-        const n = Math.trunc(Number(v));
+        const raw = String(v ?? "").trim();
+        if (raw === "-" || raw === "-1") return -1;
+        if (/^\d+$/.test(raw)) return Math.trunc(Number(raw));
+        const n = Math.trunc(Number(raw));
         if (!Number.isFinite(n)) return -1;
         if (n < -1) return -1;
-        return n;
+        if (n === -1) return -1;
+        return Math.max(0, n);
     }
 
     function applyParamStepToInputs() {
@@ -253,6 +272,8 @@ import {
         inputs.forEach((el) => {
             if (el.id === "inpSnapStep") return;
             if (el.id === "inpParamStep") return;
+            if (el.id === "inpSnapParticleRange") return;
+            if (el.id === "inpOffsetPreviewLimit") return;
             el.step = step;
         });
     }
@@ -264,6 +285,24 @@ import {
             inpParamStep.value = String(next);
         }
         applyParamStepToInputs();
+        if (!opts.skipSave) saveSettingsToStorage();
+    }
+
+    function setSnapStep(v, opts = {}) {
+        const next = normalizeSnapStep(v);
+        snapStep = next;
+        if (inpSnapStep && inpSnapStep.value !== String(next)) {
+            inpSnapStep.value = String(next);
+        }
+        if (!opts.skipSave) saveSettingsToStorage();
+    }
+
+    function setParticleSnapRange(v, opts = {}) {
+        const next = normalizeParticleSnapRange(v);
+        particleSnapRange = next;
+        if (inpSnapParticleRange && inpSnapParticleRange.value !== String(next)) {
+            inpSnapParticleRange.value = String(next);
+        }
         if (!opts.skipSave) saveSettingsToStorage();
     }
 
@@ -286,6 +325,8 @@ import {
         );
         return {
             paramStep,
+            snapStep,
+            particleSnapRange,
             showAxes: chkAxes ? !!chkAxes.checked : true,
             showGrid: chkGrid ? !!chkGrid.checked : true,
             theme: currentTheme,
@@ -306,6 +347,12 @@ import {
         if (!payload || typeof payload !== "object") return;
         if (payload.paramStep !== undefined) {
             setParamStep(payload.paramStep, { skipSave: true });
+        }
+        if (payload.snapStep !== undefined) {
+            setSnapStep(payload.snapStep, { skipSave: true });
+        }
+        if (payload.particleSnapRange !== undefined) {
+            setParticleSnapRange(payload.particleSnapRange, { skipSave: true });
         }
         if (payload.offsetPreviewLimit !== undefined) {
             setOffsetPreviewLimit(payload.offsetPreviewLimit, { skipSave: true });
@@ -1567,9 +1614,7 @@ import {
     }
 
     function getSnapStep() {
-        const v = parseFloat(inpSnapStep?.value);
-        if (!Number.isFinite(v) || v <= 0) return 1;
-        return v;
+        return snapStep;
     }
     function getPlaneInfo() {
         return SNAP_PLANES[snapPlane] || SNAP_PLANES.XZ;
@@ -1673,7 +1718,7 @@ import {
         return dx * dx + dy * dy + dz * dz;
     }
 
-    function nearestPointCandidate(ref, maxDist = 0.35) {
+    function nearestPointCandidate(ref, maxDist = particleSnapRange) {
         if (!lastPoints || lastPoints.length === 0) return null;
         let best = null;
         let bestD2 = Infinity;
@@ -1695,24 +1740,28 @@ import {
 
         const useGrid = chkSnapGrid && chkSnapGrid.checked;
         const useParticle = chkSnapParticle && chkSnapParticle.checked;
+        const snapRange = particleSnapRange;
+        const snapRange2 = snapRange * snapRange;
 
         if (!useGrid && !useParticle) return raw;
 
         const gridP = useGrid ? snapToGridOnPlane(raw, getSnapStep(), getPlaneInfo().axis) : null;
 
         let particleP = null;
+        let particleFromHit = false;
         const particleHit = particlePoint ? {x: particlePoint.x, y: particlePoint.y, z: particlePoint.z} : null;
         if (useParticle) {
-            if (particleHit) {
+            if (particleHit && dist2(raw, particleHit) <= snapRange2) {
                 particleP = particleHit;
+                particleFromHit = true;
             } else {
-                const cand = nearestPointCandidate(hitVec3, 0.35);
+                const cand = nearestPointCandidate(raw, snapRange);
                 particleP = cand ? cand.point : null;
             }
         }
 
         // 鼠标命中粒子时优先吸附粒子
-        if (useParticle && particleHit) return particleHit;
+        if (useParticle && particleFromHit) return particleP;
         if (useParticle && !useGrid) return particleP || raw;
         if (useGrid && useParticle) return particleP || gridP;
         if (useGrid && !useParticle) return gridP;
@@ -1839,13 +1888,6 @@ import {
         renderer.domElement.addEventListener("contextmenu", (e) => {
             // 通常 three 应用都会禁用默认右键菜单（不影响右键拖动平移）
             e.preventDefault();
-        });
-        inpSnapStep?.addEventListener("input", () => {
-            // 拾取模式下，步长改变时让红点立刻更新一次
-            if (linePickMode) {
-                // 触发一次 move 逻辑最简单：直接隐藏，下一次 move 会刷新
-                // 或者你也可以在这里主动调用 showHoverMarker(当前映射点)
-            }
         });
         if (inpPointSize) {
             inpPointSize.value = String(pointSize);
@@ -2325,7 +2367,8 @@ function getParticleSnapFromEvent(ev) {
     raycaster.setFromCamera(mouse, camera);
     // 吸附更宽松的阈值，优先捕获鼠标附近的粒子
     raycaster.params.Points = raycaster.params.Points || {};
-    raycaster.params.Points.threshold = Math.max(0.12, (pointSize || 0.2) * 0.6);
+    const hitThreshold = Math.max(0.12, (pointSize || 0.2) * 0.6);
+    raycaster.params.Points.threshold = Math.min(hitThreshold, particleSnapRange);
     const hits = raycaster.intersectObject(pointsObj, false);
     if (!hits || hits.length === 0) return null;
     const idx = hits[0].index;
@@ -3552,12 +3595,46 @@ function onCanvasDblClick(ev) {
         });
     }
     if (inpParamStep) {
+        if (inpParamStep.value === "") inpParamStep.value = String(paramStep);
+        setParamStep(inpParamStep.value, { skipSave: true });
         inpParamStep.addEventListener("input", () => {
             setParamStep(inpParamStep.value);
         });
     }
+    if (inpSnapStep) {
+        if (inpSnapStep.value === "") inpSnapStep.value = String(snapStep);
+        setSnapStep(inpSnapStep.value, { skipSave: true });
+        inpSnapStep.addEventListener("input", () => {
+            const n = parseFloat(inpSnapStep.value);
+            if (!Number.isFinite(n) || n <= 0) return;
+            snapStep = n;
+            saveSettingsToStorage();
+        });
+        inpSnapStep.addEventListener("blur", () => {
+            setSnapStep(inpSnapStep.value);
+        });
+    }
+    if (inpSnapParticleRange) {
+        if (inpSnapParticleRange.value === "") inpSnapParticleRange.value = String(particleSnapRange);
+        setParticleSnapRange(inpSnapParticleRange.value, { skipSave: true });
+        inpSnapParticleRange.addEventListener("input", () => {
+            const n = parseFloat(inpSnapParticleRange.value);
+            if (!Number.isFinite(n) || n <= 0) return;
+            particleSnapRange = n;
+            saveSettingsToStorage();
+        });
+        inpSnapParticleRange.addEventListener("blur", () => {
+            setParticleSnapRange(inpSnapParticleRange.value);
+        });
+    }
     if (inpOffsetPreviewLimit) {
         if (inpOffsetPreviewLimit.value === "") inpOffsetPreviewLimit.value = String(offsetPreviewLimit);
+        setOffsetPreviewLimit(inpOffsetPreviewLimit.value, { skipSave: true });
+        inpOffsetPreviewLimit.addEventListener("keydown", (ev) => {
+            if (ev.key !== "-" && ev.code !== "NumpadSubtract") return;
+            ev.preventDefault();
+            setOffsetPreviewLimit(-1);
+        });
         inpOffsetPreviewLimit.addEventListener("input", () => {
             setOffsetPreviewLimit(inpOffsetPreviewLimit.value);
         });
@@ -3710,4 +3787,3 @@ function onCanvasDblClick(ev) {
     if (typeof refreshHotkeyHints === "function") refreshHotkeyHints();
     renderAll();
 })();
-
