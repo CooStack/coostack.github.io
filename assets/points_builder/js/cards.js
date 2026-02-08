@@ -1237,6 +1237,31 @@ export function initCardSystem(ctx = {}) {
         if (shouldRevert) renderAll();
     }
 
+    function getDragScrollContainer(el) {
+        if (!el || !el.closest) return elCardsRoot || null;
+        const sub = el.closest(".subcards");
+        if (sub) return sub;
+        const root = el.closest(".cards");
+        if (root) return root;
+        return elCardsRoot || null;
+    }
+
+    function autoScrollDuringDrag(containerEl, clientY) {
+        if (!containerEl || !Number.isFinite(clientY)) return;
+        const rect = containerEl.getBoundingClientRect();
+        const edge = 56;
+        const maxStep = 28;
+        let delta = 0;
+        if (clientY < rect.top + edge) {
+            const ratio = Math.min(1, (rect.top + edge - clientY) / edge);
+            delta = -Math.ceil(maxStep * ratio);
+        } else if (clientY > rect.bottom - edge) {
+            const ratio = Math.min(1, (clientY - (rect.bottom - edge)) / edge);
+            delta = Math.ceil(maxStep * ratio);
+        }
+        if (delta !== 0) containerEl.scrollTop += delta;
+    }
+
 
     function setupDnD(handleEl, cardEl, node, listRef, getIdx, ownerNode = null) {
         const isNestedDropTarget = (target) => {
@@ -1245,7 +1270,8 @@ export function initCardSystem(ctx = {}) {
             return !!zone && cardEl.contains(zone);
         };
         handleEl.setAttribute("draggable", "true");
-        handleEl.addEventListener("pointerdown", () => {
+        handleEl.addEventListener("pointerdown", (e) => {
+            e.stopPropagation();
             if (typeof ctx.setDraggingState === "function") ctx.setDraggingState(true);
         });
         handleEl.addEventListener("pointerup", () => {
@@ -1291,6 +1317,7 @@ export function initCardSystem(ctx = {}) {
         cardEl.addEventListener("dragover", (e) => {
             if (isNestedDropTarget(e.target)) return;
             e.preventDefault();
+            autoScrollDuringDrag(getDragScrollContainer(cardEl), e.clientY);
             const builderInfo = getDragBuilderInfo(e);
             e.dataTransfer.dropEffect = builderInfo ? "copy" : "move";
             cardEl.classList.add("drag-over");
@@ -1298,7 +1325,50 @@ export function initCardSystem(ctx = {}) {
             if (builderInfo) return;
             const dragIds = getDragNodeIds(e);
             if (!dragIds.length) return;
-            if (dragIds.length > 1) return;
+            if (dragIds.length > 1) {
+                if (!dragPreview || !Array.isArray(dragPreview.ids) || dragPreview.ids.length < 2) return;
+                if (dragPreview.listRef !== listRef) return;
+                if (!cardEl.parentElement || cardEl.parentElement !== dragPreview.container) return;
+                const targetCardId = cardEl.dataset.id;
+                if (!targetCardId || dragPreview.ids.includes(targetCardId)) return;
+
+                const scopeId = ownerNode ? ownerNode.id : null;
+                const mode = isFilterActive(scopeId) ? "swap" : "insert";
+                if (mode === "swap") return;
+                const rect = cardEl.getBoundingClientRect();
+                const after = (e.clientY > rect.top + rect.height / 2);
+                if (dragPreview.lastTargetId === targetCardId
+                    && dragPreview.lastMode === mode
+                    && dragPreview.lastAfter === after) {
+                    return;
+                }
+
+                const prevPositions = captureCardPositionsIn(cardEl.parentElement);
+                const orderedGroupEls = Array.from(cardEl.parentElement.querySelectorAll(".card[data-id]"))
+                    .filter((el) => dragPreview.ids.includes(el.dataset.id));
+                if (!orderedGroupEls.length) return;
+                const first = orderedGroupEls[0];
+                const last = orderedGroupEls[orderedGroupEls.length - 1];
+                const nextOfLast = last ? last.nextElementSibling : null;
+                let ref = after ? cardEl.nextElementSibling : cardEl;
+                // 处理“紧邻目标”的无效落点：自动切换到另一侧，支持整组与单卡交换位置
+                if (ref === first) {
+                    ref = cardEl; // 原本会变成 no-op（目标在选中组上方，落在下半区）
+                } else if (ref === nextOfLast) {
+                    ref = cardEl.nextElementSibling; // 原本会变成 no-op（目标在选中组下方，落在上半区）
+                }
+                if (ref === first || ref === nextOfLast) return;
+                const frag = document.createDocumentFragment();
+                orderedGroupEls.forEach((el) => frag.appendChild(el));
+                cardEl.parentElement.insertBefore(frag, ref);
+
+                dragPreview.dirty = true;
+                dragPreview.lastTargetId = targetCardId;
+                dragPreview.lastMode = mode;
+                dragPreview.lastAfter = after;
+                applyCardSwapAnimationIn(cardEl.parentElement, prevPositions);
+                return;
+            }
             const id = dragIds[0];
             if (!id || !dragPreview || dragPreview.id !== id) return;
             if (dragPreview.listRef !== listRef) return;
@@ -1370,7 +1440,22 @@ export function initCardSystem(ctx = {}) {
                 historyCapture("drag_drop_multi");
                 const rect = cardEl.getBoundingClientRect();
                 const after = (e.clientY > rect.top + rect.height / 2);
-                const targetIndex = getIdx() + (after ? 1 : 0);
+                const targetCardIndex = getIdx();
+                let targetIndex = targetCardIndex + (after ? 1 : 0);
+                const selectedIndices = dragIds
+                    .map((dragId) => listRef.findIndex((it) => it && it.id === dragId))
+                    .filter((v) => v >= 0)
+                    .sort((a, b) => a - b);
+                if (selectedIndices.length) {
+                    const firstSel = selectedIndices[0];
+                    const lastSel = selectedIndices[selectedIndices.length - 1];
+                    // 紧邻上方/下方目标时，避免 targetIndex 落在原区间导致“看起来没交换”
+                    if (targetCardIndex < firstSel && targetIndex === firstSel) {
+                        targetIndex = targetCardIndex;
+                    } else if (targetCardIndex > lastSel && targetIndex === (lastSel + 1)) {
+                        targetIndex = targetCardIndex + 1;
+                    }
+                }
                 if (typeof moveNodesByIds === "function") {
                     const ok = moveNodesByIds(dragIds, listRef, targetIndex, ownerNode);
                     if (ok) {
@@ -1428,7 +1513,8 @@ export function initCardSystem(ctx = {}) {
     function setupDrag(handleEl, cardEl, listRef, getIdx, onRender) {
         if (!handleEl || !cardEl || !Array.isArray(listRef)) return;
         handleEl.setAttribute("draggable", "true");
-        handleEl.addEventListener("pointerdown", () => {
+        handleEl.addEventListener("pointerdown", (e) => {
+            e.stopPropagation();
             if (typeof ctx.setDraggingState === "function") ctx.setDraggingState(true);
         });
         handleEl.addEventListener("pointerup", () => {
@@ -1484,7 +1570,8 @@ export function initCardSystem(ctx = {}) {
         if (!handleEl || !ownerNode) return;
         handleEl.setAttribute("draggable", "true");
         handleEl.classList.add("drag-handle");
-        handleEl.addEventListener("pointerdown", () => {
+        handleEl.addEventListener("pointerdown", (e) => {
+            e.stopPropagation();
             if (typeof ctx.setDraggingState === "function") ctx.setDraggingState(true);
         });
         handleEl.addEventListener("pointerup", () => {
@@ -1518,6 +1605,7 @@ export function initCardSystem(ctx = {}) {
         containerEl.addEventListener("dragover", (e) => {
             e.preventDefault();
             e.stopPropagation();
+            autoScrollDuringDrag(getDragScrollContainer(containerEl), e.clientY);
             const builderInfo = getDragBuilderInfo(e);
             e.dataTransfer.dropEffect = builderInfo ? "copy" : "move";
             containerEl.classList.add("dropzone-active");
@@ -1586,6 +1674,7 @@ export function initCardSystem(ctx = {}) {
         zoneEl.addEventListener("dragover", (e) => {
             e.preventDefault();
             e.stopPropagation();
+            autoScrollDuringDrag(getDragScrollContainer(zoneEl), e.clientY);
             const builderInfo = getDragBuilderInfo(e);
             e.dataTransfer.dropEffect = builderInfo ? "copy" : "move";
             zoneEl.classList.add("active");

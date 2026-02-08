@@ -1802,10 +1802,17 @@ import {
         }
         if (!contexts.length) return false;
 
-        const fromList = contexts[0].parentList;
+        // 允许“部分可移动”：当多选里包含目标子卡片自身（或其祖先）时，仅跳过这些非法项。
+        const movable = [];
         for (const ctx of contexts) {
+            if (targetOwnerNode && nodeContainsId(ctx.node, targetOwnerNode.id)) continue;
+            movable.push(ctx);
+        }
+        if (!movable.length) return false;
+
+        const fromList = movable[0].parentList;
+        for (const ctx of movable) {
             if (ctx.parentList !== fromList) return false;
-            if (targetOwnerNode && nodeContainsId(ctx.node, targetOwnerNode.id)) return false;
         }
 
         const scopeId = targetOwnerNode ? targetOwnerNode.id : null;
@@ -1813,10 +1820,10 @@ import {
             return false;
         }
 
-        contexts.sort((a, b) => a.index - b.index);
+        movable.sort((a, b) => a.index - b.index);
         const moved = [];
-        for (let i = contexts.length - 1; i >= 0; i--) {
-            const ctx = contexts[i];
+        for (let i = movable.length - 1; i >= 0; i--) {
+            const ctx = movable[i];
             const item = fromList.splice(ctx.index, 1)[0];
             if (item) moved.unshift(item);
         }
@@ -1825,7 +1832,7 @@ import {
         let idx = Math.max(0, Math.min(targetIndex, targetList.length));
         if (fromList === targetList) {
             let removedBefore = 0;
-            for (const ctx of contexts) {
+            for (const ctx of movable) {
                 if (ctx.index < idx) removedBefore++;
             }
             idx = Math.max(0, idx - removedBefore);
