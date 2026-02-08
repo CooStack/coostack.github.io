@@ -3687,6 +3687,42 @@ function openQuickSyncTargetIdsAt(ids, clientX, clientY) {
     return quickSyncTargetIds(ids, { x: clientX, y: clientY });
 }
 
+function openActionMenuForBlankNoSelection(ev) {
+    if (!ev || !isActionMenuAllowed()) {
+        hideActionMenu();
+        hideQuickSyncPanel();
+        return false;
+    }
+    const selectedSet = (typeof getCardSelectionIds === "function") ? getCardSelectionIds() : null;
+    const selectedCount = selectedSet ? selectedSet.size : 0;
+    if (selectedCount > 0) return false;
+    hideQuickSyncPanel();
+    const items = [
+        {
+            label: "添加卡片",
+            onSelect: () => {
+                const ctx = getInsertContextFromFocus();
+                const ownerNodeId = (ctx && ctx.ownerNode && isBuilderContainerKind(ctx.ownerNode.kind)) ? ctx.ownerNode.id : null;
+                openModal(ctx.list, ctx.insertIndex, ctx.label, ownerNodeId);
+            }
+        },
+        {
+            label: "绘制直线",
+            onSelect: () => {
+                if (linePickMode) stopLinePick();
+                if (pointPickMode) stopPointPick();
+                const ctx = getInsertContextFromFocus();
+                startLinePick(ctx.list, ctx.label, ctx.insertIndex);
+            }
+        },
+        {
+            label: "添加全局偏移",
+            onSelect: () => addQuickOffsetTo(state.root.children)
+        }
+    ];
+    return showActionMenu(ev.clientX, ev.clientY, items);
+}
+
 function openActionMenuForTargets(ev, targetIds, options = {}) {
     if (!ev || !isActionMenuAllowed()) {
         hideActionMenu();
@@ -3740,14 +3776,26 @@ function onCanvasContextMenu(ev) {
             focusCardById(ownerId, false, false, true);
         }
     }
-    if (!targetIds.length) targetIds = getActionTargetIds();
+    if (!targetIds.length) {
+        const selectedSet = (typeof getCardSelectionIds === "function") ? getCardSelectionIds() : null;
+        const selectedCount = selectedSet ? selectedSet.size : 0;
+        if (selectedCount === 0 && openActionMenuForBlankNoSelection(ev)) return;
+        targetIds = getActionTargetIds();
+    }
     openActionMenuForTargets(ev, targetIds, { allowQuickSync: true });
 }
 
 function onCardsContextMenu(ev) {
     const target = ev && ev.target;
     const card = target && target.closest ? target.closest(".card[data-id]") : null;
-    if (!card || !elCardsRoot || !elCardsRoot.contains(card)) return;
+    if (!card || !elCardsRoot || !elCardsRoot.contains(card)) {
+        if (!ev) return;
+        ev.preventDefault();
+        if (openActionMenuForBlankNoSelection(ev)) return;
+        const ids = getActionTargetIds();
+        openActionMenuForTargets(ev, ids, { allowQuickSync: true });
+        return;
+    }
     ev.preventDefault();
     if (!isActionMenuAllowed()) {
         hideActionMenu();
@@ -5520,8 +5568,7 @@ function onCanvasDblClick(ev) {
             openModal(ctx.list, ctx.insertIndex, ctx.label, ownerNodeId);
         });
     btnQuickOffset.addEventListener("click", () => {
-        const ctx = getInsertContextFromFocus();
-        addQuickOffsetTo(ctx.list);
+        addQuickOffsetTo(state.root.children);
     });
 
     btnPickLine.addEventListener("click", () => {
