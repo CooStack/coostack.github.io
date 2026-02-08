@@ -1918,6 +1918,7 @@ import {
     const OFFSET_PREVIEW_HEX = 0x8a8a8a;
     const LINE_PICK_PREVIEW_HEX = 0x33a1ff;
     const POINT_PICK_PREVIEW_HEX = 0x5dd6ff;
+    const ROTATE_POINT_HEX = 0x64f59d;
     const defaultPointColor = new THREE.Color(DEFAULT_POINT_HEX);
     const focusPointColor = new THREE.Color(FOCUS_POINT_HEX);
     const syncPointColor = new THREE.Color(SYNC_POINT_HEX);
@@ -1925,6 +1926,7 @@ import {
     const offsetPreviewColor = new THREE.Color(OFFSET_PREVIEW_HEX);
     const linePickPreviewColor = new THREE.Color(LINE_PICK_PREVIEW_HEX);
     const pointPickPreviewColor = new THREE.Color(POINT_PICK_PREVIEW_HEX);
+    const rotatePointColor = new THREE.Color(ROTATE_POINT_HEX);
 
     let pickMarkers = [];
     let pointSize = 0.2;     // ✅ 粒子大小（PointsMaterial.size）
@@ -1957,6 +1959,17 @@ import {
     let offsetTargetIds = [];
     let offsetRefPoint = null;
     let offsetHoverPoint = null;
+    let rotateMode = false;
+    let rotateTargetIds = [];
+    let rotateSourceIds = [];
+    let rotateAxis = null;
+    let rotateCenter = null;
+    let rotateCurrentDeg = 0;
+    let rotateDragPointerId = null;
+    let rotateDragStartPoint = null;
+    let rotateDragStartDeg = 0;
+    let rotateDragChanged = false;
+    let rotateManualInput = "";
     const panKeyState = {ArrowUp: false, ArrowDown: false, ArrowLeft: false, ArrowRight: false};
     const PAN_KEY_SPEED = 0.0025;
     const _panDir = new THREE.Vector3();
@@ -1973,6 +1986,10 @@ import {
     let _rMoved = false;
     let _rDownX = 0;
     let _rDownY = 0;
+    const ACTION_MENU_DRAG_PX = 6;
+    const ACTION_MENU_DRAG_SUPPRESS_MS = 240;
+    let actionMenuRightTrack = null; // { pointerId, startX, startY, moved }
+    let suppressActionMenuUntil = 0;
 
     function rememberPointPickMenuAnchor(ev) {
         if (!ev) return;
@@ -2020,6 +2037,51 @@ import {
         // 2) 右键按下位掩码：buttons&2
         // 3) macOS Ctrl+Click：button===0 且 ctrlKey=true
         return ev.button === 2 || (ev.buttons & 2) === 2 || (ev.button === 0 && ev.ctrlKey);
+    }
+
+    function beginActionMenuRightTrack(ev) {
+        if (!ev || !isRightLike(ev)) return;
+        actionMenuRightTrack = {
+            pointerId: ev.pointerId,
+            startX: Number(ev.clientX) || 0,
+            startY: Number(ev.clientY) || 0,
+            moved: false
+        };
+    }
+
+    function updateActionMenuRightTrack(ev) {
+        if (!actionMenuRightTrack || !ev) return;
+        if (actionMenuRightTrack.pointerId !== undefined && ev.pointerId !== actionMenuRightTrack.pointerId) return;
+        const dx = ev.clientX - actionMenuRightTrack.startX;
+        const dy = ev.clientY - actionMenuRightTrack.startY;
+        if (Math.hypot(dx, dy) > ACTION_MENU_DRAG_PX) actionMenuRightTrack.moved = true;
+    }
+
+    function endActionMenuRightTrack(ev, forceSuppress = false) {
+        if (!actionMenuRightTrack) return;
+        if (forceSuppress) {
+            suppressActionMenuUntil = performance.now() + ACTION_MENU_DRAG_SUPPRESS_MS;
+            actionMenuRightTrack = null;
+            return;
+        }
+        if (!ev) return;
+        if (actionMenuRightTrack.pointerId !== undefined && ev.pointerId !== actionMenuRightTrack.pointerId) return;
+        updateActionMenuRightTrack(ev);
+        if (actionMenuRightTrack.moved) {
+            suppressActionMenuUntil = performance.now() + ACTION_MENU_DRAG_SUPPRESS_MS;
+        }
+        actionMenuRightTrack = null;
+    }
+
+    function shouldSuppressActionMenuByGesture(ev) {
+        if (performance.now() < suppressActionMenuUntil) return true;
+        if (!actionMenuRightTrack) return false;
+        if (ev && Number.isFinite(ev.clientX) && Number.isFinite(ev.clientY)) {
+            const dx = ev.clientX - actionMenuRightTrack.startX;
+            const dy = ev.clientY - actionMenuRightTrack.startY;
+            if (Math.hypot(dx, dy) > ACTION_MENU_DRAG_PX) return true;
+        }
+        return !!actionMenuRightTrack.moved;
     }
 
     function armCanvasClickSuppress(ev = null, ttlMs = SUPPRESS_CANVAS_CLICK_MS) {
@@ -2346,9 +2408,9 @@ import {
 
     function updatePickLineButtons() {
         const label = getPlaneInfo().label;
-        if (btnPickLine) btnPickLine.textContent = `${label} 拾取直线`;
+        if (btnPickLine) btnPickLine.textContent = `${label} 绘制直线`;
         document.querySelectorAll("[data-pick-line-btn]").forEach((el) => {
-            el.textContent = `${label}拾取直线`;
+            el.textContent = `${label}绘制直线`;
         });
         if (btnPickPoint) btnPickPoint.textContent = `${label} 点拾取`;
     }
@@ -2390,6 +2452,9 @@ import {
         }
         if (pointPickMode) {
             refreshPointPickStatus();
+        }
+        if (rotateMode) {
+            refreshRotateStatus();
         }
     }
 
@@ -2440,8 +2505,16 @@ import {
         renderer.domElement.addEventListener("pointermove", onPointerMove);
         renderer.domElement.addEventListener("pointerup", onPointerUp);
         renderer.domElement.addEventListener("pointercancel", (ev) => {
+            if (actionMenuRightTrack && ev && ev.pointerId === actionMenuRightTrack.pointerId) {
+                endActionMenuRightTrack(ev, true);
+            }
             if (viewBoxPending && ev && ev.pointerId === viewBoxPending.pointerId) {
                 clearViewBoxState(ev.pointerId);
+            }
+            if (rotateMode && ev && rotateDragPointerId !== null && ev.pointerId === rotateDragPointerId) {
+                rotateDragPointerId = null;
+                rotateDragStartPoint = null;
+                stopRotateMode({ silent: true });
             }
         });
         renderer.domElement.addEventListener("click", onCanvasClick);
@@ -3089,6 +3162,65 @@ function buildAxisFromParams(p) {
     return U.v(num(p.x), num(p.y), num(p.z));
 }
 
+function averageSegmentCenterForNodeIds(ids) {
+    const src = Array.isArray(ids) ? ids : [];
+    let sx = 0, sy = 0, sz = 0;
+    let count = 0;
+    for (const id of src) {
+        const c = getNodeSegmentCenter(id);
+        if (!c) continue;
+        sx += c.x;
+        sy += c.y;
+        sz += c.z;
+        count += 1;
+    }
+    if (!count) return null;
+    return { x: sx / count, y: sy / count, z: sz / count };
+}
+
+function resolveAxisForNodeId(nodeId) {
+    const path = findNodePathById(nodeId);
+    if (!Array.isArray(path) || !path.length) return U.v(0, 1, 0);
+    let axis = U.v(0, 1, 0);
+    for (const step of path) {
+        let localAxis = U.v(0, 1, 0);
+        const list = (step && Array.isArray(step.parentList)) ? step.parentList : [];
+        const end = step && Number.isFinite(step.index) ? step.index : -1;
+        for (let i = 0; i <= end && i < list.length; i++) {
+            const n = list[i];
+            if (!n || !n.kind) continue;
+            if (n.kind === "axis") {
+                localAxis = buildAxisFromParams(n.params);
+            }
+        }
+        axis = localAxis;
+    }
+    const n = U.norm(axis);
+    if (U.len(n) <= 1e-9) return U.v(0, 1, 0);
+    return n;
+}
+
+function projectVectorOnAxisPlane(v, axisN) {
+    const d = U.dot(v, axisN);
+    return U.sub(v, U.mul(axisN, d));
+}
+
+function signedAngleDegAroundAxis(fromPoint, toPoint, center, axisN) {
+    if (!fromPoint || !toPoint || !center || !axisN) return null;
+    const fromVec = projectVectorOnAxisPlane(U.sub(fromPoint, center), axisN);
+    const toVec = projectVectorOnAxisPlane(U.sub(toPoint, center), axisN);
+    const fromLen = U.len(fromVec);
+    const toLen = U.len(toVec);
+    if (fromLen <= 1e-9 || toLen <= 1e-9) return null;
+    const a = U.mul(fromVec, 1 / fromLen);
+    const b = U.mul(toVec, 1 / toLen);
+    const dot = Math.max(-1, Math.min(1, U.dot(a, b)));
+    const cross = U.cross(a, b);
+    const sign = U.dot(cross, axisN) >= 0 ? 1 : -1;
+    const rad = Math.acos(dot) * sign;
+    return rad * 180 / Math.PI;
+}
+
 function makeInverseAxisAngleQuat(axis, rad) {
     if (!Number.isFinite(rad) || Math.abs(rad) < 1e-12) return null;
     const n = U.norm(axis);
@@ -3293,7 +3425,7 @@ function shouldStartViewBox(ev) {
     if (ev.altKey) return false;
     const leftMouseAction = controls && controls.mouseButtons ? controls.mouseButtons.LEFT : null;
     if (leftMouseAction !== null && leftMouseAction !== undefined) return false;
-    if (linePickMode || pointPickMode || offsetMode) return false;
+    if (linePickMode || pointPickMode || offsetMode || rotateMode) return false;
     return true;
 }
 
@@ -3494,7 +3626,7 @@ function focusCardById(id, recordHistory = true, scrollToTop = true, revealPath 
 }
 
 function isActionMenuAllowed() {
-    if (linePickMode || pointPickMode || offsetMode) return false;
+    if (linePickMode || pointPickMode || offsetMode || rotateMode) return false;
     if ((modal && !modal.classList.contains("hidden"))
         || (hkModal && !hkModal.classList.contains("hidden"))
         || (settingsModal && !settingsModal.classList.contains("hidden"))) {
@@ -3551,6 +3683,59 @@ function startMoveForTargetIds(ids) {
     focusCardById(focusId, false, false, true);
     if (valid.length > 1) startOffsetMode(focusId, { ids: valid });
     else startOffsetMode(focusId);
+}
+
+function addRotateForTargetIds(ids) {
+    const validBase = normalizeActionTargetIds(ids);
+    const valid = normalizeOffsetTargetIds(validBase);
+    if (!valid.length) return;
+    const usable = [];
+    for (const id of valid) {
+        const center = getNodeSegmentCenter(id);
+        if (!center) continue;
+        usable.push(id);
+    }
+    if (!usable.length) {
+        showToast("所选卡片没有可旋转的点", "error");
+        return;
+    }
+    const centerSeed = averageSegmentCenterForNodeIds(usable);
+    const axisSeed = resolveAxisForNodeId(usable[0]);
+
+    historyCapture(usable.length > 1 ? "add_rotate_as_axis_multi" : "add_rotate_as_axis");
+    const rotateIds = [];
+    for (const id of usable) {
+        const ctx = findNodeContextById(id);
+        if (!ctx || !ctx.node || !Array.isArray(ctx.parentList)) continue;
+        let axisForNode = resolveAxisForNodeId(id);
+        if (!axisForNode || !Number.isFinite(axisForNode.x) || !Number.isFinite(axisForNode.y) || !Number.isFinite(axisForNode.z)) {
+            axisForNode = axisSeed;
+        }
+        axisForNode = U.norm(axisForNode || axisSeed || U.v(0, 1, 0));
+        if (U.len(axisForNode) <= 1e-9) axisForNode = U.v(0, 1, 0);
+        const rotateNode = makeNode("rotate_as_axis", {
+            params: {
+                deg: 0,
+                degUnit: "deg",
+                useCustomAxis: true,
+                ax: axisForNode.x,
+                ay: axisForNode.y,
+                az: axisForNode.z
+            }
+        });
+        const wrapper = makeNode("add_builder", { params: { ox: 0, oy: 0, oz: 0 } });
+        wrapper.children = [ctx.node, rotateNode];
+        ctx.parentList.splice(ctx.index, 1, wrapper);
+        rotateIds.push(rotateNode.id);
+    }
+    if (!rotateIds.length) return;
+
+    if (typeof setCardSelectionIds === "function") {
+        setCardSelectionIds(usable, { replace: true, focus: false, syncWithParamSync: false });
+    }
+    focusCardById(usable[0], false, false, true);
+    renderAll();
+    startRotateMode(rotateIds, { sourceIds: usable, center: centerSeed, axis: axisSeed });
 }
 
 function deleteTargetIds(ids) {
@@ -3750,6 +3935,10 @@ function openActionMenuForTargets(ev, targetIds, options = {}) {
         onSelect: () => startMoveForTargetIds(ids)
     });
     items.push({
+        label: "添加旋转",
+        onSelect: () => addRotateForTargetIds(ids)
+    });
+    items.push({
         label: "删除",
         danger: true,
         onSelect: () => deleteTargetIds(ids)
@@ -3759,6 +3948,10 @@ function openActionMenuForTargets(ev, targetIds, options = {}) {
 
 function onCanvasContextMenu(ev) {
     ev.preventDefault();
+    if (shouldSuppressActionMenuByGesture(ev)) {
+        hideActionMenu();
+        return;
+    }
     if (!isActionMenuAllowed()) {
         hideActionMenu();
         return;
@@ -3786,28 +3979,35 @@ function onCanvasContextMenu(ev) {
 }
 
 function onCardsContextMenu(ev) {
+    if (!ev) return;
+    ev.preventDefault();
+    if (shouldSuppressActionMenuByGesture(ev)) {
+        hideActionMenu();
+        return;
+    }
     const target = ev && ev.target;
     const card = target && target.closest ? target.closest(".card[data-id]") : null;
     if (!card || !elCardsRoot || !elCardsRoot.contains(card)) {
-        if (!ev) return;
-        ev.preventDefault();
         if (openActionMenuForBlankNoSelection(ev)) return;
         const ids = getActionTargetIds();
         openActionMenuForTargets(ev, ids, { allowQuickSync: true });
         return;
     }
-    ev.preventDefault();
     if (!isActionMenuAllowed()) {
         hideActionMenu();
         return;
     }
     const id = card.dataset.id;
     if (!id) return;
-    if (typeof setCardSelectionIds === "function") {
-        setCardSelectionIds([id], { replace: true, focus: false, syncWithParamSync: false });
+    const selectedSet = (typeof getCardSelectionIds === "function") ? getCardSelectionIds() : null;
+    const selectedIds = normalizeActionTargetIds(selectedSet ? Array.from(selectedSet) : []);
+    const useSelectedGroup = selectedIds.length > 1 && selectedIds.includes(id);
+    const targetIds = useSelectedGroup ? selectedIds : [id];
+    if (!useSelectedGroup && typeof setCardSelectionIds === "function") {
+        setCardSelectionIds(targetIds, { replace: true, focus: false, syncWithParamSync: false });
     }
     focusCardById(id, false, false, true);
-    openActionMenuForTargets(ev, [id], { allowQuickSync: true });
+    openActionMenuForTargets(ev, targetIds, { allowQuickSync: true });
 }
 
 function onCanvasClick(ev) {
@@ -3817,8 +4017,8 @@ function onCanvasClick(ev) {
     hideActionMenu();
     hideQuickSyncPanel();
 
-    // 拾取模式中由 onPointerDown 处理；此处不抢逻辑
-    if (linePickMode || pointPickMode) return;
+    // 拾取/旋转模式中由 onPointerDown 处理；此处不抢逻辑
+    if (linePickMode || pointPickMode || rotateMode) return;
 
     blurActiveElementForCanvas();
 
@@ -3882,6 +4082,24 @@ function onCanvasDblClick(ev) {
 
     function setPointPickStatus(text) {
         setLinePickStatus(text);
+    }
+
+    function formatRotateAxisForStatus(axis) {
+        if (!axis) return "(0, 1, 0)";
+        return `(${U.fmt(axis.x)}, ${U.fmt(axis.y)}, ${U.fmt(axis.z)})`;
+    }
+
+    function buildRotateStatusText() {
+        const info = getPlaneInfo().label;
+        const axisText = formatRotateAxisForStatus(rotateAxis);
+        const groupTip = (Array.isArray(rotateSourceIds) && rotateSourceIds.length > 1) ? `（${rotateSourceIds.length}项）` : "";
+        const manualTip = rotateManualInput ? `，输入中：${rotateManualInput}` : "";
+        return `${info} 旋转模式${groupTip}：当前 ${U.fmt(rotateCurrentDeg)}°，轴 ${axisText}${manualTip}；长按左键拖动，或输入数值后 Enter 确认`;
+    }
+
+    function refreshRotateStatus() {
+        if (!rotateMode) return;
+        setLinePickStatus(buildRotateStatusText());
     }
 
     function pointPickTargetLabel(target) {
@@ -4208,6 +4426,7 @@ function onCanvasDblClick(ev) {
         hideActionMenu();
         hideQuickSyncPanel();
         if (offsetMode) stopOffsetMode();
+        if (rotateMode) stopRotateMode({ silent: true });
         _rClickT = 0;
         clearPickMarkers();
         hideLinePickPreview();
@@ -4241,6 +4460,7 @@ function onCanvasDblClick(ev) {
         hidePointPickPreview();
         pointPickHoverPoint = null;
         if (offsetMode) stopOffsetMode();
+        if (rotateMode) stopRotateMode({ silent: true });
         if (linePickMode) stopLinePick();
         const selectedSet = (typeof getCardSelectionIds === "function") ? getCardSelectionIds() : null;
         const selectedIds = normalizeActionTargetIds(selectedSet ? Array.from(selectedSet) : []);
@@ -4447,6 +4667,7 @@ function onCanvasDblClick(ev) {
 
         if (linePickMode) stopLinePick();
         if (pointPickMode) stopPointPick();
+        if (rotateMode) stopRotateMode({ silent: true });
         offsetMode = true;
         offsetTargetIds = usableIds;
         offsetTargetId = usableIds[0] || null;
@@ -4458,7 +4679,7 @@ function onCanvasDblClick(ev) {
         offsetHoverPoint = null;
         hideOffsetPreview();
         const groupTip = usableIds.length > 1 ? `（${usableIds.length}项）` : "";
-        setLinePickStatus(`${getPlaneInfo().label} 偏移模式${groupTip}：左键确定位置，Esc / T / 右键双击 退出`);
+        setLinePickStatus(`${getPlaneInfo().label} 偏移模式${groupTip}：左键确定位置，Esc / V / 右键双击 退出`);
         ensureHoverMarker();
         setHoverMarkerColor(offsetPointColor.getHex());
         hoverMarker.visible = false;
@@ -4551,6 +4772,202 @@ function onCanvasDblClick(ev) {
         stopOffsetMode();
     }
 
+    function normalizeRotateTargetIds(ids) {
+        const src = normalizeActionTargetIds(ids);
+        const out = [];
+        for (const id of src) {
+            const ctx = findNodeContextById(id);
+            if (!ctx || !ctx.node || ctx.node.kind !== "rotate_as_axis") continue;
+            out.push(id);
+        }
+        return out;
+    }
+
+    function getActiveRotateTargetIds() {
+        const out = [];
+        const seen = new Set();
+        for (const id of (Array.isArray(rotateTargetIds) ? rotateTargetIds : [])) {
+            if (!id || seen.has(id)) continue;
+            seen.add(id);
+            const ctx = findNodeContextById(id);
+            if (!ctx || !ctx.node || ctx.node.kind !== "rotate_as_axis") continue;
+            out.push(id);
+        }
+        return out;
+    }
+
+    function setRotateDegForTargets(nextDeg) {
+        if (!Number.isFinite(nextDeg)) return false;
+        const ids = getActiveRotateTargetIds();
+        if (!ids.length) return false;
+        let changed = false;
+        for (const id of ids) {
+            const ctx = findNodeContextById(id);
+            if (!ctx || !ctx.node) continue;
+            const p = ctx.node.params || (ctx.node.params = {});
+            const prev = num(p.deg);
+            if (Math.abs(prev - nextDeg) > 1e-9) changed = true;
+            if (p.degUnit !== "deg") changed = true;
+            p.deg = nextDeg;
+            p.degUnit = "deg";
+        }
+        rotateCurrentDeg = nextDeg;
+        if (changed) rebuildPreviewAndKotlin();
+        refreshRotateStatus();
+        return changed;
+    }
+
+    function updateRotateFromMappedPoint(mapped) {
+        if (!rotateMode || !rotateDragStartPoint || !mapped || !rotateCenter || !rotateAxis) return;
+        const deltaDeg = signedAngleDegAroundAxis(rotateDragStartPoint, mapped, rotateCenter, rotateAxis);
+        if (!Number.isFinite(deltaDeg)) return;
+        const nextDeg = rotateDragStartDeg + deltaDeg;
+        if (setRotateDegForTargets(nextDeg)) rotateDragChanged = true;
+    }
+
+    function startRotateMode(rotateIds, options = {}) {
+        hideActionMenu();
+        hideQuickSyncPanel();
+        if (linePickMode) stopLinePick();
+        if (pointPickMode) stopPointPick();
+        if (offsetMode) stopOffsetMode();
+
+        const ids = normalizeRotateTargetIds(rotateIds);
+        if (!ids.length) return false;
+        const sourceIds = normalizeOffsetTargetIds(Array.isArray(options.sourceIds) ? options.sourceIds : []);
+        let center = options.center;
+        if (!center || !Number.isFinite(center.x) || !Number.isFinite(center.y) || !Number.isFinite(center.z)) {
+            center = averageSegmentCenterForNodeIds(sourceIds);
+        }
+        if (!center) {
+            showToast("无法进入旋转模式：该图形没有点", "error");
+            return false;
+        }
+        let axis = options.axis;
+        if (!axis || !Number.isFinite(axis.x) || !Number.isFinite(axis.y) || !Number.isFinite(axis.z)) {
+            axis = resolveAxisForNodeId(sourceIds[0] || null);
+        }
+        axis = U.norm(axis || U.v(0, 1, 0));
+        if (U.len(axis) <= 1e-9) axis = U.v(0, 1, 0);
+
+        rotateMode = true;
+        rotateTargetIds = ids.slice();
+        rotateSourceIds = sourceIds.length ? sourceIds.slice() : ids.slice();
+        rotateCenter = { x: center.x, y: center.y, z: center.z };
+        rotateAxis = axis;
+        rotateManualInput = "";
+        rotateDragPointerId = null;
+        rotateDragStartPoint = null;
+        rotateDragStartDeg = 0;
+        rotateDragChanged = false;
+
+        const firstCtx = findNodeContextById(ids[0]);
+        rotateCurrentDeg = firstCtx && firstCtx.node ? num(firstCtx.node.params?.deg) : 0;
+        _rClickT = 0;
+        ensureHoverMarker();
+        setHoverMarkerColor(rotatePointColor.getHex());
+        hoverMarker.visible = false;
+        refreshRotateStatus();
+        updateFocusColors();
+        return true;
+    }
+
+    function stopRotateMode(options = {}) {
+        if (!rotateMode) return;
+        const silent = !!options.silent;
+        const keepDoneText = !!options.keepDoneText;
+        const finalDeg = rotateCurrentDeg;
+        rotateMode = false;
+        rotateTargetIds = [];
+        rotateSourceIds = [];
+        rotateCenter = null;
+        rotateAxis = null;
+        rotateManualInput = "";
+        rotateDragPointerId = null;
+        rotateDragStartPoint = null;
+        rotateDragStartDeg = 0;
+        rotateDragChanged = false;
+        hideHoverMarker();
+        if (silent) {
+            hideLinePickStatus();
+        } else if (keepDoneText) {
+            setLinePickStatus(`${getPlaneInfo().label} 旋转完成：${U.fmt(finalDeg)}°`);
+            setTimeout(() => {
+                if (!linePickMode && !pointPickMode && !offsetMode && !rotateMode) hideLinePickStatus();
+            }, 900);
+        } else {
+            hideLinePickStatus();
+        }
+        updateFocusColors();
+    }
+
+    function handleRotateModeManualInputKeydown(e) {
+        if (!rotateMode) return false;
+        if (e.ctrlKey || e.metaKey || e.altKey) return false;
+        const ae = document.activeElement;
+        const tag = (ae && ae.tagName ? String(ae.tagName).toUpperCase() : "");
+        if (ae && (tag === "INPUT" || tag === "TEXTAREA" || ae.isContentEditable)) return false;
+
+        const key = String(e.key || "");
+        const code = String(e.code || "");
+
+        const commitManual = () => {
+            const text = String(rotateManualInput || "").trim();
+            if (!text || text === "-" || text === "." || text === "-.") {
+                rotateManualInput = "";
+                refreshRotateStatus();
+                return true;
+            }
+            const n = parseFloat(text);
+            if (!Number.isFinite(n)) {
+                showToast("旋转角度输入无效", "error");
+                return true;
+            }
+            setRotateDegForTargets(n);
+            stopRotateMode({ keepDoneText: true });
+            return true;
+        };
+
+        if (code === "Enter" || key === "Enter") {
+            e.preventDefault();
+            return commitManual();
+        }
+        if (code === "Backspace" || key === "Backspace") {
+            e.preventDefault();
+            rotateManualInput = rotateManualInput ? rotateManualInput.slice(0, -1) : "";
+            refreshRotateStatus();
+            return true;
+        }
+        if (code === "Delete" || key === "Delete") {
+            e.preventDefault();
+            rotateManualInput = "";
+            refreshRotateStatus();
+            return true;
+        }
+        if (code === "Minus" || code === "NumpadSubtract" || key === "-") {
+            e.preventDefault();
+            if (!rotateManualInput) rotateManualInput = "-";
+            refreshRotateStatus();
+            return true;
+        }
+        if (code === "Period" || code === "NumpadDecimal" || key === ".") {
+            e.preventDefault();
+            if (!rotateManualInput.includes(".")) {
+                if (!rotateManualInput || rotateManualInput === "-") rotateManualInput += "0.";
+                else rotateManualInput += ".";
+            }
+            refreshRotateStatus();
+            return true;
+        }
+        if (/^\d$/.test(key)) {
+            e.preventDefault();
+            rotateManualInput += key;
+            refreshRotateStatus();
+            return true;
+        }
+        return false;
+    }
+
     function applyPointToTarget(p) {
         if (!pointPickTarget) return;
         const root = pointPickTarget;
@@ -4591,12 +5008,13 @@ function onCanvasDblClick(ev) {
 
     function onPointerMove(ev) {
         rememberPointPickMenuAnchor(ev);
+        updateActionMenuRightTrack(ev);
         if (updateViewBoxSelecting(ev)) {
             ev.preventDefault();
             return;
         }
-        if (!linePickMode && !pointPickMode && !offsetMode) return;
-        if ((linePickMode || pointPickMode || offsetMode) && _rDown) {
+        if (!linePickMode && !pointPickMode && !offsetMode && !rotateMode) return;
+        if ((linePickMode || pointPickMode || offsetMode || rotateMode) && _rDown) {
             const d = Math.hypot(ev.clientX - _rDownX, ev.clientY - _rDownY);
             if (d > 6) _rMoved = true; // 视为拖动
             hideHoverMarker();
@@ -4627,6 +5045,11 @@ function onCanvasDblClick(ev) {
                 setHoverMarkerColor(offsetPointColor.getHex());
                 offsetHoverPoint = mapped;
                 updateOffsetPreview(mapped);
+            } else if (rotateMode) {
+                setHoverMarkerColor(rotatePointColor.getHex());
+                if (rotateDragPointerId !== null && ev.pointerId === rotateDragPointerId) {
+                    updateRotateFromMappedPoint(mapped);
+                }
             }
             showHoverMarker(mapped);
         } else {
@@ -4645,11 +5068,22 @@ function onCanvasDblClick(ev) {
 
     function onPointerUp(ev) {
         rememberPointPickMenuAnchor(ev);
+        endActionMenuRightTrack(ev);
         if (finishViewBoxSelection(ev)) return;
         if (viewBoxPending && ev && ev.pointerId === viewBoxPending.pointerId) {
             clearViewBoxState(ev.pointerId);
         }
-        if (!linePickMode && !pointPickMode && !offsetMode) return;
+        if (!linePickMode && !pointPickMode && !offsetMode && !rotateMode) return;
+        if (rotateMode && ev && ev.button === 0 && rotateDragPointerId !== null && ev.pointerId === rotateDragPointerId) {
+            rotateDragPointerId = null;
+            rotateDragStartPoint = null;
+            const changed = !!rotateDragChanged;
+            rotateDragChanged = false;
+            armCanvasClickSuppress(ev);
+            if (changed) stopRotateMode({ keepDoneText: true });
+            else refreshRotateStatus();
+            return;
+        }
         if (!_rDown) return;
 
         _rDown = false;
@@ -4671,6 +5105,7 @@ function onCanvasDblClick(ev) {
             if (linePickMode) stopLinePick();
             if (pointPickMode) stopPointPick();
             if (offsetMode) stopOffsetMode();
+            if (rotateMode) stopRotateMode({ silent: true });
             _rClickT = 0;
             return;
         }
@@ -4683,19 +5118,37 @@ function onCanvasDblClick(ev) {
 
     function onPointerDown(ev) {
         rememberPointPickMenuAnchor(ev);
+        beginActionMenuRightTrack(ev);
         // 非拾取模式：点击/拖动预览主要用于 OrbitControls；选点聚焦由 click 事件处理
-        if (!linePickMode && !pointPickMode && !offsetMode) {
+        if (!linePickMode && !pointPickMode && !offsetMode && !rotateMode) {
             beginViewBoxPending(ev);
             return;
         }
 
         // ✅ 右键 / Ctrl+Click：不选点，只进入“可能的右键双击取消”判定流程
-        if ((linePickMode || pointPickMode || offsetMode) && isRightLike(ev)) {
+        if ((linePickMode || pointPickMode || offsetMode || rotateMode) && isRightLike(ev)) {
             _rDown = true;
             _rMoved = false;
             _rDownX = ev.clientX;
             _rDownY = ev.clientY;
             return; // 关键：右键永远不选点
+        }
+
+        if (rotateMode) {
+            if (ev.button !== 0 || ev.ctrlKey) return;
+            armCanvasClickSuppress(ev);
+            const mapped = getMappedPointFromEvent(ev);
+            if (!mapped) return;
+            rotateDragPointerId = ev.pointerId;
+            rotateDragStartPoint = mapped;
+            rotateDragStartDeg = rotateCurrentDeg;
+            rotateDragChanged = false;
+            rotateManualInput = "";
+            ensureHoverMarker();
+            setHoverMarkerColor(rotatePointColor.getHex());
+            showHoverMarker(mapped);
+            refreshRotateStatus();
+            return;
         }
 
         // 偏移模式下左键由 click 事件统一处理（可保留原有吸附与历史逻辑）
@@ -5045,6 +5498,11 @@ function onCanvasDblClick(ev) {
 
         // Esc closes modal / hotkeys menu
         if (e.code === "Escape") {
+            if (rotateMode) {
+                e.preventDefault();
+                stopRotateMode({ silent: true });
+                return;
+            }
             if (offsetMode) {
                 e.preventDefault();
                 stopOffsetMode();
@@ -5071,6 +5529,8 @@ function onCanvasDblClick(ev) {
                 return;
             }
         }
+
+        if (handleRotateModeManualInputKeydown(e)) return;
 
         // 2) Undo/Redo should work everywhere (including inputs)
         if (hotkeyMatchEvent(e, hotkeys.actions.undo)) {
@@ -5209,6 +5669,7 @@ function onCanvasDblClick(ev) {
             if (modal && !modal.classList.contains("hidden")) hideModal();
             if (hkModal && !hkModal.classList.contains("hidden")) hideHotkeysModal();
             if (settingsModal && !settingsModal.classList.contains("hidden")) hideSettingsModal();
+            if (rotateMode) stopRotateMode({ silent: true });
 
             if (linePickMode) stopLinePick();
             else {
@@ -5224,6 +5685,7 @@ function onCanvasDblClick(ev) {
             if (modal && !modal.classList.contains("hidden")) hideModal();
             if (hkModal && !hkModal.classList.contains("hidden")) hideHotkeysModal();
             if (settingsModal && !settingsModal.classList.contains("hidden")) hideSettingsModal();
+            if (rotateMode) stopRotateMode({ silent: true });
             if (pointPickMode) stopPointPick();
             else {
                 if (linePickMode) stopLinePick();
@@ -5279,9 +5741,39 @@ function onCanvasDblClick(ev) {
             mirrorCopyFocusedCard();
             return;
         }
+        if (hotkeyMatchEvent(e, hotkeys.actions.triggerFocusedRotate)) {
+            if ((modal && !modal.classList.contains("hidden")) || (hkModal && !hkModal.classList.contains("hidden"))) return;
+            e.preventDefault();
+            if (offsetMode) {
+                stopOffsetMode();
+                return;
+            }
+            if (rotateMode) {
+                stopRotateMode({ silent: true });
+                return;
+            }
+            let targetId = focusedNodeId;
+            let selectedIds = [];
+            if (!targetId && typeof getCardSelectionIds === "function") {
+                const sel = getCardSelectionIds();
+                if (sel && sel.size) targetId = Array.from(sel)[0] || null;
+            }
+            if (typeof getCardSelectionIds === "function") {
+                const sel = getCardSelectionIds();
+                if (sel && sel.size) selectedIds = Array.from(sel).filter(Boolean);
+            }
+            if (!targetId) return;
+            focusCardById(targetId, false, false, true);
+            addRotateForTargetIds(selectedIds.length > 1 ? selectedIds : [targetId]);
+            return;
+        }
         if (hotkeyMatchEvent(e, hotkeys.actions.triggerFocusedMove)) {
             if ((modal && !modal.classList.contains("hidden")) || (hkModal && !hkModal.classList.contains("hidden"))) return;
             e.preventDefault();
+            if (rotateMode) {
+                stopRotateMode({ silent: true });
+                return;
+            }
             if (offsetMode) {
                 stopOffsetMode();
                 return;
@@ -5326,6 +5818,8 @@ function onCanvasDblClick(ev) {
         panKeyState.ArrowDown = false;
         panKeyState.ArrowLeft = false;
         panKeyState.ArrowRight = false;
+        actionMenuRightTrack = null;
+        suppressActionMenuUntil = 0;
         hideActionMenu();
         const pid = viewBoxPending ? viewBoxPending.pointerId : null;
         clearViewBoxState(pid);
@@ -5574,6 +6068,7 @@ function onCanvasDblClick(ev) {
     btnPickLine.addEventListener("click", () => {
         if (linePickMode) stopLinePick();
         else {
+            if (rotateMode) stopRotateMode({ silent: true });
             if (pointPickMode) stopPointPick();
             const ctx = getInsertContextFromFocus();
             startLinePick(ctx.list, ctx.label, ctx.insertIndex);
@@ -5583,6 +6078,7 @@ function onCanvasDblClick(ev) {
         if (pointPickMode) {
             stopPointPick();
         } else {
+            if (rotateMode) stopRotateMode({ silent: true });
             if (linePickMode) stopLinePick();
             startPointPick();
         }

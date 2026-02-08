@@ -34,13 +34,13 @@
     const HOTKEY_STORAGE_KEY = "pb_hotkeys_v2";
 
     const DEFAULT_HOTKEYS = {
-        version: 2,
+        version: 3,
         actions: {
             openPicker: "KeyW",          // W
             pickLineXZ: "KeyQ",          // Q
             pickPoint: "KeyE",           // E
             toggleFullscreen: "KeyF",    // F
-            resetCamera: "KeyR",         // R
+            resetCamera: "Shift+KeyR",   // Shift + R
             importJson: "Mod+KeyO",      // Ctrl/Cmd + O
             toggleSettings: "KeyH",      // H
             toggleParamSync: "KeyY",     // Y
@@ -55,7 +55,8 @@
             mirrorPlaneZY: "Shift+KeyD", // Shift + D
             copyFocused: "Mod+KeyD",     // Ctrl/Cmd + D
             mirrorCopy: "Mod+Shift+KeyM",// Ctrl/Cmd + Shift + M
-            triggerFocusedMove: "KeyT",  // T
+            triggerFocusedMove: "KeyV",  // V
+            triggerFocusedRotate: "KeyR",// R
             undo: "Mod+KeyZ",            // Ctrl/Cmd + Z
             redo: "Mod+Shift+KeyZ",      // Ctrl/Cmd + Shift + Z
             // 删除聚焦卡片（Mac 键盘上的“Delete”通常对应 Backspace；更通用）
@@ -146,8 +147,9 @@
             const raw = localStorage.getItem(HOTKEY_STORAGE_KEY);
             if (raw) {
                 const obj = JSON.parse(raw);
+                const storedVersion = Number(obj && obj.version);
                 const out = {
-                    version: 2,
+                    version: DEFAULT_HOTKEYS.version,
                     actions: Object.assign({}, DEFAULT_HOTKEYS.actions),
                     kinds: {},
                 };
@@ -162,6 +164,13 @@
                 // normalize
                 for (const k of Object.keys(out.actions)) out.actions[k] = normalizeHotkey(out.actions[k]);
                 for (const k of Object.keys(out.kinds)) out.kinds[k] = normalizeHotkey(out.kinds[k]);
+
+                // v3 migration: preserve custom keys, only move old defaults.
+                if (!Number.isFinite(storedVersion) || storedVersion < 3) {
+                    if (out.actions.resetCamera === "KeyR") out.actions.resetCamera = "Shift+KeyR";
+                    if (out.actions.triggerFocusedMove === "KeyT") out.actions.triggerFocusedMove = "KeyV";
+                    if (!out.actions.triggerFocusedRotate) out.actions.triggerFocusedRotate = "KeyR";
+                }
                 return out;
             }
         } catch (e) {
@@ -197,7 +206,7 @@
     }
 
     function resetHotkeys() {
-        hotkeys.version = 2;
+        hotkeys.version = DEFAULT_HOTKEYS.version;
         hotkeys.actions = Object.assign({}, DEFAULT_HOTKEYS.actions);
         hotkeys.kinds = {};
         saveHotkeys();
@@ -226,7 +235,7 @@
         {id: "pickLineXZ", title: "进入 XZ 拾取直线", desc: "默认 Q"},
         {id: "pickPoint", title: "点拾取（填充当前输入）", desc: "默认 E"},
         {id: "toggleFullscreen", title: "预览全屏 / 退出全屏", desc: "默认 F"},
-        {id: "resetCamera", title: "重置镜头", desc: "默认 R"},
+        {id: "resetCamera", title: "重置镜头", desc: "默认 Shift + R"},
         {id: "importJson", title: "导入 JSON", desc: "默认 Ctrl/Cmd+O"},
         {id: "toggleSettings", title: "打开/隐藏 设置", desc: "默认 H"},
         {id: "toggleParamSync", title: "打开/隐藏 参数同步", desc: "默认 Y"},
@@ -241,7 +250,8 @@
         {id: "mirrorPlaneZY", title: "切换镜像平面：ZY", desc: "默认 Shift+D"},
         {id: "copyFocused", title: "复制当前聚焦卡片", desc: "默认 Ctrl/Cmd + D"},
         {id: "mirrorCopy", title: "镜像复制（直线/Offset）", desc: "默认 Ctrl/Cmd + Shift + M"},
-        {id: "triggerFocusedMove", title: "触发聚焦卡片移动", desc: "默认 T"},
+        {id: "triggerFocusedMove", title: "触发聚焦卡片移动", desc: "默认 V"},
+        {id: "triggerFocusedRotate", title: "触发聚焦卡片旋转", desc: "默认 R"},
         {id: "deleteFocused", title: "删除当前聚焦卡片", desc: "默认 Backspace"},
         {id: "undo", title: "撤销", desc: "默认 Ctrl/Cmd + Z"},
         {id: "redo", title: "恢复", desc: "默认 Ctrl/Cmd + Shift + Z"},
@@ -472,7 +482,7 @@
             if (hkObj) {
                 if (!hkObj.actions || typeof hkObj.actions !== "object") hkObj.actions = {};
                 if (!hkObj.kinds || typeof hkObj.kinds !== "object") hkObj.kinds = {};
-                hotkeys.version = 2;
+                hotkeys.version = DEFAULT_HOTKEYS.version;
                 hotkeys.actions = Object.assign({}, DEFAULT_HOTKEYS.actions, hkObj.actions);
                 hotkeys.kinds = Object.assign({}, hkObj.kinds);
                 saveHotkeys();
