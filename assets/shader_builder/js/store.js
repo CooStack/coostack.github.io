@@ -175,7 +175,22 @@ function normalizePostGraphState(state) {
     const nodes = state.post.nodes;
     for (const node of nodes) {
         if (!node || typeof node !== "object") continue;
-        const minTextureCount = getPostInputTextureMinCount(node.inputs);
+        const nodeType = String(node.type || "simple").trim().toLowerCase();
+        const normalizedType = nodeType === "pingpong" ? "pingpong" : (nodeType === "texture" ? "texture" : "simple");
+        node.type = normalizedType;
+        if (normalizedType === "texture") {
+            node.inputs = 0;
+            node.outputs = 1;
+            const textureOnly = Array.isArray(node.params)
+                ? node.params.filter((p) => isTextureParam(p)).slice(0, 1)
+                : [];
+            node.params = ensurePostInputSamplerParam(textureOnly, 1);
+            continue;
+        }
+        const inputCount = Math.max(1, Math.min(8, Math.round(Number(node.inputs || 1))));
+        node.inputs = inputCount;
+        node.outputs = Math.max(1, Math.min(8, Math.round(Number(node.outputs || 1))));
+        const minTextureCount = getPostInputTextureMinCount(inputCount);
         node.params = ensurePostInputSamplerParam(node.params, minTextureCount);
     }
     const nodeIds = new Set(nodes.map((n) => String(n?.id || "")).filter(Boolean));

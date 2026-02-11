@@ -206,6 +206,8 @@
                             </label>
                         </div>
                         <div class="field field-inline actions-row">
+                            <button id="btnDuplicateNode" class="btn">复制卡片</button>
+
                             <button id="btnDeleteNode" class="btn danger">删除卡片</button>
                         </div>
                     </div>
@@ -272,6 +274,21 @@
             </section>
         </aside>
     </main>
+
+    <div id="nodeTypePickerMask" class="modal-mask hidden"></div>
+    <div id="nodeTypePickerModal" class="modal hidden" role="dialog" aria-modal="true">
+        <div class="modal-head">
+            <div class="modal-title">选择后处理卡片类型</div>
+            <input id="nodeTypeSearch" class="input" placeholder="搜索类型：simple / pingpong / texture" />
+            <button id="btnCloseNodeTypePicker" class="btn icon">✕</button>
+        </div>
+        <div class="modal-body">
+            <div id="nodeTypePicker" class="picker node-type-picker"></div>
+        </div>
+        <div class="modal-foot">
+            <button id="btnCancelNodeTypePicker" class="btn">取消</button>
+        </div>
+    </div>
 
     <div id="settingsMask" class="modal-mask hidden"></div>
     <div id="settingsModal" class="modal hidden" role="dialog" aria-modal="true">

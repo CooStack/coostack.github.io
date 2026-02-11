@@ -677,15 +677,16 @@ export class ShaderWorkbenchRenderer {
             pass.textureID = primaryInputUniform;
         }
 
-        const aliasUniforms = inputSamplerUniforms.filter((name) => name !== pass.textureID);
-        if (aliasUniforms.length) {
-            pass.__inputUniformAliases = aliasUniforms;
+        const inputUniformTargets = inputSamplerUniforms.filter((name) => !!pass.uniforms?.[name]);
+        if (inputUniformTargets.length) {
+            pass.__inputUniformTargets = inputUniformTargets;
+            pass.__inputUniformAliases = inputUniformTargets.filter((name) => name !== pass.textureID);
             const originalRender = pass.render.bind(pass);
             pass.render = (renderer, writeBuffer, readBuffer, deltaTime, maskActive) => {
                 const readTexture = readBuffer?.texture || pass.uniforms?.[pass.textureID]?.value || null;
-                for (const alias of pass.__inputUniformAliases || []) {
-                    if (!pass.uniforms?.[alias]) continue;
-                    pass.uniforms[alias].value = readTexture;
+                for (const uniformName of pass.__inputUniformTargets || []) {
+                    if (!pass.uniforms?.[uniformName]) continue;
+                    pass.uniforms[uniformName].value = readTexture;
                 }
                 return originalRender(renderer, writeBuffer, readBuffer, deltaTime, maskActive);
             };

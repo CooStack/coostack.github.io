@@ -135,10 +135,17 @@ const els = {
     chkNodeMipmap: $("chkNodeMipmap"),
     btnApplyNodeShader: $("btnApplyNodeShader"),
     btnExportNodeFragment: $("btnExportNodeFragment"),
+    btnDuplicateNode: $("btnDuplicateNode"),
     btnDeleteNode: $("btnDeleteNode"),
     nodeTextureHint: $("nodeTextureHint"),
     nodeShaderSection: $("nodeShaderSection"),
     nodeShaderActions: $("nodeShaderActions"),
+    nodeTypePickerModal: $("nodeTypePickerModal"),
+    nodeTypePickerMask: $("nodeTypePickerMask"),
+    nodeTypePicker: $("nodeTypePicker"),
+    nodeTypeSearch: $("nodeTypeSearch"),
+    btnCloseNodeTypePicker: $("btnCloseNodeTypePicker"),
+    btnCancelNodeTypePicker: $("btnCancelNodeTypePicker"),
 
     kotlinBody: $("kotlinBody"),
     kotlinModelBlock: $("kotlinModelBlock"),
@@ -275,6 +282,27 @@ const NODE_TYPE_DEFAULTS = Object.freeze({
         useMipmap: false
     })
 });
+
+const NODE_TYPE_CHOICES = Object.freeze([
+    Object.freeze({
+        type: NODE_TYPE_SIMPLE,
+        title: "simple",
+        desc: "标准后处理卡片，可编写片元着色并使用多个参数。",
+        hint: "适合常规颜色处理、模糊、调色等。"
+    }),
+    Object.freeze({
+        type: NODE_TYPE_PINGPONG,
+        title: "pingpong",
+        desc: "支持迭代次数的后处理卡片，适合多次反馈运算。",
+        hint: "适合反馈模糊、扩散、累积型效果。"
+    }),
+    Object.freeze({
+        type: NODE_TYPE_TEXTURE,
+        title: "texture",
+        desc: "纯纹理输出卡片，不执行片元着色处理。",
+        hint: "仅保留 1 个纹理参数，常用于直接输入纹理。"
+    })
+]);
 
 function normalizePostNodeType(type) {
     const t = String(type || NODE_TYPE_SIMPLE).trim().toLowerCase();
@@ -623,7 +651,9 @@ function syncNodeParamsFromShaderSource(node) {
     const prev = Array.isArray(node.params) ? node.params : [];
     const nodeType = normalizePostNodeType(node.type);
     const minInputs = minInputCountByNodeType(nodeType);
-    const normalizedInputs = normalizeNodeNumber(node.inputs, minInputs, minInputs, 8);
+    const normalizedInputs = nodeType === NODE_TYPE_TEXTURE
+        ? 0
+        : normalizeNodeNumber(node.inputs, minInputs, minInputs, 8);
     const inputChanged = Number(node.inputs) !== normalizedInputs;
     if (inputChanged) node.inputs = normalizedInputs;
     const minTextureCount = getPostInputTextureMinCount(node.inputs);
@@ -781,7 +811,9 @@ function captureNodeTypeSnapshot(node) {
     return {
         fragmentSource: String(node?.fragmentSource || ""),
         params: cloneNodeParams(node?.params || []),
-        inputs: normalizeNodeNumber(node?.inputs, nodeType === NODE_TYPE_TEXTURE ? 0 : 1, minInputs, 8),
+        inputs: nodeType === NODE_TYPE_TEXTURE
+            ? 0
+            : normalizeNodeNumber(node?.inputs, 1, minInputs, 8),
         outputs: normalizeNodeNumber(node?.outputs, 1, 1, 8),
         textureUnit: Math.max(0, Math.round(Number(node?.textureUnit || 1))),
         filter: String(node?.filter || "GL33.GL_LINEAR"),
@@ -796,7 +828,9 @@ function applyNodeTypeSnapshot(node, snapshot, type) {
     const src = snapshot && typeof snapshot === "object" ? snapshot : {};
     const minInputs = minInputCountByNodeType(normalizedType);
 
-    node.inputs = normalizeNodeNumber(src.inputs, base.inputs, minInputs, 8);
+    node.inputs = normalizedType === NODE_TYPE_TEXTURE
+        ? 0
+        : normalizeNodeNumber(src.inputs, base.inputs, minInputs, 8);
     node.outputs = normalizeNodeNumber(src.outputs, base.outputs, 1, 8);
     node.textureUnit = Math.max(0, Math.round(Number(src.textureUnit ?? base.textureUnit)));
     node.filter = String(src.filter || base.filter);
@@ -834,6 +868,7 @@ function switchPostNodeType(node, nextTypeRaw) {
     } else {
         applyNodeTypeSnapshot(node, null, nextType);
     }
+    syncNodeParamsFromShaderSource(node);
     syncNodeOutputsFromShaderSource(node);
 
     node.typeStateCache = cache;
@@ -877,6 +912,7 @@ function duplicatePostNode(draft, nodeId) {
     if (copy.fragmentPathTemplate) {
         copy.fragmentPath = resolveNodeFragmentPath(copy.name, copy.fragmentPathTemplate);
     }
+    syncNodeParamsFromShaderSource(copy);
     syncNodeShaderUniformDecls(copy);
     syncNodeOutputsFromShaderSource(copy);
 
@@ -1167,15 +1203,10 @@ const graphEditor = new GraphEditor({
             }, meta || {}));
         },
         onDuplicateNode(nodeId) {
-            let created = null;
-            store.patch((draft) => {
-                created = duplicatePostNode(draft, nodeId);
-                ensureSelectedNode(draft);
-            }, { reason: "node-duplicate", forceCompile: true, forceKotlin: true });
-            if (created) showToast("已复制后处理卡片", "ok");
+            duplicateNodeByIds([nodeId]);
         },
         onAddNode() {
-            addPostNode();
+            addPostNode({ askType: true });
         },
         onDeleteNode(nodeId) {
             store.patch((draft) => {
@@ -1338,6 +1369,13 @@ const KOTLIN_TARGET_STORAGE_KEY = "sb_kotlin_target_v1";
 let workspacePage = normalizeWorkspacePage(localStorage.getItem(PAGE_STORAGE_KEY), { allowCard: false });
 let cardPreviewPos = loadJson(CARD_PREVIEW_POS_KEY, null);
 let kotlinGenerateTarget = normalizeKotlinGenerateTarget(localStorage.getItem(KOTLIN_TARGET_STORAGE_KEY) || "all");
+let nodeTypePickerState = {
+    open: false,
+    defaultType: NODE_TYPE_SIMPLE,
+    lastFocusEl: null,
+    onPick: null,
+    list: []
+};
 
 function normalizeCardPreviewPos(raw) {
     if (!raw || typeof raw !== "object") return null;
@@ -1507,6 +1545,9 @@ const settingsSystem = initSettingsSystem({
 });
 
 function toggleSettings() {
+    if (isNodeTypePickerOpen()) {
+        closeNodeTypePicker({ pickType: null });
+    }
     const hidden = !!els.settingsModal?.classList.contains("hidden");
     if (hidden) settingsSystem.show();
     else settingsSystem.hide();
@@ -1541,7 +1582,145 @@ function performRedo() {
     return true;
 }
 
-function addPostNode() {
+function isNodeTypePickerOpen() {
+    return !!(els.nodeTypePickerModal && !els.nodeTypePickerModal.classList.contains("hidden"));
+}
+
+function buildNodeTypePickerList(filterText = "") {
+    const f = String(filterText || "").trim().toLowerCase();
+    const scored = [];
+    for (let i = 0; i < NODE_TYPE_CHOICES.length; i += 1) {
+        const item = NODE_TYPE_CHOICES[i];
+        const typeText = String(item.type || "").toLowerCase();
+        const titleText = String(item.title || "").toLowerCase();
+        const descText = String(item.desc || "").toLowerCase();
+        const hintText = String(item.hint || "").toLowerCase();
+        if (!f) {
+            scored.push({ item, group: 0, score: 0, order: i });
+            continue;
+        }
+        const titleIdx = titleText.indexOf(f);
+        const typeIdx = typeText.indexOf(f);
+        const direct = [titleIdx, typeIdx].filter((v) => v >= 0);
+        if (direct.length) {
+            scored.push({
+                item,
+                group: 0,
+                score: Math.min(...direct),
+                order: i
+            });
+            continue;
+        }
+        const descIdx = descText.indexOf(f);
+        const hintIdx = hintText.indexOf(f);
+        const secondary = [descIdx, hintIdx].filter((v) => v >= 0);
+        if (secondary.length) {
+            scored.push({
+                item,
+                group: 1,
+                score: Math.min(...secondary),
+                order: i
+            });
+        }
+    }
+    scored.sort((a, b) => (a.group - b.group) || (a.score - b.score) || (a.order - b.order));
+    return scored.map((it) => it.item);
+}
+
+function renderNodeTypePicker(filterText = "") {
+    if (!(els.nodeTypePicker instanceof HTMLElement)) return;
+    const list = buildNodeTypePickerList(filterText);
+    nodeTypePickerState.list = list.map((item) => normalizePostNodeType(item.type));
+    const defaultType = normalizePostNodeType(nodeTypePickerState.defaultType || NODE_TYPE_SIMPLE);
+    els.nodeTypePicker.innerHTML = "";
+
+    if (!list.length) {
+        const empty = document.createElement("div");
+        empty.className = "node-type-empty";
+        empty.textContent = "没有匹配类型，请修改搜索关键词。";
+        els.nodeTypePicker.appendChild(empty);
+        return;
+    }
+
+    for (const item of list) {
+        const type = normalizePostNodeType(item.type);
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = "pickitem node-type-item";
+        if (type === defaultType) btn.classList.add("active");
+        btn.dataset.type = type;
+        btn.innerHTML = [
+            `<div class="t">${escapeHtml(item.title || type)}</div>`,
+            `<div class="d">${escapeHtml(item.desc || "")}</div>`,
+            `<div class="node-type-meta">${escapeHtml(item.hint || "")}</div>`
+        ].join("");
+        btn.addEventListener("click", () => {
+            closeNodeTypePicker({ pickType: type });
+        });
+        els.nodeTypePicker.appendChild(btn);
+    }
+}
+
+function closeNodeTypePicker({ pickType = null, emit = true } = {}) {
+    const onPick = nodeTypePickerState.onPick;
+    const lastFocusEl = nodeTypePickerState.lastFocusEl;
+
+    nodeTypePickerState.open = false;
+    nodeTypePickerState.onPick = null;
+    nodeTypePickerState.list = [];
+
+    if (els.nodeTypePickerModal) els.nodeTypePickerModal.classList.add("hidden");
+    if (els.nodeTypePickerMask) els.nodeTypePickerMask.classList.add("hidden");
+    if (els.nodeTypeSearch) els.nodeTypeSearch.value = "";
+    if (els.nodeTypePicker) els.nodeTypePicker.innerHTML = "";
+
+    if (emit && typeof onPick === "function") {
+        onPick(pickType ? normalizePostNodeType(pickType) : null);
+    }
+
+    if (lastFocusEl instanceof HTMLElement) {
+        try {
+            lastFocusEl.focus({ preventScroll: true });
+        } catch {
+            lastFocusEl.focus();
+        }
+    }
+}
+
+function openNodeTypePicker({ defaultType = NODE_TYPE_SIMPLE, onPick = null } = {}) {
+    if (!(els.nodeTypePickerModal instanceof HTMLElement)
+        || !(els.nodeTypePickerMask instanceof HTMLElement)
+        || !(els.nodeTypePicker instanceof HTMLElement)) {
+        if (typeof onPick === "function") onPick(normalizePostNodeType(defaultType));
+        return;
+    }
+    closeNodeTypePicker({ emit: false });
+    nodeTypePickerState.open = true;
+    nodeTypePickerState.defaultType = normalizePostNodeType(defaultType);
+    nodeTypePickerState.lastFocusEl = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    nodeTypePickerState.onPick = typeof onPick === "function" ? onPick : null;
+    els.nodeTypePickerModal.classList.remove("hidden");
+    els.nodeTypePickerMask.classList.remove("hidden");
+    if (els.nodeTypeSearch) els.nodeTypeSearch.value = "";
+    renderNodeTypePicker("");
+    if (els.nodeTypeSearch instanceof HTMLElement) els.nodeTypeSearch.focus();
+}
+
+function addPostNode({ presetType = null, askType = true } = {}) {
+    let targetType = normalizePostNodeType(presetType || NODE_TYPE_SIMPLE);
+    if (askType && !presetType) {
+        const state = store.getState();
+        const selectedNode = findPostNode(state, state.selectedNodeId);
+        openNodeTypePicker({
+            defaultType: normalizePostNodeType(selectedNode?.type || targetType),
+            onPick: (picked) => {
+                if (!picked) return;
+                addPostNode({ presetType: picked, askType: false });
+            }
+        });
+        return;
+    }
+
     store.patch((draft) => {
         const node = createDefaultPostNode((draft.post.nodes || []).length);
         const selected = findPostNode(draft, draft.selectedNodeId);
@@ -1550,11 +1729,73 @@ function addPostNode() {
             node.x = Number(selected.x || 220) + 230;
             node.y = Number(selected.y || 80);
         }
-        syncNodeParamsFromShaderSource(node);
+
+        if (targetType !== NODE_TYPE_SIMPLE) {
+            switchPostNodeType(node, targetType);
+        } else {
+            syncNodeParamsFromShaderSource(node);
+        }
+
+        if (targetType === NODE_TYPE_TEXTURE) {
+            node.inputs = 0;
+            node.outputs = 1;
+            node.params = ensurePostInputSamplerParam(
+                (node.params || []).filter((p) => isTextureParam(p)).slice(0, 1),
+                1
+            );
+        }
 
         draft.post.nodes.push(node);
         draft.selectedNodeId = node.id;
     }, { reason: "node-add", forceCompile: true, forceKotlin: true });
+}
+
+function duplicateNodeByIds(nodeIds = []) {
+    const ids = Array.from(new Set((nodeIds || []).map((id) => String(id || "")).filter(Boolean)))
+        .filter((id) => id !== GRAPH_INPUT_ID && id !== GRAPH_OUTPUT_ID);
+    if (!ids.length) return 0;
+
+    let createdCount = 0;
+    let lastCreatedId = "";
+    store.patch((draft) => {
+        for (const id of ids) {
+            const created = duplicatePostNode(draft, id);
+            if (!created) continue;
+            createdCount += 1;
+            lastCreatedId = created.id;
+        }
+        if (lastCreatedId) draft.selectedNodeId = lastCreatedId;
+        ensureSelectedNode(draft);
+    }, { reason: "node-duplicate", forceCompile: true, forceKotlin: true });
+
+    if (createdCount > 0) {
+        if (lastCreatedId && graphEditor && typeof graphEditor.selectSingleNode === "function") {
+            graphEditor.selectSingleNode(lastCreatedId, { primary: true });
+        }
+        showToast(`已复制 ${createdCount} 个卡片`, "ok");
+    }
+    return createdCount;
+}
+
+function duplicateSelectedNode() {
+    const ids = [];
+    if (graphEditor?.selectedNodeIds instanceof Set) {
+        for (const id of graphEditor.selectedNodeIds) {
+            const s = String(id || "");
+            if (!s || s === GRAPH_INPUT_ID || s === GRAPH_OUTPUT_ID) continue;
+            ids.push(s);
+        }
+    }
+    if (!ids.length) {
+        const state = store.getState();
+        const selected = String(state?.selectedNodeId || "");
+        if (selected && selected !== GRAPH_INPUT_ID && selected !== GRAPH_OUTPUT_ID) ids.push(selected);
+    }
+    if (!ids.length) {
+        showToast("请先选择要复制的卡片", "warn");
+        return 0;
+    }
+    return duplicateNodeByIds(ids);
 }
 
 function deleteSelectedNode() {
@@ -2059,7 +2300,14 @@ function renderNodeParamList(state, node) {
                         String(p.type || prevType).toLowerCase()
                     );
                 }
-                n.params = ensurePostInputSamplerParam(n.params, getPostInputTextureMinCount(n.inputs));
+                if (normalizePostNodeType(n.type) === NODE_TYPE_TEXTURE) {
+                    const textureOnly = n.params.filter((param) => isTextureParam(param)).slice(0, 1);
+                    n.params = ensurePostInputSamplerParam(textureOnly, 1);
+                    n.inputs = 0;
+                    n.outputs = 1;
+                } else {
+                    n.params = ensurePostInputSamplerParam(n.params, getPostInputTextureMinCount(n.inputs));
+                }
                 syncNodeShaderUniformDecls(n, oldNames);
             }, { reason: "node-param-change", forceCompile: true, forceKotlin: true });
         },
@@ -2069,7 +2317,14 @@ function renderNodeParamList(state, node) {
                 if (!n) return;
                 const oldNames = (n.params || []).map((it) => String(it?.name || "").trim());
                 n.params.splice(index, 1);
-                n.params = ensurePostInputSamplerParam(n.params, getPostInputTextureMinCount(n.inputs));
+                if (normalizePostNodeType(n.type) === NODE_TYPE_TEXTURE) {
+                    const textureOnly = (n.params || []).filter((param) => isTextureParam(param)).slice(0, 1);
+                    n.params = ensurePostInputSamplerParam(textureOnly, 1);
+                    n.inputs = 0;
+                    n.outputs = 1;
+                } else {
+                    n.params = ensurePostInputSamplerParam(n.params, getPostInputTextureMinCount(n.inputs));
+                }
                 syncNodeShaderUniformDecls(n, oldNames);
             }, { reason: "node-param-delete", forceCompile: true, forceKotlin: true });
         }
@@ -2091,7 +2346,7 @@ function refreshNodeEditorPanel(state) {
             quickAdd.className = "btn small";
             quickAdd.style.marginTop = "8px";
             quickAdd.textContent = "创建后处理卡片";
-            quickAdd.addEventListener("click", () => addPostNode());
+            quickAdd.addEventListener("click", () => addPostNode({ askType: true }));
 
             els.nodeEditorEmpty.appendChild(info);
             els.nodeEditorEmpty.appendChild(quickAdd);
@@ -2099,6 +2354,10 @@ function refreshNodeEditorPanel(state) {
         els.nodeEditorEmpty?.classList.remove("hidden");
         els.nodeEditor?.classList.add("hidden");
         els.nodeTextureHint?.classList.add("hidden");
+        if (els.btnDuplicateNode) {
+            els.btnDuplicateNode.disabled = true;
+            els.btnDuplicateNode.title = "";
+        }
         nodeFragmentEditor.setValue("", { silent: true });
         return;
     }
@@ -2141,6 +2400,10 @@ function refreshNodeEditorPanel(state) {
         els.btnAddNodeParam.title = isTextureNode
             ? "texture 节点固定为纹理输入参数"
             : "";
+    }
+    if (els.btnDuplicateNode) {
+        els.btnDuplicateNode.disabled = false;
+        els.btnDuplicateNode.title = "";
     }
 
     setInputValue(els.inpNodeName, node.name || "");
@@ -2515,6 +2778,51 @@ function bindTextureEvents() {
     });
 }
 
+function bindNodeTypePickerEvents() {
+    const closePicker = () => closeNodeTypePicker({ pickType: null });
+    const pickFirst = () => {
+        const firstType = nodeTypePickerState.list?.[0];
+        if (!firstType) return;
+        closeNodeTypePicker({ pickType: firstType });
+    };
+
+    els.btnCloseNodeTypePicker?.addEventListener("click", closePicker);
+    els.btnCancelNodeTypePicker?.addEventListener("click", closePicker);
+    els.nodeTypePickerMask?.addEventListener("click", closePicker);
+
+    els.nodeTypeSearch?.addEventListener("input", () => {
+        renderNodeTypePicker(els.nodeTypeSearch.value);
+    });
+
+    els.nodeTypeSearch?.addEventListener("keydown", (ev) => {
+        if (ev.code === "Escape") {
+            ev.preventDefault();
+            ev.stopPropagation();
+            closePicker();
+            return;
+        }
+        if (ev.code === "Enter") {
+            ev.preventDefault();
+            ev.stopPropagation();
+            pickFirst();
+        }
+    });
+
+    els.nodeTypePickerModal?.addEventListener("keydown", (ev) => {
+        if (ev.code === "Escape") {
+            ev.preventDefault();
+            ev.stopPropagation();
+            closePicker();
+            return;
+        }
+        if (ev.code === "Enter" && document.activeElement !== els.nodeTypeSearch) {
+            ev.preventDefault();
+            ev.stopPropagation();
+            pickFirst();
+        }
+    });
+}
+
 function bindNodeEvents() {
     const patchSelectedNode = (mutator, meta = {}) => {
         store.patch((draft) => {
@@ -2609,6 +2917,10 @@ function bindNodeEvents() {
 
     els.btnAddNodeParam?.addEventListener("click", () => {
         patchSelectedNode((node) => {
+            if (normalizePostNodeType(node.type) === NODE_TYPE_TEXTURE) {
+                showToast("texture 卡片不支持新增普通参数", "warn");
+                return;
+            }
             const p = createParamTemplate();
             p.name = `uParam${nextCustomParamSerial(node.params, { excludePostInputSampler: true })}`;
             node.params.push(p);
@@ -2643,11 +2955,14 @@ function bindNodeEvents() {
     els.btnDeleteNode?.addEventListener("click", () => {
         deleteSelectedNode();
     });
+    els.btnDuplicateNode?.addEventListener("click", () => {
+        duplicateSelectedNode();
+    });
 }
 
 function bindPipelineEvents() {
     els.btnAddPass?.addEventListener("click", () => {
-        addPostNode();
+        addPostNode({ askType: true });
     });
 
     els.btnAutoLayout?.addEventListener("click", () => {
@@ -2963,7 +3278,16 @@ function bindTopActions() {
         if (ev.defaultPrevented) return;
         const isMod = ev.ctrlKey || ev.metaKey;
         const editing = shouldIgnoreHotkeysForTarget(ev.target);
-        if (isMod && !editing && !ev.altKey) {
+        const settingsOpen = !!(els.settingsModal && !els.settingsModal.classList.contains("hidden"));
+        const hotkeyOpen = !!(els.hotkeyModal && !els.hotkeyModal.classList.contains("hidden"));
+        const typePickerOpen = isNodeTypePickerOpen();
+        if (typePickerOpen && ev.code === "Escape") {
+            ev.preventDefault();
+            closeNodeTypePicker({ pickType: null });
+            return;
+        }
+        const anyModalOpen = settingsOpen || hotkeyOpen || typePickerOpen;
+        if (isMod && !editing && !anyModalOpen && !ev.altKey) {
             const undoKey = ev.code === "KeyZ" && !ev.shiftKey;
             const redoKey = ev.code === "KeyY" || (ev.code === "KeyZ" && ev.shiftKey);
             if (undoKey) {
@@ -2976,11 +3300,13 @@ function bindTopActions() {
                 performRedo();
                 return;
             }
+            if (ev.code === "KeyD" && !ev.shiftKey) {
+                ev.preventDefault();
+                duplicateSelectedNode();
+                return;
+            }
         }
 
-        const settingsOpen = !!(els.settingsModal && !els.settingsModal.classList.contains("hidden"));
-        const hotkeyOpen = !!(els.hotkeyModal && !els.hotkeyModal.classList.contains("hidden"));
-        const anyModalOpen = settingsOpen || hotkeyOpen;
         if (!anyModalOpen && !editing && !isMod && !ev.altKey && !ev.repeat && (ev.code === "Delete" || ev.code === "Backspace")) {
             ev.preventDefault();
             deleteSelectedNode();
@@ -2991,6 +3317,7 @@ function bindTopActions() {
     bindProjectEvents();
     bindModelEvents();
     bindTextureEvents();
+    bindNodeTypePickerEvents();
     bindNodeEvents();
     bindPipelineEvents();
     bindKotlinEvents();
@@ -3000,6 +3327,7 @@ function bindTopActions() {
 }
 
 function handleHotkeyAction(actionId) {
+    if (isNodeTypePickerOpen()) return;
     switch (actionId) {
         case "addPass":
             addPostNode();

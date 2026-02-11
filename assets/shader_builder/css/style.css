@@ -1385,6 +1385,69 @@ body.card-preview-dragging {
     padding: 0 10px;
 }
 
+.picker {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
+    align-content: start;
+}
+
+.pickitem {
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    padding: 10px;
+    cursor: pointer;
+    text-align: left;
+    background: color-mix(in srgb, var(--panel2) 78%, transparent);
+    transition: transform .06s ease, border-color .15s ease, background .15s ease;
+}
+
+.pickitem:hover {
+    transform: translateY(-1px);
+    background: color-mix(in srgb, var(--panel2) 58%, transparent);
+    border-color: color-mix(in srgb, var(--line2) 74%, #ffffff22);
+}
+
+.pickitem .t {
+    font-weight: 700;
+    margin-bottom: 4px;
+}
+
+.pickitem .d {
+    font-size: 12px;
+    color: var(--muted);
+}
+
+#nodeTypePickerModal {
+    width: min(900px, 94vw);
+}
+
+.node-type-picker {
+    min-height: 220px;
+    max-height: 54vh;
+    overflow: auto;
+    padding-right: 4px;
+}
+
+.node-type-item.active {
+    border-color: color-mix(in srgb, var(--accent) 66%, var(--line2));
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 36%, transparent) inset;
+}
+
+.node-type-meta {
+    margin-top: 8px;
+    font-size: 11px;
+    color: var(--muted);
+}
+
+.node-type-empty {
+    border: 1px dashed var(--line2);
+    border-radius: 12px;
+    padding: 14px;
+    color: var(--muted);
+    font-size: 12px;
+}
+
 .settings-grid {
     display: grid;
     gap: 10px;
@@ -1490,6 +1553,12 @@ body.card-preview-dragging {
     .topbar-left,
     .topbar-right {
         flex-wrap: wrap;
+    }
+}
+
+@media (max-width: 900px) {
+    .picker {
+        grid-template-columns: 1fr;
     }
 }
 
