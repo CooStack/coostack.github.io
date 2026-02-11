@@ -769,10 +769,15 @@ export class ShaderCodeEditor {
         this.portalParent = null;
         this.indentUnit = "    ";
         this.suggestSuspendUntil = 0;
+        this.historyLimit = 240;
+        this.localHistory = [];
+        this.localHistoryIndex = -1;
+        this.historyApplying = false;
 
         this.buildDOM();
         this.bindEvents();
         this.renderHighlight();
+        this.resetLocalHistory();
         EDITOR_REGISTRY.add(this);
     }
 
@@ -840,6 +845,7 @@ export class ShaderCodeEditor {
             this.renderHighlight();
             this.syncScroll();
             this.onChange(this.textarea.value);
+            if (!this.historyApplying) this.pushLocalHistorySnapshot();
             if (Date.now() < this.suggestSuspendUntil) {
                 this.closeSuggest();
                 return;
@@ -855,7 +861,10 @@ export class ShaderCodeEditor {
             const isMod = ev.ctrlKey || ev.metaKey;
 
             if (isMod && !ev.altKey && (ev.code === "KeyZ" || ev.code === "KeyY")) {
-                // Keep native textarea undo/redo behavior.
+                const redo = ev.code === "KeyY" || (ev.code === "KeyZ" && ev.shiftKey);
+                this.stepLocalHistory(redo ? 1 : -1);
+                ev.preventDefault();
+                ev.stopPropagation();
                 this.suggestSuspendUntil = Date.now() + 360;
                 this.closeSuggest();
                 return;
@@ -1010,10 +1019,68 @@ export class ShaderCodeEditor {
         this.renderHighlight();
         this.syncScroll();
         if (!opts.silent) this.onChange(this.textarea.value);
+        this.resetLocalHistory();
     }
 
     getValue() {
         return this.textarea.value;
+    }
+
+    createLocalHistorySnapshot() {
+        return {
+            value: String(this.textarea.value || ""),
+            start: Number(this.textarea.selectionStart || 0),
+            end: Number(this.textarea.selectionEnd || 0)
+        };
+    }
+
+    sameLocalHistorySnapshot(a, b) {
+        if (!a || !b) return false;
+        return a.value === b.value && a.start === b.start && a.end === b.end;
+    }
+
+    resetLocalHistory() {
+        const snap = this.createLocalHistorySnapshot();
+        this.localHistory = [snap];
+        this.localHistoryIndex = 0;
+    }
+
+    pushLocalHistorySnapshot() {
+        const snap = this.createLocalHistorySnapshot();
+        const cur = this.localHistory[this.localHistoryIndex];
+        if (this.sameLocalHistorySnapshot(cur, snap)) return;
+
+        if (this.localHistoryIndex < this.localHistory.length - 1) {
+            this.localHistory = this.localHistory.slice(0, this.localHistoryIndex + 1);
+        }
+        this.localHistory.push(snap);
+        if (this.localHistory.length > this.historyLimit) {
+            const overflow = this.localHistory.length - this.historyLimit;
+            this.localHistory.splice(0, overflow);
+            this.localHistoryIndex = Math.max(0, this.localHistoryIndex - overflow);
+        }
+        this.localHistoryIndex = this.localHistory.length - 1;
+    }
+
+    applyLocalHistorySnapshot(snap) {
+        if (!snap) return false;
+        this.historyApplying = true;
+        this.textarea.value = String(snap.value || "");
+        this.textarea.selectionStart = Number(snap.start || 0);
+        this.textarea.selectionEnd = Number(snap.end || 0);
+        this.renderHighlight();
+        this.syncScroll();
+        this.onChange(this.textarea.value);
+        this.historyApplying = false;
+        return true;
+    }
+
+    stepLocalHistory(delta = -1) {
+        if (!Number.isFinite(delta) || delta === 0) return false;
+        const next = this.localHistoryIndex + (delta > 0 ? 1 : -1);
+        if (next < 0 || next >= this.localHistory.length) return false;
+        this.localHistoryIndex = next;
+        return this.applyLocalHistorySnapshot(this.localHistory[this.localHistoryIndex]);
     }
 
     setCompletions(items) {
@@ -1163,6 +1230,7 @@ export class ShaderCodeEditor {
         this.renderHighlight();
         this.syncScroll();
         this.onChange(this.textarea.value);
+        if (!this.historyApplying) this.pushLocalHistorySnapshot();
         this.closeSuggest();
         this.textarea.focus();
     }
@@ -1224,6 +1292,7 @@ export class ShaderCodeEditor {
         this.renderHighlight();
         this.syncScroll();
         this.onChange(this.textarea.value);
+        if (!this.historyApplying) this.pushLocalHistorySnapshot();
         this.closeSuggest();
     }
 
@@ -1236,6 +1305,7 @@ export class ShaderCodeEditor {
             this.renderHighlight();
             this.syncScroll();
             this.onChange(this.textarea.value);
+            if (!this.historyApplying) this.pushLocalHistorySnapshot();
             this.closeSuggest();
             return;
         }
@@ -1250,6 +1320,7 @@ export class ShaderCodeEditor {
             this.renderHighlight();
             this.syncScroll();
             this.onChange(this.textarea.value);
+            if (!this.historyApplying) this.pushLocalHistorySnapshot();
             this.closeSuggest();
             return;
         }
@@ -1260,6 +1331,7 @@ export class ShaderCodeEditor {
             this.renderHighlight();
             this.syncScroll();
             this.onChange(this.textarea.value);
+            if (!this.historyApplying) this.pushLocalHistorySnapshot();
             this.closeSuggest();
             return;
         }
@@ -1275,6 +1347,7 @@ export class ShaderCodeEditor {
         this.renderHighlight();
         this.syncScroll();
         this.onChange(this.textarea.value);
+        if (!this.historyApplying) this.pushLocalHistorySnapshot();
         this.closeSuggest();
     }
 
@@ -1294,6 +1367,7 @@ export class ShaderCodeEditor {
         this.renderHighlight();
         this.syncScroll();
         this.onChange(this.textarea.value);
+        if (!this.historyApplying) this.pushLocalHistorySnapshot();
         this.closeSuggest();
         return true;
     }
@@ -1317,6 +1391,7 @@ export class ShaderCodeEditor {
         this.renderHighlight();
         this.syncScroll();
         this.onChange(this.textarea.value);
+        if (!this.historyApplying) this.pushLocalHistorySnapshot();
         this.closeSuggest();
         return true;
     }
@@ -1339,6 +1414,7 @@ export class ShaderCodeEditor {
         this.renderHighlight();
         this.syncScroll();
         this.onChange(this.textarea.value);
+        if (!this.historyApplying) this.pushLocalHistorySnapshot();
         this.closeSuggest();
 
         if (navigator.clipboard?.writeText) {
@@ -1359,6 +1435,7 @@ export class ShaderCodeEditor {
         this.renderHighlight();
         this.syncScroll();
         this.onChange(this.textarea.value);
+        if (!this.historyApplying) this.pushLocalHistorySnapshot();
         this.closeSuggest();
     }
 
@@ -1400,6 +1477,7 @@ export class ShaderCodeEditor {
         this.renderHighlight();
         this.syncScroll();
         this.onChange(this.textarea.value);
+        if (!this.historyApplying) this.pushLocalHistorySnapshot();
         this.closeSuggest();
     }
 
@@ -1434,7 +1512,8 @@ export class ShaderCodeEditor {
         const formatted = formattedLines.join("\n");
         if (formatted === this.textarea.value) return;
 
-        this.textarea.value = formatted;
+        const prevLen = this.textarea.value.length;
+        this.textarea.setRangeText(formatted, 0, prevLen, "end");
 
         const targetLine = Math.max(0, Math.min(cursorLine, formattedLines.length - 1));
         const newLine = formattedLines[targetLine] || "";
@@ -1452,6 +1531,7 @@ export class ShaderCodeEditor {
         this.renderHighlight();
         this.syncScroll();
         this.onChange(this.textarea.value);
+        if (!this.historyApplying) this.pushLocalHistorySnapshot();
         this.closeSuggest();
     }
 
