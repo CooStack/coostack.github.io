@@ -1,4 +1,4 @@
-﻿import { GRAPH_INPUT_ID, GRAPH_OUTPUT_ID } from "./store.js";
+import { GRAPH_INPUT_ID, GRAPH_OUTPUT_ID } from "./store.js";
 import { parseVec } from "./utils.js";
 import { MC_COMPAT } from "./constants.js";
 
@@ -32,19 +32,6 @@ function sanitizeUniformExpr(raw, fallback = "") {
     return expr || fallback;
 }
 
-function inferUniformExprFromValue(raw, type) {
-    const value = String(raw ?? "").trim();
-    if (!value) return "";
-
-    const t = String(type || "float").toLowerCase();
-    if (t === "bool" && /^(true|false)$/i.test(value)) return "";
-    if (/^[+\-]?\d+(?:\.\d+)?(?:[eE][+\-]?\d+)?[fFlL]?$/.test(value)) return "";
-    if (t === "vec2" && /^([+\-]?\d+(?:\.\d+)?(?:[eE][+\-]?\d+)?\s*,\s*){1}[+\-]?\d+(?:\.\d+)?(?:[eE][+\-]?\d+)?$/.test(value)) return "";
-    if (t === "vec3" && /^([+\-]?\d+(?:\.\d+)?(?:[eE][+\-]?\d+)?\s*,\s*){2}[+\-]?\d+(?:\.\d+)?(?:[eE][+\-]?\d+)?$/.test(value)) return "";
-
-    return /[A-Za-z_]/.test(value) ? sanitizeUniformExpr(value, "") : "";
-}
-
 function buildProgramSetter(param, target = "program") {
     const name = String(param?.name || "uParam");
     const type = String(param?.type || "float").toLowerCase();
@@ -52,7 +39,7 @@ function buildProgramSetter(param, target = "program") {
     const useUniformExpr = String(param?.valueSource || "value").toLowerCase() === "uniform";
     const valueExpr = useUniformExpr
         ? sanitizeUniformExpr(param?.valueExpr, "")
-        : inferUniformExprFromValue(value, type);
+        : "";
 
     if (type === "int") {
         const rhs = valueExpr || kotlinScalar(value, "int");
@@ -204,11 +191,71 @@ function nodeVarMap(nodes) {
     return map;
 }
 
-function resolveNodeExpression(node, variableName) {
+function buildTextureLookup(state) {
+    const map = new Map();
+    for (const tex of state?.textures || []) {
+        const id = String(tex?.id || "").trim();
+        if (!id || map.has(id)) continue;
+        map.set(id, tex);
+    }
+    return map;
+}
+
+function pickPrimaryTextureParam(node) {
+    for (const param of node?.params || []) {
+        if (String(param?.type || "").toLowerCase() !== "texture") continue;
+        return param;
+    }
+    return null;
+}
+
+function buildTextureNodeSourceLines(node, textureById) {
+    const param = pickPrimaryTextureParam(node);
+    const sourceType = String(param?.sourceType || "value").toLowerCase();
+    const textureId = String(param?.textureId || "").trim();
+
+    if (sourceType === "upload" && textureId && textureById.has(textureId)) {
+        const texDef = textureById.get(textureId) || {};
+        const path = buildUploadedTextureResourcePath(texDef.name || textureId);
+        return [
+            "addTexture(",
+            "    IdentifierTexture(",
+            "        ResourceLocation.fromNamespaceAndPath(CooParticlesConstants.MOD_ID, \"" + path + "\")",
+            "    )",
+            ")"
+        ];
+    }
+
+    return [
+        "addTexture(ReferenceTexture(minecraft.mainRenderTarget.colorTextureId))"
+    ];
+}
+
+function resolveNodeExpression(node, variableName, textureById = new Map()) {
     const fragmentPath = node.fragmentPath || "pipe/frags/screen.fsh";
     const baseIndent = "            ";
+    const nodeType = String(node?.type || "simple").toLowerCase();
 
-    if (node.type === "pingpong") {
+    if (nodeType === "texture") {
+        const sourceLines = buildTextureNodeSourceLines(node, textureById);
+        const body = [
+            `${baseIndent}TextureShaderPipe(`,
+            `${baseIndent}    SimpleTextures().apply {`,
+            ...sourceLines.map((line) => `${baseIndent}        ${line}`),
+            `${baseIndent}    }`,
+            `${baseIndent})`
+        ];
+
+        let suffix = "";
+        if (node.useMipmap) suffix += ".useMipmap()";
+        return {
+            header: body.join("\n"),
+            suffix,
+            variableName
+        };
+    }
+
+    if (nodeType === "pingpong") {
         const body = [
             `${baseIndent}PingPongShaderPipe(`,
             `${baseIndent}    IdentifierShader(`,
@@ -410,6 +457,7 @@ export function generatePostKotlin(state) {
     const nodes = Array.isArray(state?.post?.nodes) ? state.post.nodes : [];
     const links = Array.isArray(state?.post?.links) ? state.post.links : [];
     const map = nodeVarMap(nodes);
+    const textureById = buildTextureLookup(state);
     const lines = createTargetHeader();
 
     lines.push("// ---- Post Process Pipeline ----");
@@ -426,10 +474,10 @@ export function generatePostKotlin(state) {
 
     for (const node of nodes) {
         const variableName = map.get(node.id) || "pipe_unknown";
-        const expr = resolveNodeExpression(node, variableName);
+        const expr = resolveNodeExpression(node, variableName, textureById);
         lines.push(`val ${variableName} = addPipe(`);
         lines.push(expr.header);
-        lines.push(`            ${expr.suffix}`);
+        if (expr.suffix) lines.push(`            ${expr.suffix}`);
         lines.push(")");
         lines.push("");
     }
@@ -460,6 +508,7 @@ export function generatePostKotlin(state) {
     lines.push("// Notes:");
     lines.push("// 1) 上传的后处理 shader 文本请保存到资源目录后，把 fragmentPath 指向真实资源路径。");
     lines.push("// 2) texture 参数支持 uploaded/connection；connection 会在注释里保留来源，按你的管线映射到 sampler slot。");
+    lines.push("// 3) texture 类型节点会生成 TextureShaderPipe；若未绑定上传纹理，会回退到主渲染目标颜色纹理。");
 
     return lines.join("\n");
 }

@@ -1,4 +1,4 @@
-﻿:root {
+:root {
     --bg: #0e1218;
     --panel: #151b24;
     --panel2: #121822;
@@ -432,6 +432,12 @@ body.is-resizing {
     color: var(--muted);
 }
 
+.field-note {
+    font-size: 11px;
+    line-height: 1.3;
+    color: var(--muted);
+}
+
 .field-inline {
     display: flex;
     align-items: center;
@@ -668,6 +674,14 @@ body.is-resizing {
     color: var(--muted);
 }
 
+.graph-node-output-hint {
+    margin-bottom: 6px;
+    font-size: 10px;
+    line-height: 1.3;
+    color: color-mix(in srgb, var(--text) 64%, var(--muted));
+    word-break: break-word;
+}
+
 .graph-node-inline {
     display: grid;
     gap: 6px;
@@ -680,6 +694,18 @@ body.is-resizing {
 
 .graph-node-inline-row.dual {
     grid-template-columns: 1fr 1fr;
+}
+
+.graph-node-inline-field {
+    min-width: 0;
+    display: grid;
+    gap: 3px;
+}
+
+.graph-node-inline-field-label {
+    font-size: 10px;
+    color: var(--muted);
+    line-height: 1.15;
 }
 
 .graph-node-inline-check {

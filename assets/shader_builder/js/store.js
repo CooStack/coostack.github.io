@@ -1,4 +1,4 @@
-﻿import {
+import {
     DEFAULT_MODEL_FRAGMENT,
     DEFAULT_MODEL_VERTEX,
     DEFAULT_POST_FRAGMENT,
@@ -11,6 +11,13 @@ import { deepClone, uid } from "./utils.js";
 
 export const GRAPH_INPUT_ID = "__input__";
 export const GRAPH_OUTPUT_ID = "__output__";
+export const POST_INPUT_SAMPLER_NAME = "samp";
+
+export function getPostInputTextureMinCount(rawInputs = 1) {
+    const n = Number(rawInputs);
+    if (!Number.isFinite(n)) return 1;
+    return Math.max(1, Math.min(8, Math.round(n)));
+}
 
 export function sanitizeNodeNameForPath(name) {
     const raw = String(name || "").trim();
@@ -56,7 +63,7 @@ export function createDefaultPostNode(index = 0) {
         vertexPath: "pipe/vertexes/screen.vsh",
         fragmentPathTemplate,
         fragmentPath: resolveNodeFragmentPath(name, fragmentPathTemplate),
-        params: createDefaultPostParams(),
+        params: ensurePostInputSamplerParam(createDefaultPostParams(), 1),
         inputs: 1,
         outputs: 1,
         textureUnit: 1,
@@ -96,6 +103,69 @@ export function createDefaultState() {
     };
 }
 
+export function isPostInputSamplerParam(param) {
+    return isTextureParam(param);
+}
+
+export function isTextureParam(param) {
+    const type = String(param?.type || "").trim().toLowerCase();
+    return type === "texture";
+}
+
+export function countTextureParams(params = []) {
+    let count = 0;
+    for (const p of params || []) {
+        if (isTextureParam(p)) count += 1;
+    }
+    return count;
+}
+
+function defaultPostTextureParamName(index = 0) {
+    if (index <= 0) return POST_INPUT_SAMPLER_NAME;
+    return `${POST_INPUT_SAMPLER_NAME}${index + 1}`;
+}
+
+function normalizePostInputSamplerParam(param, textureIndex = 0) {
+    const base = Object.assign(createParamTemplate(), param || {});
+    const name = String(base.name || "").trim();
+    base.name = name || defaultPostTextureParamName(textureIndex);
+    base.type = "texture";
+    base.valueSource = "value";
+    base.valueExpr = "";
+    base.sourceType = String(base.sourceType || "value");
+    if (!["value", "upload", "connection"].includes(base.sourceType)) {
+        base.sourceType = "value";
+    }
+    if (!String(base.value || "").trim()) base.value = "0";
+    if (base.sourceType !== "upload") base.textureId = "";
+    if (base.sourceType !== "connection") base.connection = "";
+    return base;
+}
+
+export function ensurePostInputSamplerParam(params = [], requiredCount = 1) {
+    const minCount = getPostInputTextureMinCount(requiredCount);
+    const list = Array.isArray(params) ? params.map((p) => Object.assign({}, p || {})) : [];
+    const out = [];
+    let textureIndex = 0;
+
+    for (const p of list) {
+        const copy = Object.assign({}, p || {});
+        if (isTextureParam(copy)) {
+            out.push(normalizePostInputSamplerParam(copy, textureIndex));
+            textureIndex += 1;
+            continue;
+        }
+        out.push(copy);
+    }
+
+    while (textureIndex < minCount) {
+        out.push(normalizePostInputSamplerParam(null, textureIndex));
+        textureIndex += 1;
+    }
+
+    return out;
+}
+
 function normalizePostGraphState(state) {
     if (!state || typeof state !== "object") return;
     if (!state.post || typeof state.post !== "object") state.post = {};
@@ -103,6 +173,11 @@ function normalizePostGraphState(state) {
     if (!Array.isArray(state.post.links)) state.post.links = [];
 
     const nodes = state.post.nodes;
+    for (const node of nodes) {
+        if (!node || typeof node !== "object") continue;
+        const minTextureCount = getPostInputTextureMinCount(node.inputs);
+        node.params = ensurePostInputSamplerParam(node.params, minTextureCount);
+    }
     const nodeIds = new Set(nodes.map((n) => String(n?.id || "")).filter(Boolean));
     const dedup = new Set();
     const links = [];
@@ -148,6 +223,7 @@ function normalizePostGraphState(state) {
 
 export function createStore(initialState = createDefaultState()) {
     let state = deepClone(initialState);
+    normalizePostGraphState(state);
     const listeners = new Set();
     const undoStack = [];
     const redoStack = [];

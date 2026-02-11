@@ -1,4 +1,4 @@
-﻿import { escapeHtml } from "./utils.js";
+import { escapeHtml } from "./utils.js";
 
 const GLSL_KEYWORDS = new Set([
     "attribute", "const", "uniform", "varying", "in", "out", "inout", "break", "continue", "do", "for", "while", "if", "else",
@@ -294,9 +294,11 @@ export const BASE_GLSL_COMPLETIONS = dedupeCompletions(toCompletionObjects([
     { label: "#version 330 core", insertText: "#version 330 core\n", detail: "MC 1.21.1 GLSL target", priority: 100 },
     { label: "precision highp float;", insertText: "precision highp float;\n", detail: "Precision declaration", priority: 100 },
     { label: "uniform float uTime;", insertText: "uniform float uTime;\n", detail: "Time uniform", priority: 100 },
+    { label: "uniform vec3 CameraPos;", insertText: "uniform vec3 CameraPos;\n", detail: "Camera position uniform", priority: 100 },
     { label: "uniform vec3 uColor;", insertText: "uniform vec3 uColor;\n", detail: "Color uniform", priority: 100 },
     { label: "uniform sampler2D uTexture0;", insertText: "uniform sampler2D uTexture0;\n", detail: "Texture uniform", priority: 100 },
     { label: "uTime", insertText: "uTime", detail: "Common uniform symbol", priority: 210 },
+    { label: "CameraPos", insertText: "CameraPos", detail: "Common uniform symbol", priority: 210 },
     { label: "tickDelta", insertText: "tickDelta", detail: "Common uniform symbol", priority: 210 },
     { label: "partialTicks", insertText: "partialTicks", detail: "Common uniform symbol", priority: 210 },
     { label: "uResolution", insertText: "uResolution", detail: "Common uniform symbol", priority: 210 },
@@ -357,6 +359,59 @@ function defaultTokenRange(text, caret) {
     let end = caret;
     while (end < text.length && /[A-Za-z0-9_]/.test(text[end])) end += 1;
     return { start, end, token: text.slice(start, caret) };
+}
+
+function isCaretInCommentContext(source, caret) {
+    const text = String(source || "");
+    const end = Math.max(0, Math.min(Number(caret) || 0, text.length));
+
+    let mode = "code";
+    let quote = "";
+
+    for (let i = 0; i < end; i += 1) {
+        const ch = text[i];
+        const next = text[i + 1] || "";
+
+        if (mode === "line-comment") {
+            if (ch === "\n") mode = "code";
+            continue;
+        }
+        if (mode === "block-comment") {
+            if (ch === "*" && next === "/") {
+                mode = "code";
+                i += 1;
+            }
+            continue;
+        }
+        if (mode === "string") {
+            if (ch === "\\") {
+                i += 1;
+                continue;
+            }
+            if (ch === quote) {
+                mode = "code";
+                quote = "";
+            }
+            continue;
+        }
+
+        if (ch === "\"" || ch === "'") {
+            mode = "string";
+            quote = ch;
+            continue;
+        }
+        if (ch === "/" && next === "/") {
+            mode = "line-comment";
+            i += 1;
+            continue;
+        }
+        if (ch === "/" && next === "*") {
+            mode = "block-comment";
+            i += 1;
+        }
+    }
+
+    return mode === "line-comment" || mode === "block-comment";
 }
 
 function ensurePortalHost() {
@@ -799,7 +854,7 @@ export class ShaderCodeEditor {
 
         const hintEl = document.createElement("div");
         hintEl.className = "editor-hint";
-        hintEl.textContent = "Ctrl+Space 提示 | Ctrl+Shift+I 格式化";
+        hintEl.textContent = "Ctrl+/ 行注释 | Ctrl+Space 提示 | Ctrl+Shift+I 格式化";
 
         this.btnMaxEl = document.createElement("button");
         this.btnMaxEl.type = "button";
@@ -873,6 +928,12 @@ export class ShaderCodeEditor {
             if (isMod && !ev.altKey && ev.code === "KeyX" && (this.textarea.selectionStart === this.textarea.selectionEnd)) {
                 ev.preventDefault();
                 this.cutCurrentLine();
+                return;
+            }
+
+            if (isMod && !ev.altKey && (ev.code === "Slash" || ev.code === "NumpadDivide")) {
+                ev.preventDefault();
+                this.toggleLineCommentAtSelection();
                 return;
             }
 
@@ -1139,6 +1200,12 @@ export class ShaderCodeEditor {
     }
 
     openSuggest(manual = false) {
+        const caret = this.textarea.selectionStart || 0;
+        if (isCaretInCommentContext(this.textarea.value, caret)) {
+            this.closeSuggest();
+            return;
+        }
+
         const range = this.currentTokenRange();
         this.suggestRange = range;
 
@@ -1192,6 +1259,10 @@ export class ShaderCodeEditor {
     }
 
     tryAutoSuggest() {
+        if (isCaretInCommentContext(this.textarea.value, this.textarea.selectionStart || 0)) {
+            this.closeSuggest();
+            return;
+        }
         const range = this.currentTokenRange();
         const token = String(range.token || "");
         if (token.length < this.autoSuggestMin) {
@@ -1253,6 +1324,45 @@ export class ShaderCodeEditor {
         this.onChange(this.textarea.value);
         this.closeSuggest();
         return true;
+    }
+
+    toggleLineCommentAtSelection() {
+        const text = String(this.textarea.value || "");
+        const start = this.textarea.selectionStart || 0;
+        const endRaw = this.textarea.selectionEnd || start;
+        const hasSelection = endRaw !== start;
+        const end = hasSelection && endRaw > start && text[endRaw - 1] === "\n" ? endRaw - 1 : endRaw;
+
+        const lineStart = text.lastIndexOf("\n", Math.max(0, start - 1)) + 1;
+        const lineEndRaw = text.indexOf("\n", end);
+        const lineEnd = lineEndRaw < 0 ? text.length : lineEndRaw;
+
+        const block = text.slice(lineStart, lineEnd);
+        const lines = block.split("\n");
+        const allCommented = lines.every((line) => /^[ \t]*\/\//.test(line));
+        const mapped = lines.map((line) => {
+            if (allCommented) {
+                return line.replace(/^([ \t]*)\/\//, "$1");
+            }
+            return line.replace(/^([ \t]*)/, "$1//");
+        });
+        const nextBlock = mapped.join("\n");
+
+        if (hasSelection) {
+            this.textarea.setRangeText(nextBlock, lineStart, lineEnd, "select");
+        } else {
+            this.textarea.setRangeText(nextBlock, lineStart, lineEnd, "end");
+            const caretShift = allCommented ? -2 : 2;
+            const nextCaret = Math.max(lineStart, start + caretShift);
+            this.textarea.selectionStart = nextCaret;
+            this.textarea.selectionEnd = nextCaret;
+        }
+
+        this.renderHighlight();
+        this.syncScroll();
+        this.onChange(this.textarea.value);
+        if (!this.historyApplying) this.pushLocalHistorySnapshot();
+        this.closeSuggest();
     }
 
     insertIndentAtCaret(direction = 1) {

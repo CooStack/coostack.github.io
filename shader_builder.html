@@ -1,4 +1,4 @@
-﻿<!doctype html>
+<!doctype html>
 <html lang="zh-CN">
 <head>
     <meta charset="utf-8" />
@@ -90,7 +90,7 @@
             </section>
         </aside>
 
-        <div class="resizer resizer-left" data-resizer="left" aria-hidden="true"></div>
+        <div class="resizer resizer-left" data-resizer="left" aria-hidden="true "></div>
 
         <section class="viewer">
             <div class="viewer-hud">
@@ -165,6 +165,7 @@
                                 <select id="selNodeType" class="input">
                                     <option value="simple">simple</option>
                                     <option value="pingpong">pingpong</option>
+                                    <option value="texture">texture</option>
                                 </select>
                             </label>
                         </div>
@@ -179,8 +180,9 @@
                                 <input id="inpNodeInputs" class="input" type="number" min="1" step="1" value="1" />
                             </label>
                             <label class="field">
-                                <span>输出槽数量</span>
-                                <input id="inpNodeOutputs" class="input" type="number" min="1" step="1" value="1" />
+                                <span>输出槽数量（自动）</span>
+                                <input id="inpNodeOutputs" class="input" type="number" min="1" step="1" value="1" readonly />
+                                <span id="nodeOutputHint" class="field-note">根据片元 out 声明自动同步</span>
                             </label>
                             <label class="field">
                                 <span>纹理单元</span>
@@ -206,6 +208,10 @@
                         <div class="field field-inline actions-row">
                             <button id="btnDeleteNode" class="btn danger">删除卡片</button>
                         </div>
+                    </div>
+
+                    <div id="nodeTextureHint" class="hint hidden">
+                        texture 卡片仅输出纹理，不执行片元着色处理。请在参数中选择输入来源（pass input / upload / connection）。
                     </div>
 
                     <div id="nodeShaderSection">

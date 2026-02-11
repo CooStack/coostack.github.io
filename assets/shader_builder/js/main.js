@@ -1,16 +1,20 @@
-﻿import {
+import {
     MC_COMPAT,
     STORAGE_KEYS
 } from "./constants.js";
 import {
+    countTextureParams,
     createDefaultPostNode,
     createDefaultState,
     createParamTemplate,
     createStore,
+    ensurePostInputSamplerParam,
     ensureSelectedNode,
     findPostNode,
     GRAPH_INPUT_ID,
     GRAPH_OUTPUT_ID,
+    getPostInputTextureMinCount,
+    isTextureParam,
     normalizeNodePathTemplate,
     removeNodeAndLinks,
     resolveNodeFragmentPath,
@@ -28,6 +32,7 @@ import {
 } from "./io.js";
 import {
     debounce,
+    deepClone,
     downloadText,
     escapeHtml,
     loadJson,
@@ -123,6 +128,7 @@ const els = {
     nodeParamList: $("nodeParamList"),
     inpNodeInputs: $("inpNodeInputs"),
     inpNodeOutputs: $("inpNodeOutputs"),
+    nodeOutputHint: $("nodeOutputHint"),
     inpNodeTextureUnit: $("inpNodeTextureUnit"),
     selNodeFilter: $("selNodeFilter"),
     inpNodeIterations: $("inpNodeIterations"),
@@ -130,6 +136,7 @@ const els = {
     btnApplyNodeShader: $("btnApplyNodeShader"),
     btnExportNodeFragment: $("btnExportNodeFragment"),
     btnDeleteNode: $("btnDeleteNode"),
+    nodeTextureHint: $("nodeTextureHint"),
     nodeShaderSection: $("nodeShaderSection"),
     nodeShaderActions: $("nodeShaderActions"),
 
@@ -239,6 +246,55 @@ function normalizeNodeNumber(value, fallback = 1, min = 1, max = 8) {
     return Math.max(min, Math.min(max, Math.round(n)));
 }
 
+const NODE_TYPE_SIMPLE = "simple";
+const NODE_TYPE_PINGPONG = "pingpong";
+const NODE_TYPE_TEXTURE = "texture";
+const NODE_TYPE_DEFAULTS = Object.freeze({
+    [NODE_TYPE_SIMPLE]: Object.freeze({
+        inputs: 1,
+        outputs: 1,
+        textureUnit: 1,
+        filter: "GL33.GL_LINEAR",
+        iterations: 1,
+        useMipmap: false
+    }),
+    [NODE_TYPE_PINGPONG]: Object.freeze({
+        inputs: 1,
+        outputs: 1,
+        textureUnit: 1,
+        filter: "GL33.GL_LINEAR",
+        iterations: 4,
+        useMipmap: false
+    }),
+    [NODE_TYPE_TEXTURE]: Object.freeze({
+        inputs: 0,
+        outputs: 1,
+        textureUnit: 1,
+        filter: "GL33.GL_LINEAR",
+        iterations: 1,
+        useMipmap: false
+    })
+});
+
+function normalizePostNodeType(type) {
+    const t = String(type || NODE_TYPE_SIMPLE).trim().toLowerCase();
+    if (t === NODE_TYPE_PINGPONG) return NODE_TYPE_PINGPONG;
+    if (t === NODE_TYPE_TEXTURE) return NODE_TYPE_TEXTURE;
+    return NODE_TYPE_SIMPLE;
+}
+
+function minInputCountByNodeType(type) {
+    return normalizePostNodeType(type) === NODE_TYPE_TEXTURE ? 0 : 1;
+}
+
+function sanitizeTextureNameForKotlin(name, fallback = "texture") {
+    const raw = String(name || "").trim();
+    const base = raw.replace(/[^a-zA-Z0-9_]/g, "_").replace(/_+/g, "_").replace(/^_+|_+$/g, "");
+    let out = base || fallback;
+    if (/^[0-9]/.test(out)) out = `_${out}`;
+    return out.slice(0, 64) || fallback;
+}
+
 const GLSL_UNIFORM_TYPE_MAP = Object.freeze({
     float: "float",
     int: "int",
@@ -247,6 +303,19 @@ const GLSL_UNIFORM_TYPE_MAP = Object.freeze({
     vec3: "vec3",
     texture: "sampler2D"
 });
+const GLSL_TO_PARAM_TYPE_MAP = Object.freeze({
+    float: "float",
+    int: "int",
+    bool: "bool",
+    vec2: "vec2",
+    vec3: "vec3",
+    sampler2D: "texture",
+    samplerCube: "texture"
+});
+const AUTO_SYNC_EXCLUDED_UNIFORM_NAMES = new Set([
+    "tDiffuse",
+    "tex"
+]);
 
 function isValidGlslIdentifier(name) {
     return /^[A-Za-z_][A-Za-z0-9_]*$/.test(String(name || "").trim());
@@ -298,23 +367,303 @@ function findUniformInsertIndex(lines) {
     return idx;
 }
 
-function syncUniformDeclarationsInSource(source, params = []) {
+function stripShaderCommentsPreserveLines(source) {
+    let text = String(source || "");
+    text = text.replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, " "));
+    text = text.replace(/\/\/[^\n]*/g, (m) => " ".repeat(m.length));
+    return text;
+}
+
+function extractUniformDecl(line) {
+    const body = String(line || "").replace(/\/\/.*$/g, "").trim();
+    // Match declarations like:
+    // uniform vec3 CameraPos;
+    // uniform highp vec3 CameraPos;
+    // uniform sampler2D tex;
+    const m = /^uniform\s+(.+?)\s+([A-Za-z_][A-Za-z0-9_]*)\s*(\[[^\]]+\])?\s*;\s*$/.exec(body);
+    if (!m) return null;
+    const typeTokens = String(m[1] || "").trim().split(/\s+/).filter(Boolean);
+    if (!typeTokens.length) return null;
+    return {
+        name: String(m[2] || ""),
+        glslType: String(typeTokens[typeTokens.length - 1] || ""),
+        isArray: !!m[3]
+    };
+}
+
+function extractUniformDeclName(line) {
+    return extractUniformDecl(line)?.name || "";
+}
+
+function paramTypeForGlslUniform(glslType) {
+    return GLSL_TO_PARAM_TYPE_MAP[String(glslType || "").trim()] || "";
+}
+
+function defaultValueForParamType(type) {
+    const t = String(type || "float").toLowerCase();
+    if (t === "int") return "0";
+    if (t === "bool") return "false";
+    if (t === "vec2") return "0,0";
+    if (t === "vec3") return "1,1,1";
+    if (t === "texture") return "0";
+    return "1.0";
+}
+
+function collectUniformDeclsFromSource(source) {
+    const clean = stripShaderCommentsPreserveLines(source);
+    const lines = clean.split(/\r?\n/);
+    const list = [];
+    const seen = new Set();
+
+    for (const line of lines) {
+        const decl = extractUniformDecl(line);
+        if (!decl || decl.isArray) continue;
+        const name = String(decl.name || "").trim();
+        if (!isValidGlslIdentifier(name) || seen.has(name)) continue;
+        if (AUTO_SYNC_EXCLUDED_UNIFORM_NAMES.has(name)) continue;
+        const type = paramTypeForGlslUniform(decl.glslType);
+        if (!type) continue;
+        seen.add(name);
+        list.push({ name, type });
+    }
+
+    return list;
+}
+
+function extractFragmentOutputDecl(line) {
+    const body = String(line || "").replace(/\/\/.*$/g, "").trim();
+    if (!body) return null;
+
+    let layoutSpec = "";
+    let typeExpr = "";
+    let name = "";
+    let isArray = false;
+
+    let m = /^layout\s*\(\s*([^)]+)\s*\)\s*out\s+(.+?)\s+([A-Za-z_][A-Za-z0-9_]*)\s*(\[[^\]]+\])?\s*;\s*$/i.exec(body);
+    if (m) {
+        layoutSpec = String(m[1] || "");
+        typeExpr = String(m[2] || "");
+        name = String(m[3] || "");
+        isArray = !!m[4];
+    } else {
+        m = /^out\s+(.+?)\s+([A-Za-z_][A-Za-z0-9_]*)\s*(\[[^\]]+\])?\s*;\s*$/i.exec(body);
+        if (!m) return null;
+        typeExpr = String(m[1] || "");
+        name = String(m[2] || "");
+        isArray = !!m[3];
+    }
+
+    if (isArray || !isValidGlslIdentifier(name)) return null;
+    const typeTokens = typeExpr.split(/\s+/).filter(Boolean);
+    const glslType = String(typeTokens[typeTokens.length - 1] || "").trim().toLowerCase();
+    if (glslType !== "vec4") return null;
+
+    let location = null;
+    if (layoutSpec) {
+        const loc = /\blocation\s*=\s*(\d+)/i.exec(layoutSpec);
+        if (loc) {
+            const n = Number(loc[1]);
+            if (Number.isFinite(n)) location = Math.max(0, Math.round(n));
+        }
+    }
+
+    return { name, location };
+}
+
+function collectFragmentOutputDeclsFromSource(source) {
+    const clean = stripShaderCommentsPreserveLines(source);
+    const lines = clean.split(/\r?\n/);
+    const list = [];
+    const seen = new Set();
+
+    for (const line of lines) {
+        const decl = extractFragmentOutputDecl(line);
+        if (!decl) continue;
+        const key = String(decl.name || "");
+        if (!key || seen.has(key)) continue;
+        seen.add(key);
+        list.push({
+            name: key,
+            location: Number.isFinite(Number(decl.location)) ? Math.max(0, Math.round(Number(decl.location))) : null
+        });
+    }
+
+    return list;
+}
+
+function areFragmentOutputListsEquivalent(a = [], b = []) {
+    const left = Array.isArray(a) ? a : [];
+    const right = Array.isArray(b) ? b : [];
+    if (left.length !== right.length) return false;
+    for (let i = 0; i < left.length; i += 1) {
+        const x = left[i] || {};
+        const y = right[i] || {};
+        if (String(x.name || "") !== String(y.name || "")) return false;
+        const lx = Number.isFinite(Number(x.location)) ? Math.round(Number(x.location)) : -1;
+        const ly = Number.isFinite(Number(y.location)) ? Math.round(Number(y.location)) : -1;
+        if (lx !== ly) return false;
+    }
+    return true;
+}
+
+function syncNodeOutputsFromShaderSource(node) {
+    if (!node || typeof node !== "object") return false;
+    const nodeType = normalizePostNodeType(node.type);
+
+    let nextDecls = [];
+    let nextOutputs = 1;
+    if (nodeType === NODE_TYPE_TEXTURE) {
+        nextDecls = [{ name: "TextureOut", location: 0 }];
+        nextOutputs = 1;
+    } else {
+        nextDecls = collectFragmentOutputDeclsFromSource(node.fragmentSource);
+        nextOutputs = Math.max(1, Math.min(8, nextDecls.length || 1));
+    }
+
+    let changed = false;
+    if (normalizeNodeNumber(node.outputs, 1, 1, 8) !== nextOutputs) {
+        node.outputs = nextOutputs;
+        changed = true;
+    }
+
+    const prevDecls = Array.isArray(node.__fragmentOutputs) ? node.__fragmentOutputs : [];
+    if (!areFragmentOutputListsEquivalent(prevDecls, nextDecls)) {
+        node.__fragmentOutputs = nextDecls;
+        changed = true;
+    }
+
+    return changed;
+}
+
+function hasIncompleteUniformDeclaration(source) {
+    const clean = stripShaderCommentsPreserveLines(source);
+    for (const line of clean.split(/\r?\n/)) {
+        const trimmed = String(line || "").trim();
+        if (!trimmed) continue;
+        if (!/^uniform\b/.test(trimmed)) continue;
+        if (!/;\s*$/.test(trimmed)) return true;
+    }
+    return false;
+}
+
+function buildParamFromUniformDecl(decl, prev = null) {
+    const base = Object.assign(createParamTemplate(), prev || {});
+    const type = String(decl?.type || "float").toLowerCase();
+    base.name = String(decl?.name || "").trim();
+    base.type = type;
+    base.value = String(base.value ?? "");
+
+    if (type === "texture") {
+        base.sourceType = String(base.sourceType || "value");
+        base.valueSource = "value";
+        base.valueExpr = "";
+        if (!base.value.trim()) base.value = "0";
+    } else {
+        base.sourceType = "value";
+        base.textureId = "";
+        base.connection = "";
+        base.valueSource = String(base.valueSource || "value").toLowerCase() === "uniform" ? "uniform" : "value";
+        if (!base.value.trim()) base.value = defaultValueForParamType(type);
+        if (base.valueSource === "uniform" && !String(base.valueExpr || "").trim()) {
+            base.valueExpr = defaultUniformExprByType(type);
+        } else {
+            base.valueExpr = String(base.valueExpr || "");
+        }
+    }
+
+    return base;
+}
+
+function syncParamsFromUniformSource(params = [], source = "") {
+    const decls = collectUniformDeclsFromSource(source);
+    if (!decls.length && (params || []).length && hasIncompleteUniformDeclaration(source)) {
+        return Array.isArray(params) ? params : [];
+    }
+    const prevByName = new Map();
+    for (const p of params || []) {
+        const name = String(p?.name || "").trim();
+        if (!name || prevByName.has(name)) continue;
+        prevByName.set(name, p);
+    }
+    return decls.map((decl) => buildParamFromUniformDecl(decl, prevByName.get(decl.name)));
+}
+
+function areParamListsEquivalent(a = [], b = []) {
+    const left = Array.isArray(a) ? a : [];
+    const right = Array.isArray(b) ? b : [];
+    if (left.length !== right.length) return false;
+    for (let i = 0; i < left.length; i += 1) {
+        const x = left[i] || {};
+        const y = right[i] || {};
+        if (String(x.id || "") !== String(y.id || "")) return false;
+        if (String(x.name || "") !== String(y.name || "")) return false;
+        if (String(x.type || "") !== String(y.type || "")) return false;
+        if (String(x.value ?? "") !== String(y.value ?? "")) return false;
+        if (String(x.valueSource || "value") !== String(y.valueSource || "value")) return false;
+        if (String(x.valueExpr || "") !== String(y.valueExpr || "")) return false;
+        if (String(x.sourceType || "value") !== String(y.sourceType || "value")) return false;
+        if (String(x.textureId || "") !== String(y.textureId || "")) return false;
+        if (String(x.connection || "") !== String(y.connection || "")) return false;
+    }
+    return true;
+}
+
+function syncModelParamsFromShaderSource(draft) {
+    if (!draft?.model?.shader) return false;
+    const shader = draft.model.shader;
+    const prev = Array.isArray(shader.params) ? shader.params : [];
+    const next = syncParamsFromUniformSource(prev, shader.fragmentSource);
+    if (areParamListsEquivalent(prev, next)) return false;
+    shader.params = next;
+    return true;
+}
+
+function syncNodeParamsFromShaderSource(node) {
+    if (!node) return false;
+    const prev = Array.isArray(node.params) ? node.params : [];
+    const nodeType = normalizePostNodeType(node.type);
+    const minInputs = minInputCountByNodeType(nodeType);
+    const normalizedInputs = normalizeNodeNumber(node.inputs, minInputs, minInputs, 8);
+    const inputChanged = Number(node.inputs) !== normalizedInputs;
+    if (inputChanged) node.inputs = normalizedInputs;
+    const minTextureCount = getPostInputTextureMinCount(node.inputs);
+    const next = nodeType === NODE_TYPE_TEXTURE
+        ? ensurePostInputSamplerParam(
+            prev.filter((p) => isTextureParam(p)).slice(0, 1),
+            Math.max(1, minTextureCount)
+        )
+        : ensurePostInputSamplerParam(
+            syncParamsFromUniformSource(prev, node.fragmentSource),
+            minTextureCount
+        );
+
+    let changed = inputChanged;
+    if (!areParamListsEquivalent(prev, next)) {
+        node.params = next;
+        changed = true;
+    }
+    if (syncNodeOutputsFromShaderSource(node)) changed = true;
+    return changed;
+}
+
+function syncUniformDeclarationsInSource(source, params = [], managedNames = []) {
     const text = String(source || "");
     const desired = collectUniformDeclsFromParams(params);
-    if (!desired.length) return text;
-
     const desiredByName = new Map(desired.map((it) => [it.name, it.decl]));
+    const managed = new Set((managedNames || []).map((n) => String(n || "").trim()).filter(Boolean));
     const lines = text.split(/\r?\n/);
     const seen = new Set();
     const removeIdx = [];
 
     for (let i = 0; i < lines.length; i += 1) {
         const line = String(lines[i] || "");
-        const m = /^\s*uniform\s+([A-Za-z_][A-Za-z0-9_]*)\s+([A-Za-z_][A-Za-z0-9_]*)\s*;\s*$/.exec(line);
-        if (!m) continue;
-        const name = String(m[2] || "");
+        const name = extractUniformDeclName(line);
+        if (!name) continue;
         const wanted = desiredByName.get(name);
-        if (!wanted) continue;
+        if (!wanted) {
+            if (managed.has(name)) removeIdx.push(i);
+            continue;
+        }
         if (seen.has(name)) {
             removeIdx.push(i);
             continue;
@@ -333,18 +682,207 @@ function syncUniformDeclarationsInSource(source, params = []) {
         lines.splice(insertAt, 0, ...missing);
     }
 
-    return lines.join("\n");
+    return {
+        source: lines.join("\n"),
+        managedNames: desired.map((it) => it.name)
+    };
 }
 
-function syncModelShaderUniformDecls(draft) {
+function syncModelShaderUniformDecls(draft, extraManagedNames = []) {
     if (!draft?.model?.shader) return;
     const shader = draft.model.shader;
-    shader.fragmentSource = syncUniformDeclarationsInSource(shader.fragmentSource, shader.params || []);
+    const prevManaged = Array.isArray(shader.__autoUniformNames) ? shader.__autoUniformNames : [];
+    const mergedManaged = Array.from(new Set([
+        ...prevManaged,
+        ...(extraManagedNames || [])
+    ].map((n) => String(n || "").trim()).filter(Boolean)));
+    const synced = syncUniformDeclarationsInSource(shader.fragmentSource, shader.params || [], mergedManaged);
+    shader.fragmentSource = synced.source;
+    shader.__autoUniformNames = synced.managedNames;
 }
 
-function syncNodeShaderUniformDecls(node) {
+function syncNodeShaderUniformDecls(node, extraManagedNames = []) {
     if (!node) return;
-    node.fragmentSource = syncUniformDeclarationsInSource(node.fragmentSource, node.params || []);
+    const prevManaged = Array.isArray(node.__autoUniformNames) ? node.__autoUniformNames : [];
+    const mergedManaged = Array.from(new Set([
+        ...prevManaged,
+        ...(extraManagedNames || [])
+    ].map((n) => String(n || "").trim()).filter(Boolean)));
+    const synced = syncUniformDeclarationsInSource(node.fragmentSource, node.params || [], mergedManaged);
+    node.fragmentSource = synced.source;
+    node.__autoUniformNames = synced.managedNames;
+}
+
+function formatNodeOutputHint(node) {
+    const nodeType = normalizePostNodeType(node?.type);
+    if (nodeType === NODE_TYPE_TEXTURE) {
+        return "texture 节点固定输出: location 0 -> TextureOut";
+    }
+
+    const outputs = Array.isArray(node?.__fragmentOutputs) ? node.__fragmentOutputs : [];
+    if (!outputs.length) return "未检测到 out vec4 声明，默认输出槽数量为 1";
+
+    return outputs.map((item, idx) => {
+        const slot = Number.isFinite(Number(item?.location)) ? Math.round(Number(item.location)) : idx;
+        const name = String(item?.name || `FragColor${idx}`);
+        return `location ${slot}: ${name}`;
+    }).join(" | ");
+}
+
+function escapeRegex(source) {
+    return String(source || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function replaceIdentifierToken(source, fromName, toName) {
+    const text = String(source || "");
+    const from = String(fromName || "").trim();
+    const to = String(toName || "").trim();
+    if (!from || !to || from === to) return { source: text, count: 0 };
+    if (!isValidGlslIdentifier(from) || !isValidGlslIdentifier(to)) return { source: text, count: 0 };
+
+    const re = new RegExp(`\\b${escapeRegex(from)}\\b`, "g");
+    let count = 0;
+    const next = text.replace(re, () => {
+        count += 1;
+        return to;
+    });
+    return { source: next, count };
+}
+
+function applyParamRenameInShaderSource(source, prevName, nextName, paramType = "float") {
+    let nextSource = String(source || "");
+    const direct = replaceIdentifierToken(nextSource, prevName, nextName);
+    nextSource = direct.source;
+
+    if (String(paramType || "").toLowerCase() === "texture" && direct.count === 0) {
+        for (const alias of ["tDiffuse", "tex", "samp"]) {
+            if (alias === prevName || alias === nextName) continue;
+            const fallback = replaceIdentifierToken(nextSource, alias, nextName);
+            nextSource = fallback.source;
+            if (fallback.count > 0) break;
+        }
+    }
+
+    return nextSource;
+}
+
+function cloneNodeParams(params = [], { regenerateIds = false } = {}) {
+    const list = Array.isArray(params) ? params : [];
+    return list.map((p) => {
+        const out = Object.assign({}, p || {});
+        if (regenerateIds) out.id = uid("param");
+        return out;
+    });
+}
+
+function captureNodeTypeSnapshot(node) {
+    const nodeType = normalizePostNodeType(node?.type);
+    const minInputs = minInputCountByNodeType(nodeType);
+    return {
+        fragmentSource: String(node?.fragmentSource || ""),
+        params: cloneNodeParams(node?.params || []),
+        inputs: normalizeNodeNumber(node?.inputs, nodeType === NODE_TYPE_TEXTURE ? 0 : 1, minInputs, 8),
+        outputs: normalizeNodeNumber(node?.outputs, 1, 1, 8),
+        textureUnit: Math.max(0, Math.round(Number(node?.textureUnit || 1))),
+        filter: String(node?.filter || "GL33.GL_LINEAR"),
+        iterations: Math.max(1, Math.round(Number(node?.iterations || 1))),
+        useMipmap: !!node?.useMipmap
+    };
+}
+
+function applyNodeTypeSnapshot(node, snapshot, type) {
+    const normalizedType = normalizePostNodeType(type);
+    const base = NODE_TYPE_DEFAULTS[normalizedType] || NODE_TYPE_DEFAULTS[NODE_TYPE_SIMPLE];
+    const src = snapshot && typeof snapshot === "object" ? snapshot : {};
+    const minInputs = minInputCountByNodeType(normalizedType);
+
+    node.inputs = normalizeNodeNumber(src.inputs, base.inputs, minInputs, 8);
+    node.outputs = normalizeNodeNumber(src.outputs, base.outputs, 1, 8);
+    node.textureUnit = Math.max(0, Math.round(Number(src.textureUnit ?? base.textureUnit)));
+    node.filter = String(src.filter || base.filter);
+    node.iterations = Math.max(1, Math.round(Number(src.iterations ?? base.iterations)));
+    node.useMipmap = src.useMipmap != null ? !!src.useMipmap : !!base.useMipmap;
+
+    if (typeof src.fragmentSource === "string") {
+        node.fragmentSource = src.fragmentSource;
+    }
+    if (Array.isArray(src.params)) {
+        node.params = cloneNodeParams(src.params);
+    } else if (!Array.isArray(node.params)) {
+        node.params = [];
+    }
+}
+
+function switchPostNodeType(node, nextTypeRaw) {
+    if (!node || typeof node !== "object") return false;
+    const prevType = normalizePostNodeType(node.type);
+    const nextType = normalizePostNodeType(nextTypeRaw);
+    if (prevType === nextType) {
+        node.type = prevType;
+        return false;
+    }
+
+    const cache = node.typeStateCache && typeof node.typeStateCache === "object"
+        ? node.typeStateCache
+        : {};
+    cache[prevType] = captureNodeTypeSnapshot(node);
+
+    node.type = nextType;
+    const restored = cache[nextType];
+    if (restored && typeof restored === "object") {
+        applyNodeTypeSnapshot(node, restored, nextType);
+    } else {
+        applyNodeTypeSnapshot(node, null, nextType);
+    }
+    syncNodeOutputsFromShaderSource(node);
+
+    node.typeStateCache = cache;
+    return true;
+}
+
+function makeDuplicatedNodeName(existingNodes = [], sourceName = "Pass") {
+    const used = new Set((existingNodes || []).map((n) => String(n?.name || "").trim()).filter(Boolean));
+    const base = String(sourceName || "Pass").trim() || "Pass";
+    const copyBase = `${base}_copy`;
+    if (!used.has(copyBase)) return copyBase;
+    let idx = 2;
+    while (used.has(`${copyBase}_${idx}`)) idx += 1;
+    return `${copyBase}_${idx}`;
+}
+
+function duplicatePostNode(draft, nodeId) {
+    const source = findPostNode(draft, nodeId);
+    if (!source) return null;
+
+    const copy = deepClone(source);
+    copy.id = uid("pipe");
+    copy.name = makeDuplicatedNodeName(draft?.post?.nodes || [], source.name || "Pass");
+    copy.x = Math.round(Number(source.x || 0) + 48);
+    copy.y = Math.round(Number(source.y || 0) + 48);
+    copy.params = cloneNodeParams(copy.params || [], { regenerateIds: true });
+
+    if (copy.typeStateCache && typeof copy.typeStateCache === "object") {
+        const nextCache = {};
+        for (const [k, v] of Object.entries(copy.typeStateCache)) {
+            const key = normalizePostNodeType(k);
+            if (v && typeof v === "object") {
+                const snap = Object.assign({}, v);
+                snap.params = cloneNodeParams(v.params || [], { regenerateIds: true });
+                nextCache[key] = snap;
+            }
+        }
+        copy.typeStateCache = nextCache;
+    }
+
+    if (copy.fragmentPathTemplate) {
+        copy.fragmentPath = resolveNodeFragmentPath(copy.name, copy.fragmentPathTemplate);
+    }
+    syncNodeShaderUniformDecls(copy);
+    syncNodeOutputsFromShaderSource(copy);
+
+    draft.post.nodes.push(copy);
+    draft.selectedNodeId = copy.id;
+    return copy;
 }
 
 const KOTLIN_KEYWORDS = new Set([
@@ -581,13 +1119,60 @@ const graphEditor = new GraphEditor({
             store.patch((draft) => {
                 const node = findPostNode(draft, nodeId);
                 if (!node) return;
+                const prevType = normalizePostNodeType(node.type);
+                const prevParamMeta = new Map();
+                for (let i = 0; i < (node.params || []).length; i += 1) {
+                    const param = node.params[i] || {};
+                    const key = String(param.id || `idx:${i}`);
+                    if (prevParamMeta.has(key)) continue;
+                    prevParamMeta.set(key, {
+                        name: String(param.name || "").trim(),
+                        type: String(param.type || "").toLowerCase()
+                    });
+                }
                 mutator(node, draft);
+                for (let i = 0; i < (node.params || []).length; i += 1) {
+                    const param = node.params[i] || {};
+                    const key = String(param.id || `idx:${i}`);
+                    const prev = prevParamMeta.get(key);
+                    if (!prev) continue;
+                    const nextName = String(param.name || "").trim();
+                    if (!prev.name || !nextName || prev.name === nextName) continue;
+                    node.fragmentSource = applyParamRenameInShaderSource(
+                        node.fragmentSource,
+                        prev.name,
+                        nextName,
+                        String(param.type || prev.type).toLowerCase()
+                    );
+                }
+                const nextType = normalizePostNodeType(node.type);
+                if (nextType !== prevType) {
+                    switchPostNodeType(node, nextType);
+                }
+                const minTextureCount = getPostInputTextureMinCount(node.inputs);
+                if (nextType === NODE_TYPE_TEXTURE) {
+                    const textureOnly = Array.isArray(node.params)
+                        ? node.params.filter((p) => isTextureParam(p)).slice(0, 1)
+                        : [];
+                    node.params = ensurePostInputSamplerParam(textureOnly, Math.max(1, minTextureCount));
+                } else {
+                    node.params = ensurePostInputSamplerParam(node.params, minTextureCount);
+                }
+                syncNodeOutputsFromShaderSource(node);
                 syncNodeShaderUniformDecls(node);
             }, Object.assign({
                 reason: "node-inline-edit",
                 forceCompile: true,
                 forceKotlin: true
             }, meta || {}));
+        },
+        onDuplicateNode(nodeId) {
+            let created = null;
+            store.patch((draft) => {
+                created = duplicatePostNode(draft, nodeId);
+                ensureSelectedNode(draft);
+            }, { reason: "node-duplicate", forceCompile: true, forceKotlin: true });
+            if (created) showToast("已复制后处理卡片", "ok");
         },
         onAddNode() {
             addPostNode();
@@ -723,6 +1308,7 @@ const modelFragmentEditor = new ShaderCodeEditor({
     onChange(value) {
         store.patch((draft) => {
             draft.model.shader.fragmentSource = value;
+            syncModelParamsFromShaderSource(draft);
         }, { reason: "model-fragment-source", silentUI: true, forceKotlin: true });
     }
 });
@@ -735,6 +1321,7 @@ const nodeFragmentEditor = new ShaderCodeEditor({
             const node = findPostNode(draft, draft.selectedNodeId);
             if (!node) return;
             node.fragmentSource = value;
+            syncNodeParamsFromShaderSource(node);
         }, { reason: "node-fragment-source", silentUI: true, forceKotlin: true });
     }
 });
@@ -963,6 +1550,7 @@ function addPostNode() {
             node.x = Number(selected.x || 220) + 230;
             node.y = Number(selected.y || 80);
         }
+        syncNodeParamsFromShaderSource(node);
 
         draft.post.nodes.push(node);
         draft.selectedNodeId = node.id;
@@ -981,6 +1569,16 @@ function deleteSelectedNode() {
         removeNodeAndLinks(draft, nodeId);
         ensureSelectedNode(draft);
     }, { reason: "node-delete", forceCompile: true, forceKotlin: true });
+}
+
+function nextCustomParamSerial(params = [], { excludePostInputSampler = false, excludeTextureParams = false } = {}) {
+    const excludeTextures = !!(excludePostInputSampler || excludeTextureParams);
+    let count = 0;
+    for (const p of params || []) {
+        if (excludeTextures && isTextureParam(p)) continue;
+        count += 1;
+    }
+    return count + 1;
 }
 
 function refreshEditorCompletions(state) {
@@ -1031,10 +1629,11 @@ function renderTextureList(state) {
 
         const inpName = document.createElement("input");
         inpName.className = "input";
-        inpName.value = String(tex.name || "");
-        inpName.placeholder = "纹理名称";
+        inpName.value = sanitizeTextureNameForKotlin(tex.name || `texture_${tex.id}`);
+        inpName.placeholder = "纹理名称 (Kotlin 标识符)";
         inpName.addEventListener("change", () => {
-            const nextName = String(inpName.value || "").trim() || `texture_${tex.id}`;
+            const nextName = sanitizeTextureNameForKotlin(inpName.value, `texture_${tex.id}`);
+            inpName.value = nextName;
             store.patch((draft) => {
                 const target = (draft.textures || []).find((t) => t.id === tex.id);
                 if (!target) return;
@@ -1125,85 +1724,42 @@ function createValueSourceSelect(current) {
     return sel;
 }
 
-const UNIFORM_EXPR_PRESETS = [
-    "uTime",
-    "tickDelta",
-    "partialTicks",
-    "uResolution",
-    "uMouse",
-    "Math.sin(uTime)",
-    "Math.cos(uTime)",
-    "org.joml.Vector2f(uTime, uTime)",
-    "org.joml.Vector3f(1f, 1f, 1f)"
-];
-const UNIFORM_SYMBOL_PRESETS = new Set([
-    "uTime",
-    "tickDelta",
-    "partialTicks",
-    "uResolution",
-    "uMouse"
-]);
+const UNIFORM_EXPR_OPTIONS_BY_TYPE = Object.freeze({
+    float: ["uTime", "tickDelta", "partialTicks"],
+    int: ["Math.round(tickDelta)", "Math.round(partialTicks)", "0"],
+    bool: ["true", "false"],
+    vec2: ["uResolution", "uMouse", "org.joml.Vector2f(uTime, uTime)"],
+    vec3: ["CameraPos", "org.joml.Vector3f(1f, 1f, 1f)"]
+});
 
-let uniformExprDatalistReady = false;
-let uniformValueDatalistReady = false;
-
-function ensureUniformExprDatalist() {
-    const id = "sb_uniform_expr_suggestions";
-    if (uniformExprDatalistReady && document.getElementById(id)) return id;
-    let list = document.getElementById(id);
-    if (!(list instanceof HTMLDataListElement)) {
-        list = document.createElement("datalist");
-        list.id = id;
-        document.body.appendChild(list);
-    }
-    list.innerHTML = "";
-    for (const expr of UNIFORM_EXPR_PRESETS) {
-        const opt = document.createElement("option");
-        opt.value = expr;
-        list.appendChild(opt);
-    }
-    uniformExprDatalistReady = true;
-    return id;
-}
-
-function ensureUniformValueDatalist() {
-    const id = "sb_uniform_value_suggestions";
-    if (uniformValueDatalistReady && document.getElementById(id)) return id;
-    let list = document.getElementById(id);
-    if (!(list instanceof HTMLDataListElement)) {
-        list = document.createElement("datalist");
-        list.id = id;
-        document.body.appendChild(list);
-    }
-    list.innerHTML = "";
-    for (const expr of UNIFORM_SYMBOL_PRESETS) {
-        const opt = document.createElement("option");
-        opt.value = expr;
-        list.appendChild(opt);
-    }
-    uniformValueDatalistReady = true;
-    return id;
+function uniformExprOptionsByType(type) {
+    const t = String(type || "float").toLowerCase();
+    const base = UNIFORM_EXPR_OPTIONS_BY_TYPE[t] || UNIFORM_EXPR_OPTIONS_BY_TYPE.float;
+    return Array.from(new Set(base.map((it) => String(it || "").trim()).filter(Boolean)));
 }
 
 function defaultUniformExprByType(type) {
-    const t = String(type || "float").toLowerCase();
-    if (t === "vec2") return "org.joml.Vector2f(uTime, uTime)";
-    if (t === "vec3") return "org.joml.Vector3f(1f, 1f, 1f)";
-    if (t === "int") return "0";
-    if (t === "bool") return "true";
-    return "uTime";
+    const list = uniformExprOptionsByType(type);
+    return list[0] || "uTime";
 }
 
-function shouldTreatAsUniformExpr(raw, type) {
-    const value = String(raw || "").trim();
-    if (!value) return false;
-    if (UNIFORM_SYMBOL_PRESETS.has(value)) return true;
-    if (String(type || "").toLowerCase() === "bool" && /^(true|false)$/i.test(value)) return false;
-    if (/^[+\-]?\d+(?:\.\d+)?(?:[eE][+\-]?\d+)?$/.test(value)) return false;
-    return /[A-Za-z_]/.test(value);
+function populateUniformExprSelect(selectEl, type, currentValue = "") {
+    if (!(selectEl instanceof HTMLSelectElement)) return;
+    const current = String(currentValue || "").trim();
+    const options = uniformExprOptionsByType(type);
+    if (current && !options.includes(current)) options.unshift(current);
+    selectEl.innerHTML = "";
+    for (const expr of options) {
+        const opt = document.createElement("option");
+        opt.value = expr;
+        opt.textContent = expr;
+        if (expr === current) opt.selected = true;
+        selectEl.appendChild(opt);
+    }
+    if (!selectEl.value && options.length) selectEl.value = options[0];
 }
 
-function renderParamList({ container, params, textures, step, onPatch, onDelete }) {
+function renderParamList({ container, params, textures, step, onPatch, onDelete, lockParamPredicate = null }) {
     if (!container) return;
     container.innerHTML = "";
 
@@ -1221,6 +1777,7 @@ function renderParamList({ container, params, textures, step, onPatch, onDelete 
         const p = params[i] || {};
         const type = normalizeParamType(p.type);
         const isTextureType = type === "texture";
+        const lockDeleteAndType = typeof lockParamPredicate === "function" ? !!lockParamPredicate(p, i) : false;
 
         const item = document.createElement("div");
         item.className = "param-item";
@@ -1239,6 +1796,12 @@ function renderParamList({ container, params, textures, step, onPatch, onDelete 
         btnDelete.type = "button";
         btnDelete.className = "btn small danger";
         btnDelete.textContent = "删";
+        if (lockDeleteAndType) {
+            btnDelete.disabled = true;
+            btnDelete.title = "至少要保留输入数量对应的 texture 参数";
+        }
+
+        if (lockDeleteAndType) selType.disabled = true;
 
         rowMain.appendChild(inpName);
         rowMain.appendChild(selType);
@@ -1334,7 +1897,6 @@ function renderParamList({ container, params, textures, step, onPatch, onDelete 
             const inpValue = document.createElement("input");
             inpValue.className = "input";
             inpValue.value = String(p.value ?? "");
-            inpValue.setAttribute("list", ensureUniformValueDatalist());
             inpValue.placeholder = placeholderForType(type);
 
             rowMain.appendChild(inpValue);
@@ -1346,26 +1908,27 @@ function renderParamList({ container, params, textures, step, onPatch, onDelete 
             rowValueSource.style.gridTemplateColumns = "1fr 2fr";
 
             const selValueSource = createValueSourceSelect(String(p.valueSource || "value"));
-            const inpExpr = document.createElement("input");
-            inpExpr.className = "input";
-            inpExpr.placeholder = `变量表达式，例如 ${defaultUniformExprByType(type)}`;
-            inpExpr.value = String(p.valueExpr || "");
-            inpExpr.setAttribute("list", ensureUniformExprDatalist());
+            const selExpr = document.createElement("select");
+            selExpr.className = "input";
+            populateUniformExprSelect(selExpr, type, String(p.valueExpr || defaultUniformExprByType(type)));
 
             const updateMode = () => {
-                const useExpr = selValueSource.value === "uniform";
+                const currentType = normalizeParamType(selType.value);
+                const useExpr = currentType !== "texture" && selValueSource.value === "uniform";
                 rowMain.style.gridTemplateColumns = useExpr ? "1fr 1fr auto" : "1fr 1fr 1fr auto";
                 rowValueSource.style.gridTemplateColumns = useExpr ? "1fr 2fr" : "1fr";
                 inpValue.classList.toggle("hidden", useExpr);
-                inpExpr.classList.toggle("hidden", !useExpr);
-                inpExpr.disabled = !useExpr;
+                selExpr.classList.toggle("hidden", !useExpr);
+                selExpr.disabled = !useExpr;
                 inpValue.disabled = useExpr;
-                if (useExpr && !inpExpr.value.trim()) inpExpr.value = defaultUniformExprByType(type);
+                if (useExpr && !String(selExpr.value || "").trim()) {
+                    populateUniformExprSelect(selExpr, currentType, defaultUniformExprByType(currentType));
+                }
             };
             updateMode();
 
             rowValueSource.appendChild(selValueSource);
-            rowValueSource.appendChild(inpExpr);
+            rowValueSource.appendChild(selExpr);
             item.appendChild(rowValueSource);
 
             selValueSource.addEventListener("change", () => {
@@ -1373,25 +1936,22 @@ function renderParamList({ container, params, textures, step, onPatch, onDelete 
                 onPatch(i, (param) => {
                     param.valueSource = selValueSource.value;
                     if (param.valueSource === "uniform" && !String(param.valueExpr || "").trim()) {
-                        param.valueExpr = defaultUniformExprByType(type);
+                        param.valueExpr = String(selExpr.value || defaultUniformExprByType(param.type));
                     }
                 });
             });
 
-            inpExpr.addEventListener("change", () => {
+            selExpr.addEventListener("change", () => {
                 onPatch(i, (param) => {
-                    param.valueExpr = inpExpr.value.trim();
+                    param.valueSource = "uniform";
+                    param.valueExpr = String(selExpr.value || "").trim();
                 });
             });
 
             inpValue.addEventListener("change", () => {
                 onPatch(i, (param) => {
-                    const next = inpValue.value.trim();
+                    const next = String(inpValue.value || "").trim();
                     param.value = next;
-                    if (shouldTreatAsUniformExpr(next, param.type)) {
-                        param.valueSource = "uniform";
-                        param.valueExpr = next;
-                    }
                 });
             });
         }
@@ -1402,30 +1962,32 @@ function renderParamList({ container, params, textures, step, onPatch, onDelete 
             });
         });
 
-        selType.addEventListener("change", () => {
-            onPatch(i, (param) => {
-                const nextType = normalizeParamType(selType.value);
-                param.type = nextType;
-                if (nextType !== "texture") {
-                    param.sourceType = "value";
-                    param.textureId = "";
-                    param.connection = "";
-                    param.valueSource = param.valueSource || "value";
-                    if (param.valueSource === "uniform" && !String(param.valueExpr || "").trim()) {
-                        param.valueExpr = defaultUniformExprByType(nextType);
+        if (!lockDeleteAndType) {
+            selType.addEventListener("change", () => {
+                onPatch(i, (param) => {
+                    const nextType = normalizeParamType(selType.value);
+                    param.type = nextType;
+                    if (nextType !== "texture") {
+                        param.sourceType = "value";
+                        param.textureId = "";
+                        param.connection = "";
+                        param.valueSource = param.valueSource || "value";
+                        if (param.valueSource === "uniform" && !String(param.valueExpr || "").trim()) {
+                            param.valueExpr = defaultUniformExprByType(nextType);
+                        } else {
+                            param.valueExpr = String(param.valueExpr || "");
+                        }
                     } else {
-                        param.valueExpr = String(param.valueExpr || "");
+                        param.sourceType = param.sourceType || "value";
+                        param.valueSource = "value";
+                        param.valueExpr = "";
+                        if (!String(param.value || "").trim()) param.value = "0";
                     }
-                } else {
-                    param.sourceType = param.sourceType || "value";
-                    param.valueSource = "value";
-                    param.valueExpr = "";
-                    if (!String(param.value || "").trim()) param.value = "0";
-                }
+                });
             });
-        });
 
-        btnDelete.addEventListener("click", () => onDelete(i));
+            btnDelete.addEventListener("click", () => onDelete(i));
+        }
 
         container.appendChild(item);
     }
@@ -1439,43 +2001,76 @@ function renderModelParamList(state) {
         step: state.settings?.paramStep || 0.1,
         onPatch(index, mutator) {
             store.patch((draft) => {
+                const oldNames = (draft.model?.shader?.params || []).map((it) => String(it?.name || "").trim());
                 const p = draft.model?.shader?.params?.[index];
                 if (!p) return;
+                const prevName = String(p.name || "").trim();
+                const prevType = String(p.type || "").toLowerCase();
                 mutator(p);
-                syncModelShaderUniformDecls(draft);
+                const nextName = String(p.name || "").trim();
+                if (prevName && nextName && prevName !== nextName) {
+                    draft.model.shader.fragmentSource = applyParamRenameInShaderSource(
+                        draft.model.shader.fragmentSource,
+                        prevName,
+                        nextName,
+                        String(p.type || prevType).toLowerCase()
+                    );
+                }
+                syncModelShaderUniformDecls(draft, oldNames);
             }, { reason: "model-param-change", forceCompile: true, forceKotlin: true });
         },
         onDelete(index) {
             store.patch((draft) => {
+                const oldNames = (draft.model?.shader?.params || []).map((it) => String(it?.name || "").trim());
                 draft.model.shader.params.splice(index, 1);
-                syncModelShaderUniformDecls(draft);
+                syncModelShaderUniformDecls(draft, oldNames);
             }, { reason: "model-param-delete", forceCompile: true, forceKotlin: true });
         }
     });
 }
 
 function renderNodeParamList(state, node) {
+    const nodeParams = node?.params || [];
+    const minTextureCount = getPostInputTextureMinCount(node?.inputs);
+    const textureCount = countTextureParams(nodeParams);
+
     renderParamList({
         container: els.nodeParamList,
-        params: node?.params || [],
+        params: nodeParams,
         textures: state.textures || [],
         step: state.settings?.paramStep || 0.1,
+        lockParamPredicate: (param) => isTextureParam(param) && textureCount <= minTextureCount,
         onPatch(index, mutator) {
             store.patch((draft) => {
                 const n = findPostNode(draft, draft.selectedNodeId);
                 if (!n || !Array.isArray(n.params)) return;
+                const oldNames = n.params.map((it) => String(it?.name || "").trim());
                 const p = n.params[index];
                 if (!p) return;
+                const prevName = String(p.name || "").trim();
+                const prevType = String(p.type || "").toLowerCase();
                 mutator(p);
-                syncNodeShaderUniformDecls(n);
+                const nextName = String(p.name || "").trim();
+                if (prevName && nextName && prevName !== nextName) {
+                    n.fragmentSource = applyParamRenameInShaderSource(
+                        n.fragmentSource,
+                        prevName,
+                        nextName,
+                        String(p.type || prevType).toLowerCase()
+                    );
+                }
+                n.params = ensurePostInputSamplerParam(n.params, getPostInputTextureMinCount(n.inputs));
+                syncNodeShaderUniformDecls(n, oldNames);
             }, { reason: "node-param-change", forceCompile: true, forceKotlin: true });
         },
         onDelete(index) {
             store.patch((draft) => {
                 const n = findPostNode(draft, draft.selectedNodeId);
                 if (!n) return;
+                const oldNames = (n.params || []).map((it) => String(it?.name || "").trim());
                 n.params.splice(index, 1);
-                syncNodeShaderUniformDecls(n);
+                n.params = ensurePostInputSamplerParam(n.params, getPostInputTextureMinCount(n.inputs));
+                syncNodeShaderUniformDecls(n, oldNames);
             }, { reason: "node-param-delete", forceCompile: true, forceKotlin: true });
         }
     });
@@ -1503,6 +2098,7 @@ function refreshNodeEditorPanel(state) {
         }
         els.nodeEditorEmpty?.classList.remove("hidden");
         els.nodeEditor?.classList.add("hidden");
+        els.nodeTextureHint?.classList.add("hidden");
         nodeFragmentEditor.setValue("", { silent: true });
         return;
     }
@@ -1517,18 +2113,72 @@ function refreshNodeEditorPanel(state) {
     els.nodeEditorEmpty?.classList.add("hidden");
     els.nodeEditor?.classList.remove("hidden");
 
+    const nodeType = normalizePostNodeType(node.type);
+    const minInputs = minInputCountByNodeType(nodeType);
+    const isTextureNode = nodeType === NODE_TYPE_TEXTURE;
+    const isPingPongNode = nodeType === NODE_TYPE_PINGPONG;
+
+    if (els.nodeShaderSection) {
+        els.nodeShaderSection.classList.toggle("hidden", isTextureNode);
+    }
+    if (els.nodeTextureHint) {
+        els.nodeTextureHint.classList.toggle("hidden", !isTextureNode);
+    }
+    if (els.inpNodeFragmentPath) {
+        els.inpNodeFragmentPath.disabled = isTextureNode;
+    }
+    if (els.btnUploadNodeFragment) {
+        els.btnUploadNodeFragment.disabled = isTextureNode;
+    }
+    if (els.btnApplyNodeShader) {
+        els.btnApplyNodeShader.disabled = isTextureNode;
+    }
+    if (els.btnExportNodeFragment) {
+        els.btnExportNodeFragment.disabled = isTextureNode;
+    }
+    if (els.btnAddNodeParam) {
+        els.btnAddNodeParam.disabled = isTextureNode;
+        els.btnAddNodeParam.title = isTextureNode
+            ? "texture 节点固定为纹理输入参数"
+            : "";
+    }
+
     setInputValue(els.inpNodeName, node.name || "");
     setInputValue(els.inpNodeFragmentPath, node.fragmentPath || "");
-    setInputValue(els.inpNodeInputs, normalizeNodeNumber(node.inputs, 1, 1, 8));
+    setInputValue(els.inpNodeInputs, normalizeNodeNumber(node.inputs, isTextureNode ? 0 : 1, minInputs, 8));
     setInputValue(els.inpNodeOutputs, normalizeNodeNumber(node.outputs, 1, 1, 8));
     setInputValue(els.inpNodeTextureUnit, Number(node.textureUnit || 1));
     setInputValue(els.inpNodeIterations, Number(node.iterations || 1));
+
+    if (els.inpNodeInputs) {
+        els.inpNodeInputs.min = String(minInputs);
+        els.inpNodeInputs.disabled = isTextureNode;
+    }
+    if (els.inpNodeOutputs) {
+        els.inpNodeOutputs.min = "1";
+        els.inpNodeOutputs.readOnly = true;
+        els.inpNodeOutputs.disabled = true;
+        els.inpNodeOutputs.title = formatNodeOutputHint(node);
+    }
+    if (els.nodeOutputHint) {
+        els.nodeOutputHint.textContent = formatNodeOutputHint(node);
+    }
+    if (els.inpNodeIterations) {
+        els.inpNodeIterations.disabled = !isPingPongNode;
+        els.inpNodeIterations.title = isPingPongNode ? "PingPong 迭代次数" : "仅 pingpong 类型可编辑";
+    }
+    if (els.inpNodeTextureUnit) {
+        els.inpNodeTextureUnit.disabled = isTextureNode;
+    }
 
     if (els.selNodeType && els.selNodeType.value !== String(node.type || "simple")) {
         els.selNodeType.value = String(node.type || "simple");
     }
     if (els.selNodeFilter && els.selNodeFilter.value !== String(node.filter || "GL33.GL_LINEAR")) {
         els.selNodeFilter.value = String(node.filter || "GL33.GL_LINEAR");
+    }
+    if (els.selNodeFilter) {
+        els.selNodeFilter.disabled = isTextureNode;
     }
     setChecked(els.chkNodeMipmap, !!node.useMipmap);
 
@@ -1616,6 +2266,14 @@ function requestRendererSync({ force = false, now = false } = {}) {
     }
 }
 
+function syncAllPostNodesFromShaderSource(draft) {
+    let changed = false;
+    for (const node of draft?.post?.nodes || []) {
+        if (syncNodeParamsFromShaderSource(node)) changed = true;
+    }
+    return changed;
+}
+
 const saveProjectDebounced = debounce(() => {
     const payload = normalizeProjectPayload(store.getState());
     saveJson(STORAGE_KEYS.project, payload);
@@ -1629,6 +2287,17 @@ function applyStateToUI(state, meta = {}) {
         refreshNodeEditorPanel(state);
         refreshEditorCompletions(state);
         renderTextureList(state);
+        graphEditor.render();
+    } else if (meta.reason === "model-fragment-source") {
+        renderModelParamList(state);
+        refreshEditorCompletions(state);
+    } else if (meta.reason === "node-fragment-source") {
+        const node = findPostNode(state, state.selectedNodeId);
+        renderNodeParamList(state, node);
+        setInputValue(els.inpNodeOutputs, normalizeNodeNumber(node?.outputs, 1, 1, 8));
+        if (els.inpNodeOutputs) els.inpNodeOutputs.title = formatNodeOutputHint(node);
+        if (els.nodeOutputHint) els.nodeOutputHint.textContent = formatNodeOutputHint(node);
+        refreshEditorCompletions(state);
         graphEditor.render();
     }
 
@@ -1677,6 +2346,9 @@ function bindProjectEvents() {
             hasCustomModelLoaded = false;
             renderer.setPrimitive(payload.model?.primitive || "sphere");
             store.reset(payload, { reason: "project-import", forceCompile: true, forceCompileNow: true, forceKotlin: true, clearHistory: true });
+            store.patch((draft) => {
+                syncAllPostNodesFromShaderSource(draft);
+            }, { reason: "project-import-node-sync", skipHistory: true, forceCompile: true, forceCompileNow: true, forceKotlin: true });
             settingsSystem.applySettings(payload.settings || {});
             showToast("项目已导入", "ok");
         } catch (err) {
@@ -1692,6 +2364,9 @@ function bindProjectEvents() {
         hasCustomModelLoaded = false;
         renderer.setPrimitive(next.model.primitive);
         store.reset(next, { reason: "project-reset", forceCompile: true, forceCompileNow: true, forceKotlin: true, clearHistory: true });
+        store.patch((draft) => {
+            syncAllPostNodesFromShaderSource(draft);
+        }, { reason: "project-reset-node-sync", skipHistory: true, forceCompile: true, forceCompileNow: true, forceKotlin: true });
         settingsSystem.applySettings(next.settings || {});
         showToast("已重置项目", "ok");
     });
@@ -1778,6 +2453,7 @@ function bindModelEvents() {
         store.patch((draft) => {
             draft.model.shader.fragmentSource = source;
             if (!draft.model.shader.fragmentPath) draft.model.shader.fragmentPath = guessedPath;
+            syncModelParamsFromShaderSource(draft);
         }, { reason: "model-fragment-upload", forceCompile: true, forceCompileNow: true, forceKotlin: true });
         showToast("片元着色器已导入", "ok");
     });
@@ -1824,9 +2500,10 @@ function bindTextureEvents() {
         try {
             const dataUrl = await readFileAsDataURL(file);
             store.patch((draft) => {
+                const textureId = uid("tex");
                 draft.textures.push({
-                    id: uid("tex"),
-                    name: file.name,
+                    id: textureId,
+                    name: sanitizeTextureNameForKotlin(file.name, `texture_${textureId}`),
                     dataUrl
                 });
             }, { reason: "texture-upload", forceCompile: true, forceKotlin: true });
@@ -1860,7 +2537,10 @@ function bindNodeEvents() {
 
     els.selNodeType?.addEventListener("change", () => {
         patchSelectedNode((node) => {
-            node.type = String(els.selNodeType.value || "simple");
+            switchPostNodeType(node, String(els.selNodeType.value || NODE_TYPE_SIMPLE));
+            node.params = ensurePostInputSamplerParam(node.params, getPostInputTextureMinCount(node.inputs));
+            syncNodeParamsFromShaderSource(node);
+            syncNodeShaderUniformDecls(node);
         }, { reason: "node-type", forceCompile: true, forceKotlin: true });
     });
 
@@ -1874,14 +2554,12 @@ function bindNodeEvents() {
 
     els.inpNodeInputs?.addEventListener("change", () => {
         patchSelectedNode((node) => {
-            node.inputs = normalizeNodeNumber(els.inpNodeInputs.value, 1, 1, 8);
+            const minInputs = minInputCountByNodeType(node.type);
+            node.inputs = normalizeNodeNumber(els.inpNodeInputs.value, minInputs, minInputs, 8);
+            node.params = ensurePostInputSamplerParam(node.params, getPostInputTextureMinCount(node.inputs));
+            syncNodeOutputsFromShaderSource(node);
+            syncNodeShaderUniformDecls(node);
         }, { reason: "node-inputs", forceCompile: true, forceKotlin: true });
-    });
-
-    els.inpNodeOutputs?.addEventListener("change", () => {
-        patchSelectedNode((node) => {
-            node.outputs = normalizeNodeNumber(els.inpNodeOutputs.value, 1, 1, 8);
-        }, { reason: "node-outputs", forceCompile: true, forceKotlin: true });
     });
 
     els.inpNodeTextureUnit?.addEventListener("change", () => {
@@ -1924,6 +2602,7 @@ function bindNodeEvents() {
                 node.fragmentPathTemplate = resolved.fragmentPathTemplate;
                 node.fragmentPath = resolved.fragmentPath;
             }
+            syncNodeParamsFromShaderSource(node);
         }, { reason: "node-fragment-upload", forceCompile: true, forceCompileNow: true, forceKotlin: true });
         showToast("卡片片元已导入", "ok");
     });
@@ -1931,14 +2610,22 @@ function bindNodeEvents() {
     els.btnAddNodeParam?.addEventListener("click", () => {
         patchSelectedNode((node) => {
             const p = createParamTemplate();
-            p.name = `uParam${(node.params.length || 0) + 1}`;
+            p.name = `uParam${nextCustomParamSerial(node.params, { excludePostInputSampler: true })}`;
             node.params.push(p);
             syncNodeShaderUniformDecls(node);
         }, { reason: "node-param-add", forceCompile: true, forceKotlin: true });
     });
 
     els.btnApplyNodeShader?.addEventListener("click", () => {
+        const state = store.getState();
+        const selected = findPostNode(state, state.selectedNodeId);
+        if (!selected) return;
+        if (normalizePostNodeType(selected.type) === NODE_TYPE_TEXTURE) {
+            showToast("texture 卡片不使用片元着色器。", "warn");
+            return;
+        }
         patchSelectedNode((node) => {
+            syncNodeParamsFromShaderSource(node);
             syncNodeShaderUniformDecls(node);
         }, { reason: "node-uniform-sync", skipHistory: true, forceCompile: true, forceKotlin: true });
         requestRendererSync({ force: true, now: true });
@@ -2273,6 +2960,7 @@ function bindTopActions() {
     });
     els.btnBackToPost?.addEventListener("click", () => applyWorkspacePage("post"));
     document.addEventListener("keydown", (ev) => {
+        if (ev.defaultPrevented) return;
         const isMod = ev.ctrlKey || ev.metaKey;
         const editing = shouldIgnoreHotkeysForTarget(ev.target);
         if (isMod && !editing && !ev.altKey) {
@@ -2293,7 +2981,7 @@ function bindTopActions() {
         const settingsOpen = !!(els.settingsModal && !els.settingsModal.classList.contains("hidden"));
         const hotkeyOpen = !!(els.hotkeyModal && !els.hotkeyModal.classList.contains("hidden"));
         const anyModalOpen = settingsOpen || hotkeyOpen;
-        if (!anyModalOpen && !editing && !isMod && !ev.altKey && (ev.code === "Delete" || ev.code === "Backspace")) {
+        if (!anyModalOpen && !editing && !isMod && !ev.altKey && !ev.repeat && (ev.code === "Delete" || ev.code === "Backspace")) {
             ev.preventDefault();
             deleteSelectedNode();
             return;
@@ -2352,6 +3040,9 @@ hotkeySystem = initHotkeysSystem({
 function init() {
     bindTopActions();
     applyWorkspacePage(workspacePage, { save: false });
+    store.patch((draft) => {
+        syncAllPostNodesFromShaderSource(draft);
+    }, { reason: "init-node-sync", skipHistory: true, silentUI: true, forceKotlin: true });
 
     const state = store.getState();
     hasCustomModelLoaded = false;

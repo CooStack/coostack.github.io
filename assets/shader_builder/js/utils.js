@@ -1,4 +1,4 @@
-﻿export function uid(prefix = "id") {
+export function uid(prefix = "id") {
     if (globalThis.crypto && typeof globalThis.crypto.randomUUID === "function") {
         return `${prefix}_${globalThis.crypto.randomUUID().replace(/-/g, "").slice(0, 12)}`;
     }

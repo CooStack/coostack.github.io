@@ -1,4 +1,4 @@
-﻿import { DEFAULT_HOTKEYS, HOTKEY_ACTIONS, STORAGE_KEYS } from "./constants.js";
+import { DEFAULT_HOTKEYS, HOTKEY_ACTIONS, STORAGE_KEYS } from "./constants.js";
 import {
     eventToHotkey,
     hotkeyMatchEvent,
@@ -198,6 +198,7 @@ export function initHotkeysSystem(ctx) {
             const target = e.target;
             const isPlainKey = !e.ctrlKey && !e.metaKey && !e.altKey;
             if (isPlainKey && shouldIgnoreHotkeysForTarget(target)) return;
+            if (e.repeat) return;
 
             for (const def of HOTKEY_ACTIONS) {
                 const hk = hotkeys.actions[def.id] || "";

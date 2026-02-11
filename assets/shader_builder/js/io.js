@@ -1,4 +1,11 @@
-﻿import { createDefaultPostNode, createDefaultState, normalizeNodePathTemplate, resolveNodeFragmentPath } from "./store.js";
+import {
+    createDefaultPostNode,
+    createDefaultState,
+    ensurePostInputSamplerParam,
+    getPostInputTextureMinCount,
+    normalizeNodePathTemplate,
+    resolveNodeFragmentPath
+} from "./store.js";
 import { deepClone, downloadText, readFileAsText, sanitizeProjectName } from "./utils.js";
 
 function normalizeParamObject(param, fallback = {}) {
@@ -25,6 +32,14 @@ function normalizeParamObject(param, fallback = {}) {
         textureId: String(merged.textureId || ""),
         connection: String(merged.connection || "")
     };
+}
+
+function sanitizeTextureNameForKotlin(name, fallback = "texture") {
+    const raw = String(name || "").trim();
+    const base = raw.replace(/[^a-zA-Z0-9_]/g, "_").replace(/_+/g, "_").replace(/^_+|_+$/g, "");
+    let out = base || fallback;
+    if (/^[0-9]/.test(out)) out = `_${out}`;
+    return out.slice(0, 64) || fallback;
 }
 
 export function buildProjectPayload(state) {
@@ -70,7 +85,7 @@ export function normalizeProjectPayload(payload) {
     if (Array.isArray(payload.textures)) {
         out.textures = payload.textures.map((t) => ({
             id: String(t.id || ""),
-            name: String(t.name || "texture"),
+            name: sanitizeTextureNameForKotlin(t.name, `texture_${String(t.id || "").trim() || "item"}`),
             dataUrl: String(t.dataUrl || "")
         })).filter((t) => t.id && t.dataUrl);
     }
@@ -81,8 +96,9 @@ export function normalizeProjectPayload(payload) {
             ? payload.post.nodes.map((n, i) => {
                 const d = createDefaultPostNode(i);
                 const merged = Object.assign({}, d, n || {});
+                const minTextureCount = getPostInputTextureMinCount(merged.inputs);
                 merged.params = Array.isArray(n?.params)
-                    ? n.params.map((p) => normalizeParamObject(p))
+                    ? ensurePostInputSamplerParam(n.params.map((p) => normalizeParamObject(p)), minTextureCount)
                     : deepClone(d.params);
 
                 const hasTemplate = typeof n?.fragmentPathTemplate === "string" && n.fragmentPathTemplate.trim() !== "";

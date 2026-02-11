@@ -1,7 +1,10 @@
 import {
     GRAPH_INPUT_ID,
     GRAPH_OUTPUT_ID,
+    countTextureParams,
     createParamTemplate,
+    getPostInputTextureMinCount,
+    isTextureParam,
     resolveNodeFragmentPath
 } from "./store.js";
 
@@ -10,9 +13,11 @@ const LINK_HOLD_REWIRE_MS = 260;
 const SNAP_RADIUS_PX = 26;
 const MIN_GRAPH_SCALE = 0.35;
 const MAX_GRAPH_SCALE = 2.6;
+const NODE_TYPE_TEXTURE = "texture";
 const NODE_TYPE_OPTIONS = [
     { value: "simple", label: "simple" },
-    { value: "pingpong", label: "pingpong" }
+    { value: "pingpong", label: "pingpong" },
+    { value: "texture", label: "texture" }
 ];
 const NODE_FILTER_OPTIONS = [
     "GL33.GL_LINEAR",
@@ -59,6 +64,31 @@ function normalizeInt(value, fallback = 1, min = 1, max = 8) {
     return Math.max(min, Math.min(max, Math.round(n)));
 }
 
+function normalizeNodeType(type) {
+    const t = String(type || "simple").trim().toLowerCase();
+    if (t === "pingpong") return "pingpong";
+    if (t === NODE_TYPE_TEXTURE) return NODE_TYPE_TEXTURE;
+    return "simple";
+}
+
+function minInputCountByNodeType(type) {
+    return normalizeNodeType(type) === NODE_TYPE_TEXTURE ? 0 : 1;
+}
+
+function formatFragmentOutputHint(node, outputCount = 1) {
+    if (normalizeNodeType(node?.type) === NODE_TYPE_TEXTURE) {
+        return "output: location 0 -> TextureOut";
+    }
+
+    const decls = Array.isArray(node?.__fragmentOutputs) ? node.__fragmentOutputs : [];
+    if (!decls.length) return "output: fallback slot0";
+    return decls.map((item, idx) => {
+        const slot = Number.isFinite(Number(item?.location)) ? Math.round(Number(item.location)) : idx;
+        const name = String(item?.name || `FragColor${idx}`);
+        return `${slot}:${name}`;
+    }).join(" | ");
+}
+
 function stopEditorEvent(ev) {
     ev.stopPropagation();
 }
@@ -70,30 +100,48 @@ function bindEditorEvents(el) {
     });
 }
 
-function shouldTreatAsUniformExpr(raw, type) {
-    const value = String(raw || "").trim();
-    if (!value) return false;
-    if (String(type || "").toLowerCase() === "bool" && /^(true|false)$/i.test(value)) return false;
-    if (/^[+\-]?\d+(?:\.\d+)?(?:[eE][+\-]?\d+)?$/.test(value)) return false;
-    return /[A-Za-z_]/.test(value);
-}
-
 function placeholderByType(type) {
     const t = String(type || "float").toLowerCase();
-    if (t === "vec3") return "x,y,z 或变量";
-    if (t === "vec2") return "x,y 或变量";
+    if (t === "vec3") return "x,y,z";
+    if (t === "vec2") return "x,y";
     if (t === "bool") return "true/false";
-    if (t === "texture") return "采样槽";
-    return "常量 / uTime";
+    if (t === "texture") return "采样槽位";
+    return "常量";
+}
+
+const UNIFORM_EXPR_OPTIONS_BY_TYPE = Object.freeze({
+    float: ["uTime", "tickDelta", "partialTicks"],
+    int: ["Math.round(tickDelta)", "Math.round(partialTicks)", "0"],
+    bool: ["true", "false"],
+    vec2: ["uResolution", "uMouse", "org.joml.Vector2f(uTime, uTime)"],
+    vec3: ["CameraPos", "org.joml.Vector3f(1f, 1f, 1f)"]
+});
+
+function uniformExprOptionsByType(type) {
+    const t = String(type || "float").toLowerCase();
+    const base = UNIFORM_EXPR_OPTIONS_BY_TYPE[t] || UNIFORM_EXPR_OPTIONS_BY_TYPE.float;
+    return Array.from(new Set(base.map((it) => String(it || "").trim()).filter(Boolean)));
 }
 
 function defaultUniformExprByType(type) {
-    const t = String(type || "float").toLowerCase();
-    if (t === "vec3") return "vec3(uTime)";
-    if (t === "vec2") return "vec2(uTime)";
-    if (t === "int") return "int(uTime)";
-    if (t === "bool") return "true";
-    return "uTime";
+    const list = uniformExprOptionsByType(type);
+    return list[0] || "uTime";
+}
+
+function populateUniformExprSelect(selectEl, type, currentValue = "") {
+    if (!(selectEl instanceof HTMLSelectElement)) return;
+    const current = String(currentValue || "").trim();
+    const options = uniformExprOptionsByType(type);
+    if (current && !options.includes(current)) options.unshift(current);
+    selectEl.innerHTML = "";
+    for (const expr of options) {
+        const opt = document.createElement("option");
+        opt.value = expr;
+        opt.textContent = expr;
+        if (expr === current) opt.selected = true;
+        selectEl.appendChild(opt);
+    }
+    if (!selectEl.value && options.length) selectEl.value = options[0];
 }
 
 export class GraphEditor {
@@ -111,6 +159,7 @@ export class GraphEditor {
             onCreateLink: () => {},
             onDeleteLink: () => {},
             onDeleteLinks: () => {},
+            onDuplicateNode: () => {},
             onOpenNodeEditor: () => {},
             onPatchNode: () => {},
             onAddNode: () => {}
@@ -218,6 +267,9 @@ export class GraphEditor {
             if (action === "open-editor") {
                 this.selectSingleNode(nodeId, { primary: true });
                 this.callbacks.onOpenNodeEditor(nodeId);
+            } else if (action === "duplicate-node") {
+                this.selectSingleNode(nodeId, { primary: true });
+                this.callbacks.onDuplicateNode(nodeId);
             } else if (action === "delete-node") {
                 if (this.selectedNodeIds.has(nodeId) && this.selectedNodeIds.size > 1) {
                     this.deleteSelectedNodes();
@@ -244,10 +296,11 @@ export class GraphEditor {
         this.contextMenuEl.innerHTML = "";
         const items = [];
         if (mode === "node" && nodeId) {
-            items.push({ action: "open-editor", text: "跳转到代码编写页", danger: false });
-            items.push({ action: "delete-node", text: "删除卡片", danger: true });
+            items.push({ action: "open-editor", text: "Open Editor", danger: false });
+            items.push({ action: "duplicate-node", text: "Duplicate Node", danger: false });
+            items.push({ action: "delete-node", text: "Delete Node", danger: true });
         } else {
-            items.push({ action: "add-node", text: "添加卡片", danger: false });
+            items.push({ action: "add-node", text: "Add Node", danger: false });
         }
         for (const item of items) {
             const btn = document.createElement("button");
@@ -551,11 +604,11 @@ export class GraphEditor {
     }
 
     deleteSelection() {
-        if (Array.from(this.selectedNodeIds).some((id) => !this.isSystemNodeId(id))) {
-            return { kind: "nodes", count: this.deleteSelectedNodes() };
-        }
         if (this.selectedLinkIds.size) {
             return { kind: "links", count: this.deleteSelectedLinks() };
+        }
+        if (Array.from(this.selectedNodeIds).some((id) => !this.isSystemNodeId(id))) {
+            return { kind: "nodes", count: this.deleteSelectedNodes() };
         }
         return { kind: "", count: 0 };
     }
@@ -711,7 +764,7 @@ export class GraphEditor {
         const handle = document.createElement("button");
         handle.type = "button";
         handle.className = `handle ${kind}`;
-        handle.title = `${kind === "in" ? "输入槽" : "输出槽"} ${slot}`;
+        handle.title = `${kind === "in" ? "Input Slot" : "Output Slot"} ${slot}`;
         handle.dataset.nodeId = nodeId;
         handle.dataset.slot = String(slot);
         handle.dataset.kind = kind;
@@ -738,8 +791,13 @@ export class GraphEditor {
 
         const summary = document.createElement("div");
         summary.className = "graph-node-summary";
-        summary.textContent = `输入:${inputCount} 输出:${outputCount} | 参数:${Number(node.params?.length || 0)}`;
+        summary.textContent = `In:${inputCount} Out:${outputCount} | Params:${Number(node.params?.length || 0)}`;
         body.appendChild(summary);
+        const outputHint = document.createElement("div");
+        outputHint.className = "graph-node-output-hint";
+        outputHint.textContent = formatFragmentOutputHint(node, outputCount);
+        body.appendChild(outputHint);
+
 
         const inline = document.createElement("div");
         inline.className = "graph-node-inline";
@@ -750,10 +808,10 @@ export class GraphEditor {
         const inpName = document.createElement("input");
         inpName.className = "input";
         inpName.value = String(node.name || "");
-        inpName.placeholder = "卡片名称";
+        inpName.placeholder = "Card Name";
         bindEditorEvents(inpName);
         inpName.addEventListener("change", () => {
-            const next = String(inpName.value || "").trim() || String(node.name || "卡片");
+            const next = String(inpName.value || "").trim() || String(node.name || "Card");
             this.callbacks.onPatchNode(node.id, (target) => {
                 target.name = next;
                 if (target.fragmentPathTemplate) {
@@ -763,6 +821,8 @@ export class GraphEditor {
         });
         nameRow.appendChild(inpName);
         inline.appendChild(nameRow);
+
+        const textureNode = normalizeNodeType(node.type) === NODE_TYPE_TEXTURE;
 
         const rowTypeFilter = document.createElement("div");
         rowTypeFilter.className = "graph-node-inline-row dual";
@@ -797,26 +857,45 @@ export class GraphEditor {
                 target.filter = String(selFilter.value || "GL33.GL_LINEAR");
             }, { reason: "node-inline-filter", forceCompile: true, forceKotlin: true });
         });
+        selFilter.disabled = textureNode;
+        if (textureNode) {
+            selFilter.title = "texture node does not use shader filter mode";
+        }
 
         rowTypeFilter.appendChild(selType);
         rowTypeFilter.appendChild(selFilter);
         inline.appendChild(rowTypeFilter);
 
+        const createInlineField = (labelText, controlEl) => {
+            const field = document.createElement("div");
+            field.className = "graph-node-inline-field";
+            const label = document.createElement("span");
+            label.className = "graph-node-inline-field-label";
+            label.textContent = labelText;
+            field.appendChild(label);
+            field.appendChild(controlEl);
+            return field;
+        };
+
         const rowSlots = document.createElement("div");
         rowSlots.className = "graph-node-inline-row dual";
+        const minInputs = minInputCountByNodeType(node.type);
+
         const inpInputs = document.createElement("input");
         inpInputs.className = "input";
         inpInputs.type = "number";
-        inpInputs.min = "1";
+        inpInputs.min = String(minInputs);
         inpInputs.max = "8";
         inpInputs.step = "1";
-        inpInputs.value = String(normalizeInt(node.inputs, 1, 1, 8));
+        inpInputs.value = String(normalizeInt(node.inputs, minInputs, minInputs, 8));
         inpInputs.placeholder = "\u8f93\u5165\u69fd";
-        inpInputs.title = "\u8f93\u5165\u69fd";
+        inpInputs.title = textureNode ? "texture node input slots are fixed to 0" : "input slots";
+        inpInputs.disabled = textureNode;
         bindEditorEvents(inpInputs);
         inpInputs.addEventListener("change", () => {
             this.callbacks.onPatchNode(node.id, (target) => {
-                target.inputs = normalizeInt(inpInputs.value, 1, 1, 8);
+                const targetMin = minInputCountByNodeType(target.type);
+                target.inputs = normalizeInt(inpInputs.value, targetMin, targetMin, 8);
             }, { reason: "node-inline-inputs", forceCompile: true, forceKotlin: true });
         });
 
@@ -828,16 +907,13 @@ export class GraphEditor {
         inpOutputs.step = "1";
         inpOutputs.value = String(normalizeInt(node.outputs, 1, 1, 8));
         inpOutputs.placeholder = "\u8f93\u51fa\u69fd";
-        inpOutputs.title = "\u8f93\u51fa\u69fd";
+        inpOutputs.title = formatFragmentOutputHint(node, outputCount);
+        inpOutputs.readOnly = true;
+        inpOutputs.disabled = true;
         bindEditorEvents(inpOutputs);
-        inpOutputs.addEventListener("change", () => {
-            this.callbacks.onPatchNode(node.id, (target) => {
-                target.outputs = normalizeInt(inpOutputs.value, 1, 1, 8);
-            }, { reason: "node-inline-outputs", forceCompile: true, forceKotlin: true });
-        });
 
-        rowSlots.appendChild(inpInputs);
-        rowSlots.appendChild(inpOutputs);
+        rowSlots.appendChild(createInlineField("Input Slots", inpInputs));
+        rowSlots.appendChild(createInlineField("Output Slots (auto)", inpOutputs));
         inline.appendChild(rowSlots);
 
         const rowRuntime = document.createElement("div");
@@ -850,6 +926,7 @@ export class GraphEditor {
         inpTexUnit.value = String(Math.max(0, Math.round(Number(node.textureUnit || 1))));
         inpTexUnit.placeholder = "\u7eb9\u7406\u5355\u5143";
         inpTexUnit.title = "\u7eb9\u7406\u5355\u5143";
+        inpTexUnit.disabled = textureNode;
         bindEditorEvents(inpTexUnit);
         inpTexUnit.addEventListener("change", () => {
             this.callbacks.onPatchNode(node.id, (target) => {
@@ -865,6 +942,7 @@ export class GraphEditor {
         inpIterations.value = String(Math.max(1, Math.round(Number(node.iterations || 1))));
         inpIterations.placeholder = "\u8fed\u4ee3\u6b21\u6570";
         inpIterations.title = "PingPong \u8fed\u4ee3\u6b21\u6570";
+        inpIterations.disabled = textureNode || normalizeNodeType(node.type) !== "pingpong";
         bindEditorEvents(inpIterations);
         inpIterations.addEventListener("change", () => {
             this.callbacks.onPatchNode(node.id, (target) => {
@@ -872,9 +950,16 @@ export class GraphEditor {
             }, { reason: "node-inline-iterations", forceCompile: true, forceKotlin: true });
         });
 
-        rowRuntime.appendChild(inpTexUnit);
-        rowRuntime.appendChild(inpIterations);
+        rowRuntime.appendChild(createInlineField("Texture Unit", inpTexUnit));
+        rowRuntime.appendChild(createInlineField("Iterations", inpIterations));
         inline.appendChild(rowRuntime);
+
+        if (textureNode) {
+            const textureHint = document.createElement("div");
+            textureHint.className = "graph-node-output-hint";
+            textureHint.textContent = "texture node outputs texture only, no fragment shader processing.";
+            inline.appendChild(textureHint);
+        }
 
         const rowMipmap = document.createElement("div");
         rowMipmap.className = "graph-node-inline-row";
@@ -891,7 +976,7 @@ export class GraphEditor {
             }, { reason: "node-inline-mipmap", forceCompile: true, forceKotlin: true });
         });
         const chkText = document.createElement("span");
-        chkText.textContent = "useMipmap()";
+        chkText.textContent = "Enable Mipmap";
         chkWrap.appendChild(chkMipmap);
         chkWrap.appendChild(chkText);
         rowMipmap.appendChild(chkWrap);
@@ -900,36 +985,48 @@ export class GraphEditor {
         const paramsHead = document.createElement("div");
         paramsHead.className = "graph-node-param-head";
         const headText = document.createElement("span");
-        headText.textContent = `参数 (${Number(node.params?.length || 0)})`;
+        headText.textContent = `Params (${Number(node.params?.length || 0)})`;
         const btnAddParam = document.createElement("button");
         btnAddParam.type = "button";
         btnAddParam.className = "btn small";
-        btnAddParam.textContent = "+参数";
+        btnAddParam.textContent = "+Param";
         bindEditorEvents(btnAddParam);
-        btnAddParam.addEventListener("click", () => {
-            this.callbacks.onPatchNode(node.id, (target) => {
-                const p = createParamTemplate();
-                p.name = `uParam${(target.params?.length || 0) + 1}`;
-                target.params = Array.isArray(target.params) ? target.params : [];
-                target.params.push(p);
-            }, { reason: "node-inline-param-add", forceCompile: true, forceKotlin: true });
-        });
+        if (textureNode) {
+            btnAddParam.disabled = true;
+            btnAddParam.title = "texture node keeps one texture parameter";
+        } else {
+            btnAddParam.addEventListener("click", () => {
+                this.callbacks.onPatchNode(node.id, (target) => {
+                    const p = createParamTemplate();
+                    const current = Array.isArray(target.params) ? target.params : [];
+                    const serial = current.filter((it) => !isTextureParam(it)).length + 1;
+                    p.name = `uParam${serial}`;
+                    target.params = Array.isArray(target.params) ? target.params : [];
+                    target.params.push(p);
+                }, { reason: "node-inline-param-add", forceCompile: true, forceKotlin: true });
+            });
+        }
         paramsHead.appendChild(headText);
         paramsHead.appendChild(btnAddParam);
         inline.appendChild(paramsHead);
 
         const paramList = document.createElement("div");
         paramList.className = "graph-node-param-list";
+        const minTextureCount = getPostInputTextureMinCount(node.inputs);
+        const textureParamCount = countTextureParams(node.params || []);
+        const stateSnapshot = this.store?.getState ? this.store.getState() : null;
+        const textures = Array.isArray(stateSnapshot?.textures) ? stateSnapshot.textures : [];
 
         for (let i = 0; i < (node.params || []).length; i += 1) {
             const p = node.params[i] || {};
+            const lockTextureParam = isTextureParam(p) && (textureNode ? i === 0 : textureParamCount <= minTextureCount);
             const item = document.createElement("div");
             item.className = "graph-node-param-item";
 
             const inpParamName = document.createElement("input");
             inpParamName.className = "input";
             inpParamName.value = String(p.name || "");
-            inpParamName.placeholder = "参数名";
+            inpParamName.placeholder = "param name";
             bindEditorEvents(inpParamName);
             inpParamName.addEventListener("change", () => {
                 this.callbacks.onPatchNode(node.id, (target) => {
@@ -945,6 +1042,10 @@ export class GraphEditor {
             const rowValueSource = document.createElement("div");
             rowValueSource.className = "graph-node-param-value-source";
 
+            const rowTextureSource = document.createElement("div");
+            rowTextureSource.className = "graph-node-param-value-source";
+            rowTextureSource.style.gridTemplateColumns = "1fr 2fr";
+
             const selParamType = document.createElement("select");
             selParamType.className = "input";
             bindEditorEvents(selParamType);
@@ -955,6 +1056,7 @@ export class GraphEditor {
                 if (t === String(p.type || "float")) opt.selected = true;
                 selParamType.appendChild(opt);
             }
+            if (lockTextureParam || textureNode) selParamType.disabled = true;
 
             const inpParamValue = document.createElement("input");
             inpParamValue.className = "input";
@@ -966,8 +1068,8 @@ export class GraphEditor {
             selValueSource.className = "input";
             bindEditorEvents(selValueSource);
             [
-                { value: "value", label: "常量" },
-                { value: "uniform", label: "变量" }
+                { value: "value", label: "value" },
+                { value: "uniform", label: "uniform" }
             ].forEach((item) => {
                 const opt = document.createElement("option");
                 opt.value = item.value;
@@ -976,53 +1078,114 @@ export class GraphEditor {
                 selValueSource.appendChild(opt);
             });
 
-            const inpUniformExpr = document.createElement("input");
-            inpUniformExpr.className = "input";
-            inpUniformExpr.placeholder = `变量表达式，例如 ${defaultUniformExprByType(p.type)}`;
-            inpUniformExpr.value = String(p.valueExpr || "");
-            bindEditorEvents(inpUniformExpr);
+            const selUniformExpr = document.createElement("select");
+            selUniformExpr.className = "input";
+            bindEditorEvents(selUniformExpr);
+            populateUniformExprSelect(selUniformExpr, p.type, String(p.valueExpr || defaultUniformExprByType(p.type)));
+
+            const selTextureSource = document.createElement("select");
+            selTextureSource.className = "input";
+            bindEditorEvents(selTextureSource);
+            [
+                { value: "value", label: "pass input" },
+                { value: "upload", label: "uploaded" },
+                { value: "connection", label: "connection" }
+            ].forEach((item) => {
+                const opt = document.createElement("option");
+                opt.value = item.value;
+                opt.textContent = item.label;
+                if (item.value === String(p.sourceType || "value")) opt.selected = true;
+                selTextureSource.appendChild(opt);
+            });
+
+            const textureInputHost = document.createElement("div");
+            textureInputHost.style.display = "grid";
+            textureInputHost.style.gridTemplateColumns = "1fr";
+            textureInputHost.style.gap = "6px";
+
+            const inpTextureSlot = document.createElement("input");
+            inpTextureSlot.className = "input";
+            inpTextureSlot.placeholder = "sampler slot";
+            inpTextureSlot.value = String(p.value ?? "0");
+            bindEditorEvents(inpTextureSlot);
+
+            const selTextureUpload = document.createElement("select");
+            selTextureUpload.className = "input";
+            bindEditorEvents(selTextureUpload);
+            const noneOpt = document.createElement("option");
+            noneOpt.value = "";
+            noneOpt.textContent = "select texture";
+            selTextureUpload.appendChild(noneOpt);
+            for (const tex of textures) {
+                const opt = document.createElement("option");
+                opt.value = tex.id;
+                opt.textContent = tex.name || tex.id;
+                if (String(tex.id || "") === String(p.textureId || "")) opt.selected = true;
+                selTextureUpload.appendChild(opt);
+            }
+
+            const inpTextureConnection = document.createElement("input");
+            inpTextureConnection.className = "input";
+            inpTextureConnection.placeholder = "from node, e.g. bloom:0";
+            inpTextureConnection.value = String(p.connection || "");
+            bindEditorEvents(inpTextureConnection);
+
+            const updateTextureSourceUI = () => {
+                const sourceType = String(selTextureSource.value || "value");
+                inpTextureSlot.classList.toggle("hidden", sourceType !== "value");
+                selTextureUpload.classList.toggle("hidden", sourceType !== "upload");
+                inpTextureConnection.classList.toggle("hidden", sourceType !== "connection");
+            };
 
             const updateValueSourceUI = () => {
-                const currentType = String(selParamType.value || "float");
-                const useExpr = currentType !== "texture" && selValueSource.value === "uniform";
-                const isTexture = currentType === "texture";
-                rowValueSource.style.display = isTexture ? "none" : "";
-                const hideValueInput = !isTexture && useExpr;
+                const currentType = String(selParamType.value || "float").toLowerCase();
+                const isTextureType = currentType === "texture";
+                const useExpr = !isTextureType && selValueSource.value === "uniform";
+                const hideValueInput = isTextureType || useExpr;
+
+                rowValueSource.style.display = isTextureType ? "none" : "";
+                rowTextureSource.style.display = isTextureType ? "" : "none";
                 rowParamControls.style.gridTemplateColumns = hideValueInput ? "1fr auto" : "1fr 1fr auto";
                 rowValueSource.style.gridTemplateColumns = useExpr ? "1fr 2fr" : "1fr";
                 inpParamValue.classList.toggle("hidden", hideValueInput);
-                inpUniformExpr.classList.toggle("hidden", !useExpr);
-                inpUniformExpr.disabled = !useExpr;
-                inpParamValue.disabled = useExpr && currentType !== "texture";
-                if (useExpr && !inpUniformExpr.value.trim()) {
-                    inpUniformExpr.value = defaultUniformExprByType(currentType);
+                selUniformExpr.classList.toggle("hidden", !useExpr);
+                selUniformExpr.disabled = !useExpr;
+                inpParamValue.disabled = hideValueInput;
+
+                if (useExpr && !String(selUniformExpr.value || "").trim()) {
+                    populateUniformExprSelect(selUniformExpr, currentType, defaultUniformExprByType(currentType));
                 }
+                updateTextureSourceUI();
             };
             updateValueSourceUI();
 
-            selParamType.addEventListener("change", () => {
-                updateValueSourceUI();
-                inpParamValue.placeholder = placeholderByType(selParamType.value);
-                inpUniformExpr.placeholder = `变量表达式，例如 ${defaultUniformExprByType(selParamType.value)}`;
-                this.callbacks.onPatchNode(node.id, (target) => {
-                    const param = target.params?.[i];
-                    if (!param) return;
-                    param.type = String(selParamType.value || "float");
-                    if (param.type === "texture") {
-                        param.sourceType = param.sourceType || "value";
-                        param.valueSource = "value";
-                        if (param.value === "") param.value = "0";
-                    } else {
-                        param.sourceType = "value";
-                        param.textureId = "";
-                        param.connection = "";
-                        param.valueSource = String(selValueSource.value || "value");
-                        if (!String(param.valueExpr || "").trim()) {
-                            param.valueExpr = defaultUniformExprByType(param.type);
+            if (!lockTextureParam && !textureNode) {
+                selParamType.addEventListener("change", () => {
+                    const nextType = String(selParamType.value || "float").toLowerCase();
+                    populateUniformExprSelect(selUniformExpr, nextType, String(selUniformExpr.value || ""));
+                    updateValueSourceUI();
+                    inpParamValue.placeholder = placeholderByType(nextType);
+                    this.callbacks.onPatchNode(node.id, (target) => {
+                        const param = target.params?.[i];
+                        if (!param) return;
+                        param.type = nextType;
+                        if (nextType === "texture") {
+                            param.sourceType = String(param.sourceType || "value");
+                            param.valueSource = "value";
+                            param.valueExpr = "";
+                            if (!String(param.value || "").trim()) param.value = "0";
+                        } else {
+                            param.sourceType = "value";
+                            param.textureId = "";
+                            param.connection = "";
+                            param.valueSource = String(selValueSource.value || "value");
+                            if (!String(param.valueExpr || "").trim()) {
+                                param.valueExpr = String(selUniformExpr.value || defaultUniformExprByType(nextType));
+                            }
                         }
-                    }
-                }, { reason: "node-inline-param-type", forceCompile: true, forceKotlin: true });
-            });
+                    }, { reason: "node-inline-param-type", forceCompile: true, forceKotlin: true });
+                });
+            }
 
             selValueSource.addEventListener("change", () => {
                 updateValueSourceUI();
@@ -1031,16 +1194,16 @@ export class GraphEditor {
                     if (!param || String(param.type || "float").toLowerCase() === "texture") return;
                     param.valueSource = String(selValueSource.value || "value");
                     if (param.valueSource === "uniform" && !String(param.valueExpr || "").trim()) {
-                        param.valueExpr = defaultUniformExprByType(param.type);
+                        param.valueExpr = String(selUniformExpr.value || defaultUniformExprByType(param.type));
                     }
                 }, { reason: "node-inline-param-source", forceCompile: true, forceKotlin: true });
             });
 
-            inpUniformExpr.addEventListener("change", () => {
+            selUniformExpr.addEventListener("change", () => {
                 this.callbacks.onPatchNode(node.id, (target) => {
                     const param = target.params?.[i];
                     if (!param || String(param.type || "float").toLowerCase() === "texture") return;
-                    param.valueExpr = String(inpUniformExpr.value || "").trim();
+                    param.valueExpr = String(selUniformExpr.value || "").trim();
                     param.valueSource = "uniform";
                 }, { reason: "node-inline-param-expr", forceCompile: true, forceKotlin: true });
             });
@@ -1048,38 +1211,89 @@ export class GraphEditor {
             inpParamValue.addEventListener("change", () => {
                 this.callbacks.onPatchNode(node.id, (target) => {
                     const param = target.params?.[i];
-                    if (!param) return;
-                    const next = String(inpParamValue.value || "").trim();
-                    param.value = next;
-                    if (shouldTreatAsUniformExpr(next, param.type)) {
-                        param.valueSource = "uniform";
-                        param.valueExpr = next;
-                    }
+                    if (!param || String(param.type || "float").toLowerCase() === "texture") return;
+                    param.value = String(inpParamValue.value || "").trim();
                 }, { reason: "node-inline-param-value", forceCompile: true, forceKotlin: true });
+            });
+
+            selTextureSource.addEventListener("change", () => {
+                updateValueSourceUI();
+                this.callbacks.onPatchNode(node.id, (target) => {
+                    const param = target.params?.[i];
+                    if (!param || String(param.type || "float").toLowerCase() !== "texture") return;
+                    const sourceType = String(selTextureSource.value || "value");
+                    param.sourceType = sourceType;
+                    if (sourceType === "value") {
+                        param.textureId = "";
+                        param.connection = "";
+                    } else if (sourceType === "upload") {
+                        param.connection = "";
+                    } else if (sourceType === "connection") {
+                        param.textureId = "";
+                    }
+                    if (!String(param.value || "").trim()) param.value = "0";
+                }, { reason: "node-inline-param-source-type", forceCompile: true, forceKotlin: true });
+            });
+
+            inpTextureSlot.addEventListener("change", () => {
+                this.callbacks.onPatchNode(node.id, (target) => {
+                    const param = target.params?.[i];
+                    if (!param || String(param.type || "float").toLowerCase() !== "texture") return;
+                    const next = String(inpTextureSlot.value || "").trim();
+                    param.value = next || "0";
+                }, { reason: "node-inline-param-slot", forceCompile: true, forceKotlin: true });
+            });
+
+            selTextureUpload.addEventListener("change", () => {
+                this.callbacks.onPatchNode(node.id, (target) => {
+                    const param = target.params?.[i];
+                    if (!param || String(param.type || "float").toLowerCase() !== "texture") return;
+                    param.textureId = String(selTextureUpload.value || "");
+                }, { reason: "node-inline-param-upload", forceCompile: true, forceKotlin: true });
+            });
+
+            inpTextureConnection.addEventListener("change", () => {
+                this.callbacks.onPatchNode(node.id, (target) => {
+                    const param = target.params?.[i];
+                    if (!param || String(param.type || "float").toLowerCase() !== "texture") return;
+                    param.connection = String(inpTextureConnection.value || "").trim();
+                }, { reason: "node-inline-param-connection", forceCompile: true, forceKotlin: true });
             });
 
             const btnDelParam = document.createElement("button");
             btnDelParam.type = "button";
             btnDelParam.className = "btn small danger";
-            btnDelParam.textContent = "删";
+            btnDelParam.textContent = "Del";
             bindEditorEvents(btnDelParam);
-            btnDelParam.addEventListener("click", () => {
-                this.callbacks.onPatchNode(node.id, (target) => {
-                    if (!Array.isArray(target.params)) return;
-                    target.params.splice(i, 1);
-                }, { reason: "node-inline-param-delete", forceCompile: true, forceKotlin: true });
-            });
+            if (lockTextureParam) {
+                btnDelParam.disabled = true;
+                btnDelParam.title = "required texture input cannot be removed";
+            } else {
+                btnDelParam.addEventListener("click", () => {
+                    this.callbacks.onPatchNode(node.id, (target) => {
+                        if (!Array.isArray(target.params)) return;
+                        target.params.splice(i, 1);
+                    }, { reason: "node-inline-param-delete", forceCompile: true, forceKotlin: true });
+                });
+            }
 
             rowParamControls.appendChild(selParamType);
             rowParamControls.appendChild(inpParamValue);
             rowParamControls.appendChild(btnDelParam);
 
             rowValueSource.appendChild(selValueSource);
-            rowValueSource.appendChild(inpUniformExpr);
+            rowValueSource.appendChild(selUniformExpr);
+
+            textureInputHost.appendChild(inpTextureSlot);
+            textureInputHost.appendChild(selTextureUpload);
+            textureInputHost.appendChild(inpTextureConnection);
+            rowTextureSource.appendChild(selTextureSource);
+            rowTextureSource.appendChild(textureInputHost);
 
             item.appendChild(inpParamName);
             item.appendChild(rowParamControls);
             item.appendChild(rowValueSource);
+            item.appendChild(rowTextureSource);
             paramList.appendChild(item);
         }
         inline.appendChild(paramList);
@@ -1089,7 +1303,7 @@ export class GraphEditor {
         const btnDeleteNode = document.createElement("button");
         btnDeleteNode.type = "button";
         btnDeleteNode.className = "btn small danger";
-        btnDeleteNode.textContent = "删除卡片";
+        btnDeleteNode.textContent = "Delete Card";
         bindEditorEvents(btnDeleteNode);
         btnDeleteNode.addEventListener("click", () => {
             if (this.selectedNodeIds.has(node.id) && this.selectedNodeIds.size > 1) {
@@ -1106,7 +1320,8 @@ export class GraphEditor {
     }
 
     buildNodeElement(node, { system = false, selected = false }) {
-        const inputCount = asCount(node.inputs, system ? (node.id === GRAPH_OUTPUT_ID ? 4 : 0) : 1, 8);
+        const defaultInputCount = system ? (node.id === GRAPH_OUTPUT_ID ? 4 : 0) : minInputCountByNodeType(node.type);
+        const inputCount = asCount(node.inputs, defaultInputCount, 8);
         const outputCount = asCount(node.outputs, system ? (node.id === GRAPH_INPUT_ID ? 4 : 0) : 1, 8);
 
         const el = document.createElement("div");
@@ -1140,8 +1355,8 @@ export class GraphEditor {
             const body = document.createElement("div");
             body.className = "graph-node-body";
             body.textContent = node.id === GRAPH_INPUT_ID
-                ? "输入系统节点（valueInputPipe）"
-                : "输出系统节点（valueOutput）";
+                ? "Input System Node (valueInputPipe)"
+                : "Output System Node (valueOutput)";
             el.appendChild(head);
             el.appendChild(body);
         }
@@ -1694,10 +1909,8 @@ export class GraphEditor {
                     return;
                 }
                 const additive = !!(ev.shiftKey || ev.ctrlKey || ev.metaKey);
-                if (!additive) {
-                    this.selectedNodeIds.clear();
-                    this.selectedLinkIds.clear();
-                }
+                this.selectedNodeIds.clear();
+                if (!additive) this.selectedLinkIds.clear();
                 if (additive) {
                     if (this.selectedLinkIds.has(link.id)) this.selectedLinkIds.delete(link.id);
                     else this.selectedLinkIds.add(link.id);
@@ -1961,3 +2174,4 @@ export class GraphEditor {
         this.render();
     }
 }
+

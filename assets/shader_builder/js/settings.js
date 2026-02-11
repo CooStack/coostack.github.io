@@ -1,4 +1,4 @@
-﻿import { DEFAULT_SETTINGS, THEMES, STORAGE_KEYS } from "./constants.js";
+import { DEFAULT_SETTINGS, THEMES, STORAGE_KEYS } from "./constants.js";
 import { clamp, loadJson, saveJson } from "./utils.js";
 
 function normalizeTheme(theme) {

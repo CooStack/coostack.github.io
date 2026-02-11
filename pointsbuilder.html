@@ -1,10 +1,10 @@
 ﻿<!doctype html>
 <html lang="zh-CN">
 <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <meta charset="utf-8"/>
+    <meta name="viewport" content="width=device-width,initial-scale=1"/>
     <title>PointsBuilder 可视化构建器</title>
-    <link rel="stylesheet" href="./assets/points_builder/css/style.css" />
+    <link rel="stylesheet" href="./assets/points_builder/css/style.css"/>
 </head>
 <body data-theme="dark-1">
 <div id="app">
@@ -30,12 +30,12 @@
 
             <button id="btnSaveJson" class="btn">导出 JSON</button>
             <button id="btnLoadJson" class="btn">导入 JSON</button>
-            <input id="fileJson" type="file" accept="application/json" hidden />
-            <input id="fileBuilderJson" type="file" accept="application/json" hidden />
+            <input id="fileJson" type="file" accept="application/json" hidden/>
+            <input id="fileBuilderJson" type="file" accept="application/json" hidden/>
             <button id="btnReset" class="btn danger">重置</button>
             <div class="proj-name">
                 <span>项目名</span>
-                <input id="inpProjectName" class="input proj-input" placeholder="未命名" />
+                <input id="inpProjectName" class="input proj-input" placeholder="未命名"/>
             </div>
         </div>
     </header>
@@ -120,7 +120,7 @@
     <div id="modal" class="modal hidden" role="dialog" aria-modal="true">
         <div class="modal-head">
             <div class="modal-title">添加元素</div>
-            <input id="cardSearch" class="input" placeholder="搜索元素：addCircle / rotateTo / Fourier ..." />
+            <input id="cardSearch" class="input" placeholder="搜索元素：addCircle / rotateTo / Fourier ..."/>
             <button id="btnCloseModal" class="btn icon">✕</button>
         </div>
         <div class="modal-body">
@@ -145,26 +145,29 @@
                     <div class="settings-form">
                         <div class="settings-row">
                             <div class="settings-label">参数步长</div>
-                            <input id="inpParamStep" class="input" type="number" value="0.1" step="0.01" min="0.000001" />
+                            <input id="inpParamStep" class="input" type="number" value="0.1" step="0.01"
+                                   min="0.000001"/>
                         </div>
                         <div class="settings-row">
                             <div class="settings-label">网格步长</div>
                             <input id="inpSnapStep" class="input" type="number" value="1" step="0.1" min="0.000001"
-                                   title="吸附网格开启时生效" />
+                                   title="吸附网格开启时生效"/>
                         </div>
                         <div class="settings-row">
                             <div class="settings-label">粒子吸附范围</div>
-                            <input id="inpSnapParticleRange" class="input" type="number" value="0.35" step="0.01" min="0.000001"
-                                   title="与粒子距离小于该值时吸附" />
+                            <input id="inpSnapParticleRange" class="input" type="number" value="0.35" step="0.01"
+                                   min="0.000001"
+                                   title="与粒子距离小于该值时吸附"/>
                         </div>
                         <div class="settings-row">
                             <div class="settings-label">粒子大小</div>
-                            <input id="inpPointSize" class="input" type="number" value="0.07" step="0.01" min="0.001" max="5" />
+                            <input id="inpPointSize" class="input" type="number" value="0.07" step="0.01" min="0.001"
+                                   max="5"/>
                         </div>
                         <div class="settings-row">
                             <div class="settings-label">偏移预览上限</div>
                             <input id="inpOffsetPreviewLimit" class="input" type="number" value="-1" step="1" min="-1"
-                                   title="0 禁用预览，-1 不限制" />
+                                   title="0 禁用预览，-1 不限制"/>
                         </div>
                     </div>
                 </div>
@@ -184,19 +187,19 @@
                         </div>
                         <div class="settings-toggles">
                             <label class="chk settings-toggle">
-                                <input id="chkAxes" type="checkbox" checked />
+                                <input id="chkAxes" type="checkbox" checked/>
                                 <span>显示坐标轴</span>
                             </label>
                             <label class="chk settings-toggle">
-                                <input id="chkGrid" type="checkbox" checked />
+                                <input id="chkGrid" type="checkbox" checked/>
                                 <span>显示网格</span>
                             </label>
                             <label class="chk settings-toggle">
-                                <input id="chkRealtimeKotlin" type="checkbox" />
+                                <input id="chkRealtimeKotlin" type="checkbox"/>
                                 <span>实时更新 Kotlin</span>
                             </label>
                             <label class="chk settings-toggle">
-                                <input id="chkPointPickPreview" type="checkbox" checked />
+                                <input id="chkPointPickPreview" type="checkbox" checked/>
                                 <span>点拾取效果预览</span>
                             </label>
                         </div>
@@ -214,7 +217,7 @@
         <div class="modal-foot" style="display:flex; gap:8px; align-items:center;">
             <button id="btnHotkeysExport" class="btn">导出设置</button>
             <button id="btnHotkeysImport" class="btn">导入设置</button>
-            <input id="fileHotkeys" type="file" accept="application/json" hidden />
+            <input id="fileHotkeys" type="file" accept="application/json" hidden/>
             <span style="flex:1 1 auto;"></span>
         </div>
     </div>
@@ -224,11 +227,13 @@
     <div id="hkModal" class="modal hidden" role="dialog" aria-modal="true">
         <div class="modal-head">
             <div class="modal-title">快捷键设置</div>
-            <input id="hkSearch" class="input" placeholder="搜索快捷键：撤销 / 添加元素 / addCircle ..." />
+            <input id="hkSearch" class="input" placeholder="搜索快捷键：撤销 / 添加元素 / addCircle ..."/>
             <button id="btnCloseHotkeys" class="btn icon">✕</button>
         </div>
         <div class="modal-body">
-            <div id="hkHint" style="margin:0 0 10px; opacity:.8; font-size:12px;">点击“设置”后按下你想要的按键（Esc 取消，Backspace 清空）。</div>
+            <div id="hkHint" style="margin:0 0 10px; opacity:.8; font-size:12px;">点击“设置”后按下你想要的按键（Esc
+                取消，Backspace 清空）。
+            </div>
             <div id="hkList" class="hk-list"></div>
         </div>
         <div class="modal-foot" style="display:flex; gap:8px; align-items:center;">

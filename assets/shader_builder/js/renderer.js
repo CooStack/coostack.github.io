@@ -1,4 +1,4 @@
-﻿import * as THREE from "three";
+import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { EffectComposer } from "three/addons/postprocessing/EffectComposer.js";
 import { RenderPass } from "three/addons/postprocessing/RenderPass.js";
@@ -7,6 +7,8 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 import { OBJLoader } from "three/addons/loaders/OBJLoader.js";
 import { GRAPH_INPUT_ID, GRAPH_OUTPUT_ID } from "./store.js";
 import { boolFromString, parseVec } from "./utils.js";
+
+const DYNAMIC_UNIFORM_NAMES = new Set(["uTime", "CameraPos"]);
 
 function createPrimitiveGeometry(type) {
     switch (type) {
@@ -35,7 +37,7 @@ function createWhiteTexture() {
     return tex;
 }
 
-const PREVIEW_POST_VERTEX = `
+const PREVIEW_POST_VERTEX_GLSL1 = `
 varying vec2 vUv;
 void main() {
     vUv = uv;
@@ -43,10 +45,51 @@ void main() {
 }
 `.trim();
 
-function adaptPostFragmentForPreview(source) {
+const PREVIEW_POST_VERTEX_GLSL3 = `
+out vec2 vUv;
+void main() {
+    vUv = uv;
+    gl_Position = vec4(position.xy, 0.0, 1.0);
+}
+`.trim();
+
+function adaptTextureSizeMathForPreview(source) {
+    let code = String(source || "");
+    // GLSL 3.30 textureSize(sampler2D, lod) returns ivec2.
+    // Cast to vec2 in common texel-size math to avoid int/float mismatch.
+    code = code.replace(
+        /(\b(?:\d+(?:\.\d+)?|\.\d+)\b)\s*\/\s*textureSize\s*\(\s*([A-Za-z_][A-Za-z0-9_]*)\s*,\s*([^)]+?)\s*\)/g,
+        "$1 / vec2(textureSize($2, $3))"
+    );
+    code = code.replace(
+        /(\bvec2\s+[A-Za-z_][A-Za-z0-9_]*\s*=\s*)textureSize\s*\(\s*([A-Za-z_][A-Za-z0-9_]*)\s*,\s*([^)]+?)\s*\)/g,
+        "$1vec2(textureSize($2, $3))"
+    );
+    return code;
+}
+
+function collectSamplerUniformNames(source) {
+    const text = String(source || "")
+        .replace(/\/\*[\s\S]*?\*\//g, " ")
+        .replace(/\/\/[^\n]*/g, "");
+    const names = [];
+    const seen = new Set();
+    const re = /\buniform\s+(?:(?:lowp|mediump|highp)\s+)?sampler2D\s+([A-Za-z_][A-Za-z0-9_]*)\s*(?:\[[^\]]+\])?\s*;/g;
+    let match = re.exec(text);
+    while (match) {
+        const name = String(match[1] || "").trim();
+        if (name && !seen.has(name)) {
+            seen.add(name);
+            names.push(name);
+        }
+        match = re.exec(text);
+    }
+    return names;
+}
+
+function adaptPostFragmentForPreview(source, { useGlsl3 = false } = {}) {
     let code = String(source || "");
     code = code.replace(/\r\n/g, "\n");
-    // ShaderPass preview uses GLSL1-style ShaderMaterial pipeline.
     // Convert common MC fragment styles into a stable preview form.
     code = code.replace(/^\s*#version[^\n]*\n?/gm, "");
     const outNames = [];
@@ -58,10 +101,20 @@ function adaptPostFragmentForPreview(source) {
         outNames.push(String(name || ""));
         return "";
     });
-    code = code.replace(/^\s*(in|out)\s+vec2\s+screen_uv\s*;\s*$/gm, "");
-    code = code.replace(/^\s*(in|out)\s+vec2\s+vUv\s*;\s*$/gm, "");
-    code = code.replace(/^\s*varying\s+vec2\s+screen_uv\s*;\s*$/gm, "");
-    code = code.replace(/^\s*varying\s+vec2\s+vUv\s*;\s*$/gm, "");
+
+    if (useGlsl3) {
+        code = code.replace(/^\s*(in|out)\s+vec2\s+screen_uv\s*;\s*$/gm, "");
+        code = code.replace(/^\s*(in|out)\s+vec2\s+vUv\s*;\s*$/gm, "");
+        code = code.replace(/^\s*varying\s+vec2\s+screen_uv\s*;\s*$/gm, "");
+        code = code.replace(/^\s*varying\s+vec2\s+vUv\s*;\s*$/gm, "");
+    } else {
+        // ShaderPass GLSL1 preview compatibility path.
+        code = code.replace(/^\s*(in|out)\s+vec2\s+screen_uv\s*;\s*$/gm, "");
+        code = code.replace(/^\s*(in|out)\s+vec2\s+vUv\s*;\s*$/gm, "");
+        code = code.replace(/^\s*varying\s+vec2\s+screen_uv\s*;\s*$/gm, "");
+        code = code.replace(/^\s*varying\s+vec2\s+vUv\s*;\s*$/gm, "");
+    }
+
     code = code.replace(/^\s*uniform\s+sampler2D\s+tex\s*;\s*$/gm, "uniform sampler2D tDiffuse;");
     code = code.replace(/\bscreen_uv\b/g, "vUv");
     code = code.replace(/\btex\b/g, "tDiffuse");
@@ -69,13 +122,25 @@ function adaptPostFragmentForPreview(source) {
         if (!name || name === "gl_FragColor") continue;
         code = code.replace(new RegExp(`\\b${name}\\b`, "g"), "gl_FragColor");
     }
+    if (useGlsl3) {
+        code = code.replace(/\btexture2D\s*\(/g, "texture(");
+    } else {
+        code = code.replace(/\btexture\s*\(/g, "texture2D(");
+    }
+    code = adaptTextureSizeMathForPreview(code);
 
-    if (!/\buniform\s+sampler2D\s+tDiffuse\s*;/.test(code)) {
+    if (!/\buniform\b[^\n;]*\btDiffuse\b[^\n;]*;/.test(code)) {
         code = `uniform sampler2D tDiffuse;\n${code}`;
     }
-    if (!/\bvarying\s+vec2\s+vUv\s*;/.test(code)) {
+
+    if (useGlsl3) {
+        if (!/\bin\b[^\n;]*\bvUv\b[^\n;]*;/.test(code)) {
+            code = `in vec2 vUv;\n${code}`;
+        }
+    } else if (!/\bvarying\b[^\n;]*\bvUv\b[^\n;]*;/.test(code)) {
         code = `varying vec2 vUv;\n${code}`;
     }
+
     return code;
 }
 
@@ -114,6 +179,7 @@ function adaptModelFragmentForPreview(source) {
         code = code.replace(new RegExp(`\\b${name}\\b`, "g"), "gl_FragColor");
     }
     code = code.replace(/\btexture\s*\(/g, "texture2D(");
+    code = adaptTextureSizeMathForPreview(code);
     return code;
 }
 
@@ -153,6 +219,17 @@ function resolveChain(state) {
     const reachable = new Set();
     let hasOutputConnection = false;
     const bfs = [GRAPH_INPUT_ID];
+
+    // Source-style nodes (e.g. texture node) may have zero inputs and should be
+    // considered reachable even without links from system input.
+    for (const [nodeId, node] of nodeMap.entries()) {
+        const inputCount = Number(node?.inputs ?? 1);
+        if (Number.isFinite(inputCount) && inputCount <= 0 && !reachable.has(nodeId)) {
+            reachable.add(nodeId);
+            bfs.push(nodeId);
+        }
+    }
+
     for (let i = 0; i < bfs.length; i++) {
         const cur = bfs[i];
         for (const edge of adjacency.get(cur) || []) {
@@ -452,6 +529,13 @@ export class ShaderWorkbenchRenderer {
     paramToUniform(param) {
         const type = String(param?.type || "float").toLowerCase();
         const value = param?.value ?? "";
+        const useExpr = String(param?.valueSource || "value").toLowerCase() === "uniform";
+        const expr = String(param?.valueExpr || "").trim();
+
+        // Built-in dynamic uniform expression for preview.
+        if (type === "vec3" && useExpr && expr === "CameraPos") {
+            return { value: this.camera.position };
+        }
 
         if (type === "int") return { value: Math.round(normalizeNumber(value, 0)) };
         if (type === "bool") return { value: boolFromString(value, false) };
@@ -480,8 +564,10 @@ export class ShaderWorkbenchRenderer {
         for (const param of params || []) {
             const name = String(param?.name || "").trim();
             if (!name) continue;
+            if (DYNAMIC_UNIFORM_NAMES.has(name)) continue;
             uniforms[name] = this.paramToUniform(param);
         }
+        if (!uniforms.CameraPos) uniforms.CameraPos = { value: this.camera.position };
         return uniforms;
     }
 
@@ -513,16 +599,119 @@ export class ShaderWorkbenchRenderer {
     }
 
     createShaderPassFromNode(node) {
-        const fragmentSource = adaptPostFragmentForPreview(node?.fragmentSource || "");
-        const uniforms = this.buildUniformMap(node.params || [], true);
-        uniforms.tDiffuse = uniforms.tDiffuse || { value: null };
-        uniforms.tex = uniforms.tex || uniforms.tDiffuse;
+        if (String(node?.type || "").toLowerCase() === "texture") {
+            return this.createTextureNodePass(node);
+        }
 
-        return new ShaderPass({
+        const useGlsl3 = !!this.renderer?.capabilities?.isWebGL2;
+        const fragmentSource = adaptPostFragmentForPreview(node?.fragmentSource || "", { useGlsl3 });
+        const uniforms = this.buildUniformMap(node.params || [], true);
+
+        const samplerUniformNames = collectSamplerUniformNames(node?.fragmentSource || "");
+        const uploadedTextureUniforms = new Set();
+        const inputSamplerUniforms = [];
+        const addInputSampler = (name) => {
+            const n = String(name || "").trim();
+            if (!n) return;
+            if (uploadedTextureUniforms.has(n)) return;
+            if (!inputSamplerUniforms.includes(n)) inputSamplerUniforms.push(n);
+        };
+
+        for (const param of node?.params || []) {
+            if (String(param?.type || "").toLowerCase() !== "texture") continue;
+            const uniformName = String(param?.name || "").trim();
+            if (!uniformName) continue;
+            const sourceType = String(param?.sourceType || "value").toLowerCase();
+            if (sourceType === "upload") {
+                uploadedTextureUniforms.add(uniformName);
+                continue;
+            }
+            addInputSampler(uniformName);
+        }
+
+        for (const uniformName of samplerUniformNames) {
+            addInputSampler(uniformName);
+        }
+        if (!uploadedTextureUniforms.has("tDiffuse")) addInputSampler("tDiffuse");
+        if (!uploadedTextureUniforms.has("tex")) addInputSampler("tex");
+        if (!uploadedTextureUniforms.has("samp")) addInputSampler("samp");
+
+        for (const uniformName of inputSamplerUniforms) {
+            if (!uniforms[uniformName]) {
+                uniforms[uniformName] = { value: null };
+            }
+        }
+
+        let primaryInputUniform = "tDiffuse";
+        if (uploadedTextureUniforms.has(primaryInputUniform)) {
+            primaryInputUniform = "";
+        }
+
+        if (samplerUniformNames.includes("tDiffuse") && !uploadedTextureUniforms.has("tDiffuse")) {
+            primaryInputUniform = "tDiffuse";
+        } else {
+            for (const name of samplerUniformNames) {
+                if (uploadedTextureUniforms.has(name)) continue;
+                if (inputSamplerUniforms.includes(name)) {
+                    primaryInputUniform = name;
+                    break;
+                }
+            }
+            if (!primaryInputUniform && inputSamplerUniforms.length) {
+                primaryInputUniform = inputSamplerUniforms[0];
+            }
+            if (!primaryInputUniform) {
+                primaryInputUniform = "tDiffuse";
+            }
+        }
+
+        const shader = {
             uniforms,
-            vertexShader: PREVIEW_POST_VERTEX,
+            vertexShader: useGlsl3 ? PREVIEW_POST_VERTEX_GLSL3 : PREVIEW_POST_VERTEX_GLSL1,
             fragmentShader: fragmentSource
-        });
+        };
+        if (useGlsl3) shader.glslVersion = THREE.GLSL3;
+
+        const pass = new ShaderPass(shader);
+        if (primaryInputUniform && pass.uniforms?.[primaryInputUniform]) {
+            pass.textureID = primaryInputUniform;
+        }
+
+        const aliasUniforms = inputSamplerUniforms.filter((name) => name !== pass.textureID);
+        if (aliasUniforms.length) {
+            pass.__inputUniformAliases = aliasUniforms;
+            const originalRender = pass.render.bind(pass);
+            pass.render = (renderer, writeBuffer, readBuffer, deltaTime, maskActive) => {
+                const readTexture = readBuffer?.texture || pass.uniforms?.[pass.textureID]?.value || null;
+                for (const alias of pass.__inputUniformAliases || []) {
+                    if (!pass.uniforms?.[alias]) continue;
+                    pass.uniforms[alias].value = readTexture;
+                }
+                return originalRender(renderer, writeBuffer, readBuffer, deltaTime, maskActive);
+            };
+        }
+
+        return pass;
+    }
+
+    createTextureNodePass(node) {
+        const useGlsl3 = !!this.renderer?.capabilities?.isWebGL2;
+        const textureParam = (node?.params || []).find((param) => String(param?.type || "").toLowerCase() === "texture");
+        const sourceType = String(textureParam?.sourceType || "value").toLowerCase();
+        const tDiffuseUniform = textureParam && sourceType === "upload"
+            ? this.paramToUniform(textureParam)
+            : { value: null };
+        const shader = {
+            uniforms: {
+                tDiffuse: tDiffuseUniform
+            },
+            vertexShader: useGlsl3 ? PREVIEW_POST_VERTEX_GLSL3 : PREVIEW_POST_VERTEX_GLSL1,
+            fragmentShader: useGlsl3
+                ? `in vec2 vUv;\nuniform sampler2D tDiffuse;\nout vec4 FragColor;\nvoid main(){ FragColor = texture(tDiffuse, vUv); }`
+                : `varying vec2 vUv;\nuniform sampler2D tDiffuse;\nvoid main(){ gl_FragColor = texture2D(tDiffuse, vUv); }`
+        };
+        if (useGlsl3) shader.glslVersion = THREE.GLSL3;
+        return new ShaderPass(shader);
     }
 
     applyPostPipeline(state) {
@@ -582,6 +771,11 @@ export class ShaderWorkbenchRenderer {
         if (modelUniforms?.uTime) {
             modelUniforms.uTime.value = this.time;
         }
+        if (modelUniforms?.CameraPos?.value?.copy) {
+            modelUniforms.CameraPos.value.copy(this.camera.position);
+        } else if (modelUniforms?.CameraPos) {
+            modelUniforms.CameraPos.value = this.camera.position;
+        }
         if (modelUniforms?.projMat?.value?.copy) {
             modelUniforms.projMat.value.copy(this.camera.projectionMatrix);
         }
@@ -600,6 +794,19 @@ export class ShaderWorkbenchRenderer {
         for (const ps of this.passStates) {
             const uni = ps.pass?.uniforms;
             if (uni?.uTime) uni.uTime.value = this.time;
+            if (uni?.CameraPos?.value?.copy) {
+                uni.CameraPos.value.copy(this.camera.position);
+            } else if (uni?.CameraPos) {
+                uni.CameraPos.value = this.camera.position;
+            }
+            const primary = String(ps.pass?.textureID || "tDiffuse");
+            const primaryValue = uni?.[primary]?.value;
+            if (Array.isArray(ps.pass?.__inputUniformAliases) && primaryValue) {
+                for (const alias of ps.pass.__inputUniformAliases) {
+                    if (!uni?.[alias]) continue;
+                    uni[alias].value = primaryValue;
+                }
+            }
         }
     }
 
