@@ -23,24 +23,44 @@ export const THEMES = [
 
 export const DEFAULT_MODEL_VERTEX = `
 // 目标: MC 1.21.1 (${MC_COMPAT.glsl})
+// 内置输入: pos / normal / uv
+// 传递到片元: vUv / vNormal / vWorldPos
 layout (location = 0) in vec3 pos;
+layout (location = 1) in vec3 normal;
+layout (location = 2) in vec2 uv;
 
 uniform mat4 projMat;
 uniform mat4 transMat;
 uniform mat4 viewMat;
 
+out vec2 vUv;
+out vec3 vNormal;
+out vec3 vWorldPos;
+
 void main() {
-    gl_Position = projMat * viewMat * transMat * vec4(pos, 1.0);
+    vec4 worldPos = transMat * vec4(pos, 1.0);
+    vWorldPos = worldPos.xyz;
+    vNormal = normalize(mat3(transMat) * normal);
+    vUv = uv;
+    gl_Position = projMat * viewMat * worldPos;
 }
 `.trim();
 
 export const DEFAULT_MODEL_FRAGMENT = `
 // 目标: MC 1.21.1 (${MC_COMPAT.glsl})
+// 可用插值变量: vUv / vNormal / vWorldPos
+in vec2 vUv;
+in vec3 vNormal;
+in vec3 vWorldPos;
 out vec4 FragColor;
 uniform vec3 color;
 
 void main() {
-    FragColor = vec4(color, 1.0);
+    vec3 n = normalize(vNormal);
+    vec3 lightDir = normalize(vec3(0.35, 0.9, 0.25));
+    float ndl = max(dot(n, lightDir), 0.0);
+    vec3 base = color * (0.35 + 0.65 * ndl);
+    FragColor = vec4(base, 1.0);
 }
 `.trim();
 

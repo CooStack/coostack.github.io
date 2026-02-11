@@ -768,6 +768,7 @@ export class ShaderCodeEditor {
         this.portalPlaceholder = null;
         this.portalParent = null;
         this.indentUnit = "    ";
+        this.suggestSuspendUntil = 0;
 
         this.buildDOM();
         this.bindEvents();
@@ -839,6 +840,10 @@ export class ShaderCodeEditor {
             this.renderHighlight();
             this.syncScroll();
             this.onChange(this.textarea.value);
+            if (Date.now() < this.suggestSuspendUntil) {
+                this.closeSuggest();
+                return;
+            }
             this.tryAutoSuggest();
         };
 
@@ -851,6 +856,8 @@ export class ShaderCodeEditor {
 
             if (isMod && !ev.altKey && (ev.code === "KeyZ" || ev.code === "KeyY")) {
                 // Keep native textarea undo/redo behavior.
+                this.suggestSuspendUntil = Date.now() + 360;
+                this.closeSuggest();
                 return;
             }
 
