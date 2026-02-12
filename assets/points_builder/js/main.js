@@ -2356,19 +2356,29 @@ function initPointsBuilderMain() {
         return {x: Math.round(p.x / s) * s, y: p.y, z: Math.round(p.z / s) * s};
     }
 
-    function dist2(a, b) {
+    function dist2OnPlane(a, b, planeKey) {
+        const plane = planeKey || getPlaneInfo().axis;
+        if (plane === "XY") {
+            const dx = a.x - b.x;
+            const dy = a.y - b.y;
+            return dx * dx + dy * dy;
+        }
+        if (plane === "ZY") {
+            const dy = a.y - b.y;
+            const dz = a.z - b.z;
+            return dy * dy + dz * dz;
+        }
         const dx = a.x - b.x;
-        const dy = a.y - b.y;
         const dz = a.z - b.z;
-        return dx * dx + dy * dy + dz * dz;
+        return dx * dx + dz * dz;
     }
 
-    function nearestPointCandidate(ref, maxDist = particleSnapRange) {
+    function nearestPointCandidate(ref, maxDist = particleSnapRange, planeKey = getPlaneInfo().axis) {
         if (!lastPoints || lastPoints.length === 0) return null;
         let best = null;
         let bestD2 = Infinity;
         for (const q of lastPoints) {
-            const d2 = dist2(ref, q);
+            const d2 = dist2OnPlane(ref, q, planeKey);
             if (d2 < bestD2) {
                 bestD2 = d2;
                 best = q;
@@ -2386,8 +2396,6 @@ function initPointsBuilderMain() {
         const useGrid = chkSnapGrid && chkSnapGrid.checked;
         const useParticle = chkSnapParticle && chkSnapParticle.checked;
         const snapRange = particleSnapRange;
-        const snapRange2 = snapRange * snapRange;
-
         if (!useGrid && !useParticle) return raw;
 
         const gridP = useGrid ? snapToGridOnPlane(raw, getSnapStep(), getPlaneInfo().axis) : null;
@@ -2396,11 +2404,11 @@ function initPointsBuilderMain() {
         let particleFromHit = false;
         const particleHit = particlePoint ? {x: particlePoint.x, y: particlePoint.y, z: particlePoint.z} : null;
         if (useParticle) {
-            if (particleHit && dist2(raw, particleHit) <= snapRange2) {
+            if (particleHit) {
                 particleP = particleHit;
                 particleFromHit = true;
             } else {
-                const cand = nearestPointCandidate(raw, snapRange);
+                const cand = nearestPointCandidate(raw, snapRange, getPlaneInfo().axis);
                 particleP = cand ? cand.point : null;
             }
         }
