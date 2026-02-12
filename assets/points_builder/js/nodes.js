@@ -68,6 +68,15 @@ export function createNodeHelpers(options = {}) {
             cloned.params.ex = e.x; cloned.params.ey = e.y; cloned.params.ez = e.z;
             return cloned;
         }
+        if (node.kind === "add_fill_triangle") {
+            const p1 = mirrorPointByPlane({x: node.params.p1x, y: node.params.p1y, z: node.params.p1z}, planeKey);
+            const p2 = mirrorPointByPlane({x: node.params.p2x, y: node.params.p2y, z: node.params.p2z}, planeKey);
+            const p3 = mirrorPointByPlane({x: node.params.p3x, y: node.params.p3y, z: node.params.p3z}, planeKey);
+            cloned.params.p1x = p1.x; cloned.params.p1y = p1.y; cloned.params.p1z = p1.z;
+            cloned.params.p2x = p2.x; cloned.params.p2y = p2.y; cloned.params.p2z = p2.z;
+            cloned.params.p3x = p3.x; cloned.params.p3y = p3.y; cloned.params.p3z = p3.z;
+            return cloned;
+        }
         if (node.kind === "points_on_each_offset") {
             const v = mirrorPointByPlane({x: node.params.offX, y: node.params.offY, z: node.params.offZ}, planeKey);
             cloned.params.offX = v.x; cloned.params.offY = v.y; cloned.params.offZ = v.z;

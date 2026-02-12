@@ -162,6 +162,52 @@
             return res;
         },
 
+        fillTriangle(p1, p2, p3, sampler) {
+            const a = Utils.v(p1.x, p1.y, p1.z);
+            const b = Utils.v(p2.x, p2.y, p2.z);
+            const c = Utils.v(p3.x, p3.y, p3.z);
+            const smp = Number(sampler);
+            const out = [];
+            if (!Number.isFinite(smp) || smp <= 0) return out;
+
+            const d12 = Utils.len(Utils.sub(a, b));
+            const d13 = Utils.len(Utils.sub(a, c));
+            const d23 = Utils.len(Utils.sub(b, c));
+            if (d12 <= 1e-6 || d13 <= 1e-6 || d23 <= 1e-6) return out;
+
+            const r1 = Utils.sub(b, a);
+            const r2 = Utils.sub(c, b);
+            const cr = Utils.cross(r1, r2);
+            const sameLine = (cr.x * cr.x + cr.y * cr.y + cr.z * cr.z) < 1e-6;
+            if (sameLine) {
+                const pairs = [
+                    { s: a, e: b, d: d12 },
+                    { s: a, e: c, d: d13 },
+                    { s: b, e: c, d: d23 }
+                ];
+                pairs.sort((p, q) => q.d - p.d);
+                const best = pairs[0];
+                const lineCount = Math.round(best.d * smp);
+                return Utils.getLineLocations(best.s, best.e, lineCount);
+            }
+
+            const maxEdge = Math.max(d12, d13, d23);
+            const edgeSamples = Math.max(1, Math.round(maxEdge * smp));
+            for (let i = 0; i <= edgeSamples; i++) {
+                const u = i / edgeSamples;
+                for (let j = 0; j <= edgeSamples - i; j++) {
+                    const v = j / edgeSamples;
+                    const w = 1.0 - u - v;
+                    out.push({
+                        x: a.x * w + b.x * u + c.x * v,
+                        y: a.y * w + b.y * u + c.y * v,
+                        z: a.z * w + b.z * u + c.z * v
+                    });
+                }
+            }
+            return out;
+        },
+
         getCircleXZ(r, count) {
             const c = Math.max(1, Math.trunc(Number(count) || 1));
             const rr = Number(r) || 0;

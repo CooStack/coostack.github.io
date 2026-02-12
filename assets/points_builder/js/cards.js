@@ -43,6 +43,7 @@
             "rotate角度": "整体旋转角度。",
             r: "半径，决定图形大小。",
             count: "采样点数量，越大越密。",
+            sampler: "采样密度，越大越密。",
             w: "宽度/尺度，影响图形横向尺寸。",
             h: "高度/尺度，影响图形纵向尺寸。",
             step: "步进间距，越小越密。",
@@ -96,6 +97,12 @@
                 start: "线段起点坐标。",
                 end: "线段终点坐标。",
                 count: "线段采样点数量。"
+            },
+            add_fill_triangle: {
+                p1: "三角形第一个顶点。",
+                p2: "三角形第二个顶点。",
+                p3: "三角形第三个顶点。",
+                sampler: "三角形填充采样密度（越大越密）。"
             },
             add_circle: {
                 r: "圆半径。",
@@ -2044,7 +2051,7 @@ export function initCardSystem(ctx = {}) {
         toBottomBtn.title = "置底";
         actions.appendChild(toBottomBtn);
 
-        if (node.kind === "add_line" || node.kind === "points_on_each_offset") {
+        if (node.kind === "add_line" || node.kind === "add_fill_triangle" || node.kind === "points_on_each_offset") {
             const mirrorBtn = iconBtn("⇋", () => {
                 const cloned = mirrorCopyNode(node, getMirrorPlane());
                 if (!cloned) return;
@@ -2415,6 +2422,16 @@ export function initCardSystem(ctx = {}) {
                 body.appendChild(row("end", makeVec3Editor(p, "e", rebuildPreviewAndKotlin, "end")));
                 body.appendChild(row("count", inputNum(p.count, v => {
                     p.count = v;
+                    rebuildPreviewAndKotlin();
+                })));
+                break;
+
+            case "add_fill_triangle":
+                body.appendChild(row("p1", makeVec3Editor(p, "p1", rebuildPreviewAndKotlin, "p1")));
+                body.appendChild(row("p2", makeVec3Editor(p, "p2", rebuildPreviewAndKotlin, "p2")));
+                body.appendChild(row("p3", makeVec3Editor(p, "p3", rebuildPreviewAndKotlin, "p3")));
+                body.appendChild(row("sampler", inputNum(p.sampler, v => {
+                    p.sampler = v;
                     rebuildPreviewAndKotlin();
                 })));
                 break;

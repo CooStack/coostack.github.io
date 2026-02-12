@@ -38,6 +38,7 @@ import {
     const btnAddCard = document.getElementById("btnAddCard");
     const btnQuickOffset = document.getElementById("btnQuickOffset");
     const btnPickLine = document.getElementById("btnPickLine");
+    const btnPickTriangle = document.getElementById("btnPickTriangle");
     const pickPointBtns = Array.from(document.querySelectorAll("#btnPickPoint"));
     const btnPickPoint = pickPointBtns[0] || null;
     if (pickPointBtns.length > 1) {
@@ -1123,6 +1124,7 @@ import {
         hkHint,
         btnAddCard,
         btnPickLine,
+        btnPickTriangle,
         btnPickPoint,
         btnFullscreen,
         btnResetCamera,
@@ -1932,6 +1934,8 @@ import {
     let pointSize = 0.2;     // ✅ 粒子大小（PointsMaterial.size）
     // line pick state (可指向主/任意子 builder)
     let linePickMode = false;
+    let linePickType = "line"; // line | triangle
+    let linePickRequiredPoints = 2;
     let picked = [];
     let linePickTargetList = null;
     let linePickTargetLabel = "主Builder";
@@ -2174,7 +2178,7 @@ import {
     }
 
     function colorForPickIndex(idx) {
-        // idx=0：第一个点；idx=1：第二个点
+        // idx=0：第一个点（红）；其余点（蓝）
         return idx === 0 ? 0xff3333 : 0x33a1ff;
     }
 
@@ -2409,6 +2413,7 @@ import {
     function updatePickLineButtons() {
         const label = getPlaneInfo().label;
         if (btnPickLine) btnPickLine.textContent = `${label} 绘制直线`;
+        if (btnPickTriangle) btnPickTriangle.textContent = `${label} 绘制三角形`;
         document.querySelectorAll("[data-pick-line-btn]").forEach((el) => {
             el.textContent = `${label}绘制直线`;
         });
@@ -2443,12 +2448,7 @@ import {
         updatePickLineButtons();
         updateGridForPlane();
         if (linePickMode) {
-            if (picked && picked.length === 1) {
-                const a = picked[0];
-                setLinePickStatus(`${info.label} 拾取模式[${linePickTargetLabel}]：已选第 1 点：(${U.fmt(a.x)}, ${U.fmt(a.y)}, ${U.fmt(a.z)})，再点第 2 点`);
-            } else {
-                setLinePickStatus(`${info.label} 拾取模式[${linePickTargetLabel}]：请点第 1 点`);
-            }
+            setLinePickStatus(buildLinePickProgressStatus(info.label));
         }
         if (pointPickMode) {
             refreshPointPickStatus();
@@ -2799,17 +2799,66 @@ import {
         if (linePickPreviewObj) linePickPreviewObj.visible = false;
     }
 
+    function appendPreviewSegment(out, a, b, count) {
+        const c = Math.max(2, Math.trunc(Number(count) || 2));
+        for (let i = 0; i < c; i++) {
+            const t = c <= 1 ? 0 : (i / (c - 1));
+            out.push(
+                a.x + (b.x - a.x) * t,
+                a.y + (b.y - a.y) * t,
+                a.z + (b.z - a.z) * t
+            );
+        }
+    }
+
     function updateLinePickPreview(targetPoint) {
-        if (!linePickMode || !targetPoint || !picked || picked.length !== 1) {
+        if (!linePickMode || !targetPoint || !picked || !picked.length) {
             hideLinePickPreview();
             return;
         }
-        const start = picked[0];
-        if (!start) {
+
+        const previewVerts = [];
+        if (linePickType === "triangle") {
+            if (picked.length === 1) {
+                const a = picked[0];
+                if (!a) {
+                    hideLinePickPreview();
+                    return;
+                }
+                // 三角拾取第 1 点确认后：先显示当前边
+                appendPreviewSegment(previewVerts, a, targetPoint, 30);
+            } else if (picked.length === 2) {
+                const a = picked[0], b = picked[1];
+                if (!a || !b) {
+                    hideLinePickPreview();
+                    return;
+                }
+                // 三角拾取第 2 点确认后：显示三角轮廓（第三点跟随鼠标）
+                appendPreviewSegment(previewVerts, a, b, 24);
+                appendPreviewSegment(previewVerts, b, targetPoint, 24);
+                appendPreviewSegment(previewVerts, targetPoint, a, 24);
+            } else {
+                hideLinePickPreview();
+                return;
+            }
+        } else {
+            if (picked.length !== 1) {
+                hideLinePickPreview();
+                return;
+            }
+            const a = picked[0];
+            if (!a) {
+                hideLinePickPreview();
+                return;
+            }
+            appendPreviewSegment(previewVerts, a, targetPoint, 30);
+        }
+
+        const count = Math.max(0, Math.trunc(previewVerts.length / 3));
+        if (count <= 0) {
             hideLinePickPreview();
             return;
         }
-        const count = 30;
         ensureLinePickPreviewObj();
         if (!linePickPreviewObj) return;
         const geom = linePickPreviewObj.geometry;
@@ -2818,13 +2867,7 @@ import {
             linePickPreviewCount = count;
             geom.setAttribute("position", new THREE.BufferAttribute(linePickPreviewBuf, 3));
         }
-        let o = 0;
-        for (let i = 0; i < count; i++) {
-            const t = count <= 1 ? 0 : (i / (count - 1));
-            linePickPreviewBuf[o++] = start.x + (targetPoint.x - start.x) * t;
-            linePickPreviewBuf[o++] = start.y + (targetPoint.y - start.y) * t;
-            linePickPreviewBuf[o++] = start.z + (targetPoint.z - start.z) * t;
-        }
+        linePickPreviewBuf.set(previewVerts);
         const posAttr = geom.getAttribute("position");
         if (posAttr) posAttr.needsUpdate = true;
         geom.computeBoundingSphere();
@@ -4026,6 +4069,15 @@ function openActionMenuForBlankNoSelection(ev) {
             }
         },
         {
+            label: "绘制三角形",
+            onSelect: () => {
+                if (linePickMode) stopLinePick();
+                if (pointPickMode) stopPointPick();
+                const ctx = getInsertContextFromFocus();
+                startTrianglePick(ctx.list, ctx.label, ctx.insertIndex);
+            }
+        },
+        {
             label: "添加全局偏移",
             onSelect: () => addQuickOffsetTo(state.root.children)
         }
@@ -4207,6 +4259,34 @@ function onCanvasDblClick(ev) {
 
     function setPointPickStatus(text) {
         setLinePickStatus(text);
+    }
+
+    function isTrianglePickType() {
+        return linePickType === "triangle";
+    }
+
+    function buildLinePickProgressStatus(infoLabel) {
+        const label = infoLabel || getPlaneInfo().label;
+        const targetLabel = linePickTargetLabel || "主Builder";
+        if (isTrianglePickType()) {
+            if (!picked || picked.length <= 0) {
+                return `${label} 三角拾取[${targetLabel}]：请点第 1 点`;
+            }
+            if (picked.length === 1) {
+                const a = picked[0];
+                return `${label} 三角拾取[${targetLabel}]：已选第 1 点：(${U.fmt(a.x)}, ${U.fmt(a.y)}, ${U.fmt(a.z)})，再点第 2 点`;
+            }
+            if (picked.length === 2) {
+                const b = picked[1];
+                return `${label} 三角拾取[${targetLabel}]：已选第 2 点：(${U.fmt(b.x)}, ${U.fmt(b.y)}, ${U.fmt(b.z)})，再点第 3 点`;
+            }
+            return `${label} 三角拾取[${targetLabel}]：请点第 1 点`;
+        }
+        if (!picked || picked.length <= 0) {
+            return `${label} 拾取模式[${targetLabel}]：请点第 1 点`;
+        }
+        const a = picked[0];
+        return `${label} 拾取模式[${targetLabel}]：已选第 1 点：(${U.fmt(a.x)}, ${U.fmt(a.y)}, ${U.fmt(a.z)})，再点第 2 点`;
     }
 
     function formatRotateAxisForStatus(axis) {
@@ -4547,11 +4627,12 @@ function onCanvasDblClick(ev) {
         });
     }
 
-    function startLinePick(targetList, label, insertIndex = null) {
+    function startShapePick(type, targetList, label, insertIndex = null) {
         hideActionMenu();
         hideQuickSyncPanel();
         if (offsetMode) stopOffsetMode();
         if (rotateMode) stopRotateMode({ silent: true });
+        if (pointPickMode) stopPointPick();
         _rClickT = 0;
         clearPickMarkers();
         hideLinePickPreview();
@@ -4561,11 +4642,21 @@ function onCanvasDblClick(ev) {
         linePickTargetList = targetList || state.root.children;
         linePickTargetLabel = label || "主Builder";
         linePickInsertIndex = (insertIndex === undefined ? null : insertIndex);
+        linePickType = (type === "triangle") ? "triangle" : "line";
+        linePickRequiredPoints = (linePickType === "triangle") ? 3 : 2;
         // 记录进入拾取前的聚焦卡片：拾取新增完成后要把聚焦留在原卡片上
         linePickKeepFocusId = focusedNodeId;
         linePickMode = true;
         picked = [];
-        setLinePickStatus(`${getPlaneInfo().label} 拾取模式[${linePickTargetLabel}]：请点第 1 点`);
+        setLinePickStatus(buildLinePickProgressStatus(getPlaneInfo().label));
+    }
+
+    function startLinePick(targetList, label, insertIndex = null) {
+        startShapePick("line", targetList, label, insertIndex);
+    }
+
+    function startTrianglePick(targetList, label, insertIndex = null) {
+        startShapePick("triangle", targetList, label, insertIndex);
     }
 
     function stopLinePick() {
@@ -4577,6 +4668,8 @@ function onCanvasDblClick(ev) {
         picked = [];
         linePickInsertIndex = null;
         linePickKeepFocusId = null;
+        linePickType = "line";
+        linePickRequiredPoints = 2;
         hideLinePickStatus();
     }
 
@@ -4709,6 +4802,11 @@ function onCanvasDblClick(ev) {
     const OFFSET_PARAM_GROUPS = {
         add_point: [["x", "y", "z"]],
         add_line: [["sx", "sy", "sz"], ["ex", "ey", "ez"]],
+        add_fill_triangle: [
+            ["p1x", "p1y", "p1z"],
+            ["p2x", "p2y", "p2z"],
+            ["p3x", "p3y", "p3z"]
+        ],
         add_bezier: [
             ["p1x", "p1y", "p1z"],
             ["p2x", "p2y", "p2z"],
@@ -5173,7 +5271,7 @@ function onCanvasDblClick(ev) {
             const mapped = mapPickPoint(hit, particle);
             if (linePickMode) {
                 setHoverMarkerColor(colorForPickIndex((picked?.length || 0) >= 1 ? 1 : 0));
-                if (picked && picked.length === 1) updateLinePickPreview(mapped);
+                if (picked && picked.length >= 1) updateLinePickPreview(mapped);
                 else hideLinePickPreview();
             } else if (pointPickMode) {
                 setHoverMarkerColor(0xffcc33);
@@ -5329,17 +5427,31 @@ function onCanvasDblClick(ev) {
             setHoverMarkerColor(colorForPickIndex(picked.length >= 1 ? 1 : 0));
             showHoverMarker(mapped);
 
-            if (picked.length === 1) {
-                setLinePickStatus(`${getPlaneInfo().label} 拾取模式[${linePickTargetLabel}]：已选第 1 点：(${U.fmt(mapped.x)}, ${U.fmt(mapped.y)}, ${U.fmt(mapped.z)})，再点第 2 点`);
-            } else if (picked.length === 2) {
-                const a = picked[0], b = picked[1];
+            const required = Math.max(2, Number(linePickRequiredPoints) || 2);
+            if (picked.length < required) {
+                setLinePickStatus(buildLinePickProgressStatus(getPlaneInfo().label));
+            } else if (picked.length === required) {
                 const list = linePickTargetList || state.root.children;
-                // ✅ 允许撤销：把“新增直线”纳入历史栈
-                historyCapture("pick_line_xz");
+                const isTriangle = isTrianglePickType();
+                historyCapture(isTriangle ? "pick_fill_triangle" : "pick_line_xz");
 
-                const nn = makeNode("add_line", {
-                    params: {sx: a.x, sy: a.y, sz: a.z, ex: b.x, ey: b.y, ez: b.z, count: 30}
-                });
+                let nn;
+                if (isTriangle) {
+                    const a = picked[0], b = picked[1], c = picked[2];
+                    nn = makeNode("add_fill_triangle", {
+                        params: {
+                            p1x: a.x, p1y: a.y, p1z: a.z,
+                            p2x: b.x, p2y: b.y, p2z: b.z,
+                            p3x: c.x, p3y: c.y, p3z: c.z,
+                            sampler: 3
+                        }
+                    });
+                } else {
+                    const a = picked[0], b = picked[1];
+                    nn = makeNode("add_line", {
+                        params: {sx: a.x, sy: a.y, sz: a.z, ex: b.x, ey: b.y, ez: b.z, count: 30}
+                    });
+                }
 
                 // ✅ 支持插入位置：如果是从 addBuilder 或某张卡片后进入拾取，则按 insertIndex 插入并可连续插入
                 if (linePickInsertIndex === null || linePickInsertIndex === undefined) {
@@ -5350,11 +5462,17 @@ function onCanvasDblClick(ev) {
                     linePickInsertIndex = at + 1;
                 }
 
-                setLinePickStatus(`${getPlaneInfo().label} 拾取模式[${linePickTargetLabel}]：已添加 addLine（可在卡片里改 count）`);
+                if (isTriangle) {
+                    setLinePickStatus(`${getPlaneInfo().label} 三角拾取[${linePickTargetLabel}]：已添加 addFillTriangle（可在卡片里改 sampler）`);
+                } else {
+                    setLinePickStatus(`${getPlaneInfo().label} 拾取模式[${linePickTargetLabel}]：已添加 addLine（可在卡片里改 count）`);
+                }
                 picked = [];
                 linePickMode = false;
                 // 退出拾取时清掉插入点；聚焦保留由 keepId 处理
                 linePickInsertIndex = null;
+                linePickType = "line";
+                linePickRequiredPoints = 2;
                 setTimeout(() => hideLinePickStatus(), 900);
                 hideHoverMarker();
                 clearPickMarkers();
@@ -5461,29 +5579,108 @@ function onCanvasDblClick(ev) {
         showModal();
     }
 
+    function toCompactSearchText(text) {
+        return String(text || "")
+            .toLowerCase()
+            .replace(/[^a-z0-9\u4e00-\u9fa5]+/g, "");
+    }
+
+    function toAsciiAcronym(text) {
+        const raw = String(text || "")
+            .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+            .replace(/[_\-./()+[\]{}]+/g, " ")
+            .toLowerCase();
+        const words = raw.match(/[a-z0-9]+/g) || [];
+        let out = "";
+        for (const w of words) {
+            if (w) out += w[0];
+        }
+        return out;
+    }
+
+    function findSubsequenceScore(query, target) {
+        const q = String(query || "");
+        const t = String(target || "");
+        if (!q || !t) return Infinity;
+        let qi = 0;
+        let last = -1;
+        let gap = 0;
+        for (let i = 0; i < t.length && qi < q.length; i++) {
+            if (t[i] !== q[qi]) continue;
+            if (last >= 0) gap += (i - last - 1);
+            last = i;
+            qi++;
+        }
+        if (qi !== q.length || last < 0) return Infinity;
+        // 越靠前、越紧凑，分数越低
+        return last * 10 + gap;
+    }
+
     function renderPicker(filterText) {
         const f = (filterText || "").trim().toLowerCase();
+        const fCompact = toCompactSearchText(filterText);
         cardPicker.innerHTML = "";
         const entries = Object.entries(KIND).map(([kind, def], order) => ({kind, def, order}));
 
         const shown = [];
         for (const it of entries) {
-            const title = ((it.def?.title || it.kind) + "").toLowerCase();
-            const kind = (it.kind || "").toLowerCase();
-            const desc = ((it.def?.desc || "") + "").toLowerCase();
+            const titleRaw = (it.def?.title || it.kind) + "";
+            const kindRaw = (it.kind || "") + "";
+            const descRaw = (it.def?.desc || "") + "";
+            const title = titleRaw.toLowerCase();
+            const kind = kindRaw.toLowerCase();
+            const desc = descRaw.toLowerCase();
             if (!f) {
                 shown.push({it, group: 0, score: 0, order: it.order});
                 continue;
             }
+
+            let best = null;
+            const keepBest = (group, score) => {
+                if (!Number.isFinite(score)) return;
+                if (!best || group < best.group || (group === best.group && score < best.score)) {
+                    best = { group, score };
+                }
+            };
+
+            // 1) 直接前缀/包含匹配（优先）
+            if (title.startsWith(f) || kind.startsWith(f)) keepBest(0, 0);
             const tIdx = title.indexOf(f);
             const kIdx = kind.indexOf(f);
-            const bestTitleIdx = [tIdx, kIdx].filter(v => v >= 0).reduce((a, b) => Math.min(a, b), Infinity);
-            const dIdx = desc.indexOf(f);
-            if (Number.isFinite(bestTitleIdx)) {
-                shown.push({it, group: 0, score: bestTitleIdx, order: it.order});
-            } else if (dIdx >= 0) {
-                shown.push({it, group: 1, score: dIdx, order: it.order});
+            const directIdx = Math.min(tIdx >= 0 ? tIdx : Infinity, kIdx >= 0 ? kIdx : Infinity);
+            if (Number.isFinite(directIdx)) keepBest(1, directIdx);
+
+            // 2) 缩写匹配（支持 af -> addFillTriangle / add_fill_triangle）
+            if (fCompact) {
+                const acrTitle = toAsciiAcronym(titleRaw);
+                const acrKind = toAsciiAcronym(kindRaw);
+                const acrPrefix = Math.min(
+                    acrTitle.startsWith(fCompact) ? 0 : Infinity,
+                    acrKind.startsWith(fCompact) ? 0 : Infinity
+                );
+                if (Number.isFinite(acrPrefix)) keepBest(2, acrPrefix);
+
+                const acrContain = Math.min(
+                    acrTitle.indexOf(fCompact) >= 0 ? acrTitle.indexOf(fCompact) : Infinity,
+                    acrKind.indexOf(fCompact) >= 0 ? acrKind.indexOf(fCompact) : Infinity
+                );
+                if (Number.isFinite(acrContain)) keepBest(3, acrContain);
+
+                // 3) 顺序字符匹配（模糊）
+                const compactTitle = toCompactSearchText(titleRaw);
+                const compactKind = toCompactSearchText(kindRaw);
+                const subseqScore = Math.min(
+                    findSubsequenceScore(fCompact, compactTitle),
+                    findSubsequenceScore(fCompact, compactKind)
+                );
+                if (Number.isFinite(subseqScore)) keepBest(4, subseqScore);
             }
+
+            // 4) 描述匹配放后
+            const dIdx = desc.indexOf(f);
+            if (dIdx >= 0) keepBest(5, dIdx);
+
+            if (best) shown.push({it, group: best.group, score: best.score, order: it.order});
         }
 
         if (f) {
@@ -5809,10 +6006,29 @@ function onCanvasDblClick(ev) {
             if (settingsModal && !settingsModal.classList.contains("hidden")) hideSettingsModal();
             if (rotateMode) stopRotateMode({ silent: true });
 
-            if (linePickMode) stopLinePick();
+            if (linePickMode && linePickType === "line") stopLinePick();
             else {
+                if (linePickMode) stopLinePick();
+                if (pointPickMode) stopPointPick();
                 const ctx = getInsertContextFromFocus();
                 startLinePick(ctx.list, ctx.label, ctx.insertIndex);
+            }
+            return;
+        }
+
+        if (hotkeyMatchEvent(e, hotkeys.actions.pickTriangle)) {
+            e.preventDefault();
+            if (modal && !modal.classList.contains("hidden")) hideModal();
+            if (hkModal && !hkModal.classList.contains("hidden")) hideHotkeysModal();
+            if (settingsModal && !settingsModal.classList.contains("hidden")) hideSettingsModal();
+            if (rotateMode) stopRotateMode({ silent: true });
+
+            if (linePickMode && linePickType === "triangle") stopLinePick();
+            else {
+                if (linePickMode) stopLinePick();
+                if (pointPickMode) stopPointPick();
+                const ctx = getInsertContextFromFocus();
+                startTrianglePick(ctx.list, ctx.label, ctx.insertIndex);
             }
             return;
         }
@@ -6204,12 +6420,23 @@ function onCanvasDblClick(ev) {
     });
 
     btnPickLine.addEventListener("click", () => {
-        if (linePickMode) stopLinePick();
+        if (linePickMode && linePickType === "line") stopLinePick();
         else {
             if (rotateMode) stopRotateMode({ silent: true });
+            if (linePickMode) stopLinePick();
             if (pointPickMode) stopPointPick();
             const ctx = getInsertContextFromFocus();
             startLinePick(ctx.list, ctx.label, ctx.insertIndex);
+        }
+    });
+    btnPickTriangle && btnPickTriangle.addEventListener("click", () => {
+        if (linePickMode && linePickType === "triangle") stopLinePick();
+        else {
+            if (rotateMode) stopRotateMode({ silent: true });
+            if (linePickMode) stopLinePick();
+            if (pointPickMode) stopPointPick();
+            const ctx = getInsertContextFromFocus();
+            startTrianglePick(ctx.list, ctx.label, ctx.insertIndex);
         }
     });
     btnPickPoint && btnPickPoint.addEventListener("click", () => {

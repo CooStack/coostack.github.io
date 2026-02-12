@@ -232,6 +232,26 @@ export function createKindDefs(ctx) {
             }
         },
 
+        add_fill_triangle: {
+            title: "addFillTriangle(三点填充三角形)",
+            desc: "添加三角形填充点（addFillTriangle）",
+            defaultParams: {
+                p1x: 0, p1y: 0, p1z: 0,
+                p2x: 3, p2y: 0, p2z: 0,
+                p3x: 0, p3y: 0, p3z: 3,
+                sampler: 3
+            },
+            apply(ctx, node) {
+                const p1 = U.v(num(node.params.p1x), num(node.params.p1y), num(node.params.p1z));
+                const p2 = U.v(num(node.params.p2x), num(node.params.p2y), num(node.params.p2z));
+                const p3 = U.v(num(node.params.p3x), num(node.params.p3y), num(node.params.p3z));
+                ctx.points.push(...U.fillTriangle(p1, p2, p3, num(node.params.sampler)));
+            },
+            kotlin(node) {
+                return `.addFillTriangle(${relExpr(node.params.p1x, node.params.p1y, node.params.p1z)}, ${relExpr(node.params.p2x, node.params.p2y, node.params.p2z)}, ${relExpr(node.params.p3x, node.params.p3y, node.params.p3z)}, ${U.fmt(num(node.params.sampler))})`;
+            }
+        },
+
         add_circle: {
             title: "addCircle(XZ圆)",
             desc: "添加 XZ 圆周采样点（addCircle）",
