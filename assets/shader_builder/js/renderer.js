@@ -11,6 +11,7 @@ import { boolFromString, parseVec } from "./utils.js";
 const DYNAMIC_UNIFORM_NAMES = new Set(["uTime", "CameraPos"]);
 const PREVIEW_CONTROL_MODE_DEFAULT = "default";
 const PREVIEW_CONTROL_MODE_TOUCH = "touch";
+const TOUCH_WHEEL_ROTATE_FACTOR = 0.2;
 
 function createPrimitiveGeometry(type) {
     switch (type) {
@@ -376,6 +377,10 @@ export class ShaderWorkbenchRenderer {
 
         this.fallbackTexture = createWhiteTexture();
         this.textureCache = new Map();
+        this.worldDepthMaterial = new THREE.MeshDepthMaterial();
+        this.worldDepthMaterial.depthTest = true;
+        this.worldDepthMaterial.depthWrite = true;
+        this.worldDepthMaterial.colorWrite = false;
 
         this.modelObject = null;
         this.modelMaterial = null;
@@ -433,9 +438,41 @@ export class ShaderWorkbenchRenderer {
         };
         this.onCanvasBlur = () => this.clearPanKeys();
         this.onWindowBlur = () => this.clearPanKeys();
+        this.onCanvasWheel = (ev) => {
+            if (this.previewControlMode !== PREVIEW_CONTROL_MODE_TOUCH) return;
+            if (ev.ctrlKey || ev.metaKey) return;
+
+            ev.preventDefault();
+            ev.stopImmediatePropagation();
+
+            try {
+                this.renderer.domElement.focus({ preventScroll: true });
+            } catch {
+                this.renderer.domElement.focus();
+            }
+
+            let dx = Number(ev.deltaX) || 0;
+            let dy = Number(ev.deltaY) || 0;
+            if (ev.deltaMode === 1) {
+                dx *= 16;
+                dy *= 16;
+            } else if (ev.deltaMode === 2) {
+                const h = Math.max(1, this.renderer.domElement.clientHeight || 1);
+                dx *= h;
+                dy *= h;
+            }
+
+            const h = Math.max(1, this.renderer.domElement.clientHeight || 1);
+            const rotateUnit = (2 * Math.PI / h) * (Number(this.controls.rotateSpeed) || 1) * TOUCH_WHEEL_ROTATE_FACTOR;
+            if (Math.abs(dy) > 0.0001) this.controls._rotateUp(dy * rotateUnit);
+            if (Math.abs(dx) > 0.0001) this.controls._rotateLeft(dx * rotateUnit);
+            this.controls.update();
+        };
+        this.wheelListenerOptions = { passive: false, capture: true };
         this.renderer.domElement.addEventListener("pointerdown", this.onCanvasPointerdown);
         this.renderer.domElement.addEventListener("keydown", this.onCanvasKeydown);
         this.renderer.domElement.addEventListener("keyup", this.onCanvasKeyup);
+        this.renderer.domElement.addEventListener("wheel", this.onCanvasWheel, this.wheelListenerOptions);
         this.renderer.domElement.addEventListener("blur", this.onCanvasBlur);
         window.addEventListener("blur", this.onWindowBlur);
 
@@ -454,11 +491,13 @@ export class ShaderWorkbenchRenderer {
         this.renderer.domElement.removeEventListener("pointerdown", this.onCanvasPointerdown);
         this.renderer.domElement.removeEventListener("keydown", this.onCanvasKeydown);
         this.renderer.domElement.removeEventListener("keyup", this.onCanvasKeyup);
+        this.renderer.domElement.removeEventListener("wheel", this.onCanvasWheel, this.wheelListenerOptions);
         this.renderer.domElement.removeEventListener("blur", this.onCanvasBlur);
         window.removeEventListener("blur", this.onWindowBlur);
         this.controls.dispose();
         this.renderer.dispose();
         this.fallbackTexture.dispose();
+        this.worldDepthMaterial.dispose();
         for (const item of this.textureCache.values()) {
             item.texture?.dispose();
         }
@@ -493,9 +532,11 @@ export class ShaderWorkbenchRenderer {
         const finalMode = normalizePreviewControlMode(mode);
         this.previewControlMode = finalMode;
         this.controls.mouseButtons.LEFT = finalMode === PREVIEW_CONTROL_MODE_TOUCH
-            ? THREE.MOUSE.ROTATE
+            ? THREE.MOUSE.DOLLY
             : null;
-        this.controls.mouseButtons.MIDDLE = THREE.MOUSE.ROTATE;
+        this.controls.mouseButtons.MIDDLE = finalMode === PREVIEW_CONTROL_MODE_TOUCH
+            ? null
+            : THREE.MOUSE.ROTATE;
         this.controls.mouseButtons.RIGHT = THREE.MOUSE.PAN;
     }
 
@@ -1012,6 +1053,24 @@ export class ShaderWorkbenchRenderer {
         }
     }
 
+    renderWorldDepthPrepass() {
+        const prevAutoClear = this.renderer.autoClear;
+        const prevBackground = this.scene.background;
+        const prevOverrideMaterial = this.scene.overrideMaterial;
+
+        this.renderer.autoClear = false;
+        this.scene.background = null;
+        this.scene.overrideMaterial = this.worldDepthMaterial;
+        try {
+            this.renderer.clearDepth();
+            this.renderer.render(this.scene, this.camera);
+        } finally {
+            this.scene.overrideMaterial = prevOverrideMaterial;
+            this.scene.background = prevBackground;
+            this.renderer.autoClear = prevAutoClear;
+        }
+    }
+
     renderHelperOverlay() {
         if (!this.hasVisibleHelpers()) return;
         const prevWorldVisible = this.worldRoot.visible;
@@ -1021,8 +1080,6 @@ export class ShaderWorkbenchRenderer {
         this.renderer.autoClear = false;
         this.scene.background = null;
         try {
-            // Keep color from main frame, only reset depth for helper overlay.
-            this.renderer.clearDepth();
             this.renderer.render(this.scene, this.camera);
         } finally {
             this.scene.background = prevBackground;
@@ -1099,6 +1156,10 @@ export class ShaderWorkbenchRenderer {
             this.helperRoot.visible = false;
             try {
                 this.renderMainFrame();
+                if (this.useComposer && this.composer) {
+                    // Rebuild default framebuffer depth with world only, keep current color.
+                    this.renderWorldDepthPrepass();
+                }
             } finally {
                 this.helperRoot.visible = prevHelpersVisible;
             }

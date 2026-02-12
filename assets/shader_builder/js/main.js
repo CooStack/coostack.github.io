@@ -2560,7 +2560,7 @@ function refreshTopPanel(state) {
     if (els.statusControls) {
         const mode = String(state.settings?.previewControlMode || "default").toLowerCase();
         els.statusControls.textContent = mode === "touch"
-            ? "操作：左键旋转 / 右键平移 / 滚轮缩放 / 方向键平移"
+            ? "操作：滚轮旋转 / 左键上下远近 / 右键平移 / 方向键平移"
             : "操作：中键旋转 / 右键平移 / 滚轮缩放 / 方向键平移";
     }
 }
