@@ -8,6 +8,9 @@ import { createBuilderTools } from "./builder.js";
 import { initLayoutSystem } from "./layout.js";
 import { createNodeHelpers } from "./nodes.js";
 import { toggleFullscreen } from "./viewer.js";
+import { createPickerModule } from "./main-picker.js";
+import { initGlobalShortcuts } from "./main-shortcuts.js";
+import { initTopbarAndBoot } from "./main-topbar-boot.js";
 import {
     sanitizeFileBase,
     loadProjectName,
@@ -19,7 +22,7 @@ import {
     downloadText
 } from "./io.js";
 
-(function () {
+function initPointsBuilderMain() {
     const U = globalThis.Utils;
     if (!U) throw new Error("Utils 未加载：请确认 utils.js 在 main.js 之前加载，且 utils.js 内部设置了 globalThis.Utils");
 
@@ -5529,655 +5532,41 @@ function onCanvasDblClick(ev) {
         rebuildPreviewAndKotlin();
     }
 
-    // ------- Settings modal -------
-    function showSettingsModal() {
-        if (!settingsModal || !settingsMask) return;
-        settingsModal.classList.remove("hidden");
-        settingsMask.classList.remove("hidden");
-    }
-
-    function hideSettingsModal() {
-        if (!settingsModal || !settingsMask) return;
-        settingsModal.classList.add("hidden");
-        settingsMask.classList.add("hidden");
-        settingsModal.classList.remove("under");
-        settingsMask.classList.remove("under");
-    }
-
-
-    // ------- Modal -------
-    let addTarget = { list: null, insertIndex: null, ownerLabel: "主Builder", ownerNodeId: null, keepFocusId: null };
-
-    function showModal() {
-        // ✅ 任何时候打开「添加卡片」都必须是可交互的（不能遗留 under）
-        modal.classList.remove("under");
-        modalMask.classList.remove("under");
-        modal.classList.remove("hidden");
-        modalMask.classList.remove("hidden");
-        cardSearch.value = "";
-        renderPicker("");
-        cardSearch.focus();
-    }
-
-    function hideModal() {
-        modal.classList.add("hidden");
-        modalMask.classList.add("hidden");
-        // 清理 under 状态，避免下次打开还是模糊不可点
-        modal.classList.remove("under");
-        modalMask.classList.remove("under");
-    }
-
-    function openModal(targetList, insertIndex = null, ownerLabel = "主Builder", ownerNodeId = null) {
-        // ✅ 记录插入目标 + 需要保持的焦点（在子 builder 内新增后，默认保持聚焦在 addBuilder 上）
-        addTarget = {
-            list: targetList || null,
-            insertIndex: insertIndex,
-            ownerLabel,
-            ownerNodeId: ownerNodeId || null,
-            keepFocusId: ownerNodeId || null,
-        };
-        showModal();
-    }
-
-    function toCompactSearchText(text) {
-        return String(text || "")
-            .toLowerCase()
-            .replace(/[^a-z0-9\u4e00-\u9fa5]+/g, "");
-    }
-
-    function toAsciiAcronym(text) {
-        const raw = String(text || "")
-            .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
-            .replace(/[_\-./()+[\]{}]+/g, " ")
-            .toLowerCase();
-        const words = raw.match(/[a-z0-9]+/g) || [];
-        let out = "";
-        for (const w of words) {
-            if (w) out += w[0];
-        }
-        return out;
-    }
-
-    function findSubsequenceScore(query, target) {
-        const q = String(query || "");
-        const t = String(target || "");
-        if (!q || !t) return Infinity;
-        let qi = 0;
-        let last = -1;
-        let gap = 0;
-        for (let i = 0; i < t.length && qi < q.length; i++) {
-            if (t[i] !== q[qi]) continue;
-            if (last >= 0) gap += (i - last - 1);
-            last = i;
-            qi++;
-        }
-        if (qi !== q.length || last < 0) return Infinity;
-        // 越靠前、越紧凑，分数越低
-        return last * 10 + gap;
-    }
-
-    function renderPicker(filterText) {
-        const f = (filterText || "").trim().toLowerCase();
-        const fCompact = toCompactSearchText(filterText);
-        cardPicker.innerHTML = "";
-        const entries = Object.entries(KIND).map(([kind, def], order) => ({kind, def, order}));
-
-        const shown = [];
-        for (const it of entries) {
-            const titleRaw = (it.def?.title || it.kind) + "";
-            const kindRaw = (it.kind || "") + "";
-            const descRaw = (it.def?.desc || "") + "";
-            const title = titleRaw.toLowerCase();
-            const kind = kindRaw.toLowerCase();
-            const desc = descRaw.toLowerCase();
-            if (!f) {
-                shown.push({it, group: 0, score: 0, order: it.order});
-                continue;
-            }
-
-            let best = null;
-            const keepBest = (group, score) => {
-                if (!Number.isFinite(score)) return;
-                if (!best || group < best.group || (group === best.group && score < best.score)) {
-                    best = { group, score };
-                }
-            };
-
-            // 1) 直接前缀/包含匹配（优先）
-            if (title.startsWith(f) || kind.startsWith(f)) keepBest(0, 0);
-            const tIdx = title.indexOf(f);
-            const kIdx = kind.indexOf(f);
-            const directIdx = Math.min(tIdx >= 0 ? tIdx : Infinity, kIdx >= 0 ? kIdx : Infinity);
-            if (Number.isFinite(directIdx)) keepBest(1, directIdx);
-
-            // 2) 缩写匹配（支持 af -> addFillTriangle / add_fill_triangle）
-            if (fCompact) {
-                const acrTitle = toAsciiAcronym(titleRaw);
-                const acrKind = toAsciiAcronym(kindRaw);
-                const acrPrefix = Math.min(
-                    acrTitle.startsWith(fCompact) ? 0 : Infinity,
-                    acrKind.startsWith(fCompact) ? 0 : Infinity
-                );
-                if (Number.isFinite(acrPrefix)) keepBest(2, acrPrefix);
-
-                const acrContain = Math.min(
-                    acrTitle.indexOf(fCompact) >= 0 ? acrTitle.indexOf(fCompact) : Infinity,
-                    acrKind.indexOf(fCompact) >= 0 ? acrKind.indexOf(fCompact) : Infinity
-                );
-                if (Number.isFinite(acrContain)) keepBest(3, acrContain);
-
-                // 3) 顺序字符匹配（模糊）
-                const compactTitle = toCompactSearchText(titleRaw);
-                const compactKind = toCompactSearchText(kindRaw);
-                const subseqScore = Math.min(
-                    findSubsequenceScore(fCompact, compactTitle),
-                    findSubsequenceScore(fCompact, compactKind)
-                );
-                if (Number.isFinite(subseqScore)) keepBest(4, subseqScore);
-            }
-
-            // 4) 描述匹配放后
-            const dIdx = desc.indexOf(f);
-            if (dIdx >= 0) keepBest(5, dIdx);
-
-            if (best) shown.push({it, group: best.group, score: best.score, order: it.order});
-        }
-
-        if (f) {
-            shown.sort((a, b) => {
-                if (a.group !== b.group) return a.group - b.group;
-                if (a.score !== b.score) return a.score - b.score;
-                return a.order - b.order;
-            });
-        } else {
-            shown.sort((a, b) => a.order - b.order);
-        }
-
-        for (const {it} of shown) {
-            const div = document.createElement("div");
-            div.className = "pickitem";
-            const t = document.createElement("div");
-            t.className = "t";
-            t.textContent = it.def.title;
-            const d = document.createElement("div");
-            d.className = "d";
-            d.textContent = it.def.desc || it.kind;
-            div.appendChild(t);
-            div.appendChild(d);
-
-            // 显示该卡片的快捷键（如果有）
-            const hk = hotkeys && hotkeys.kinds ? (hotkeys.kinds[it.kind] || "") : "";
-            if (hk) {
-                const bad = document.createElement("div");
-                bad.className = "hkbad";
-                bad.textContent = hotkeyToHuman(hk);
-                div.appendChild(bad);
-            }
-            // 在“选择添加”里提供快速设置快捷键
-            const setBtn = document.createElement("button");
-            setBtn.className = "sethk";
-            setBtn.textContent = "⌨";
-            setBtn.title = "设置该卡片的快捷键";
-            setBtn.addEventListener("click", (ev) => {
-                ev.stopPropagation();
-                openHotkeysModal();
-                beginHotkeyCapture({type:"kind", id: it.kind, title: it.def.title});
-            });
-            div.appendChild(setBtn);
-
-            div.addEventListener("click", () => {
-                const list = addTarget.list || state.root.children;
-                const atRaw = addTarget.insertIndex;
-                historyCapture("add_" + it.kind);
-                const nn = makeNode(it.kind);
-                if (atRaw === null || atRaw === undefined) {
-                    list.push(nn);
-                } else {
-                    const at = Math.max(0, Math.min(atRaw, list.length));
-                    list.splice(at, 0, nn);
-                    // 连续添加时，保持插入点向后移动
-                    addTarget.insertIndex = at + 1;
-                }
-                ensureAxisEverywhere();
-                // ✅ 子 builder 内新增：默认保持聚焦在 addBuilder 上；否则聚焦到新卡片
-                const focusAfter = (addTarget.keepFocusId && findNodeContextById(addTarget.keepFocusId))
-                    ? addTarget.keepFocusId
-                    : nn.id;
-
-                hideModal();
-                renderAll();
-
-                requestAnimationFrame(() => {
-                    suppressFocusHistory = true;
-                    focusCardById(focusAfter, false, true);
-                    suppressFocusHistory = false;
-                });
-            });
-            cardPicker.appendChild(div);
-        }
-    }
-
-    btnCloseModal.addEventListener("click", hideModal);
-    btnCancelModal.addEventListener("click", hideModal);
-    modalMask.addEventListener("click", hideModal);
-    cardSearch.addEventListener("input", () => renderPicker(cardSearch.value));
-
-
-    // -------------------------
-    // Insert context (based on selected / focused card)
-    // -------------------------
-    function getInsertContextFromFocus() {
-        const resolveCtx = (nodeId) => {
-            if (!nodeId) return null;
-            const ctx = findNodeContextById(nodeId);
-            if (ctx && ctx.node) {
-                if (isBuilderContainerKind(ctx.node.kind)) {
-                    if (!Array.isArray(ctx.node.children)) ctx.node.children = [];
-                    return { list: ctx.node.children, insertIndex: ctx.node.children.length, label: "子Builder", ownerNode: ctx.node };
-                }
-                // 普通卡片：插到它后面（同一列表）
-                const label = ctx.parentNode ? "子Builder" : "主Builder";
-                return { list: ctx.parentList, insertIndex: ctx.index + 1, label, ownerNode: ctx.parentNode || null };
-            }
-            return null;
-        };
-        if (focusedNodeId) {
-            const resolved = resolveCtx(focusedNodeId);
-            if (resolved) return resolved;
-        }
-        if (typeof getCardSelectionIds === "function") {
-            const selected = getCardSelectionIds();
-            if (selected && selected.size === 1) {
-                const oneId = Array.from(selected)[0];
-                const resolved = resolveCtx(oneId);
-                if (resolved) return resolved;
-            }
-        }
-        return { list: state.root.children, insertIndex: state.root.children.length, label: "主Builder", ownerNode: null };
-    }
-
-    function addKindInContext(kind, ctx) {
-        const list = ctx?.list || state.root.children;
-        const at = (ctx && ctx.insertIndex != null) ? ctx.insertIndex : list.length;
-        historyCapture("hotkey_add_" + kind);
-        const nn = makeNode(kind);
-        const idx = Math.max(0, Math.min(at, list.length));
-        list.splice(idx, 0, nn);
-        ensureAxisEverywhere();
-        renderAll();
-
-        // ✅ 若是在 addBuilder 内新增，则保持聚焦在 addBuilder；否则聚焦新卡片
-        const focusAfter = (ctx && ctx.ownerNode && isBuilderContainerKind(ctx.ownerNode.kind)) ? ctx.ownerNode.id : nn.id;
-        requestAnimationFrame(() => {
-            suppressFocusHistory = true;
-            focusCardById(focusAfter, false, true);
-            suppressFocusHistory = false;
-        });
-    }
-
-    // -------------------------
-    // Global keyboard shortcuts
-    // -------------------------
-    window.addEventListener("keydown", (e) => {
-        // 1) Hotkey capture mode (for settings)
-        if (typeof handleHotkeyCaptureKeydown === "function" && handleHotkeyCaptureKeydown(e)) return;
-
-        const isMac = /Mac|iPhone|iPad|iPod/i.test(navigator.platform);
-        const mod = isMac ? e.metaKey : e.ctrlKey;
-        const key = (e.key || "").toLowerCase();
-        if (mod && key === "s" && !e.shiftKey && !e.altKey) {
-            e.preventDefault();
-            if (btnSaveJson) btnSaveJson.click();
-            return;
-        }
-
-        // Esc closes modal / hotkeys menu
-        if (e.code === "Escape") {
-            if (rotateMode) {
-                e.preventDefault();
-                stopRotateMode({ silent: true });
-                return;
-            }
-            if (offsetMode) {
-                e.preventDefault();
-                stopOffsetMode();
-                return;
-            }
-            if (hkModal && !hkModal.classList.contains("hidden")) {
-                e.preventDefault();
-                hideHotkeysModal();
-                return;
-            }
-            if (settingsModal && !settingsModal.classList.contains("hidden")) {
-                e.preventDefault();
-                hideSettingsModal();
-                return;
-            }
-            if (modal && !modal.classList.contains("hidden")) {
-                e.preventDefault();
-                hideModal();
-                return;
-            }
-            if (paramSync && paramSync.open && typeof setSyncEnabled === "function") {
-                e.preventDefault();
-                setSyncEnabled(false);
-                return;
-            }
-        }
-
-        if (handleRotateModeManualInputKeydown(e)) return;
-
-        // 2) Undo/Redo should work everywhere (including inputs)
-        if (hotkeyMatchEvent(e, hotkeys.actions.undo)) {
-            e.preventDefault();
-            historyUndo();
-            return;
-        }
-        if (hotkeyMatchEvent(e, hotkeys.actions.redo)) {
-            e.preventDefault();
-            historyRedo();
-            return;
-        }
-
-        // Arrow keys: pan like right-drag (avoid when typing)
-        if (isArrowKey(e.code) && !shouldIgnoreArrowPan()) {
-            e.preventDefault();
-            panKeyState[e.code] = true;
-            return;
-        }
-
-        // ignore plain single-key hotkeys when typing
-        const isPlainKey = !(e.ctrlKey || e.metaKey || e.altKey);
-        if (isPlainKey && shouldIgnorePlainHotkeys()) return;
-
-        // when Add-Card modal is open, avoid triggering kind hotkeys while typing search
-        if (!modal.classList.contains("hidden") && document.activeElement === cardSearch && isPlainKey) {
-            // allow Esc handled elsewhere
-            return;
-        }
-
-        // 2.5) Delete focused card (plain key)
-        // 为了避免“在弹窗里误删卡片”，当任意弹窗打开时不响应删除快捷键
-        if ((modal && !modal.classList.contains("hidden")) || (hkModal && !hkModal.classList.contains("hidden")) || (settingsModal && !settingsModal.classList.contains("hidden"))) {
-            // 仍然允许 undo/redo 在上面已经处理
-        } else {
-            const ae = document.activeElement;
-            const tag = (ae && ae.tagName ? String(ae.tagName).toUpperCase() : "");
-            const isTypingField = !!(ae && (tag === "INPUT" || tag === "TEXTAREA" || ae.isContentEditable));
-            // 删除快捷键不应该在编辑输入时触发（尤其是 number 输入里的 Backspace）
-            if (!isTypingField) {
-                const delHk = hotkeys.actions.deleteFocused || "";
-                const delMatch = hotkeyMatchEvent(e, delHk)
-                    // 兼容：用户默认是 Backspace，但很多键盘会按 Delete
-                    || (normalizeHotkey(delHk) === "Backspace" && (e.code === "Delete" || e.code === "Backspace") && !(e.ctrlKey || e.metaKey || e.altKey || e.shiftKey));
-                if (delMatch) {
-                    e.preventDefault();
-                    if (!deleteSelectedCards()) deleteFocusedCard();
-                    return;
-                }
-            }
-        }
-
-        // 3) Open picker
-        if (hotkeyMatchEvent(e, hotkeys.actions.openPicker)) {
-            e.preventDefault();
-            // 若快捷键弹窗打开，优先关闭（避免叠窗状态残留）
-            if (hkModal && !hkModal.classList.contains("hidden")) {
-                hideHotkeysModal();
-            }
-            if (settingsModal && !settingsModal.classList.contains("hidden")) {
-                hideSettingsModal();
-            }
-            const ctx = getInsertContextFromFocus();
-            const ownerNodeId = (ctx && ctx.ownerNode && isBuilderContainerKind(ctx.ownerNode.kind)) ? ctx.ownerNode.id : null;
-            openModal(ctx.list, ctx.insertIndex, ctx.label, ownerNodeId);
-            return;
-        }
-
-        if (hotkeyMatchEvent(e, hotkeys.actions.toggleSettings)) {
-            e.preventDefault();
-            const wasHotkeysOpen = !!(hkModal && !hkModal.classList.contains("hidden"));
-            if (wasHotkeysOpen) hideHotkeysModal();
-            if (modal && !modal.classList.contains("hidden")) hideModal();
-            if (settingsModal && !settingsModal.classList.contains("hidden")) {
-                if (!wasHotkeysOpen) hideSettingsModal();
-            } else {
-                showSettingsModal();
-            }
-            return;
-        }
-
-        if (hotkeyMatchEvent(e, hotkeys.actions.toggleFullscreen)) {
-            e.preventDefault();
-            if (modal && !modal.classList.contains("hidden")) hideModal();
-            if (hkModal && !hkModal.classList.contains("hidden")) hideHotkeysModal();
-            if (settingsModal && !settingsModal.classList.contains("hidden")) hideSettingsModal();
-            toggleFullscreen();
-            return;
-        }
-
-        if (hotkeyMatchEvent(e, hotkeys.actions.resetCamera)) {
-            e.preventDefault();
-            resetCameraToPoints();
-            return;
-        }
-
-        if (hotkeyMatchEvent(e, hotkeys.actions.importJson)) {
-            e.preventDefault();
-            if (modal && !modal.classList.contains("hidden")) hideModal();
-            if (hkModal && !hkModal.classList.contains("hidden")) hideHotkeysModal();
-            if (settingsModal && !settingsModal.classList.contains("hidden")) hideSettingsModal();
-            triggerImportJson();
-            return;
-        }
-
-        if (hotkeyMatchEvent(e, hotkeys.actions.toggleParamSync)) {
-            e.preventDefault();
-            if (paramSync && paramSync.anchor) {
-                paramSync.anchor.click();
-            } else if (typeof setSyncEnabled === "function") {
-                setSyncEnabled(!(paramSync && paramSync.open));
-            }
-            return;
-        }
-        if (hotkeyMatchEvent(e, hotkeys.actions.toggleFilter)) {
-            e.preventDefault();
-            const btn = document.querySelector(".panel.left .panel-tools .filter-wrap button");
-            if (btn) btn.click();
-            return;
-        }
-        if (hotkeyMatchEvent(e, hotkeys.actions.toggleSnapGrid)) {
-            e.preventDefault();
-            if (chkSnapGrid) chkSnapGrid.click();
-            return;
-        }
-        if (hotkeyMatchEvent(e, hotkeys.actions.toggleSnapParticle)) {
-            e.preventDefault();
-            if (chkSnapParticle) chkSnapParticle.click();
-            return;
-        }
-
-        // 4) Pick line XZ
-        if (hotkeyMatchEvent(e, hotkeys.actions.pickLineXZ)) {
-            e.preventDefault();
-            // 进入拾取模式前，关闭弹窗，避免鼠标事件被遮罩拦截
-            if (modal && !modal.classList.contains("hidden")) hideModal();
-            if (hkModal && !hkModal.classList.contains("hidden")) hideHotkeysModal();
-            if (settingsModal && !settingsModal.classList.contains("hidden")) hideSettingsModal();
-            if (rotateMode) stopRotateMode({ silent: true });
-
-            if (linePickMode && linePickType === "line") stopLinePick();
-            else {
-                if (linePickMode) stopLinePick();
-                if (pointPickMode) stopPointPick();
-                const ctx = getInsertContextFromFocus();
-                startLinePick(ctx.list, ctx.label, ctx.insertIndex);
-            }
-            return;
-        }
-
-        if (hotkeyMatchEvent(e, hotkeys.actions.pickTriangle)) {
-            e.preventDefault();
-            if (modal && !modal.classList.contains("hidden")) hideModal();
-            if (hkModal && !hkModal.classList.contains("hidden")) hideHotkeysModal();
-            if (settingsModal && !settingsModal.classList.contains("hidden")) hideSettingsModal();
-            if (rotateMode) stopRotateMode({ silent: true });
-
-            if (linePickMode && linePickType === "triangle") stopLinePick();
-            else {
-                if (linePickMode) stopLinePick();
-                if (pointPickMode) stopPointPick();
-                const ctx = getInsertContextFromFocus();
-                startTrianglePick(ctx.list, ctx.label, ctx.insertIndex);
-            }
-            return;
-        }
-
-        // 4.5) Pick point (fill focused vec3)
-        if (hotkeyMatchEvent(e, hotkeys.actions.pickPoint)) {
-            e.preventDefault();
-            if (modal && !modal.classList.contains("hidden")) hideModal();
-            if (hkModal && !hkModal.classList.contains("hidden")) hideHotkeysModal();
-            if (settingsModal && !settingsModal.classList.contains("hidden")) hideSettingsModal();
-            if (rotateMode) stopRotateMode({ silent: true });
-            if (pointPickMode) stopPointPick();
-            else {
-                if (linePickMode) stopLinePick();
-                startPointPick();
-            }
-            return;
-        }
-
-        // 4.6) Snap plane quick switch
-        if (hotkeyMatchEvent(e, hotkeys.actions.snapPlaneXZ)) {
-            e.preventDefault();
-            setSnapPlane("XZ");
-            return;
-        }
-        if (hotkeyMatchEvent(e, hotkeys.actions.snapPlaneXY)) {
-            e.preventDefault();
-            setSnapPlane("XY");
-            return;
-        }
-        if (hotkeyMatchEvent(e, hotkeys.actions.snapPlaneZY)) {
-            e.preventDefault();
-            setSnapPlane("ZY");
-            return;
-        }
-
-        // 4.6.1) Mirror plane quick switch
-        if (hotkeyMatchEvent(e, hotkeys.actions.mirrorPlaneXZ)) {
-            e.preventDefault();
-            setMirrorPlane("XZ");
-            return;
-        }
-        if (hotkeyMatchEvent(e, hotkeys.actions.mirrorPlaneXY)) {
-            e.preventDefault();
-            setMirrorPlane("XY");
-            return;
-        }
-        if (hotkeyMatchEvent(e, hotkeys.actions.mirrorPlaneZY)) {
-            e.preventDefault();
-            setMirrorPlane("ZY");
-            return;
-        }
-
-        // 4.7) Copy focused / mirror copy
-        if (hotkeyMatchEvent(e, hotkeys.actions.copyFocused)) {
-            if ((modal && !modal.classList.contains("hidden")) || (hkModal && !hkModal.classList.contains("hidden"))) return;
-            e.preventDefault();
-            copyFocusedCard();
-            return;
-        }
-        if (hotkeyMatchEvent(e, hotkeys.actions.mirrorCopy)) {
-            if ((modal && !modal.classList.contains("hidden")) || (hkModal && !hkModal.classList.contains("hidden"))) return;
-            e.preventDefault();
-            mirrorCopyFocusedCard();
-            return;
-        }
-        if (hotkeyMatchEvent(e, hotkeys.actions.triggerFocusedRotate)) {
-            if ((modal && !modal.classList.contains("hidden")) || (hkModal && !hkModal.classList.contains("hidden"))) return;
-            e.preventDefault();
-            if (offsetMode) {
-                stopOffsetMode();
-                return;
-            }
-            if (rotateMode) {
-                stopRotateMode({ silent: true });
-                return;
-            }
-            let targetId = focusedNodeId;
-            let selectedIds = [];
-            if (!targetId && typeof getCardSelectionIds === "function") {
-                const sel = getCardSelectionIds();
-                if (sel && sel.size) targetId = Array.from(sel)[0] || null;
-            }
-            if (typeof getCardSelectionIds === "function") {
-                const sel = getCardSelectionIds();
-                if (sel && sel.size) selectedIds = Array.from(sel).filter(Boolean);
-            }
-            if (!targetId) return;
-            focusCardById(targetId, false, false, true);
-            addRotateForTargetIds(selectedIds.length > 1 ? selectedIds : [targetId]);
-            return;
-        }
-        if (hotkeyMatchEvent(e, hotkeys.actions.triggerFocusedMove)) {
-            if ((modal && !modal.classList.contains("hidden")) || (hkModal && !hkModal.classList.contains("hidden"))) return;
-            e.preventDefault();
-            if (rotateMode) {
-                stopRotateMode({ silent: true });
-                return;
-            }
-            if (offsetMode) {
-                stopOffsetMode();
-                return;
-            }
-            let targetId = focusedNodeId;
-            let selectedIds = [];
-            if (!targetId && typeof getCardSelectionIds === "function") {
-                const sel = getCardSelectionIds();
-                if (sel && sel.size) targetId = Array.from(sel)[0] || null;
-            }
-            if (typeof getCardSelectionIds === "function") {
-                const sel = getCardSelectionIds();
-                if (sel && sel.size) selectedIds = Array.from(sel).filter(Boolean);
-            }
-            if (!targetId) return;
-            focusCardById(targetId, false, false, true);
-            if (selectedIds.length > 1) startOffsetMode(targetId, { ids: selectedIds });
-            else startOffsetMode(targetId);
-            return;
-        }
-
-        // 5) Add specific kind
-        for (const [kind, hk] of Object.entries(hotkeys.kinds || {})) {
-            if (!hk) continue;
-            if (hotkeyMatchEvent(e, hk)) {
-                e.preventDefault();
-                const ctx = getInsertContextFromFocus();
-                addKindInContext(kind, ctx);
-                return;
-            }
-        }
-    }, true);
-
-    window.addEventListener("keyup", (e) => {
-        if (isArrowKey(e.code)) {
-            panKeyState[e.code] = false;
-        }
-    }, true);
-
-    window.addEventListener("blur", () => {
-        panKeyState.ArrowUp = false;
-        panKeyState.ArrowDown = false;
-        panKeyState.ArrowLeft = false;
-        panKeyState.ArrowRight = false;
-        actionMenuRightTrack = null;
-        suppressActionMenuUntil = 0;
-        hideActionMenu();
-        const pid = viewBoxPending ? viewBoxPending.pointerId : null;
-        clearViewBoxState(pid);
+    const pickerModule = createPickerModule({
+        settingsModal,
+        settingsMask,
+        modal,
+        modalMask,
+        btnCloseModal,
+        btnCancelModal,
+        cardPicker,
+        cardSearch,
+        KIND,
+        getHotkeys: () => hotkeys,
+        hotkeyToHuman,
+        openHotkeysModal,
+        beginHotkeyCapture,
+        getState: () => state,
+        makeNode,
+        historyCapture,
+        ensureAxisEverywhere,
+        findNodeContextById,
+        renderAll,
+        focusCardById,
+        isBuilderContainerKind,
+        getFocusedNodeId: () => focusedNodeId,
+        getCardSelectionIds: () => (typeof getCardSelectionIds === "function" ? getCardSelectionIds() : null),
+        setSuppressFocusHistory: (v) => { suppressFocusHistory = !!v; }
     });
+    const {
+        showSettingsModal,
+        hideSettingsModal,
+        showModal,
+        hideModal,
+        openModal,
+        getInsertContextFromFocus,
+        addKindInContext
+    } = pickerModule;
 
       const cardSystem = initCardSystem({
           KIND,
@@ -6295,9 +5684,73 @@ function onCanvasDblClick(ev) {
         paramSync
     } = filterSystem);
 
-    // -------------------------
-    // Top buttons
-    // -------------------------
+    initGlobalShortcuts({
+        handleHotkeyCaptureKeydown,
+        btnSaveJson,
+        getRotateMode: () => rotateMode,
+        stopRotateMode,
+        getOffsetMode: () => offsetMode,
+        stopOffsetMode,
+        hkModal,
+        hideHotkeysModal,
+        settingsModal,
+        hideSettingsModal,
+        modal,
+        hideModal,
+        getParamSync: () => paramSync,
+        setSyncEnabled,
+        handleRotateModeManualInputKeydown,
+        hotkeyMatchEvent,
+        getHotkeys: () => hotkeys,
+        historyUndo,
+        historyRedo,
+        isArrowKey,
+        shouldIgnoreArrowPan,
+        panKeyState,
+        shouldIgnorePlainHotkeys,
+        cardSearch,
+        normalizeHotkey,
+        deleteSelectedCards,
+        deleteFocusedCard,
+        getInsertContextFromFocus,
+        isBuilderContainerKind,
+        openModal,
+        showSettingsModal,
+        toggleFullscreen,
+        resetCameraToPoints,
+        triggerImportJson,
+        chkSnapGrid,
+        chkSnapParticle,
+        getLinePickMode: () => linePickMode,
+        getLinePickType: () => linePickType,
+        stopLinePick,
+        getPointPickMode: () => pointPickMode,
+        stopPointPick,
+        startLinePick,
+        startTrianglePick,
+        startPointPick,
+        setSnapPlane,
+        setMirrorPlane,
+        copyFocusedCard,
+        mirrorCopyFocusedCard,
+        getFocusedNodeId: () => focusedNodeId,
+        getCardSelectionIds: () => (typeof getCardSelectionIds === "function" ? getCardSelectionIds() : null),
+        focusCardById,
+        addRotateForTargetIds,
+        startOffsetMode,
+        addKindInContext,
+        hideActionMenu,
+        onWindowBlurCleanup: () => {
+            actionMenuRightTrack = null;
+            suppressActionMenuUntil = 0;
+            const pid = viewBoxPending ? viewBoxPending.pointerId : null;
+            clearViewBoxState(pid);
+        },
+        getIsModalOpen: () => !!(modal && !modal.classList.contains("hidden")),
+        getIsHotkeysOpen: () => !!(hkModal && !hkModal.classList.contains("hidden")),
+        getIsSettingsOpen: () => !!(settingsModal && !settingsModal.classList.contains("hidden"))
+    });
+
     function triggerImportJson() {
         if (focusedNodeId) {
             const ctx = findNodeContextById(focusedNodeId);
@@ -6310,268 +5763,124 @@ function onCanvasDblClick(ev) {
         fileJson && fileJson.click();
     }
 
-    function doExportKotlin() {
-        flushKotlinOut();
-    }
-
-    function doCopyKotlin() {
-        if (kotlinRenderTimer || kotlinDirty) flushKotlinOut();
-        const text = kotlinRaw || emitKotlin();
-        if (!kotlinRaw) setKotlinOut(text);
-        navigator.clipboard?.writeText(text);
-    }
-
-    function doDownloadKotlin() {
-        if (kotlinRenderTimer || kotlinDirty) flushKotlinOut();
-        const text = kotlinRaw || emitKotlin();
-        if (!kotlinRaw) setKotlinOut(text);
-        const blob = new Blob([text], { type: "text/plain;charset=utf-8" });
-        const a = document.createElement("a");
-        a.href = URL.createObjectURL(blob);
-        a.download = makeExportFileName("kt", "PointsBuilder_Generated");
-        a.click();
-        setTimeout(() => URL.revokeObjectURL(a.href), 200);
-    }
-
-    btnExportKotlin?.addEventListener("click", doExportKotlin);
-    btnExportKotlin2?.addEventListener("click", doExportKotlin);
-    btnToggleKotlin && btnToggleKotlin.addEventListener("click", () => setKotlinHidden(!isKotlinHidden()));
-    btnCopyKotlin?.addEventListener("click", doCopyKotlin);
-    btnCopyKotlin2?.addEventListener("click", doCopyKotlin);
-    if (selKotlinEnd) {
-        selKotlinEnd.value = kotlinEndMode;
-        selKotlinEnd.addEventListener("change", () => {
-            kotlinEndMode = selKotlinEnd.value || "builder";
-            saveKotlinEndMode(kotlinEndMode);
-            flushKotlinOut();
-        });
-    }
-    if (inpProjectName) {
-        inpProjectName.value = projectName || "";
-        inpProjectName.addEventListener("input", () => {
-            projectName = sanitizeFileBase(inpProjectName.value || "");
-            saveProjectName(projectName);
-            if (inpProjectName.value !== projectName) inpProjectName.value = projectName;
-        });
-    }
-    if (inpParamStep) {
-        if (inpParamStep.value === "") inpParamStep.value = String(paramStep);
-        setParamStep(inpParamStep.value, { skipSave: true });
-        inpParamStep.addEventListener("input", () => {
-            const n = parseFloat(inpParamStep.value);
-            if (!Number.isFinite(n) || n <= 0) return;
-            paramStep = n;
-            applyParamStepToInputs();
-            saveSettingsToStorage();
-        });
-        inpParamStep.addEventListener("blur", () => {
-            setParamStep(inpParamStep.value);
-        });
-    }
-    if (inpSnapStep) {
-        if (inpSnapStep.value === "") inpSnapStep.value = String(snapStep);
-        setSnapStep(inpSnapStep.value, { skipSave: true });
-        inpSnapStep.addEventListener("input", () => {
-            const n = parseFloat(inpSnapStep.value);
-            if (!Number.isFinite(n) || n <= 0) return;
-            snapStep = n;
-            saveSettingsToStorage();
-        });
-        inpSnapStep.addEventListener("blur", () => {
-            setSnapStep(inpSnapStep.value);
-        });
-    }
-    if (inpSnapParticleRange) {
-        if (inpSnapParticleRange.value === "") inpSnapParticleRange.value = String(particleSnapRange);
-        setParticleSnapRange(inpSnapParticleRange.value, { skipSave: true });
-        inpSnapParticleRange.addEventListener("input", () => {
-            const n = parseFloat(inpSnapParticleRange.value);
-            if (!Number.isFinite(n) || n <= 0) return;
-            particleSnapRange = n;
-            saveSettingsToStorage();
-        });
-        inpSnapParticleRange.addEventListener("blur", () => {
-            setParticleSnapRange(inpSnapParticleRange.value);
-        });
-    }
-    if (inpOffsetPreviewLimit) {
-        if (inpOffsetPreviewLimit.value === "") inpOffsetPreviewLimit.value = String(offsetPreviewLimit);
-        setOffsetPreviewLimit(inpOffsetPreviewLimit.value, { skipSave: true });
-        inpOffsetPreviewLimit.addEventListener("keydown", (ev) => {
-            if (ev.key !== "-" && ev.code !== "NumpadSubtract") return;
-            ev.preventDefault();
-            setOffsetPreviewLimit(-1);
-        });
-        inpOffsetPreviewLimit.addEventListener("input", () => {
-            setOffsetPreviewLimit(inpOffsetPreviewLimit.value);
-        });
-    }
-    btnHotkeys && btnHotkeys.addEventListener("click", showSettingsModal);
-    btnCloseSettings && btnCloseSettings.addEventListener("click", hideSettingsModal);
-    settingsMask && settingsMask.addEventListener("click", hideSettingsModal);
-
-    btnAddCard.addEventListener("click", () => {
-            const ctx = getInsertContextFromFocus();
-            const ownerNodeId = (ctx && ctx.ownerNode && isBuilderContainerKind(ctx.ownerNode.kind)) ? ctx.ownerNode.id : null;
-            openModal(ctx.list, ctx.insertIndex, ctx.label, ownerNodeId);
-        });
-    btnQuickOffset.addEventListener("click", () => {
-        addQuickOffsetTo(state.root.children);
+    initTopbarAndBoot({
+        btnExportKotlin,
+        btnExportKotlin2,
+        btnToggleKotlin,
+        btnCopyKotlin,
+        btnCopyKotlin2,
+        selKotlinEnd,
+        inpProjectName,
+        inpParamStep,
+        inpSnapStep,
+        inpSnapParticleRange,
+        inpOffsetPreviewLimit,
+        btnHotkeys,
+        btnCloseSettings,
+        settingsMask,
+        btnAddCard,
+        btnQuickOffset,
+        btnPickLine,
+        btnPickTriangle,
+        btnPickPoint,
+        btnFullscreen,
+        btnSaveJson,
+        btnLoadJson,
+        fileJson,
+        fileBuilderJson,
+        btnReset,
+        elCardsRoot,
+        chkRealtimeKotlin,
+        chkPointPickPreview,
+        showSettingsModal,
+        hideSettingsModal,
+        getInsertContextFromFocus,
+        isBuilderContainerKind,
+        openModal,
+        addQuickOffsetTo,
+        getState: () => state,
+        getFocusedNodeId: () => focusedNodeId,
+        findNodeContextById,
+        getLinePickMode: () => linePickMode,
+        getLinePickType: () => linePickType,
+        stopLinePick,
+        getRotateMode: () => rotateMode,
+        stopRotateMode,
+        getPointPickMode: () => pointPickMode,
+        stopPointPick,
+        startLinePick,
+        startTrianglePick,
+        startPointPick,
+        toggleFullscreen,
+        flushKotlinOut,
+        emitKotlin,
+        getKotlinRaw: () => kotlinRaw,
+        setKotlinOut,
+        setKotlinHidden,
+        isKotlinHidden,
+        makeExportFileName,
+        setKotlinEndMode: (v) => { kotlinEndMode = v; },
+        saveKotlinEndMode,
+        getKotlinEndMode: () => kotlinEndMode,
+        getProjectName: () => projectName,
+        setProjectName: (v) => { projectName = v; },
+        sanitizeFileBase,
+        saveProjectName,
+        paramStepRef: {
+            get value() { return paramStep; },
+            set value(v) { paramStep = v; }
+        },
+        setParamStep,
+        applyParamStepToInputs,
+        saveSettingsToStorage,
+        snapStepRef: {
+            get value() { return snapStep; },
+            set value(v) { snapStep = v; }
+        },
+        setSnapStep,
+        particleSnapRangeRef: {
+            get value() { return particleSnapRange; },
+            set value(v) { particleSnapRange = v; }
+        },
+        setParticleSnapRange,
+        offsetPreviewLimitRef: {
+            get value() { return offsetPreviewLimit; },
+            set value(v) { offsetPreviewLimit = v; }
+        },
+        setOffsetPreviewLimit,
+        historyCapture,
+        setState: (next) => { state = next; },
+        normalizeNodeTree,
+        ensureAxisEverywhere,
+        ensureAxisInList,
+        resetCollapseScopes,
+        collapseAllNodes,
+        renderAll,
+        showToast,
+        downloadText,
+        loadSettingsFromStorage,
+        setRealtimeKotlin,
+        setPointPickPreviewEnabled,
+        initTheme,
+        bindThemeHotkeys,
+        bindDragCopyGuards,
+        bindActionMenuDismiss,
+        bindPointPickMenuAnchorTracking,
+        applyLayoutState,
+        bindResizers,
+        updateKotlinToggleText,
+        safeStringifyState,
+        getLastSavedStateJson: () => lastSavedStateJson,
+        saveAutoState,
+        initThree,
+        setupListDropZone,
+        onCardsContextMenu,
+        initCollapseAllControls,
+        bindParamSyncListeners,
+        refreshHotkeyHints,
+        triggerImportJson,
+        setBuilderJsonTargetNode: (node) => { builderJsonTargetNode = node; },
+        getBuilderJsonTargetNode: () => builderJsonTargetNode
     });
-
-    btnPickLine.addEventListener("click", () => {
-        if (linePickMode && linePickType === "line") stopLinePick();
-        else {
-            if (rotateMode) stopRotateMode({ silent: true });
-            if (linePickMode) stopLinePick();
-            if (pointPickMode) stopPointPick();
-            const ctx = getInsertContextFromFocus();
-            startLinePick(ctx.list, ctx.label, ctx.insertIndex);
-        }
-    });
-    btnPickTriangle && btnPickTriangle.addEventListener("click", () => {
-        if (linePickMode && linePickType === "triangle") stopLinePick();
-        else {
-            if (rotateMode) stopRotateMode({ silent: true });
-            if (linePickMode) stopLinePick();
-            if (pointPickMode) stopPointPick();
-            const ctx = getInsertContextFromFocus();
-            startTrianglePick(ctx.list, ctx.label, ctx.insertIndex);
-        }
-    });
-    btnPickPoint && btnPickPoint.addEventListener("click", () => {
-        if (pointPickMode) {
-            stopPointPick();
-        } else {
-            if (rotateMode) stopRotateMode({ silent: true });
-            if (linePickMode) stopLinePick();
-            startPointPick();
-        }
-    });
-
-    btnFullscreen.addEventListener("click", toggleFullscreen);
-
-    btnSaveJson.addEventListener("click", async () => {
-        const text = JSON.stringify(state, null, 2);
-        // 选择保存位置与名字（若浏览器支持 File System Access API）
-        if (window.showSaveFilePicker) {
-            try {
-                const handle = await window.showSaveFilePicker({
-                    suggestedName: makeExportFileName("json", "shape"),
-                    types: [{ description: "JSON", accept: {"application/json": [".json"]} }]
-                });
-                const writable = await handle.createWritable();
-                await writable.write(text);
-                await writable.close();
-                showToast("保存成功", "success");
-                return;
-            } catch (e) {
-                if (e && e.name === "AbortError") {
-                    showToast("取消保存", "error");
-                    return;
-                }
-                console.warn("showSaveFilePicker failed:", e);
-                showToast(`保存失败：${e.message || e}`, "error");
-                return;
-            }
-        }
-        try {
-            downloadText(makeExportFileName("json", "shape"), text, "application/json");
-            showToast("保存成功", "success");
-        } catch (e) {
-            showToast(`保存失败：${e.message || e}`, "error");
-        }
-    });
-
-    btnLoadJson.addEventListener("click", () => fileJson.click());
-    fileJson.addEventListener("change", async () => {
-        const f = fileJson.files && fileJson.files[0];
-        if (!f) return;
-        const text = await f.text();
-        try {
-            const obj = JSON.parse(text);
-            if (!obj || !obj.root || !Array.isArray(obj.root.children)) throw new Error("invalid json");
-            historyCapture("import_json");
-            state = obj;
-            normalizeNodeTree(state.root);
-            ensureAxisEverywhere();
-            resetCollapseScopes();
-            collapseAllNodes(state.root.children);
-            const rawName = (f.name || "").replace(/\.[^/.]+$/, "");
-            const nextName = sanitizeFileBase(rawName || "");
-            if (nextName) {
-                projectName = nextName;
-                saveProjectName(projectName);
-                if (inpProjectName) inpProjectName.value = projectName;
-            }
-            renderAll();
-            showToast("导入成功", "success");
-        } catch (e) {
-            showToast(`导入失败-格式错误(${e.message || e})`, "error");
-        } finally {
-            fileJson.value = "";
-        }
-    });
-
-    fileBuilderJson && fileBuilderJson.addEventListener("change", async () => {
-        const f = fileBuilderJson.files && fileBuilderJson.files[0];
-        if (!f) return;
-        const target = builderJsonTargetNode;
-        try {
-            const text = await f.text();
-            const obj = JSON.parse(text);
-            if (!obj || !obj.root || !Array.isArray(obj.root.children)) throw new Error("invalid json");
-            if (!target) throw new Error("no target");
-            historyCapture("import_add_builder_json");
-            target.children = obj.root.children;
-            normalizeNodeTree(target.children);
-            ensureAxisInList(target.children);
-            resetCollapseScopes();
-            collapseAllNodes(target.children);
-            renderAll();
-            showToast("导入成功", "success");
-        } catch (e) {
-            showToast(`导入失败-格式错误(${e.message || e})`, "error");
-        } finally {
-            builderJsonTargetNode = null;
-            fileBuilderJson.value = "";
-        }
-    });
-
-    btnReset.addEventListener("click", () => {
-        if (!confirm("确定重置全部卡片？")) return;
-        historyCapture("reset");
-        state = {root: {id: "root", kind: "ROOT", children: []}};
-        renderAll();
-    });
-
-    // -------------------------
-    // Boot
-    // -------------------------
-    loadSettingsFromStorage();
-    if (chkRealtimeKotlin) setRealtimeKotlin(chkRealtimeKotlin.checked, { skipSave: true });
-    if (chkPointPickPreview) setPointPickPreviewEnabled(chkPointPickPreview.checked, { skipSave: true });
-    initTheme();
-    bindThemeHotkeys();
-    bindDragCopyGuards();
-    bindActionMenuDismiss();
-    bindPointPickMenuAnchorTracking();
-    applyLayoutState(false);
-    bindResizers();
-    updateKotlinToggleText();
-    window.addEventListener("resize", () => applyLayoutState(true));
-    window.addEventListener("beforeunload", () => {
-        const json = safeStringifyState(state);
-        if (json && json !== lastSavedStateJson) saveAutoState(state);
-    });
-    initThree();
-    setupListDropZone(elCardsRoot, () => state.root.children, () => null);
-    if (elCardsRoot && !elCardsRoot.__pbActionMenuBound) {
-        elCardsRoot.__pbActionMenuBound = true;
-        elCardsRoot.addEventListener("contextmenu", onCardsContextMenu);
-    }
-    initCollapseAllControls();
-    if (typeof bindParamSyncListeners === "function") bindParamSyncListeners();
-    if (typeof refreshHotkeyHints === "function") refreshHotkeyHints();
-    renderAll();
-})();
+}
+initPointsBuilderMain();
