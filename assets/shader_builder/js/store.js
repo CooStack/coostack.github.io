@@ -132,13 +132,11 @@ function normalizePostInputSamplerParam(param, textureIndex = 0) {
     base.type = "texture";
     base.valueSource = "value";
     base.valueExpr = "";
-    base.sourceType = String(base.sourceType || "value");
-    if (!["value", "upload", "connection"].includes(base.sourceType)) {
-        base.sourceType = "value";
-    }
+    // Post pass samplers are bound from graph input slots (input slot N).
+    base.sourceType = "connection";
+    base.connection = "";
+    base.textureId = "";
     if (!String(base.value || "").trim()) base.value = "0";
-    if (base.sourceType !== "upload") base.textureId = "";
-    if (base.sourceType !== "connection") base.connection = "";
     return base;
 }
 
@@ -182,9 +180,17 @@ function normalizePostGraphState(state) {
             node.inputs = 0;
             node.outputs = 1;
             const textureOnly = Array.isArray(node.params)
-                ? node.params.filter((p) => isTextureParam(p)).slice(0, 1)
+                ? node.params.filter((p) => isTextureParam(p))
                 : [];
-            node.params = ensurePostInputSamplerParam(textureOnly, 1);
+            const base = Object.assign(createParamTemplate(), textureOnly[0] || {});
+            base.type = "texture";
+            base.sourceType = "upload";
+            base.connection = "";
+            base.valueSource = "value";
+            base.valueExpr = "";
+            base.textureId = String(base.textureId || "");
+            if (!String(base.value ?? "").trim()) base.value = "0";
+            node.params = [base];
             continue;
         }
         const inputCount = Math.max(1, Math.min(8, Math.round(Number(node.inputs || 1))));
@@ -206,8 +212,10 @@ function normalizePostGraphState(state) {
         const toValid = toNode === GRAPH_OUTPUT_ID || nodeIds.has(toNode);
         if (!fromValid || !toValid) continue;
 
-        const fromSlot = Math.max(0, Math.round(Number(link?.fromSlot || 0)));
-        const toSlot = Math.max(0, Math.round(Number(link?.toSlot || 0)));
+        let fromSlot = Math.max(0, Math.round(Number(link?.fromSlot || 0)));
+        let toSlot = Math.max(0, Math.round(Number(link?.toSlot || 0)));
+        if (fromNode === GRAPH_INPUT_ID) fromSlot = 0;
+        if (toNode === GRAPH_OUTPUT_ID) toSlot = 0;
         const key = `${fromNode}:${fromSlot}->${toNode}:${toSlot}`;
         if (dedup.has(key)) continue;
         dedup.add(key);

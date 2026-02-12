@@ -717,8 +717,8 @@ export class GraphEditor {
         const w = safeRect.width;
         const y = Math.max(14, Math.round(h * 0.42));
         const defaults = {
-            [GRAPH_INPUT_ID]: { x: 12, y, inputs: 0, outputs: 4 },
-            [GRAPH_OUTPUT_ID]: { x: Math.max(12, w - NODE_WIDTH - 12), y, inputs: 4, outputs: 0 }
+            [GRAPH_INPUT_ID]: { x: 12, y, inputs: 0, outputs: 1 },
+            [GRAPH_OUTPUT_ID]: { x: Math.max(12, w - NODE_WIDTH - 12), y, inputs: 1, outputs: 0 }
         };
         const out = {
             [GRAPH_INPUT_ID]: null,
@@ -825,7 +825,7 @@ export class GraphEditor {
         const textureNode = normalizeNodeType(node.type) === NODE_TYPE_TEXTURE;
 
         const rowTypeFilter = document.createElement("div");
-        rowTypeFilter.className = "graph-node-inline-row dual";
+        rowTypeFilter.className = textureNode ? "graph-node-inline-row" : "graph-node-inline-row dual";
         const selType = document.createElement("select");
         selType.className = "input";
         bindEditorEvents(selType);
@@ -863,7 +863,7 @@ export class GraphEditor {
         }
 
         rowTypeFilter.appendChild(selType);
-        rowTypeFilter.appendChild(selFilter);
+        if (!textureNode) rowTypeFilter.appendChild(selFilter);
         inline.appendChild(rowTypeFilter);
 
         const createInlineField = (labelText, controlEl) => {
@@ -914,7 +914,7 @@ export class GraphEditor {
 
         rowSlots.appendChild(createInlineField("Input Slots", inpInputs));
         rowSlots.appendChild(createInlineField("Output Slots (auto)", inpOutputs));
-        inline.appendChild(rowSlots);
+        if (!textureNode) inline.appendChild(rowSlots);
 
         const rowRuntime = document.createElement("div");
         rowRuntime.className = "graph-node-inline-row dual";
@@ -952,7 +952,7 @@ export class GraphEditor {
 
         rowRuntime.appendChild(createInlineField("Texture Unit", inpTexUnit));
         rowRuntime.appendChild(createInlineField("Iterations", inpIterations));
-        inline.appendChild(rowRuntime);
+        if (!textureNode) inline.appendChild(rowRuntime);
 
         if (textureNode) {
             const textureHint = document.createElement("div");
@@ -980,7 +980,7 @@ export class GraphEditor {
         chkWrap.appendChild(chkMipmap);
         chkWrap.appendChild(chkText);
         rowMipmap.appendChild(chkWrap);
-        inline.appendChild(rowMipmap);
+        if (!textureNode) inline.appendChild(rowMipmap);
 
         const paramsHead = document.createElement("div");
         paramsHead.className = "graph-node-param-head";
@@ -993,6 +993,7 @@ export class GraphEditor {
         bindEditorEvents(btnAddParam);
         if (textureNode) {
             btnAddParam.disabled = true;
+            btnAddParam.classList.add("hidden");
             btnAddParam.title = "texture node keeps one texture parameter";
         } else {
             btnAddParam.addEventListener("click", () => {
@@ -1023,6 +1024,48 @@ export class GraphEditor {
             const item = document.createElement("div");
             item.className = "graph-node-param-item";
 
+            if (textureNode) {
+                const rowUploadOnly = document.createElement("div");
+                rowUploadOnly.className = "graph-node-param-value-source";
+                rowUploadOnly.style.gridTemplateColumns = "1fr";
+
+                const selTextureUploadOnly = document.createElement("select");
+                selTextureUploadOnly.className = "input";
+                bindEditorEvents(selTextureUploadOnly);
+
+                const noneOpt = document.createElement("option");
+                noneOpt.value = "";
+                noneOpt.textContent = "select uploaded texture";
+                selTextureUploadOnly.appendChild(noneOpt);
+
+                for (const tex of textures) {
+                    const opt = document.createElement("option");
+                    opt.value = tex.id;
+                    opt.textContent = tex.name || tex.id;
+                    if (String(tex.id || "") === String(p.textureId || "")) opt.selected = true;
+                    selTextureUploadOnly.appendChild(opt);
+                }
+
+                selTextureUploadOnly.addEventListener("change", () => {
+                    this.callbacks.onPatchNode(node.id, (target) => {
+                        const param = target.params?.[i];
+                        if (!param) return;
+                        param.type = "texture";
+                        param.sourceType = "upload";
+                        param.textureId = String(selTextureUploadOnly.value || "");
+                        param.connection = "";
+                        param.valueSource = "value";
+                        param.valueExpr = "";
+                        if (!String(param.value || "").trim()) param.value = "0";
+                    }, { reason: "node-inline-param-upload-only", forceCompile: true, forceKotlin: true });
+                });
+
+                rowUploadOnly.appendChild(selTextureUploadOnly);
+                item.appendChild(rowUploadOnly);
+                paramList.appendChild(item);
+                continue;
+            }
+
             const inpParamName = document.createElement("input");
             inpParamName.className = "input";
             inpParamName.value = String(p.name || "");
@@ -1044,7 +1087,8 @@ export class GraphEditor {
 
             const rowTextureSource = document.createElement("div");
             rowTextureSource.className = "graph-node-param-value-source";
-            rowTextureSource.style.gridTemplateColumns = "1fr 2fr";
+            const fixedTextureSource = !textureNode;
+            rowTextureSource.style.gridTemplateColumns = fixedTextureSource ? "1fr" : "1fr 2fr";
 
             const selParamType = document.createElement("select");
             selParamType.className = "input";
@@ -1086,17 +1130,27 @@ export class GraphEditor {
             const selTextureSource = document.createElement("select");
             selTextureSource.className = "input";
             bindEditorEvents(selTextureSource);
-            [
-                { value: "value", label: "pass input" },
-                { value: "upload", label: "uploaded" },
-                { value: "connection", label: "connection" }
-            ].forEach((item) => {
+            (fixedTextureSource
+                ? [{ value: "connection", label: "connection" }]
+                : [
+                    { value: "value", label: "pass input" },
+                    { value: "upload", label: "uploaded" },
+                    { value: "connection", label: "connection" }
+                ]).forEach((item) => {
                 const opt = document.createElement("option");
                 opt.value = item.value;
                 opt.textContent = item.label;
-                if (item.value === String(p.sourceType || "value")) opt.selected = true;
+                if (fixedTextureSource) {
+                    opt.selected = item.value === "connection";
+                } else if (item.value === String(p.sourceType || "value")) {
+                    opt.selected = true;
+                }
                 selTextureSource.appendChild(opt);
             });
+            if (fixedTextureSource) {
+                selTextureSource.disabled = true;
+                selTextureSource.classList.add("hidden");
+            }
 
             const textureInputHost = document.createElement("div");
             textureInputHost.style.display = "grid";
@@ -1105,7 +1159,8 @@ export class GraphEditor {
 
             const inpTextureSlot = document.createElement("input");
             inpTextureSlot.className = "input";
-            inpTextureSlot.placeholder = "sampler slot";
+            inpTextureSlot.placeholder = fixedTextureSource ? "input slot N" : "sampler slot";
+            if (fixedTextureSource) inpTextureSlot.title = "input card input port index (input slot N)";
             inpTextureSlot.value = String(p.value ?? "0");
             bindEditorEvents(inpTextureSlot);
 
@@ -1131,10 +1186,11 @@ export class GraphEditor {
             bindEditorEvents(inpTextureConnection);
 
             const updateTextureSourceUI = () => {
-                const sourceType = String(selTextureSource.value || "value");
-                inpTextureSlot.classList.toggle("hidden", sourceType !== "value");
+                const sourceType = fixedTextureSource ? "connection" : String(selTextureSource.value || "value");
+                const showSlot = fixedTextureSource ? true : sourceType === "value";
+                inpTextureSlot.classList.toggle("hidden", !showSlot);
                 selTextureUpload.classList.toggle("hidden", sourceType !== "upload");
-                inpTextureConnection.classList.toggle("hidden", sourceType !== "connection");
+                inpTextureConnection.classList.toggle("hidden", fixedTextureSource || sourceType !== "connection");
             };
 
             const updateValueSourceUI = () => {
@@ -1170,7 +1226,13 @@ export class GraphEditor {
                         if (!param) return;
                         param.type = nextType;
                         if (nextType === "texture") {
-                            param.sourceType = String(param.sourceType || "value");
+                            param.sourceType = fixedTextureSource
+                                ? "connection"
+                                : String(param.sourceType || "value");
+                            if (fixedTextureSource) {
+                                param.textureId = "";
+                                param.connection = "";
+                            }
                             param.valueSource = "value";
                             param.valueExpr = "";
                             if (!String(param.value || "").trim()) param.value = "0";
@@ -1221,7 +1283,7 @@ export class GraphEditor {
                 this.callbacks.onPatchNode(node.id, (target) => {
                     const param = target.params?.[i];
                     if (!param || String(param.type || "float").toLowerCase() !== "texture") return;
-                    const sourceType = String(selTextureSource.value || "value");
+                    const sourceType = fixedTextureSource ? "connection" : String(selTextureSource.value || "value");
                     param.sourceType = sourceType;
                     if (sourceType === "value") {
                         param.textureId = "";
@@ -1230,6 +1292,7 @@ export class GraphEditor {
                         param.connection = "";
                     } else if (sourceType === "connection") {
                         param.textureId = "";
+                        if (fixedTextureSource) param.connection = "";
                     }
                     if (!String(param.value || "").trim()) param.value = "0";
                 }, { reason: "node-inline-param-source-type", forceCompile: true, forceKotlin: true });
@@ -1320,9 +1383,9 @@ export class GraphEditor {
     }
 
     buildNodeElement(node, { system = false, selected = false }) {
-        const defaultInputCount = system ? (node.id === GRAPH_OUTPUT_ID ? 4 : 0) : minInputCountByNodeType(node.type);
+        const defaultInputCount = system ? (node.id === GRAPH_OUTPUT_ID ? 1 : 0) : minInputCountByNodeType(node.type);
         const inputCount = asCount(node.inputs, defaultInputCount, 8);
-        const outputCount = asCount(node.outputs, system ? (node.id === GRAPH_INPUT_ID ? 4 : 0) : 1, 8);
+        const outputCount = asCount(node.outputs, system ? (node.id === GRAPH_INPUT_ID ? 1 : 0) : 1, 8);
 
         const el = document.createElement("div");
         el.className = `graph-node${system ? " system" : ""}${selected ? " selected" : ""}`;
@@ -2174,4 +2237,3 @@ export class GraphEditor {
         this.render();
     }
 }
-

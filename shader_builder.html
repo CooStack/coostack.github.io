@@ -1,10 +1,10 @@
 <!doctype html>
 <html lang="zh-CN">
 <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <meta charset="utf-8"/>
+    <meta name="viewport" content="width=device-width,initial-scale=1"/>
     <title>RendererAPI 着色器构建器</title>
-    <link rel="stylesheet" href="./assets/shader_builder/css/style.css" />
+    <link rel="stylesheet" href="./assets/shader_builder/css/style.css"/>
 </head>
 <body data-theme="dark-1">
 <div id="app">
@@ -28,11 +28,11 @@
             <span class="sep"></span>
             <button id="btnExportProject" class="btn">导出项目</button>
             <button id="btnImportProject" class="btn">导入项目</button>
-            <input id="fileProject" type="file" accept="application/json" hidden />
+            <input id="fileProject" type="file" accept="application/json" hidden/>
             <button id="btnResetProject" class="btn danger">重置</button>
             <div class="proj-name">
                 <span>项目名</span>
-                <input id="inpProjectName" class="input proj-input" placeholder="shader-workbench" />
+                <input id="inpProjectName" class="input proj-input" placeholder="shader-workbench"/>
             </div>
         </div>
     </header>
@@ -56,11 +56,11 @@
                     </label>
                     <div class="field field-inline">
                         <button id="btnUploadModel" class="btn">上传模型</button>
-                        <input id="fileModel" type="file" accept=".glb,.gltf,.obj" hidden />
+                        <input id="fileModel" type="file" accept=".glb,.gltf,.obj" hidden/>
                     </div>
                     <div id="modelFileName" class="hint">当前模型：默认球体</div>
                     <label class="chk">
-                        <input id="chkEnablePost" type="checkbox" checked />
+                        <input id="chkEnablePost" type="checkbox" checked/>
                         <span>启用后处理链</span>
                     </label>
                 </div>
@@ -70,7 +70,7 @@
                 <div class="card-title">纹理库</div>
                 <div class="field field-inline">
                     <button id="btnUploadTexture" class="btn">上传纹理</button>
-                    <input id="fileTexture" type="file" accept="image/*" hidden />
+                    <input id="fileTexture" type="file" accept="image/*" hidden/>
                 </div>
                 <div id="textureList" class="list"></div>
             </section>
@@ -86,7 +86,9 @@
                     <svg id="graphLines" class="graph-lines"></svg>
                     <div id="graphCanvas" class="graph-canvas"></div>
                 </div>
-                <div class="hint">左键空白拖拽仅框选卡片，Ctrl+左键空白拖拽仅框选连线；中键拖动画布、滚轮缩放；右键空白可添加卡片，右键卡片可跳转代码页或删除。</div>
+                <div class="hint">
+                    左键空白拖拽仅框选卡片，Ctrl+左键空白拖拽仅框选连线；中键拖动画布、滚轮缩放；右键空白可添加卡片，右键卡片可跳转代码页或删除。
+                </div>
             </section>
         </aside>
 
@@ -96,8 +98,10 @@
             <div class="viewer-hud">
                 <div id="statusShader" class="badge">着色器：就绪</div>
                 <div id="statusPipeline" class="badge">后处理链：0 个卡片</div>
-                <div id="statusCompat" class="badge">MC 1.21.1: OpenGL 3.3 (GL33) / #version 330 core | 坐标轴：X+东 Y+上 Z+南</div>
-                <div class="badge">操作：中键旋转 / 右键平移 / 滚轮缩放</div>
+                <div id="statusCompat" class="badge">MC 1.21.1: OpenGL 3.3 (GL33) / #version 330 core | 坐标轴：X+东 Y+上
+                    Z+南
+                </div>
+                <div id="statusControls" class="badge">操作：中键旋转 / 右键平移 / 滚轮缩放 / 方向键平移</div>
             </div>
             <div id="threeHost" class="three-host"></div>
         </section>
@@ -112,17 +116,17 @@
                 <div class="form-grid">
                     <label class="field">
                         <span>顶点资源路径</span>
-                        <input id="inpModelVertexPath" class="input" placeholder="core/vertex/point.vsh" />
+                        <input id="inpModelVertexPath" class="input" placeholder="core/vertex/point.vsh"/>
                     </label>
                     <label class="field">
                         <span>片元资源路径</span>
-                        <input id="inpModelFragmentPath" class="input" placeholder="core/fragment/color.fsh" />
+                        <input id="inpModelFragmentPath" class="input" placeholder="core/fragment/color.fsh"/>
                     </label>
                     <div class="field field-inline">
                         <button id="btnUploadModelVertex" class="btn">上传顶点</button>
                         <button id="btnUploadModelFragment" class="btn">上传片元</button>
-                        <input id="fileModelVertex" type="file" accept=".vsh,.vert,.glsl,.txt" hidden />
-                        <input id="fileModelFragment" type="file" accept=".fsh,.frag,.glsl,.txt" hidden />
+                        <input id="fileModelVertex" type="file" accept=".vsh,.vert,.glsl,.txt" hidden/>
+                        <input id="fileModelFragment" type="file" accept=".fsh,.frag,.glsl,.txt" hidden/>
                     </div>
                     <label class="field">
                         <span>顶点编辑</span>
@@ -158,7 +162,7 @@
                         <div class="form-grid">
                             <label class="field">
                                 <span>名称</span>
-                                <input id="inpNodeName" class="input" />
+                                <input id="inpNodeName" class="input"/>
                             </label>
                             <label class="field">
                                 <span>类型</span>
@@ -177,16 +181,17 @@
                         <div class="form-grid">
                             <label class="field">
                                 <span>输入槽数量</span>
-                                <input id="inpNodeInputs" class="input" type="number" min="1" step="1" value="1" />
+                                <input id="inpNodeInputs" class="input" type="number" min="1" step="1" value="1"/>
                             </label>
                             <label class="field">
                                 <span>输出槽数量（自动）</span>
-                                <input id="inpNodeOutputs" class="input" type="number" min="1" step="1" value="1" readonly />
+                                <input id="inpNodeOutputs" class="input" type="number" min="1" step="1" value="1"
+                                       readonly/>
                                 <span id="nodeOutputHint" class="field-note">根据片元 out 声明自动同步</span>
                             </label>
                             <label class="field">
                                 <span>纹理单元</span>
-                                <input id="inpNodeTextureUnit" class="input" type="number" min="0" step="1" value="1" />
+                                <input id="inpNodeTextureUnit" class="input" type="number" min="0" step="1" value="1"/>
                             </label>
                             <label class="field">
                                 <span>过滤模式</span>
@@ -198,10 +203,10 @@
                             </label>
                             <label class="field">
                                 <span>PingPong 迭代次数</span>
-                                <input id="inpNodeIterations" class="input" type="number" min="1" step="1" value="4" />
+                                <input id="inpNodeIterations" class="input" type="number" min="1" step="1" value="4"/>
                             </label>
                             <label class="chk">
-                                <input id="chkNodeMipmap" type="checkbox" />
+                                <input id="chkNodeMipmap" type="checkbox"/>
                                 <span>useMipmap()</span>
                             </label>
                         </div>
@@ -213,7 +218,8 @@
                     </div>
 
                     <div id="nodeTextureHint" class="hint hidden">
-                        texture 卡片仅输出纹理，不执行片元着色处理。请在参数中选择输入来源（pass input / upload / connection）。
+                        texture 卡片仅输出纹理，不执行片元着色处理。请在参数中选择输入来源（pass input / upload /
+                        connection）。
                     </div>
 
                     <div id="nodeShaderSection">
@@ -225,11 +231,11 @@
                         <div class="form-grid">
                             <label class="field">
                                 <span>片元资源路径</span>
-                                <input id="inpNodeFragmentPath" class="input" placeholder="core/post/{name}.fsh" />
+                                <input id="inpNodeFragmentPath" class="input" placeholder="core/post/{name}.fsh"/>
                             </label>
                             <div class="field field-inline">
                                 <button id="btnUploadNodeFragment" class="btn">上传片元</button>
-                                <input id="fileNodeFragment" type="file" accept=".fsh,.frag,.glsl,.txt" hidden />
+                                <input id="fileNodeFragment" type="file" accept=".fsh,.frag,.glsl,.txt" hidden/>
                             </div>
                             <label id="nodeFragmentField" class="field">
                                 <span>片元编辑</span>
@@ -244,10 +250,17 @@
                 <div class="card-title card-title-row">
                     <span>Kotlin 输出</span>
                     <div class="card-title-actions">
-                        <div id="kotlinTargetSwitch" class="kotlin-target-switch" role="tablist" aria-label="Kotlin 生成目标">
-                            <button id="btnGenTargetModel" class="kotlin-target-btn" type="button" data-target="model" aria-pressed="false">模型</button>
-                            <button id="btnGenTargetPost" class="kotlin-target-btn" type="button" data-target="post" aria-pressed="false">后处理</button>
-                            <button id="btnGenTargetAll" class="kotlin-target-btn active" type="button" data-target="all" aria-pressed="true">全部</button>
+                        <div id="kotlinTargetSwitch" class="kotlin-target-switch" role="tablist"
+                             aria-label="Kotlin 生成目标">
+                            <button id="btnGenTargetModel" class="kotlin-target-btn" type="button" data-target="model"
+                                    aria-pressed="false">模型
+                            </button>
+                            <button id="btnGenTargetPost" class="kotlin-target-btn" type="button" data-target="post"
+                                    aria-pressed="false">后处理
+                            </button>
+                            <button id="btnGenTargetAll" class="kotlin-target-btn active" type="button"
+                                    data-target="all" aria-pressed="true">全部
+                            </button>
                         </div>
                         <button id="btnGenerate" class="btn small">生成 Kotlin</button>
                         <button id="btnToggleKotlin" class="btn small">隐藏</button>
@@ -279,7 +292,7 @@
     <div id="nodeTypePickerModal" class="modal hidden" role="dialog" aria-modal="true">
         <div class="modal-head">
             <div class="modal-title">选择后处理卡片类型</div>
-            <input id="nodeTypeSearch" class="input" placeholder="搜索类型：simple / pingpong / texture" />
+            <input id="nodeTypeSearch" class="input" placeholder="搜索类型：simple / pingpong / texture"/>
             <button id="btnCloseNodeTypePicker" class="btn icon">✕</button>
         </div>
         <div class="modal-body">
@@ -311,26 +324,37 @@
                 </label>
                 <label class="field">
                     <span>参数步长</span>
-                    <input id="inpParamStep" class="input" type="number" min="0.0001" step="0.01" value="0.1" />
+                    <input id="inpParamStep" class="input" type="number" min="0.0001" step="0.01" value="0.1"/>
                 </label>
                 <label class="field">
                     <span>相机 FOV</span>
-                    <input id="inpCameraFov" class="input" type="number" min="20" max="120" step="1" value="60" />
+                    <input id="inpCameraFov" class="input" type="number" min="20" max="120" step="1" value="60"/>
+                </label>
+                <label class="field">
+                    <span>预览操作</span>
+                    <select id="selPreviewControls" class="input">
+                        <option value="default">默认: 中键旋转</option>
+                        <option value="touch">触控友好: 左键旋转</option>
+                    </select>
                 </label>
                 <label class="chk">
-                    <input id="chkAxes" type="checkbox" checked />
+                    <input id="chkAxes" type="checkbox" checked/>
                     <span>显示坐标轴</span>
                 </label>
                 <label class="chk">
-                    <input id="chkGrid" type="checkbox" checked />
+                    <input id="chkGrid" type="checkbox" checked/>
                     <span>显示网格</span>
                 </label>
                 <label class="chk">
-                    <input id="chkRealtimeCompile" type="checkbox" checked />
+                    <input id="chkHelpersIndependent" type="checkbox" checked/>
+                    <span>坐标轴/网格独立渲染(不受后处理影响)</span>
+                </label>
+                <label class="chk">
+                    <input id="chkRealtimeCompile" type="checkbox" checked/>
                     <span>编辑时实时编译着色器</span>
                 </label>
                 <label class="chk">
-                    <input id="chkRealtimeCode" type="checkbox" checked />
+                    <input id="chkRealtimeCode" type="checkbox" checked/>
                     <span>实时更新 Kotlin</span>
                 </label>
             </div>
@@ -338,7 +362,7 @@
                 <button id="btnOpenHotkeys" class="btn">快捷键设置</button>
                 <button id="btnExportSettings" class="btn">导出设置</button>
                 <button id="btnImportSettings" class="btn">导入设置</button>
-                <input id="fileSettings" type="file" accept="application/json" hidden />
+                <input id="fileSettings" type="file" accept="application/json" hidden/>
             </div>
         </div>
     </div>
@@ -347,7 +371,7 @@
     <div id="hotkeyModal" class="modal hidden" role="dialog" aria-modal="true">
         <div class="modal-head">
             <div class="modal-title">快捷键设置</div>
-            <input id="hotkeySearch" class="input" placeholder="搜索动作名" />
+            <input id="hotkeySearch" class="input" placeholder="搜索动作名"/>
             <button id="btnCloseHotkeys" class="btn icon">✕</button>
         </div>
         <div class="modal-body">
@@ -363,12 +387,12 @@
 
 <script src="./assets/shader_builder/js/jszip.min.js"></script>
 <script type="importmap">
-{
-  "imports": {
-    "three": "https://cdn.jsdelivr.net/npm/three@0.182.0/build/three.module.min.js",
-    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.182.0/examples/jsm/"
-  }
-}
+    {
+      "imports": {
+        "three": "https://cdn.jsdelivr.net/npm/three@0.182.0/build/three.module.min.js",
+        "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.182.0/examples/jsm/"
+      }
+    }
 </script>
 <script type="module" src="./assets/shader_builder/js/main.js"></script>
 </body>

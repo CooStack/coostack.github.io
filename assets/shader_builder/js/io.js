@@ -96,10 +96,36 @@ export function normalizeProjectPayload(payload) {
             ? payload.post.nodes.map((n, i) => {
                 const d = createDefaultPostNode(i);
                 const merged = Object.assign({}, d, n || {});
-                const minTextureCount = getPostInputTextureMinCount(merged.inputs);
-                merged.params = Array.isArray(n?.params)
-                    ? ensurePostInputSamplerParam(n.params.map((p) => normalizeParamObject(p)), minTextureCount)
-                    : deepClone(d.params);
+                const nodeType = String(merged.type || "simple").trim().toLowerCase();
+                if (nodeType === "texture") {
+                    const list = Array.isArray(n?.params)
+                        ? n.params.map((p) => normalizeParamObject(p)).filter((p) => String(p?.type || "").toLowerCase() === "texture")
+                        : [];
+                    const baseParam = normalizeParamObject(list[0] || {}, {
+                        type: "texture",
+                        sourceType: "upload",
+                        valueSource: "value",
+                        valueExpr: "",
+                        value: "0",
+                        textureId: "",
+                        connection: ""
+                    });
+                    baseParam.type = "texture";
+                    baseParam.sourceType = "upload";
+                    baseParam.valueSource = "value";
+                    baseParam.valueExpr = "";
+                    baseParam.connection = "";
+                    baseParam.textureId = String(baseParam.textureId || "");
+                    if (!String(baseParam.value || "").trim()) baseParam.value = "0";
+                    merged.inputs = 0;
+                    merged.outputs = 1;
+                    merged.params = [baseParam];
+                } else {
+                    const minTextureCount = getPostInputTextureMinCount(merged.inputs);
+                    merged.params = Array.isArray(n?.params)
+                        ? ensurePostInputSamplerParam(n.params.map((p) => normalizeParamObject(p)), minTextureCount)
+                        : deepClone(d.params);
+                }
 
                 const hasTemplate = typeof n?.fragmentPathTemplate === "string" && n.fragmentPathTemplate.trim() !== "";
                 const hasPath = typeof n?.fragmentPath === "string" && n.fragmentPath.trim() !== "";

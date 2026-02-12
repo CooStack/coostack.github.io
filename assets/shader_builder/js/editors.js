@@ -1352,8 +1352,15 @@ export class ShaderCodeEditor {
             this.textarea.setRangeText(nextBlock, lineStart, lineEnd, "select");
         } else {
             this.textarea.setRangeText(nextBlock, lineStart, lineEnd, "end");
-            const caretShift = allCommented ? -2 : 2;
-            const nextCaret = Math.max(lineStart, start + caretShift);
+            let nextCaret = start;
+            const updated = String(this.textarea.value || "");
+            const currentLineEnd = updated.indexOf("\n", lineStart);
+            if (currentLineEnd < 0) {
+                this.textarea.setRangeText("\n", updated.length, updated.length, "end");
+                nextCaret = this.textarea.value.length;
+            } else {
+                nextCaret = currentLineEnd + 1;
+            }
             this.textarea.selectionStart = nextCaret;
             this.textarea.selectionEnd = nextCaret;
         }

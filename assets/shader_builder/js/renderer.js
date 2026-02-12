@@ -9,6 +9,8 @@ import { GRAPH_INPUT_ID, GRAPH_OUTPUT_ID } from "./store.js";
 import { boolFromString, parseVec } from "./utils.js";
 
 const DYNAMIC_UNIFORM_NAMES = new Set(["uTime", "CameraPos"]);
+const PREVIEW_CONTROL_MODE_DEFAULT = "default";
+const PREVIEW_CONTROL_MODE_TOUCH = "touch";
 
 function createPrimitiveGeometry(type) {
     switch (type) {
@@ -29,6 +31,17 @@ function createPrimitiveGeometry(type) {
 function normalizeNumber(value, fallback = 0) {
     const n = Number(value);
     return Number.isFinite(n) ? n : fallback;
+}
+
+function normalizePreviewControlMode(mode) {
+    const v = String(mode || PREVIEW_CONTROL_MODE_DEFAULT).toLowerCase();
+    return v === PREVIEW_CONTROL_MODE_TOUCH ? PREVIEW_CONTROL_MODE_TOUCH : PREVIEW_CONTROL_MODE_DEFAULT;
+}
+
+function parseSamplerSlot(value, fallback = 0) {
+    const n = Number.parseInt(String(value ?? fallback), 10);
+    if (!Number.isFinite(n)) return Math.max(0, Math.round(Number(fallback) || 0));
+    return Math.max(0, n);
 }
 
 function createWhiteTexture() {
@@ -93,11 +106,11 @@ function adaptPostFragmentForPreview(source, { useGlsl3 = false } = {}) {
     // Convert common MC fragment styles into a stable preview form.
     code = code.replace(/^\s*#version[^\n]*\n?/gm, "");
     const outNames = [];
-    code = code.replace(/^\s*layout\s*\(\s*location\s*=\s*\d+\s*\)\s*out\s+vec4\s+([A-Za-z_][A-Za-z0-9_]*)\s*;\s*$/gm, (_, name) => {
+    code = code.replace(/^\s*layout\s*\(\s*location\s*=\s*\d+\s*\)\s*out\s+(?:(?:lowp|mediump|highp)\s+)?vec4\s+([A-Za-z_][A-Za-z0-9_]*)\s*;\s*$/gm, (_, name) => {
         outNames.push(String(name || ""));
         return "";
     });
-    code = code.replace(/^\s*out\s+vec4\s+([A-Za-z_][A-Za-z0-9_]*)\s*;\s*$/gm, (_, name) => {
+    code = code.replace(/^\s*out\s+(?:(?:lowp|mediump|highp)\s+)?vec4\s+([A-Za-z_][A-Za-z0-9_]*)\s*;\s*$/gm, (_, name) => {
         outNames.push(String(name || ""));
         return "";
     });
@@ -118,10 +131,14 @@ function adaptPostFragmentForPreview(source, { useGlsl3 = false } = {}) {
     code = code.replace(/^\s*uniform\s+sampler2D\s+tex\s*;\s*$/gm, "uniform sampler2D tDiffuse;");
     code = code.replace(/\bscreen_uv\b/g, "vUv");
     code = code.replace(/\btex\b/g, "tDiffuse");
+
+    // ShaderMaterial(GLSL3) already injects its own fragment output.
+    // Fold custom out variables back to gl_FragColor to avoid MRT location conflicts.
     for (const name of outNames) {
         if (!name || name === "gl_FragColor") continue;
         code = code.replace(new RegExp(`\\b${name}\\b`, "g"), "gl_FragColor");
     }
+
     if (useGlsl3) {
         code = code.replace(/\btexture2D\s*\(/g, "texture(");
     } else {
@@ -165,11 +182,11 @@ function adaptModelFragmentForPreview(source) {
     code = code.replace(/\r\n/g, "\n");
     code = code.replace(/^\s*#version[^\n]*\n?/gm, "");
     const outNames = [];
-    code = code.replace(/^\s*layout\s*\(\s*location\s*=\s*\d+\s*\)\s*out\s+vec4\s+([A-Za-z_][A-Za-z0-9_]*)\s*;\s*$/gm, (_, name) => {
+    code = code.replace(/^\s*layout\s*\(\s*location\s*=\s*\d+\s*\)\s*out\s+(?:(?:lowp|mediump|highp)\s+)?vec4\s+([A-Za-z_][A-Za-z0-9_]*)\s*;\s*$/gm, (_, name) => {
         outNames.push(String(name || ""));
         return "";
     });
-    code = code.replace(/^\s*out\s+vec4\s+([A-Za-z_][A-Za-z0-9_]*)\s*;\s*$/gm, (_, name) => {
+    code = code.replace(/^\s*out\s+(?:(?:lowp|mediump|highp)\s+)?vec4\s+([A-Za-z_][A-Za-z0-9_]*)\s*;\s*$/gm, (_, name) => {
         outNames.push(String(name || ""));
         return "";
     });
@@ -325,29 +342,34 @@ export class ShaderWorkbenchRenderer {
 
         this.hostEl.appendChild(this.renderer.domElement);
         this.renderer.domElement.addEventListener("contextmenu", (ev) => ev.preventDefault());
+        this.renderer.domElement.tabIndex = 0;
+        this.renderer.domElement.setAttribute("aria-label", "Shader preview canvas");
 
         this.controls = new OrbitControls(this.camera, this.renderer.domElement);
         this.controls.enableDamping = true;
         this.controls.dampingFactor = 0.08;
         this.controls.target.set(0, 0, 0);
-        // Match pointsbuilder interaction:
-        // left mouse: disabled, middle: rotate, right: pan.
-        this.controls.mouseButtons.LEFT = null;
-        this.controls.mouseButtons.MIDDLE = THREE.MOUSE.ROTATE;
-        this.controls.mouseButtons.RIGHT = THREE.MOUSE.PAN;
+
+        this.previewControlMode = PREVIEW_CONTROL_MODE_DEFAULT;
+        this.applyPreviewControlMode(PREVIEW_CONTROL_MODE_DEFAULT);
+
+        this.worldRoot = new THREE.Group();
+        this.helperRoot = new THREE.Group();
+        this.scene.add(this.worldRoot);
+        this.scene.add(this.helperRoot);
 
         this.axesHelper = new THREE.AxesHelper(8);
         this.gridHelper = new THREE.GridHelper(40, 40, 0x405060, 0x263341);
-        this.scene.add(this.axesHelper);
-        this.scene.add(this.gridHelper);
+        this.helperRoot.add(this.axesHelper);
+        this.helperRoot.add(this.gridHelper);
 
-        this.scene.add(new THREE.HemisphereLight(0xb3d4ff, 0x0f141d, 0.9));
+        this.worldRoot.add(new THREE.HemisphereLight(0xb3d4ff, 0x0f141d, 0.9));
         const dir = new THREE.DirectionalLight(0xffffff, 1.15);
         dir.position.set(4, 9, 5);
-        this.scene.add(dir);
+        this.worldRoot.add(dir);
 
         this.modelRoot = new THREE.Group();
-        this.scene.add(this.modelRoot);
+        this.worldRoot.add(this.modelRoot);
 
         this.clock = new THREE.Clock();
         this.time = 0;
@@ -362,6 +384,60 @@ export class ShaderWorkbenchRenderer {
         this.passStates = [];
         this.useComposer = false;
         this.noOutputPreview = false;
+        this.systemInputTexture = null;
+        this.nodeOutputTextures = new Map();
+        this.helpersIndependentRender = true;
+
+        this.keyPanState = {
+            left: false,
+            right: false,
+            up: false,
+            down: false
+        };
+        this.panMove = new THREE.Vector3();
+        this.panRight = new THREE.Vector3();
+        this.panUp = new THREE.Vector3();
+        this.onCanvasPointerdown = () => {
+            try {
+                this.renderer.domElement.focus({ preventScroll: true });
+            } catch {
+                this.renderer.domElement.focus();
+            }
+        };
+        this.onCanvasKeydown = (ev) => {
+            if (ev.altKey || ev.ctrlKey || ev.metaKey) return;
+            let handled = true;
+            if (ev.code === "ArrowLeft") this.keyPanState.left = true;
+            else if (ev.code === "ArrowRight") this.keyPanState.right = true;
+            else if (ev.code === "ArrowUp") this.keyPanState.up = true;
+            else if (ev.code === "ArrowDown") this.keyPanState.down = true;
+            else handled = false;
+
+            if (handled) {
+                ev.preventDefault();
+                ev.stopPropagation();
+            }
+        };
+        this.onCanvasKeyup = (ev) => {
+            let handled = true;
+            if (ev.code === "ArrowLeft") this.keyPanState.left = false;
+            else if (ev.code === "ArrowRight") this.keyPanState.right = false;
+            else if (ev.code === "ArrowUp") this.keyPanState.up = false;
+            else if (ev.code === "ArrowDown") this.keyPanState.down = false;
+            else handled = false;
+
+            if (handled) {
+                ev.preventDefault();
+                ev.stopPropagation();
+            }
+        };
+        this.onCanvasBlur = () => this.clearPanKeys();
+        this.onWindowBlur = () => this.clearPanKeys();
+        this.renderer.domElement.addEventListener("pointerdown", this.onCanvasPointerdown);
+        this.renderer.domElement.addEventListener("keydown", this.onCanvasKeydown);
+        this.renderer.domElement.addEventListener("keyup", this.onCanvasKeyup);
+        this.renderer.domElement.addEventListener("blur", this.onCanvasBlur);
+        window.addEventListener("blur", this.onWindowBlur);
 
         this.resizeObserver = new ResizeObserver(() => this.resize());
         this.resizeObserver.observe(this.hostEl);
@@ -375,6 +451,11 @@ export class ShaderWorkbenchRenderer {
 
     dispose() {
         this.resizeObserver.disconnect();
+        this.renderer.domElement.removeEventListener("pointerdown", this.onCanvasPointerdown);
+        this.renderer.domElement.removeEventListener("keydown", this.onCanvasKeydown);
+        this.renderer.domElement.removeEventListener("keyup", this.onCanvasKeyup);
+        this.renderer.domElement.removeEventListener("blur", this.onCanvasBlur);
+        window.removeEventListener("blur", this.onWindowBlur);
         this.controls.dispose();
         this.renderer.dispose();
         this.fallbackTexture.dispose();
@@ -408,9 +489,21 @@ export class ShaderWorkbenchRenderer {
         document.exitFullscreen?.();
     }
 
+    applyPreviewControlMode(mode) {
+        const finalMode = normalizePreviewControlMode(mode);
+        this.previewControlMode = finalMode;
+        this.controls.mouseButtons.LEFT = finalMode === PREVIEW_CONTROL_MODE_TOUCH
+            ? THREE.MOUSE.ROTATE
+            : null;
+        this.controls.mouseButtons.MIDDLE = THREE.MOUSE.ROTATE;
+        this.controls.mouseButtons.RIGHT = THREE.MOUSE.PAN;
+    }
+
     applySettings(settings) {
         this.axesHelper.visible = !!settings?.showAxes;
         this.gridHelper.visible = !!settings?.showGrid;
+        this.helpersIndependentRender = !!settings?.helpersIndependentRender;
+        this.applyPreviewControlMode(settings?.previewControlMode);
         const fov = normalizeNumber(settings?.cameraFov, 60);
         if (Math.abs(this.camera.fov - fov) > 0.0001) {
             this.camera.fov = fov;
@@ -598,18 +691,36 @@ export class ShaderWorkbenchRenderer {
         this.onStatus({ shader: "着色器：模型已更新" });
     }
 
-    createShaderPassFromNode(node) {
+    createShaderPassFromNode(node, incomingLinks = []) {
         if (String(node?.type || "").toLowerCase() === "texture") {
-            return this.createTextureNodePass(node);
+            return this.createTextureNodePass(node, incomingLinks);
         }
 
         const useGlsl3 = !!this.renderer?.capabilities?.isWebGL2;
         const fragmentSource = adaptPostFragmentForPreview(node?.fragmentSource || "", { useGlsl3 });
         const uniforms = this.buildUniformMap(node.params || [], true);
 
+        const incomingBySlot = new Map();
+        for (const link of incomingLinks || []) {
+            const slot = Math.max(0, Math.round(Number(link?.toSlot || 0)));
+            if (!incomingBySlot.has(slot)) incomingBySlot.set(slot, link);
+        }
+        const mapLinkToBinding = (link) => {
+            if (!link || typeof link !== "object") return null;
+            const fromNode = String(link?.fromNode || "");
+            if (!fromNode) return null;
+            if (fromNode === GRAPH_INPUT_ID) return { kind: "graphInput" };
+            return {
+                kind: "nodeOutput",
+                nodeId: fromNode,
+                slot: Math.max(0, Math.round(Number(link?.fromSlot || 0)))
+            };
+        };
+
         const samplerUniformNames = collectSamplerUniformNames(node?.fragmentSource || "");
         const uploadedTextureUniforms = new Set();
         const inputSamplerUniforms = [];
+        const inputBindings = new Map();
         const addInputSampler = (name) => {
             const n = String(name || "").trim();
             if (!n) return;
@@ -617,6 +728,7 @@ export class ShaderWorkbenchRenderer {
             if (!inputSamplerUniforms.includes(n)) inputSamplerUniforms.push(n);
         };
 
+        let nextFallbackSlot = 0;
         for (const param of node?.params || []) {
             if (String(param?.type || "").toLowerCase() !== "texture") continue;
             const uniformName = String(param?.name || "").trim();
@@ -626,7 +738,25 @@ export class ShaderWorkbenchRenderer {
                 uploadedTextureUniforms.add(uniformName);
                 continue;
             }
+
             addInputSampler(uniformName);
+            let binding = null;
+            if (sourceType === "value") {
+                const slot = parseSamplerSlot(param?.value, nextFallbackSlot);
+                nextFallbackSlot = Math.max(nextFallbackSlot, slot + 1);
+                binding = mapLinkToBinding(incomingBySlot.get(slot));
+            } else if (sourceType === "connection") {
+                // "connection" may be stored either in param.connection (legacy text field)
+                // or directly in param.value as input slot index (current simplified UI).
+                const rawConn = String(param?.connection || "").trim();
+                const rawSlot = /^\d+$/.test(rawConn)
+                    ? rawConn
+                    : String(param?.value ?? "").trim();
+                const slot = parseSamplerSlot(rawSlot, nextFallbackSlot);
+                nextFallbackSlot = Math.max(nextFallbackSlot, slot + 1);
+                binding = mapLinkToBinding(incomingBySlot.get(slot));
+            }
+            inputBindings.set(uniformName, binding || { kind: "readBuffer" });
         }
 
         for (const uniformName of samplerUniformNames) {
@@ -637,32 +767,13 @@ export class ShaderWorkbenchRenderer {
         if (!uploadedTextureUniforms.has("samp")) addInputSampler("samp");
 
         for (const uniformName of inputSamplerUniforms) {
-            if (!uniforms[uniformName]) {
-                uniforms[uniformName] = { value: null };
-            }
-        }
-
-        let primaryInputUniform = "tDiffuse";
-        if (uploadedTextureUniforms.has(primaryInputUniform)) {
-            primaryInputUniform = "";
-        }
-
-        if (samplerUniformNames.includes("tDiffuse") && !uploadedTextureUniforms.has("tDiffuse")) {
-            primaryInputUniform = "tDiffuse";
-        } else {
-            for (const name of samplerUniformNames) {
-                if (uploadedTextureUniforms.has(name)) continue;
-                if (inputSamplerUniforms.includes(name)) {
-                    primaryInputUniform = name;
-                    break;
-                }
-            }
-            if (!primaryInputUniform && inputSamplerUniforms.length) {
-                primaryInputUniform = inputSamplerUniforms[0];
-            }
-            if (!primaryInputUniform) {
-                primaryInputUniform = "tDiffuse";
-            }
+            if (!uniforms[uniformName]) uniforms[uniformName] = { value: null };
+            if (inputBindings.has(uniformName)) continue;
+            const aliasSlot = uniformName === "tDiffuse" || uniformName === "tex" || uniformName === "samp"
+                ? 0
+                : nextFallbackSlot++;
+            const binding = mapLinkToBinding(incomingBySlot.get(aliasSlot));
+            inputBindings.set(uniformName, binding || { kind: "readBuffer" });
         }
 
         const shader = {
@@ -673,29 +784,57 @@ export class ShaderWorkbenchRenderer {
         if (useGlsl3) shader.glslVersion = THREE.GLSL3;
 
         const pass = new ShaderPass(shader);
-        if (primaryInputUniform && pass.uniforms?.[primaryInputUniform]) {
-            pass.textureID = primaryInputUniform;
+        let primaryInputUniform = "";
+        for (const uniformName of inputSamplerUniforms) {
+            if (!pass.uniforms?.[uniformName]) continue;
+            const binding = inputBindings.get(uniformName);
+            if (binding?.kind === "readBuffer") {
+                primaryInputUniform = uniformName;
+                break;
+            }
         }
+        pass.textureID = primaryInputUniform && pass.uniforms?.[primaryInputUniform]
+            ? primaryInputUniform
+            : "__sb_no_input__";
 
         const inputUniformTargets = inputSamplerUniforms.filter((name) => !!pass.uniforms?.[name]);
-        if (inputUniformTargets.length) {
-            pass.__inputUniformTargets = inputUniformTargets;
-            pass.__inputUniformAliases = inputUniformTargets.filter((name) => name !== pass.textureID);
-            const originalRender = pass.render.bind(pass);
-            pass.render = (renderer, writeBuffer, readBuffer, deltaTime, maskActive) => {
-                const readTexture = readBuffer?.texture || pass.uniforms?.[pass.textureID]?.value || null;
-                for (const uniformName of pass.__inputUniformTargets || []) {
-                    if (!pass.uniforms?.[uniformName]) continue;
-                    pass.uniforms[uniformName].value = readTexture;
+        pass.__inputUniformTargets = inputUniformTargets;
+        pass.__inputUniformBindings = Object.fromEntries(
+            inputUniformTargets.map((name) => [name, inputBindings.get(name) || { kind: "readBuffer" }])
+        );
+
+        const nodeId = String(node?.id || "");
+        const originalRender = pass.render.bind(pass);
+        pass.render = (renderer, writeBuffer, readBuffer, deltaTime, maskActive) => {
+            const readTexture = readBuffer?.texture || null;
+            if (!this.systemInputTexture && readTexture) {
+                this.systemInputTexture = readTexture;
+            }
+
+            for (const uniformName of pass.__inputUniformTargets || []) {
+                if (!pass.uniforms?.[uniformName]) continue;
+                const binding = pass.__inputUniformBindings?.[uniformName] || { kind: "readBuffer" };
+                let tex = readTexture;
+                if (binding?.kind === "graphInput") {
+                    tex = this.systemInputTexture || readTexture;
+                } else if (binding?.kind === "nodeOutput") {
+                    tex = this.nodeOutputTextures.get(String(binding.nodeId || "")) || readTexture;
                 }
-                return originalRender(renderer, writeBuffer, readBuffer, deltaTime, maskActive);
-            };
-        }
+                if (!tex) continue;
+                pass.uniforms[uniformName].value = tex;
+            }
+
+            const result = originalRender(renderer, writeBuffer, readBuffer, deltaTime, maskActive);
+            if (nodeId && writeBuffer?.texture) {
+                this.nodeOutputTextures.set(nodeId, writeBuffer.texture);
+            }
+            return result;
+        };
 
         return pass;
     }
 
-    createTextureNodePass(node) {
+    createTextureNodePass(node, incomingLinks = []) {
         const useGlsl3 = !!this.renderer?.capabilities?.isWebGL2;
         const textureParam = (node?.params || []).find((param) => String(param?.type || "").toLowerCase() === "texture");
         const sourceType = String(textureParam?.sourceType || "value").toLowerCase();
@@ -708,23 +847,86 @@ export class ShaderWorkbenchRenderer {
             },
             vertexShader: useGlsl3 ? PREVIEW_POST_VERTEX_GLSL3 : PREVIEW_POST_VERTEX_GLSL1,
             fragmentShader: useGlsl3
-                ? `in vec2 vUv;\nuniform sampler2D tDiffuse;\nout vec4 FragColor;\nvoid main(){ FragColor = texture(tDiffuse, vUv); }`
+                ? `in vec2 vUv;\nuniform sampler2D tDiffuse;\nvoid main(){ gl_FragColor = texture(tDiffuse, vUv); }`
                 : `varying vec2 vUv;\nuniform sampler2D tDiffuse;\nvoid main(){ gl_FragColor = texture2D(tDiffuse, vUv); }`
         };
         if (useGlsl3) shader.glslVersion = THREE.GLSL3;
-        return new ShaderPass(shader);
+
+        const pass = new ShaderPass(shader);
+        pass.textureID = sourceType === "upload" ? "__sb_no_input__" : "tDiffuse";
+
+        const incomingBySlot = new Map();
+        for (const link of incomingLinks || []) {
+            const slot = Math.max(0, Math.round(Number(link?.toSlot || 0)));
+            if (!incomingBySlot.has(slot)) incomingBySlot.set(slot, link);
+        }
+        const mapLinkToBinding = (link) => {
+            if (!link || typeof link !== "object") return null;
+            const fromNode = String(link?.fromNode || "");
+            if (!fromNode) return null;
+            if (fromNode === GRAPH_INPUT_ID) return { kind: "graphInput" };
+            return {
+                kind: "nodeOutput",
+                nodeId: fromNode,
+                slot: Math.max(0, Math.round(Number(link?.fromSlot || 0)))
+            };
+        };
+        const slot = parseSamplerSlot(textureParam?.value, 0);
+        const runtimeBinding = sourceType === "upload"
+            ? { kind: "upload" }
+            : (mapLinkToBinding(incomingBySlot.get(slot)) || { kind: "readBuffer" });
+
+        const nodeId = String(node?.id || "");
+        const originalRender = pass.render.bind(pass);
+        pass.render = (renderer, writeBuffer, readBuffer, deltaTime, maskActive) => {
+            const readTexture = readBuffer?.texture || null;
+            if (!this.systemInputTexture && readTexture) {
+                this.systemInputTexture = readTexture;
+            }
+
+            if (sourceType !== "upload" && pass.uniforms?.tDiffuse) {
+                let tex = readTexture;
+                if (runtimeBinding?.kind === "graphInput") {
+                    tex = this.systemInputTexture || readTexture;
+                } else if (runtimeBinding?.kind === "nodeOutput") {
+                    tex = this.nodeOutputTextures.get(String(runtimeBinding.nodeId || "")) || readTexture;
+                }
+                if (tex) pass.uniforms.tDiffuse.value = tex;
+            }
+
+            const result = originalRender(renderer, writeBuffer, readBuffer, deltaTime, maskActive);
+            if (nodeId && writeBuffer?.texture) {
+                this.nodeOutputTextures.set(nodeId, writeBuffer.texture);
+            }
+            return result;
+        };
+
+        return pass;
     }
 
     applyPostPipeline(state) {
         const enabled = !!state?.model?.enablePost;
         const graphResolved = resolveChain(state);
         const chain = graphResolved.chain;
+        const chainNodeIds = new Set(chain.map((n) => String(n?.id || "")).filter(Boolean));
+        const incomingLinksByNode = new Map();
+        for (const link of state?.post?.links || []) {
+            const toNode = String(link?.toNode || "");
+            if (!toNode || !chainNodeIds.has(toNode)) continue;
+            if (!incomingLinksByNode.has(toNode)) incomingLinksByNode.set(toNode, []);
+            incomingLinksByNode.get(toNode).push(link);
+        }
+        for (const links of incomingLinksByNode.values()) {
+            links.sort((a, b) => Number(a?.toSlot || 0) - Number(b?.toSlot || 0));
+        }
 
         this.composer = new EffectComposer(this.renderer);
         this.renderPass = new RenderPass(this.scene, this.camera);
         this.composer.addPass(this.renderPass);
         this.passStates = [];
         this.noOutputPreview = false;
+        this.systemInputTexture = null;
+        this.nodeOutputTextures.clear();
 
         if (!enabled) {
             this.useComposer = false;
@@ -747,8 +949,9 @@ export class ShaderWorkbenchRenderer {
 
         for (const node of chain) {
             const repeat = node.type === "pingpong" ? Math.max(1, Math.round(normalizeNumber(node.iterations, 1))) : 1;
+            const incomingLinks = incomingLinksByNode.get(String(node?.id || "")) || [];
             for (let i = 0; i < repeat; i++) {
-                const pass = this.createShaderPassFromNode(node);
+                const pass = this.createShaderPassFromNode(node, incomingLinks);
                 this.composer.addPass(pass);
                 this.passStates.push({ nodeId: node.id, pass });
             }
@@ -765,8 +968,71 @@ export class ShaderWorkbenchRenderer {
         this.applyPostPipeline(state || {});
     }
 
-    updateDynamicUniforms() {
-        this.time += this.clock.getDelta();
+    clearPanKeys() {
+        this.keyPanState.left = false;
+        this.keyPanState.right = false;
+        this.keyPanState.up = false;
+        this.keyPanState.down = false;
+    }
+
+    applyKeyboardPan(deltaSeconds = 0) {
+        const x = (this.keyPanState.right ? 1 : 0) - (this.keyPanState.left ? 1 : 0);
+        const y = (this.keyPanState.up ? 1 : 0) - (this.keyPanState.down ? 1 : 0);
+        if (!x && !y) return;
+
+        const delta = Math.max(0, Number(deltaSeconds) || 0);
+        if (delta <= 0) return;
+
+        const distance = this.camera.position.distanceTo(this.controls.target);
+        const speed = Math.max(0.5, distance * 1.6);
+        const step = speed * delta;
+        const len = Math.hypot(x, y) || 1;
+
+        this.panMove.set(0, 0, 0);
+        this.panRight.setFromMatrixColumn(this.camera.matrix, 0).normalize();
+        this.panUp.setFromMatrixColumn(this.camera.matrix, 1).normalize();
+        this.panMove.addScaledVector(this.panRight, (x / len) * step);
+        this.panMove.addScaledVector(this.panUp, (y / len) * step);
+
+        this.camera.position.add(this.panMove);
+        this.controls.target.add(this.panMove);
+    }
+
+    hasVisibleHelpers() {
+        return !!(this.axesHelper.visible || this.gridHelper.visible);
+    }
+
+    renderMainFrame() {
+        if (this.useComposer && this.composer) {
+            this.systemInputTexture = null;
+            this.nodeOutputTextures.clear();
+            this.composer.render();
+        } else {
+            this.renderer.render(this.scene, this.camera);
+        }
+    }
+
+    renderHelperOverlay() {
+        if (!this.hasVisibleHelpers()) return;
+        const prevWorldVisible = this.worldRoot.visible;
+        const prevAutoClear = this.renderer.autoClear;
+        const prevBackground = this.scene.background;
+        this.worldRoot.visible = false;
+        this.renderer.autoClear = false;
+        this.scene.background = null;
+        try {
+            // Keep color from main frame, only reset depth for helper overlay.
+            this.renderer.clearDepth();
+            this.renderer.render(this.scene, this.camera);
+        } finally {
+            this.scene.background = prevBackground;
+            this.renderer.autoClear = prevAutoClear;
+            this.worldRoot.visible = prevWorldVisible;
+        }
+    }
+
+    updateDynamicUniforms(deltaSeconds = 0) {
+        this.time += Math.max(0, Number(deltaSeconds) || 0);
 
         const modelUniforms = this.modelMaterial?.uniforms;
         if (modelUniforms?.uTime) {
@@ -814,19 +1080,31 @@ export class ShaderWorkbenchRenderer {
     loop() {
         requestAnimationFrame(this.loop);
         this.controls.update();
-        this.updateDynamicUniforms();
+        const delta = this.clock.getDelta();
+        this.applyKeyboardPan(delta);
+        this.updateDynamicUniforms(delta);
 
         if (this.noOutputPreview) {
             this.renderer.setRenderTarget(null);
             this.renderer.setClearColor(0x000000, 1);
             this.renderer.clear(true, true, true);
+            if (this.helpersIndependentRender) {
+                this.renderHelperOverlay();
+            }
             return;
         }
 
-        if (this.useComposer && this.composer) {
-            this.composer.render();
+        if (this.helpersIndependentRender && this.hasVisibleHelpers()) {
+            const prevHelpersVisible = this.helperRoot.visible;
+            this.helperRoot.visible = false;
+            try {
+                this.renderMainFrame();
+            } finally {
+                this.helperRoot.visible = prevHelpersVisible;
+            }
+            this.renderHelperOverlay();
         } else {
-            this.renderer.render(this.scene, this.camera);
+            this.renderMainFrame();
         }
     }
 }

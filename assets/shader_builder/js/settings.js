@@ -6,6 +6,11 @@ function normalizeTheme(theme) {
     return valid ? theme : DEFAULT_SETTINGS.theme;
 }
 
+function normalizePreviewControlMode(mode) {
+    const v = String(mode || DEFAULT_SETTINGS.previewControlMode).toLowerCase();
+    return v === "touch" ? "touch" : "default";
+}
+
 function normalizeSettings(raw = {}) {
     const out = Object.assign({}, DEFAULT_SETTINGS, raw || {});
     out.theme = normalizeTheme(out.theme);
@@ -13,6 +18,8 @@ function normalizeSettings(raw = {}) {
     out.cameraFov = clamp(out.cameraFov, 20, 120);
     out.showAxes = !!out.showAxes;
     out.showGrid = !!out.showGrid;
+    out.helpersIndependentRender = out.helpersIndependentRender !== false;
+    out.previewControlMode = normalizePreviewControlMode(out.previewControlMode);
     out.realtimeCompile = !!out.realtimeCompile;
     out.realtimeCode = !!out.realtimeCode;
     return out;
@@ -40,6 +47,8 @@ export function initSettingsSystem(ctx) {
         inpCameraFov,
         chkAxes,
         chkGrid,
+        chkHelpersIndependent,
+        selPreviewControls,
         chkRealtimeCompile,
         chkRealtimeCode
     } = els;
@@ -51,6 +60,8 @@ export function initSettingsSystem(ctx) {
             cameraFov: Number(inpCameraFov?.value ?? DEFAULT_SETTINGS.cameraFov),
             showAxes: !!chkAxes?.checked,
             showGrid: !!chkGrid?.checked,
+            helpersIndependentRender: !!chkHelpersIndependent?.checked,
+            previewControlMode: normalizePreviewControlMode(selPreviewControls?.value),
             realtimeCompile: !!chkRealtimeCompile?.checked,
             realtimeCode: !!chkRealtimeCode?.checked
         });
@@ -69,6 +80,8 @@ export function initSettingsSystem(ctx) {
         if (inpCameraFov) inpCameraFov.value = String(settings.cameraFov);
         if (chkAxes) chkAxes.checked = !!settings.showAxes;
         if (chkGrid) chkGrid.checked = !!settings.showGrid;
+        if (chkHelpersIndependent) chkHelpersIndependent.checked = !!settings.helpersIndependentRender;
+        if (selPreviewControls) selPreviewControls.value = normalizePreviewControlMode(settings.previewControlMode);
         if (chkRealtimeCompile) chkRealtimeCompile.checked = !!settings.realtimeCompile;
         if (chkRealtimeCode) chkRealtimeCode.checked = !!settings.realtimeCode;
     }
@@ -113,7 +126,7 @@ export function initSettingsSystem(ctx) {
         const onAnyChange = () => {
             patchSettings(collectForm());
         };
-        [themeSelect, inpParamStep, inpCameraFov, chkAxes, chkGrid, chkRealtimeCompile, chkRealtimeCode].forEach((el) => {
+        [themeSelect, inpParamStep, inpCameraFov, chkAxes, chkGrid, chkHelpersIndependent, selPreviewControls, chkRealtimeCompile, chkRealtimeCode].forEach((el) => {
             if (!el) return;
             el.addEventListener("change", onAnyChange);
         });

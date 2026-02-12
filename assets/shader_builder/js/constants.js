@@ -122,6 +122,8 @@ export const DEFAULT_SETTINGS = {
     cameraFov: 60,
     showAxes: true,
     showGrid: true,
+    helpersIndependentRender: true,
+    previewControlMode: "default",
     realtimeCompile: true,
     realtimeCode: true
 };

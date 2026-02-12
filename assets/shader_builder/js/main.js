@@ -98,6 +98,7 @@ const els = {
     statusShader: $("statusShader"),
     statusPipeline: $("statusPipeline"),
     statusCompat: $("statusCompat"),
+    statusControls: $("statusControls"),
     threeHost: $("threeHost"),
     viewer: document.querySelector(".viewer"),
     viewerHud: document.querySelector(".viewer-hud"),
@@ -168,8 +169,10 @@ const els = {
     themeSelect: $("themeSelect"),
     inpParamStep: $("inpParamStep"),
     inpCameraFov: $("inpCameraFov"),
+    selPreviewControls: $("selPreviewControls"),
     chkAxes: $("chkAxes"),
     chkGrid: $("chkGrid"),
+    chkHelpersIndependent: $("chkHelpersIndependent"),
     chkRealtimeCompile: $("chkRealtimeCompile"),
     chkRealtimeCode: $("chkRealtimeCode"),
 
@@ -646,6 +649,39 @@ function syncModelParamsFromShaderSource(draft) {
     return true;
 }
 
+function normalizeTextureNodeUploadParams(params = []) {
+    const list = (Array.isArray(params) ? params : []).filter((p) => isTextureParam(p));
+    const base = Object.assign(createParamTemplate(), list[0] || {});
+    base.type = "texture";
+    base.sourceType = "upload";
+    base.connection = "";
+    base.valueSource = "value";
+    base.valueExpr = "";
+    base.textureId = String(base.textureId || "");
+    if (!String(base.value ?? "").trim()) base.value = "0";
+    return [base];
+}
+
+function enforceTextureNodeUploadOnly(node) {
+    if (!node || normalizePostNodeType(node.type) !== NODE_TYPE_TEXTURE) return false;
+    let changed = false;
+    if (Number(node.inputs) !== 0) {
+        node.inputs = 0;
+        changed = true;
+    }
+    if (normalizeNodeNumber(node.outputs, 1, 1, 8) !== 1) {
+        node.outputs = 1;
+        changed = true;
+    }
+    const prev = Array.isArray(node.params) ? node.params : [];
+    const next = normalizeTextureNodeUploadParams(prev);
+    if (!areParamListsEquivalent(prev, next)) {
+        node.params = next;
+        changed = true;
+    }
+    return changed;
+}
+
 function syncNodeParamsFromShaderSource(node) {
     if (!node) return false;
     const prev = Array.isArray(node.params) ? node.params : [];
@@ -656,15 +692,11 @@ function syncNodeParamsFromShaderSource(node) {
         : normalizeNodeNumber(node.inputs, minInputs, minInputs, 8);
     const inputChanged = Number(node.inputs) !== normalizedInputs;
     if (inputChanged) node.inputs = normalizedInputs;
-    const minTextureCount = getPostInputTextureMinCount(node.inputs);
     const next = nodeType === NODE_TYPE_TEXTURE
-        ? ensurePostInputSamplerParam(
-            prev.filter((p) => isTextureParam(p)).slice(0, 1),
-            Math.max(1, minTextureCount)
-        )
+        ? normalizeTextureNodeUploadParams(prev)
         : ensurePostInputSamplerParam(
             syncParamsFromUniformSource(prev, node.fragmentSource),
-            minTextureCount
+            getPostInputTextureMinCount(node.inputs)
         );
 
     let changed = inputChanged;
@@ -1041,12 +1073,20 @@ function decodeDataUrlPayload(dataUrl) {
 }
 
 function createLink(fromNode, fromSlot, toNode, toSlot) {
+    const from = String(fromNode || "");
+    const to = String(toNode || "");
+    const nextFromSlot = from === GRAPH_INPUT_ID
+        ? 0
+        : Math.max(0, Math.round(Number(fromSlot || 0)));
+    const nextToSlot = to === GRAPH_OUTPUT_ID
+        ? 0
+        : Math.max(0, Math.round(Number(toSlot || 0)));
     return {
         id: uid("link"),
-        fromNode,
-        fromSlot: Number(fromSlot || 0),
-        toNode,
-        toSlot: Number(toSlot || 0)
+        fromNode: from,
+        fromSlot: nextFromSlot,
+        toNode: to,
+        toSlot: nextToSlot
     };
 }
 
@@ -1185,13 +1225,10 @@ const graphEditor = new GraphEditor({
                 if (nextType !== prevType) {
                     switchPostNodeType(node, nextType);
                 }
-                const minTextureCount = getPostInputTextureMinCount(node.inputs);
                 if (nextType === NODE_TYPE_TEXTURE) {
-                    const textureOnly = Array.isArray(node.params)
-                        ? node.params.filter((p) => isTextureParam(p)).slice(0, 1)
-                        : [];
-                    node.params = ensurePostInputSamplerParam(textureOnly, Math.max(1, minTextureCount));
+                    enforceTextureNodeUploadOnly(node);
                 } else {
+                    const minTextureCount = getPostInputTextureMinCount(node.inputs);
                     node.params = ensurePostInputSamplerParam(node.params, minTextureCount);
                 }
                 syncNodeOutputsFromShaderSource(node);
@@ -1737,12 +1774,7 @@ function addPostNode({ presetType = null, askType = true } = {}) {
         }
 
         if (targetType === NODE_TYPE_TEXTURE) {
-            node.inputs = 0;
-            node.outputs = 1;
-            node.params = ensurePostInputSamplerParam(
-                (node.params || []).filter((p) => isTextureParam(p)).slice(0, 1),
-                1
-            );
+            enforceTextureNodeUploadOnly(node);
         }
 
         draft.post.nodes.push(node);
@@ -2000,7 +2032,17 @@ function populateUniformExprSelect(selectEl, type, currentValue = "") {
     if (!selectEl.value && options.length) selectEl.value = options[0];
 }
 
-function renderParamList({ container, params, textures, step, onPatch, onDelete, lockParamPredicate = null }) {
+function renderParamList({
+    container,
+    params,
+    textures,
+    step,
+    onPatch,
+    onDelete,
+    lockParamPredicate = null,
+    forceTextureUploadOnly = false,
+    forceTextureConnectionOnly = false
+}) {
     if (!container) return;
     container.innerHTML = "";
 
@@ -2018,6 +2060,8 @@ function renderParamList({ container, params, textures, step, onPatch, onDelete,
         const p = params[i] || {};
         const type = normalizeParamType(p.type);
         const isTextureType = type === "texture";
+        const textureUploadOnly = isTextureType && !!forceTextureUploadOnly;
+        const textureConnectionOnly = isTextureType && !textureUploadOnly && !!forceTextureConnectionOnly;
         const lockDeleteAndType = typeof lockParamPredicate === "function" ? !!lockParamPredicate(p, i) : false;
 
         const item = document.createElement("div");
@@ -2050,20 +2094,30 @@ function renderParamList({ container, params, textures, step, onPatch, onDelete,
         if (isTextureType) {
             rowMain.style.gridTemplateColumns = "1fr 1fr auto";
             rowMain.appendChild(btnDelete);
+            if (textureUploadOnly) rowMain.classList.add("hidden");
             item.appendChild(rowMain);
 
             const rowTex = document.createElement("div");
             rowTex.className = "param-row";
-            rowTex.style.gridTemplateColumns = "1fr 2fr";
+            rowTex.style.gridTemplateColumns = (textureUploadOnly || textureConnectionOnly) ? "1fr" : "1fr 2fr";
 
-            const selSource = createSourceSelect(String(p.sourceType || "value"));
+            const selSource = createSourceSelect(
+                textureUploadOnly
+                    ? "upload"
+                    : (textureConnectionOnly ? "connection" : String(p.sourceType || "value"))
+            );
+            if (textureUploadOnly || textureConnectionOnly) {
+                selSource.disabled = true;
+                selSource.classList.add("hidden");
+            }
             const sourceInputHost = document.createElement("div");
             sourceInputHost.style.display = "grid";
             sourceInputHost.style.gridTemplateColumns = "1fr";
 
             const inpSlot = document.createElement("input");
             inpSlot.className = "input";
-            inpSlot.placeholder = "采样槽位";
+            inpSlot.placeholder = textureConnectionOnly ? "input slot N" : "采样槽位";
+            if (textureConnectionOnly) inpSlot.title = "输入卡片输入的端口号（input slot N）";
             inpSlot.value = String(p.value ?? "0");
 
             const selTexture = document.createElement("select");
@@ -2086,10 +2140,13 @@ function renderParamList({ container, params, textures, step, onPatch, onDelete,
             inpConn.value = String(p.connection || "");
 
             const updateTextureVis = () => {
-                const sourceType = String(selSource.value || "value");
-                inpSlot.classList.toggle("hidden", sourceType !== "value");
+                const sourceType = textureUploadOnly
+                    ? "upload"
+                    : (textureConnectionOnly ? "connection" : String(selSource.value || "value"));
+                const showSlot = textureConnectionOnly ? true : sourceType === "value";
+                inpSlot.classList.toggle("hidden", !showSlot);
                 selTexture.classList.toggle("hidden", sourceType !== "upload");
-                inpConn.classList.toggle("hidden", sourceType !== "connection");
+                inpConn.classList.toggle("hidden", textureConnectionOnly || sourceType !== "connection");
             };
             updateTextureVis();
 
@@ -2103,7 +2160,9 @@ function renderParamList({ container, params, textures, step, onPatch, onDelete,
             selSource.addEventListener("change", () => {
                 updateTextureVis();
                 onPatch(i, (param) => {
-                    const sourceType = String(selSource.value || "value");
+                    const sourceType = textureUploadOnly
+                        ? "upload"
+                        : (textureConnectionOnly ? "connection" : String(selSource.value || "value"));
                     param.sourceType = sourceType;
                     if (sourceType === "value") {
                         param.textureId = "";
@@ -2112,6 +2171,7 @@ function renderParamList({ container, params, textures, step, onPatch, onDelete,
                         param.connection = "";
                     } else if (sourceType === "connection") {
                         param.textureId = "";
+                        if (textureConnectionOnly) param.connection = "";
                     }
                 });
             });
@@ -2125,6 +2185,12 @@ function renderParamList({ container, params, textures, step, onPatch, onDelete,
 
             selTexture.addEventListener("change", () => {
                 onPatch(i, (param) => {
+                    if (textureUploadOnly) {
+                        param.sourceType = "upload";
+                        param.connection = "";
+                        param.valueSource = "value";
+                        param.valueExpr = "";
+                    }
                     param.textureId = selTexture.value;
                 });
             });
@@ -2197,13 +2263,15 @@ function renderParamList({ container, params, textures, step, onPatch, onDelete,
             });
         }
 
-        inpName.addEventListener("change", () => {
-            onPatch(i, (param) => {
-                param.name = inpName.value.trim();
+        if (!textureUploadOnly) {
+            inpName.addEventListener("change", () => {
+                onPatch(i, (param) => {
+                    param.name = inpName.value.trim();
+                });
             });
-        });
+        }
 
-        if (!lockDeleteAndType) {
+        if (!lockDeleteAndType && !textureUploadOnly) {
             selType.addEventListener("change", () => {
                 onPatch(i, (param) => {
                     const nextType = normalizeParamType(selType.value);
@@ -2219,9 +2287,15 @@ function renderParamList({ container, params, textures, step, onPatch, onDelete,
                             param.valueExpr = String(param.valueExpr || "");
                         }
                     } else {
-                        param.sourceType = param.sourceType || "value";
+                        param.sourceType = forceTextureUploadOnly
+                            ? "upload"
+                            : (forceTextureConnectionOnly ? "connection" : (param.sourceType || "value"));
                         param.valueSource = "value";
                         param.valueExpr = "";
+                        if (forceTextureConnectionOnly) {
+                            param.textureId = "";
+                            param.connection = "";
+                        }
                         if (!String(param.value || "").trim()) param.value = "0";
                     }
                 });
@@ -2274,12 +2348,15 @@ function renderNodeParamList(state, node) {
     const nodeParams = node?.params || [];
     const minTextureCount = getPostInputTextureMinCount(node?.inputs);
     const textureCount = countTextureParams(nodeParams);
+    const isTextureNode = normalizePostNodeType(node?.type) === NODE_TYPE_TEXTURE;
 
     renderParamList({
         container: els.nodeParamList,
         params: nodeParams,
         textures: state.textures || [],
         step: state.settings?.paramStep || 0.1,
+        forceTextureUploadOnly: isTextureNode,
+        forceTextureConnectionOnly: !isTextureNode,
         lockParamPredicate: (param) => isTextureParam(param) && textureCount <= minTextureCount,
         onPatch(index, mutator) {
             store.patch((draft) => {
@@ -2301,10 +2378,7 @@ function renderNodeParamList(state, node) {
                     );
                 }
                 if (normalizePostNodeType(n.type) === NODE_TYPE_TEXTURE) {
-                    const textureOnly = n.params.filter((param) => isTextureParam(param)).slice(0, 1);
-                    n.params = ensurePostInputSamplerParam(textureOnly, 1);
-                    n.inputs = 0;
-                    n.outputs = 1;
+                    enforceTextureNodeUploadOnly(n);
                 } else {
                     n.params = ensurePostInputSamplerParam(n.params, getPostInputTextureMinCount(n.inputs));
                 }
@@ -2318,10 +2392,7 @@ function renderNodeParamList(state, node) {
                 const oldNames = (n.params || []).map((it) => String(it?.name || "").trim());
                 n.params.splice(index, 1);
                 if (normalizePostNodeType(n.type) === NODE_TYPE_TEXTURE) {
-                    const textureOnly = (n.params || []).filter((param) => isTextureParam(param)).slice(0, 1);
-                    n.params = ensurePostInputSamplerParam(textureOnly, 1);
-                    n.inputs = 0;
-                    n.outputs = 1;
+                    enforceTextureNodeUploadOnly(n);
                 } else {
                     n.params = ensurePostInputSamplerParam(n.params, getPostInputTextureMinCount(n.inputs));
                 }
@@ -2376,6 +2447,11 @@ function refreshNodeEditorPanel(state) {
     const minInputs = minInputCountByNodeType(nodeType);
     const isTextureNode = nodeType === NODE_TYPE_TEXTURE;
     const isPingPongNode = nodeType === NODE_TYPE_PINGPONG;
+    const toggleControlFieldHidden = (controlEl, hidden) => {
+        if (!(controlEl instanceof HTMLElement)) return;
+        const field = controlEl.closest(".field, .chk");
+        if (field) field.classList.toggle("hidden", !!hidden);
+    };
 
     if (els.nodeShaderSection) {
         els.nodeShaderSection.classList.toggle("hidden", isTextureNode);
@@ -2397,6 +2473,7 @@ function refreshNodeEditorPanel(state) {
     }
     if (els.btnAddNodeParam) {
         els.btnAddNodeParam.disabled = isTextureNode;
+        els.btnAddNodeParam.classList.toggle("hidden", isTextureNode);
         els.btnAddNodeParam.title = isTextureNode
             ? "texture 节点固定为纹理输入参数"
             : "";
@@ -2433,6 +2510,12 @@ function refreshNodeEditorPanel(state) {
     if (els.inpNodeTextureUnit) {
         els.inpNodeTextureUnit.disabled = isTextureNode;
     }
+    toggleControlFieldHidden(els.inpNodeInputs, isTextureNode);
+    toggleControlFieldHidden(els.inpNodeOutputs, isTextureNode);
+    toggleControlFieldHidden(els.inpNodeTextureUnit, isTextureNode);
+    toggleControlFieldHidden(els.selNodeFilter, isTextureNode);
+    toggleControlFieldHidden(els.inpNodeIterations, isTextureNode);
+    toggleControlFieldHidden(els.chkNodeMipmap, isTextureNode);
 
     if (els.selNodeType && els.selNodeType.value !== String(node.type || "simple")) {
         els.selNodeType.value = String(node.type || "simple");
@@ -2473,6 +2556,12 @@ function refreshTopPanel(state) {
         } else {
             els.modelFileName.textContent = "当前模型：默认球体";
         }
+    }
+    if (els.statusControls) {
+        const mode = String(state.settings?.previewControlMode || "default").toLowerCase();
+        els.statusControls.textContent = mode === "touch"
+            ? "操作：左键旋转 / 右键平移 / 滚轮缩放 / 方向键平移"
+            : "操作：中键旋转 / 右键平移 / 滚轮缩放 / 方向键平移";
     }
 }
 
