@@ -97,7 +97,15 @@ export function createDefaultState() {
             links: [
                 { id: uid("link"), fromNode: GRAPH_INPUT_ID, fromSlot: 0, toNode: firstNode.id, toSlot: 0 },
                 { id: uid("link"), fromNode: firstNode.id, fromSlot: 0, toNode: GRAPH_OUTPUT_ID, toSlot: 0 }
-            ]
+            ],
+            systemNodePositions: {
+                [GRAPH_INPUT_ID]: null,
+                [GRAPH_OUTPUT_ID]: null
+            },
+            systemNodeUserMoved: {
+                [GRAPH_INPUT_ID]: false,
+                [GRAPH_OUTPUT_ID]: false
+            }
         },
         selectedNodeId: firstNode.id
     };
@@ -169,6 +177,21 @@ function normalizePostGraphState(state) {
     if (!state.post || typeof state.post !== "object") state.post = {};
     if (!Array.isArray(state.post.nodes)) state.post.nodes = [];
     if (!Array.isArray(state.post.links)) state.post.links = [];
+    if (!state.post.systemNodePositions || typeof state.post.systemNodePositions !== "object") {
+        state.post.systemNodePositions = {};
+    }
+    if (!state.post.systemNodeUserMoved || typeof state.post.systemNodeUserMoved !== "object") {
+        state.post.systemNodeUserMoved = {};
+    }
+    for (const id of [GRAPH_INPUT_ID, GRAPH_OUTPUT_ID]) {
+        const raw = state.post.systemNodePositions[id];
+        const x = Number(raw?.x);
+        const y = Number(raw?.y);
+        state.post.systemNodePositions[id] = Number.isFinite(x) && Number.isFinite(y)
+            ? { x, y }
+            : null;
+        state.post.systemNodeUserMoved[id] = !!state.post.systemNodeUserMoved[id];
+    }
 
     const nodes = state.post.nodes;
     for (const node of nodes) {

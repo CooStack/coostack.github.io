@@ -101,20 +101,145 @@ function collectSamplerUniformNames(source) {
     return names;
 }
 
-function adaptPostFragmentForPreview(source, { useGlsl3 = false } = {}) {
+function escapeRegexLiteral(source) {
+    return String(source || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function stripAndCollectVec4FragmentOutputs(source) {
+    let code = String(source || "");
+    const outputs = [];
+    const seen = new Set();
+    const addOutput = (name, location = null) => {
+        const key = String(name || "").trim();
+        if (!key || seen.has(key)) return;
+        seen.add(key);
+        const hasLocation = location !== null && location !== undefined && Number.isFinite(Number(location));
+        outputs.push({
+            name: key,
+            location: hasLocation ? Math.max(0, Math.round(Number(location))) : null
+        });
+    };
+
+    code = code.replace(
+        /^\s*(?:layout\s*\(\s*location\s*=\s*(\d+)\s*\)\s*)?out\s+(?:(?:lowp|mediump|highp)\s+)?vec4\s+([A-Za-z_][A-Za-z0-9_]*)\s*;\s*(?:\/\/.*)?$/gm,
+        (_, location, name) => {
+            addOutput(name, location);
+            return "";
+        }
+    );
+
+    return { code, outputs };
+}
+
+function resolvePrimaryFragmentOutput(outputs = [], preferredOutputSlot = null) {
+    const list = Array.isArray(outputs) ? outputs : [];
+    const preferredSlot = Number(preferredOutputSlot);
+    if (Number.isFinite(preferredSlot)) {
+        const normalizedSlot = Math.max(0, Math.round(preferredSlot));
+        for (const output of list) {
+            const rawLocation = output?.location;
+            const hasLocation = rawLocation !== null && rawLocation !== undefined && Number.isFinite(Number(rawLocation));
+            if (!hasLocation) continue;
+            if (Math.max(0, Math.round(Number(rawLocation))) !== normalizedSlot) continue;
+            const name = String(output?.name || "").trim();
+            if (name) return name;
+        }
+        if (normalizedSlot < list.length) {
+            const name = String(list[normalizedSlot]?.name || "").trim();
+            if (name) return name;
+        }
+    }
+    for (const output of list) {
+        const rawLocation = output?.location;
+        const hasLocation = rawLocation !== null && rawLocation !== undefined && Number.isFinite(Number(rawLocation));
+        if (!hasLocation) continue;
+        if (Math.max(0, Math.round(Number(rawLocation))) !== 0) continue;
+        const name = String(output?.name || "").trim();
+        if (name) return name;
+    }
+    return String(list[0]?.name || "").trim();
+}
+
+function injectGlobalDeclsAfterPreamble(source, declarations = []) {
+    const decls = (Array.isArray(declarations) ? declarations : [])
+        .map((line) => String(line || "").trim())
+        .filter(Boolean);
+    if (!decls.length) return String(source || "");
+
+    const lines = String(source || "").split("\n");
+    let insertAt = 0;
+    while (insertAt < lines.length) {
+        const trimmed = String(lines[insertAt] || "").trim();
+        if (!trimmed || /^#/.test(trimmed) || /^precision\b/.test(trimmed)) {
+            insertAt += 1;
+            continue;
+        }
+        break;
+    }
+    lines.splice(insertAt, 0, ...decls);
+    return lines.join("\n");
+}
+
+function adaptFragmentOutputsForSingleTarget(source, outputs = [], {
+    useGlsl3 = false,
+    preferredOutputSlot = 0
+} = {}) {
+    let code = String(source || "");
+    const list = Array.isArray(outputs) ? outputs : [];
+    const primaryOutput = resolvePrimaryFragmentOutput(list, preferredOutputSlot);
+    const declsToInject = [];
+    const previewPrimaryOut = "sbFragColor";
+
+    if (useGlsl3) {
+        let glsl3Primary = String(primaryOutput || "").trim();
+        if (!glsl3Primary && /\bgl_FragColor\b/.test(code)) {
+            glsl3Primary = "gl_FragColor";
+        }
+
+        if (glsl3Primary && glsl3Primary !== previewPrimaryOut && glsl3Primary !== "gl_FragColor") {
+            code = code.replace(new RegExp(`\\b${escapeRegexLiteral(glsl3Primary)}\\b`, "g"), previewPrimaryOut);
+        }
+        code = code.replace(/\bgl_FragColor\b/g, previewPrimaryOut);
+        declsToInject.push(`layout(location = 0) out vec4 ${previewPrimaryOut};`);
+
+        for (const output of list) {
+            const name = String(output?.name || "").trim();
+            if (!name || name === "gl_FragColor" || name === glsl3Primary || name === previewPrimaryOut) continue;
+            declsToInject.push(`vec4 ${name};`);
+        }
+    } else {
+        for (const output of list) {
+            const name = String(output?.name || "").trim();
+            if (!name || name === "gl_FragColor") continue;
+            if (name === primaryOutput) {
+                code = code.replace(new RegExp(`\\b${escapeRegexLiteral(name)}\\b`, "g"), "gl_FragColor");
+                continue;
+            }
+            declsToInject.push(`vec4 ${name};`);
+        }
+
+        if (!list.length && /\bout\s+vec4\s+/.test(code) === false && /\bgl_FragColor\b/.test(code) === false) {
+            return code;
+        }
+    }
+
+    if (declsToInject.length) {
+        code = injectGlobalDeclsAfterPreamble(code, declsToInject);
+    }
+
+    return code;
+}
+
+function adaptPostFragmentForPreview(source, {
+    useGlsl3 = false,
+    preferredOutputSlot = 0
+} = {}) {
     let code = String(source || "");
     code = code.replace(/\r\n/g, "\n");
     // Convert common MC fragment styles into a stable preview form.
     code = code.replace(/^\s*#version[^\n]*\n?/gm, "");
-    const outNames = [];
-    code = code.replace(/^\s*layout\s*\(\s*location\s*=\s*\d+\s*\)\s*out\s+(?:(?:lowp|mediump|highp)\s+)?vec4\s+([A-Za-z_][A-Za-z0-9_]*)\s*;\s*$/gm, (_, name) => {
-        outNames.push(String(name || ""));
-        return "";
-    });
-    code = code.replace(/^\s*out\s+(?:(?:lowp|mediump|highp)\s+)?vec4\s+([A-Za-z_][A-Za-z0-9_]*)\s*;\s*$/gm, (_, name) => {
-        outNames.push(String(name || ""));
-        return "";
-    });
+    const postOutputs = stripAndCollectVec4FragmentOutputs(code);
+    code = postOutputs.code;
 
     if (useGlsl3) {
         code = code.replace(/^\s*(in|out)\s+vec2\s+screen_uv\s*;\s*$/gm, "");
@@ -129,16 +254,11 @@ function adaptPostFragmentForPreview(source, { useGlsl3 = false } = {}) {
         code = code.replace(/^\s*varying\s+vec2\s+vUv\s*;\s*$/gm, "");
     }
 
-    code = code.replace(/^\s*uniform\s+sampler2D\s+tex\s*;\s*$/gm, "uniform sampler2D tDiffuse;");
     code = code.replace(/\bscreen_uv\b/g, "vUv");
-    code = code.replace(/\btex\b/g, "tDiffuse");
 
     // ShaderMaterial(GLSL3) already injects its own fragment output.
-    // Fold custom out variables back to gl_FragColor to avoid MRT location conflicts.
-    for (const name of outNames) {
-        if (!name || name === "gl_FragColor") continue;
-        code = code.replace(new RegExp(`\\b${name}\\b`, "g"), "gl_FragColor");
-    }
+    // Preview path only has one render target: keep location=0/first output as color.
+    code = adaptFragmentOutputsForSingleTarget(code, postOutputs.outputs, { useGlsl3, preferredOutputSlot });
 
     if (useGlsl3) {
         code = code.replace(/\btexture2D\s*\(/g, "texture(");
@@ -146,10 +266,6 @@ function adaptPostFragmentForPreview(source, { useGlsl3 = false } = {}) {
         code = code.replace(/\btexture\s*\(/g, "texture2D(");
     }
     code = adaptTextureSizeMathForPreview(code);
-
-    if (!/\buniform\b[^\n;]*\btDiffuse\b[^\n;]*;/.test(code)) {
-        code = `uniform sampler2D tDiffuse;\n${code}`;
-    }
 
     if (useGlsl3) {
         if (!/\bin\b[^\n;]*\bvUv\b[^\n;]*;/.test(code)) {
@@ -162,7 +278,7 @@ function adaptPostFragmentForPreview(source, { useGlsl3 = false } = {}) {
     return code;
 }
 
-function adaptModelVertexForPreview(source) {
+function adaptModelVertexForPreview(source, { useGlsl3 = false } = {}) {
     let code = String(source || "");
     code = code.replace(/\r\n/g, "\n");
     code = code.replace(/^\s*#version[^\n]*\n?/gm, "");
@@ -170,7 +286,12 @@ function adaptModelVertexForPreview(source) {
     code = code.replace(/^\s*(attribute|in)\s+[A-Za-z0-9_]+\s+(pos|position|normal|uv)\s*;\s*$/gm, "");
     code = code.replace(/^\s*layout\s*\(\s*location\s*=\s*\d+\s*\)\s*in\s+[A-Za-z0-9_]+\s+(aPos|aNormal|aUv)\s*;\s*$/gm, "");
     code = code.replace(/^\s*(attribute|in)\s+[A-Za-z0-9_]+\s+(aPos|aNormal|aUv)\s*;\s*$/gm, "");
-    code = code.replace(/^\s*out\s+([A-Za-z0-9_]+)\s+([A-Za-z_][A-Za-z0-9_]*)\s*;\s*$/gm, "varying $1 $2;");
+    if (useGlsl3) {
+        code = code.replace(/^\s*varying\s+([A-Za-z0-9_]+)\s+([A-Za-z_][A-Za-z0-9_]*)\s*;\s*$/gm, "out $1 $2;");
+        code = code.replace(/\battribute\b/g, "in");
+    } else {
+        code = code.replace(/^\s*out\s+([A-Za-z0-9_]+)\s+([A-Za-z_][A-Za-z0-9_]*)\s*;\s*$/gm, "varying $1 $2;");
+    }
     code = code.replace(/\bpos\b/g, "position");
     code = code.replace(/\baPos\b/g, "position");
     code = code.replace(/\baNormal\b/g, "normal");
@@ -178,25 +299,23 @@ function adaptModelVertexForPreview(source) {
     return code;
 }
 
-function adaptModelFragmentForPreview(source) {
+function adaptModelFragmentForPreview(source, { useGlsl3 = false } = {}) {
     let code = String(source || "");
     code = code.replace(/\r\n/g, "\n");
     code = code.replace(/^\s*#version[^\n]*\n?/gm, "");
-    const outNames = [];
-    code = code.replace(/^\s*layout\s*\(\s*location\s*=\s*\d+\s*\)\s*out\s+(?:(?:lowp|mediump|highp)\s+)?vec4\s+([A-Za-z_][A-Za-z0-9_]*)\s*;\s*$/gm, (_, name) => {
-        outNames.push(String(name || ""));
-        return "";
-    });
-    code = code.replace(/^\s*out\s+(?:(?:lowp|mediump|highp)\s+)?vec4\s+([A-Za-z_][A-Za-z0-9_]*)\s*;\s*$/gm, (_, name) => {
-        outNames.push(String(name || ""));
-        return "";
-    });
-    code = code.replace(/^\s*in\s+([A-Za-z0-9_]+)\s+([A-Za-z_][A-Za-z0-9_]*)\s*;\s*$/gm, "varying $1 $2;");
-    for (const name of outNames) {
-        if (!name || name === "gl_FragColor") continue;
-        code = code.replace(new RegExp(`\\b${name}\\b`, "g"), "gl_FragColor");
+    const modelOutputs = stripAndCollectVec4FragmentOutputs(code);
+    code = modelOutputs.code;
+    if (useGlsl3) {
+        code = code.replace(/^\s*varying\s+([A-Za-z0-9_]+)\s+([A-Za-z_][A-Za-z0-9_]*)\s*;\s*$/gm, "in $1 $2;");
+    } else {
+        code = code.replace(/^\s*in\s+([A-Za-z0-9_]+)\s+([A-Za-z_][A-Za-z0-9_]*)\s*;\s*$/gm, "varying $1 $2;");
     }
-    code = code.replace(/\btexture\s*\(/g, "texture2D(");
+    code = adaptFragmentOutputsForSingleTarget(code, modelOutputs.outputs, { useGlsl3 });
+    if (useGlsl3) {
+        code = code.replace(/\btexture2D\s*\(/g, "texture(");
+    } else {
+        code = code.replace(/\btexture\s*\(/g, "texture2D(");
+    }
     code = adaptTextureSizeMathForPreview(code);
     return code;
 }
@@ -381,6 +500,22 @@ export class ShaderWorkbenchRenderer {
         this.worldDepthMaterial.depthTest = true;
         this.worldDepthMaterial.depthWrite = true;
         this.worldDepthMaterial.colorWrite = false;
+        this.copySize = new THREE.Vector2();
+        this.nodeOutputCopyScene = new THREE.Scene();
+        this.nodeOutputCopyCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+        this.nodeOutputCopyMaterial = new THREE.ShaderMaterial({
+            uniforms: {
+                tInput: { value: null }
+            },
+            vertexShader: PREVIEW_POST_VERTEX_GLSL1,
+            fragmentShader: "varying vec2 vUv;\nuniform sampler2D tInput;\nvoid main(){ gl_FragColor = texture2D(tInput, vUv); }",
+            depthTest: false,
+            depthWrite: false,
+            toneMapped: false
+        });
+        this.nodeOutputCopyQuad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), this.nodeOutputCopyMaterial);
+        this.nodeOutputCopyQuad.frustumCulled = false;
+        this.nodeOutputCopyScene.add(this.nodeOutputCopyQuad);
 
         this.modelObject = null;
         this.modelMaterial = null;
@@ -391,6 +526,8 @@ export class ShaderWorkbenchRenderer {
         this.noOutputPreview = false;
         this.systemInputTexture = null;
         this.nodeOutputTextures = new Map();
+        this.nodeOutputRenderTargets = new Map();
+        this.nodeGroupInputTextures = new Map();
         this.helpersIndependentRender = true;
 
         this.keyPanState = {
@@ -498,6 +635,9 @@ export class ShaderWorkbenchRenderer {
         this.renderer.dispose();
         this.fallbackTexture.dispose();
         this.worldDepthMaterial.dispose();
+        this.disposeNodeOutputCache();
+        this.nodeOutputCopyMaterial?.dispose?.();
+        this.nodeOutputCopyQuad?.geometry?.dispose?.();
         for (const item of this.textureCache.values()) {
             item.texture?.dispose();
         }
@@ -705,9 +845,100 @@ export class ShaderWorkbenchRenderer {
         return uniforms;
     }
 
+    makeNodeOutputKey(nodeId, slot = 0) {
+        const id = String(nodeId || "").trim();
+        if (!id) return "";
+        return `${id}#${Math.max(0, Math.round(Number(slot || 0)))}`;
+    }
+
+    resolveNodeOutputTexture(binding, fallbackTexture = null) {
+        if (!binding || binding.kind !== "nodeOutput") return fallbackTexture || null;
+        const nodeId = String(binding.nodeId || "").trim();
+        if (!nodeId) return fallbackTexture || null;
+        const slot = Math.max(0, Math.round(Number(binding.slot || 0)));
+        const key = this.makeNodeOutputKey(nodeId, slot);
+        if (key && this.nodeOutputTextures.has(key)) return this.nodeOutputTextures.get(key) || null;
+        if (slot === 0 && this.nodeOutputTextures.has(nodeId)) return this.nodeOutputTextures.get(nodeId) || null;
+        return fallbackTexture || null;
+    }
+
+    sanitizeSampleTexture(texture, writeTexture, fallbacks = []) {
+        if (!texture) return null;
+        if (!writeTexture || texture !== writeTexture) return texture;
+        for (const item of fallbacks || []) {
+            if (item && item !== writeTexture) return item;
+        }
+        return null;
+    }
+
+    getNodeOutputRenderTarget(key, sourceTexture) {
+        if (!key || !sourceTexture || !this.renderer) return null;
+        const drawingSize = this.renderer.getDrawingBufferSize(this.copySize);
+        const width = Math.max(1, Math.round(Number(drawingSize.x || 1)));
+        const height = Math.max(1, Math.round(Number(drawingSize.y || 1)));
+        const sourceFormat = sourceTexture.format || THREE.RGBAFormat;
+        const sourceType = sourceTexture.type || THREE.UnsignedByteType;
+
+        let target = this.nodeOutputRenderTargets.get(key) || null;
+        const needsRecreate = !target
+            || target.width !== width
+            || target.height !== height
+            || target.texture?.format !== sourceFormat
+            || target.texture?.type !== sourceType;
+        if (needsRecreate) {
+            if (target) target.dispose();
+            target = new THREE.WebGLRenderTarget(width, height, {
+                minFilter: sourceTexture.minFilter || THREE.LinearFilter,
+                magFilter: sourceTexture.magFilter || THREE.LinearFilter,
+                format: sourceFormat,
+                type: sourceType,
+                depthBuffer: false,
+                stencilBuffer: false
+            });
+            if ("colorSpace" in target.texture && "colorSpace" in sourceTexture) {
+                target.texture.colorSpace = sourceTexture.colorSpace;
+            }
+            this.nodeOutputRenderTargets.set(key, target);
+        }
+        return target;
+    }
+
+    cacheNodeOutputTexture(renderer, nodeId, slot, sourceTexture) {
+        const id = String(nodeId || "").trim();
+        if (!id || !renderer || !sourceTexture) return;
+        const normalizedSlot = Math.max(0, Math.round(Number(slot || 0)));
+        const key = this.makeNodeOutputKey(id, normalizedSlot);
+        if (!key) return;
+        const target = this.getNodeOutputRenderTarget(key, sourceTexture);
+        if (!target || !this.nodeOutputCopyMaterial || !this.nodeOutputCopyScene || !this.nodeOutputCopyCamera) return;
+
+        const prevTarget = renderer.getRenderTarget();
+        const prevAutoClear = renderer.autoClear;
+        this.nodeOutputCopyMaterial.uniforms.tInput.value = sourceTexture;
+        renderer.autoClear = true;
+        renderer.setRenderTarget(target);
+        renderer.clear(true, false, false);
+        renderer.render(this.nodeOutputCopyScene, this.nodeOutputCopyCamera);
+        renderer.setRenderTarget(prevTarget);
+        renderer.autoClear = prevAutoClear;
+
+        this.nodeOutputTextures.set(key, target.texture);
+        if (normalizedSlot === 0) this.nodeOutputTextures.set(id, target.texture);
+    }
+
+    disposeNodeOutputCache() {
+        for (const target of this.nodeOutputRenderTargets.values()) {
+            target?.dispose?.();
+        }
+        this.nodeOutputRenderTargets.clear();
+        this.nodeOutputTextures.clear();
+        this.nodeGroupInputTextures.clear();
+    }
+
     applyModelShader(modelState) {
         if (!modelState?.shader) return;
         const shader = modelState.shader;
+        const useGlsl3 = !!this.renderer?.capabilities?.isWebGL2;
 
         const uniforms = this.buildUniformMap(shader.params || [], true);
         if (!uniforms.uColor) uniforms.uColor = { value: new THREE.Vector3(0.3, 0.8, 1.0) };
@@ -716,29 +947,37 @@ export class ShaderWorkbenchRenderer {
         if (!uniforms.viewMat) uniforms.viewMat = { value: new THREE.Matrix4() };
         if (!uniforms.transMat) uniforms.transMat = { value: new THREE.Matrix4() };
 
-        const previewVertex = adaptModelVertexForPreview(shader.vertexSource);
-        const previewFragment = adaptModelFragmentForPreview(shader.fragmentSource);
+        const previewVertex = adaptModelVertexForPreview(shader.vertexSource, { useGlsl3 });
+        const previewFragment = adaptModelFragmentForPreview(shader.fragmentSource, { useGlsl3 });
 
-        const material = new THREE.ShaderMaterial({
+        const materialOptions = {
             vertexShader: previewVertex,
             fragmentShader: previewFragment,
             uniforms,
             side: THREE.DoubleSide,
             transparent: true
-        });
+        };
+        if (useGlsl3) materialOptions.glslVersion = THREE.GLSL3;
+
+        const material = new THREE.ShaderMaterial(materialOptions);
 
         this.modelMaterial = material;
         this.applyMaterialToModel(material);
         this.onStatus({ shader: "着色器：模型已更新" });
     }
 
-    createShaderPassFromNode(node, incomingLinks = []) {
+    createShaderPassFromNode(node, incomingLinks = [], runtime = {}) {
         if (String(node?.type || "").toLowerCase() === "texture") {
-            return this.createTextureNodePass(node, incomingLinks);
+            return this.createTextureNodePass(node, incomingLinks, runtime);
         }
 
         const useGlsl3 = !!this.renderer?.capabilities?.isWebGL2;
-        const fragmentSource = adaptPostFragmentForPreview(node?.fragmentSource || "", { useGlsl3 });
+        const outputSlot = Math.max(0, Math.round(Number(runtime?.outputSlot || 0)));
+        const renderGroupKey = String(runtime?.renderGroupKey || "");
+        const fragmentSource = adaptPostFragmentForPreview(node?.fragmentSource || "", {
+            useGlsl3,
+            preferredOutputSlot: outputSlot
+        });
         const uniforms = this.buildUniformMap(node.params || [], true);
 
         const incomingBySlot = new Map();
@@ -762,11 +1001,20 @@ export class ShaderWorkbenchRenderer {
         const uploadedTextureUniforms = new Set();
         const inputSamplerUniforms = [];
         const inputBindings = new Map();
+        const takenInputSlots = new Set();
         const addInputSampler = (name) => {
             const n = String(name || "").trim();
             if (!n) return;
             if (uploadedTextureUniforms.has(n)) return;
             if (!inputSamplerUniforms.includes(n)) inputSamplerUniforms.push(n);
+        };
+        const reserveSlot = (slot, { allowAutoBump = false } = {}) => {
+            let next = Math.max(0, Math.round(Number(slot || 0)));
+            if (allowAutoBump) {
+                while (takenInputSlots.has(next)) next += 1;
+            }
+            takenInputSlots.add(next);
+            return next;
         };
 
         let nextFallbackSlot = 0;
@@ -783,7 +1031,11 @@ export class ShaderWorkbenchRenderer {
             addInputSampler(uniformName);
             let binding = null;
             if (sourceType === "value") {
-                const slot = parseSamplerSlot(param?.value, nextFallbackSlot);
+                const rawValue = String(param?.value ?? "").trim();
+                const rawConnection = String(param?.connection || "").trim();
+                const autoDefault = (!rawValue || rawValue === "0") && !rawConnection;
+                let slot = parseSamplerSlot(param?.value, nextFallbackSlot);
+                slot = reserveSlot(slot, { allowAutoBump: autoDefault });
                 nextFallbackSlot = Math.max(nextFallbackSlot, slot + 1);
                 binding = mapLinkToBinding(incomingBySlot.get(slot));
             } else if (sourceType === "connection") {
@@ -793,7 +1045,9 @@ export class ShaderWorkbenchRenderer {
                 const rawSlot = /^\d+$/.test(rawConn)
                     ? rawConn
                     : String(param?.value ?? "").trim();
-                const slot = parseSamplerSlot(rawSlot, nextFallbackSlot);
+                const autoDefault = (!rawSlot || rawSlot === "0") && !rawConn;
+                let slot = parseSamplerSlot(rawSlot, nextFallbackSlot);
+                slot = reserveSlot(slot, { allowAutoBump: autoDefault });
                 nextFallbackSlot = Math.max(nextFallbackSlot, slot + 1);
                 binding = mapLinkToBinding(incomingBySlot.get(slot));
             }
@@ -803,54 +1057,52 @@ export class ShaderWorkbenchRenderer {
         for (const uniformName of samplerUniformNames) {
             addInputSampler(uniformName);
         }
-        if (!uploadedTextureUniforms.has("tDiffuse")) addInputSampler("tDiffuse");
-        if (!uploadedTextureUniforms.has("tex")) addInputSampler("tex");
-        if (!uploadedTextureUniforms.has("samp")) addInputSampler("samp");
-
         for (const uniformName of inputSamplerUniforms) {
             if (!uniforms[uniformName]) uniforms[uniformName] = { value: null };
             if (inputBindings.has(uniformName)) continue;
-            const aliasSlot = uniformName === "tDiffuse" || uniformName === "tex" || uniformName === "samp"
+            let aliasSlot = uniformName === "tDiffuse" || uniformName === "tex" || uniformName === "samp"
                 ? 0
                 : nextFallbackSlot++;
+            aliasSlot = reserveSlot(aliasSlot, { allowAutoBump: true });
             const binding = mapLinkToBinding(incomingBySlot.get(aliasSlot));
             inputBindings.set(uniformName, binding || { kind: "readBuffer" });
         }
 
-        const shader = {
+        const shaderMaterialOptions = {
             uniforms,
             vertexShader: useGlsl3 ? PREVIEW_POST_VERTEX_GLSL3 : PREVIEW_POST_VERTEX_GLSL1,
             fragmentShader: fragmentSource
         };
-        if (useGlsl3) shader.glslVersion = THREE.GLSL3;
-
-        const pass = new ShaderPass(shader);
-        let primaryInputUniform = "";
-        for (const uniformName of inputSamplerUniforms) {
-            if (!pass.uniforms?.[uniformName]) continue;
-            const binding = inputBindings.get(uniformName);
-            if (binding?.kind === "readBuffer") {
-                primaryInputUniform = uniformName;
-                break;
-            }
-        }
-        pass.textureID = primaryInputUniform && pass.uniforms?.[primaryInputUniform]
-            ? primaryInputUniform
-            : "__sb_no_input__";
+        if (useGlsl3) shaderMaterialOptions.glslVersion = THREE.GLSL3;
+        const shaderMaterial = new THREE.ShaderMaterial(shaderMaterialOptions);
+        const pass = new ShaderPass(shaderMaterial);
+        pass.textureID = "__sb_no_input__";
 
         const inputUniformTargets = inputSamplerUniforms.filter((name) => !!pass.uniforms?.[name]);
         pass.__inputUniformTargets = inputUniformTargets;
         pass.__inputUniformBindings = Object.fromEntries(
             inputUniformTargets.map((name) => [name, inputBindings.get(name) || { kind: "readBuffer" }])
         );
+        pass.__renderGroupKey = renderGroupKey;
+        pass.__outputSlot = outputSlot;
 
         const nodeId = String(node?.id || "");
         const originalRender = pass.render.bind(pass);
         pass.render = (renderer, writeBuffer, readBuffer, deltaTime, maskActive) => {
-            const readTexture = readBuffer?.texture || null;
-            if (!this.systemInputTexture && readTexture) {
-                this.systemInputTexture = readTexture;
+            const runtimeReadTexture = readBuffer?.texture || null;
+            if (!this.systemInputTexture && runtimeReadTexture) {
+                this.systemInputTexture = runtimeReadTexture;
             }
+
+            let readTexture = runtimeReadTexture;
+            const groupKey = String(pass.__renderGroupKey || "");
+            if (groupKey) {
+                if (!this.nodeGroupInputTextures.has(groupKey) && runtimeReadTexture) {
+                    this.nodeGroupInputTextures.set(groupKey, runtimeReadTexture);
+                }
+                readTexture = this.nodeGroupInputTextures.get(groupKey) || runtimeReadTexture;
+            }
+            const writeTexture = writeBuffer?.texture || null;
 
             for (const uniformName of pass.__inputUniformTargets || []) {
                 if (!pass.uniforms?.[uniformName]) continue;
@@ -859,15 +1111,21 @@ export class ShaderWorkbenchRenderer {
                 if (binding?.kind === "graphInput") {
                     tex = this.systemInputTexture || readTexture;
                 } else if (binding?.kind === "nodeOutput") {
-                    tex = this.nodeOutputTextures.get(String(binding.nodeId || "")) || readTexture;
+                    tex = this.resolveNodeOutputTexture(binding, readTexture);
                 }
+                tex = this.sanitizeSampleTexture(tex, writeTexture, [
+                    readTexture,
+                    runtimeReadTexture,
+                    this.systemInputTexture,
+                    this.fallbackTexture
+                ]);
                 if (!tex) continue;
                 pass.uniforms[uniformName].value = tex;
             }
 
             const result = originalRender(renderer, writeBuffer, readBuffer, deltaTime, maskActive);
             if (nodeId && writeBuffer?.texture) {
-                this.nodeOutputTextures.set(nodeId, writeBuffer.texture);
+                this.cacheNodeOutputTexture(renderer, nodeId, pass.__outputSlot || 0, writeBuffer.texture);
             }
             return result;
         };
@@ -875,26 +1133,28 @@ export class ShaderWorkbenchRenderer {
         return pass;
     }
 
-    createTextureNodePass(node, incomingLinks = []) {
+    createTextureNodePass(node, incomingLinks = [], runtime = {}) {
         const useGlsl3 = !!this.renderer?.capabilities?.isWebGL2;
+        const outputSlot = Math.max(0, Math.round(Number(runtime?.outputSlot || 0)));
+        const renderGroupKey = String(runtime?.renderGroupKey || "");
         const textureParam = (node?.params || []).find((param) => String(param?.type || "").toLowerCase() === "texture");
         const sourceType = String(textureParam?.sourceType || "value").toLowerCase();
         const tDiffuseUniform = textureParam && sourceType === "upload"
             ? this.paramToUniform(textureParam)
             : { value: null };
-        const shader = {
+        const shaderMaterialOptions = {
             uniforms: {
                 tDiffuse: tDiffuseUniform
             },
             vertexShader: useGlsl3 ? PREVIEW_POST_VERTEX_GLSL3 : PREVIEW_POST_VERTEX_GLSL1,
             fragmentShader: useGlsl3
-                ? `in vec2 vUv;\nuniform sampler2D tDiffuse;\nvoid main(){ gl_FragColor = texture(tDiffuse, vUv); }`
+                ? `in vec2 vUv;\nuniform sampler2D tDiffuse;\nlayout(location = 0) out vec4 sbFragColor;\nvoid main(){ sbFragColor = texture(tDiffuse, vUv); }`
                 : `varying vec2 vUv;\nuniform sampler2D tDiffuse;\nvoid main(){ gl_FragColor = texture2D(tDiffuse, vUv); }`
         };
-        if (useGlsl3) shader.glslVersion = THREE.GLSL3;
-
-        const pass = new ShaderPass(shader);
-        pass.textureID = sourceType === "upload" ? "__sb_no_input__" : "tDiffuse";
+        if (useGlsl3) shaderMaterialOptions.glslVersion = THREE.GLSL3;
+        const shaderMaterial = new THREE.ShaderMaterial(shaderMaterialOptions);
+        const pass = new ShaderPass(shaderMaterial);
+        pass.textureID = "__sb_no_input__";
 
         const incomingBySlot = new Map();
         for (const link of incomingLinks || []) {
@@ -916,28 +1176,46 @@ export class ShaderWorkbenchRenderer {
         const runtimeBinding = sourceType === "upload"
             ? { kind: "upload" }
             : (mapLinkToBinding(incomingBySlot.get(slot)) || { kind: "readBuffer" });
+        pass.__renderGroupKey = renderGroupKey;
+        pass.__outputSlot = outputSlot;
 
         const nodeId = String(node?.id || "");
         const originalRender = pass.render.bind(pass);
         pass.render = (renderer, writeBuffer, readBuffer, deltaTime, maskActive) => {
-            const readTexture = readBuffer?.texture || null;
-            if (!this.systemInputTexture && readTexture) {
-                this.systemInputTexture = readTexture;
+            const runtimeReadTexture = readBuffer?.texture || null;
+            if (!this.systemInputTexture && runtimeReadTexture) {
+                this.systemInputTexture = runtimeReadTexture;
             }
+
+            let readTexture = runtimeReadTexture;
+            const groupKey = String(pass.__renderGroupKey || "");
+            if (groupKey) {
+                if (!this.nodeGroupInputTextures.has(groupKey) && runtimeReadTexture) {
+                    this.nodeGroupInputTextures.set(groupKey, runtimeReadTexture);
+                }
+                readTexture = this.nodeGroupInputTextures.get(groupKey) || runtimeReadTexture;
+            }
+            const writeTexture = writeBuffer?.texture || null;
 
             if (sourceType !== "upload" && pass.uniforms?.tDiffuse) {
                 let tex = readTexture;
                 if (runtimeBinding?.kind === "graphInput") {
                     tex = this.systemInputTexture || readTexture;
                 } else if (runtimeBinding?.kind === "nodeOutput") {
-                    tex = this.nodeOutputTextures.get(String(runtimeBinding.nodeId || "")) || readTexture;
+                    tex = this.resolveNodeOutputTexture(runtimeBinding, readTexture);
                 }
+                tex = this.sanitizeSampleTexture(tex, writeTexture, [
+                    readTexture,
+                    runtimeReadTexture,
+                    this.systemInputTexture,
+                    this.fallbackTexture
+                ]);
                 if (tex) pass.uniforms.tDiffuse.value = tex;
             }
 
             const result = originalRender(renderer, writeBuffer, readBuffer, deltaTime, maskActive);
             if (nodeId && writeBuffer?.texture) {
-                this.nodeOutputTextures.set(nodeId, writeBuffer.texture);
+                this.cacheNodeOutputTexture(renderer, nodeId, pass.__outputSlot || 0, writeBuffer.texture);
             }
             return result;
         };
@@ -951,11 +1229,25 @@ export class ShaderWorkbenchRenderer {
         const chain = graphResolved.chain;
         const chainNodeIds = new Set(chain.map((n) => String(n?.id || "")).filter(Boolean));
         const incomingLinksByNode = new Map();
+        const outgoingSlotsByNode = new Map();
         for (const link of state?.post?.links || []) {
             const toNode = String(link?.toNode || "");
             if (!toNode || !chainNodeIds.has(toNode)) continue;
+            const fromNode = String(link?.fromNode || "");
+            if (!fromNode) continue;
+            if (fromNode !== GRAPH_INPUT_ID && !chainNodeIds.has(fromNode)) continue;
             if (!incomingLinksByNode.has(toNode)) incomingLinksByNode.set(toNode, []);
             incomingLinksByNode.get(toNode).push(link);
+        }
+        for (const link of state?.post?.links || []) {
+            const fromNode = String(link?.fromNode || "");
+            if (!fromNode || !chainNodeIds.has(fromNode)) continue;
+            const toNode = String(link?.toNode || "");
+            if (!toNode) continue;
+            const toActive = toNode === GRAPH_OUTPUT_ID || chainNodeIds.has(toNode);
+            if (!toActive) continue;
+            if (!outgoingSlotsByNode.has(fromNode)) outgoingSlotsByNode.set(fromNode, new Set());
+            outgoingSlotsByNode.get(fromNode).add(Math.max(0, Math.round(Number(link?.fromSlot || 0))));
         }
         for (const links of incomingLinksByNode.values()) {
             links.sort((a, b) => Number(a?.toSlot || 0) - Number(b?.toSlot || 0));
@@ -967,7 +1259,7 @@ export class ShaderWorkbenchRenderer {
         this.passStates = [];
         this.noOutputPreview = false;
         this.systemInputTexture = null;
-        this.nodeOutputTextures.clear();
+        this.disposeNodeOutputCache();
 
         if (!enabled) {
             this.useComposer = false;
@@ -990,11 +1282,22 @@ export class ShaderWorkbenchRenderer {
 
         for (const node of chain) {
             const repeat = node.type === "pingpong" ? Math.max(1, Math.round(normalizeNumber(node.iterations, 1))) : 1;
-            const incomingLinks = incomingLinksByNode.get(String(node?.id || "")) || [];
+            const nodeId = String(node?.id || "");
+            const incomingLinks = incomingLinksByNode.get(nodeId) || [];
+            const outputSlots = outgoingSlotsByNode.has(nodeId)
+                ? Array.from(outgoingSlotsByNode.get(nodeId) || []).sort((a, b) => a - b)
+                : [0];
+            if (!outputSlots.length) outputSlots.push(0);
             for (let i = 0; i < repeat; i++) {
-                const pass = this.createShaderPassFromNode(node, incomingLinks);
-                this.composer.addPass(pass);
-                this.passStates.push({ nodeId: node.id, pass });
+                const renderGroupKey = `${nodeId}@${i}`;
+                for (const outputSlot of outputSlots) {
+                    const pass = this.createShaderPassFromNode(node, incomingLinks, {
+                        outputSlot,
+                        renderGroupKey
+                    });
+                    this.composer.addPass(pass);
+                    this.passStates.push({ nodeId: node.id, outputSlot, pass });
+                }
             }
         }
 
@@ -1047,6 +1350,7 @@ export class ShaderWorkbenchRenderer {
         if (this.useComposer && this.composer) {
             this.systemInputTexture = null;
             this.nodeOutputTextures.clear();
+            this.nodeGroupInputTextures.clear();
             this.composer.render();
         } else {
             this.renderer.render(this.scene, this.camera);

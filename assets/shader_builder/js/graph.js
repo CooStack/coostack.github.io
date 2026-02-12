@@ -156,6 +156,7 @@ export class GraphEditor {
             onDeleteNodes: () => {},
             onMoveNode: () => {},
             onMoveNodes: () => {},
+            onMoveSystemNodes: () => {},
             onCreateLink: () => {},
             onDeleteLink: () => {},
             onDeleteLinks: () => {},
@@ -178,6 +179,10 @@ export class GraphEditor {
         this.systemNodePositions = {
             [GRAPH_INPUT_ID]: null,
             [GRAPH_OUTPUT_ID]: null
+        };
+        this.systemNodeUserMoved = {
+            [GRAPH_INPUT_ID]: false,
+            [GRAPH_OUTPUT_ID]: false
         };
         this.view = {
             scale: 1,
@@ -726,7 +731,22 @@ export class GraphEditor {
         };
         for (const id of [GRAPH_INPUT_ID, GRAPH_OUTPUT_ID]) {
             const saved = this.systemNodePositions[id];
+            const userMoved = !!this.systemNodeUserMoved[id];
+            const savedX = Number(saved?.x);
+            const savedY = Number(saved?.y);
+            const hasSavedPos = Number.isFinite(savedX) && Number.isFinite(savedY);
+            if (userMoved && hasSavedPos) {
+                out[id] = {
+                    x: savedX,
+                    y: savedY,
+                    inputs: defaults[id].inputs,
+                    outputs: defaults[id].outputs
+                };
+                continue;
+            }
             const outputCollapsedNearInput = id === GRAPH_OUTPUT_ID
+                && !this.systemNodeUserMoved[GRAPH_INPUT_ID]
+                && !this.systemNodeUserMoved[GRAPH_OUTPUT_ID]
                 && Number(rawRect.width || 0) > 240
                 && Number(this.systemNodePositions[GRAPH_INPUT_ID]?.x || 0) <= 24
                 && Number(saved?.x || 0) <= 24
@@ -758,6 +778,23 @@ export class GraphEditor {
             }
         }
         return out;
+    }
+
+    syncSystemNodesFromState(state) {
+        const positions = state?.post?.systemNodePositions;
+        const moved = state?.post?.systemNodeUserMoved;
+        if (!positions || typeof positions !== "object") return;
+        for (const id of [GRAPH_INPUT_ID, GRAPH_OUTPUT_ID]) {
+            const pos = positions[id];
+            const x = Number(pos?.x);
+            const y = Number(pos?.y);
+            if (Number.isFinite(x) && Number.isFinite(y)) {
+                this.systemNodePositions[id] = { x, y };
+            }
+            if (moved && Object.prototype.hasOwnProperty.call(moved, id)) {
+                this.systemNodeUserMoved[id] = !!moved[id];
+            }
+        }
     }
 
     createHandle({ nodeId, kind, slot, total }) {
@@ -1751,6 +1788,7 @@ export class GraphEditor {
                 item.el.style.top = `${Math.round(pos.y)}px`;
                 if (item.system) {
                     this.systemNodePositions[item.id] = { x: pos.x, y: pos.y };
+                    if (this.dragState.moved) this.systemNodeUserMoved[item.id] = true;
                 }
             }
             this.drawLinks(this.store.getState());
@@ -1790,12 +1828,20 @@ export class GraphEditor {
         }
         if (this.dragState) {
             const movedRegular = [];
+            const movedSystem = [];
             if (this.dragState.moved) {
                 for (const item of this.dragState.nodes) {
                     const pos = this.dragState.positions.get(item.id);
                     if (!pos) continue;
                     if (item.system) {
                         this.systemNodePositions[item.id] = { x: pos.x, y: pos.y };
+                        this.systemNodeUserMoved[item.id] = true;
+                        movedSystem.push({
+                            id: item.id,
+                            x: pos.x,
+                            y: pos.y,
+                            userMoved: true
+                        });
                         continue;
                     }
                     movedRegular.push({
@@ -1812,6 +1858,9 @@ export class GraphEditor {
                             this.callbacks.onMoveNode(move.id, move.x, move.y);
                         }
                     }
+                }
+                if (movedSystem.length && typeof this.callbacks.onMoveSystemNodes === "function") {
+                    this.callbacks.onMoveSystemNodes(movedSystem);
                 }
             }
             this.dragState = null;
@@ -1998,6 +2047,7 @@ export class GraphEditor {
 
     render() {
         const state = this.store.getState();
+        this.syncSystemNodesFromState(state);
         const system = this.getSystemNodeLayout();
         this.canvasEl.innerHTML = "";
         this.nodeElements.clear();

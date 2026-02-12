@@ -7,8 +7,8 @@ export const STORAGE_KEYS = {
 
 export const MC_COMPAT = {
     mcVersion: "1.21.1",
-    openGL: "OpenGL 3.3 (GL33)",
-    glsl: "#version 330 core",
+    openGL: "OpenGL ES 3.0 / WebGL2",
+    glsl: "#version 300 es",
     axis: "X+ 东, Y+ 上, Z+ 南"
 };
 
@@ -25,6 +25,9 @@ export const DEFAULT_MODEL_VERTEX = `
 // 目标: MC 1.21.1 (${MC_COMPAT.glsl})
 // 内置输入: pos / normal / uv
 // 传递到片元: vUv / vNormal / vWorldPos
+#version 300 es
+precision highp float;
+precision highp int;
 layout (location = 0) in vec3 pos;
 layout (location = 1) in vec3 normal;
 layout (location = 2) in vec2 uv;
@@ -49,6 +52,9 @@ void main() {
 export const DEFAULT_MODEL_FRAGMENT = `
 // 目标: MC 1.21.1 (${MC_COMPAT.glsl})
 // 可用插值变量: vUv / vNormal / vWorldPos
+#version 300 es
+precision highp float;
+precision highp int;
 in vec2 vUv;
 in vec3 vNormal;
 in vec3 vWorldPos;
@@ -66,6 +72,9 @@ void main() {
 
 export const DEFAULT_POST_VERTEX = `
 // 目标: MC 1.21.1 (${MC_COMPAT.glsl})
+#version 300 es
+precision highp float;
+precision highp int;
 layout (location = 0) in vec3 pos;
 layout (location = 1) in vec2 aUv;
 out vec2 screen_uv;
@@ -80,12 +89,15 @@ void main() {
 
 export const DEFAULT_POST_FRAGMENT = `
 // 目标: MC 1.21.1 (${MC_COMPAT.glsl})
+#version 300 es
+precision highp float;
+precision highp int;
 in vec2 screen_uv;
 uniform sampler2D tDiffuse;
 out vec4 FragColor;
 
 void main() {
-    FragColor = texture2D(tDiffuse, screen_uv);
+    FragColor = texture(tDiffuse, screen_uv);
 }
 `.trim();
 

@@ -224,6 +224,72 @@ function ensureExt(path, ext) {
     return ext.startsWith(".") ? `${p}${ext}` : `${p}.${ext}`;
 }
 
+const GLSL300_ES_VERSION = "#version 300 es";
+
+function collectVec4FragmentOutputs(source) {
+    const text = String(source || "");
+    const re = /^\s*(?:layout\s*\(\s*location\s*=\s*(\d+)\s*\)\s*)?out\s+(?:(?:lowp|mediump|highp)\s+)?vec4\s+([A-Za-z_][A-Za-z0-9_]*)\s*;\s*$/gm;
+    const out = [];
+    let match = re.exec(text);
+    while (match) {
+        const rawLoc = match[1];
+        out.push({
+            name: String(match[2] || "").trim(),
+            location: rawLoc === undefined ? null : Math.max(0, Math.round(Number(rawLoc) || 0))
+        });
+        match = re.exec(text);
+    }
+    return out;
+}
+
+function pickPrimaryVec4FragmentOutput(outputs = []) {
+    const list = Array.isArray(outputs) ? outputs : [];
+    for (const item of list) {
+        if (!item?.name) continue;
+        if (item.location === 0) return item.name;
+    }
+    return String(list[0]?.name || "").trim();
+}
+
+function normalizeShaderForGlsl300Es(source, { stage = "fragment" } = {}) {
+    const shaderStage = String(stage || "fragment").toLowerCase();
+    let code = String(source || "")
+        .replace(/^\uFEFF/, "")
+        .replace(/\r\n/g, "\n");
+
+    code = code.replace(/^\s*#version[^\n]*(?:\n|$)/gm, "");
+
+    if (shaderStage === "vertex") {
+        code = code.replace(/\battribute\b/g, "in");
+        code = code.replace(/\bvarying\b/g, "out");
+        code = code.replace(/\btexture2D\s*\(/g, "texture(");
+        code = code.replace(/\btextureCube\s*\(/g, "texture(");
+    } else {
+        code = code.replace(/\bvarying\b/g, "in");
+        code = code.replace(/\btexture2D\s*\(/g, "texture(");
+        code = code.replace(/\btextureCube\s*\(/g, "texture(");
+
+        if (/\bgl_FragColor\b/.test(code)) {
+            const outputs = collectVec4FragmentOutputs(code);
+            let outputName = pickPrimaryVec4FragmentOutput(outputs);
+            if (!outputName) {
+                outputName = "FragColor";
+                code = `out vec4 ${outputName};\n${code}`;
+            }
+            code = code.replace(/\bgl_FragColor\b/g, outputName);
+        }
+    }
+
+    const hasFloatPrecision = /^\s*precision\s+\w+\s+float\s*;/m.test(code);
+    const hasIntPrecision = /^\s*precision\s+\w+\s+int\s*;/m.test(code);
+    const preamble = [GLSL300_ES_VERSION];
+    if (!hasFloatPrecision) preamble.push("precision highp float;");
+    if (!hasIntPrecision) preamble.push("precision highp int;");
+
+    code = code.replace(/^\s*\n+/g, "");
+    return `${preamble.join("\n")}\n${code}`.trimEnd();
+}
+
 function resolveNodePathByInput(inputPath, nodeName) {
     const raw = String(inputPath || "").trim();
     const fallbackTemplate = "core/post/{name}.fsh";
@@ -619,6 +685,34 @@ function syncParamsFromUniformSource(params = [], source = "") {
     return decls.map((decl) => buildParamFromUniformDecl(decl, prevByName.get(decl.name)));
 }
 
+function normalizeTextureParamSlots(params = []) {
+    const list = Array.isArray(params) ? params : [];
+    const textureIndexes = [];
+    for (let i = 0; i < list.length; i += 1) {
+        const p = list[i] || {};
+        if (String(p?.type || "").toLowerCase() !== "texture") continue;
+        if (String(p?.sourceType || "value").toLowerCase() === "upload") continue;
+        textureIndexes.push(i);
+    }
+    if (textureIndexes.length <= 1) return list;
+
+    const slotValues = textureIndexes.map((idx) => String(list[idx]?.value ?? "").trim());
+    const likelyDefault = slotValues.every((raw) => !raw || raw === "0");
+    if (!likelyDefault) return list;
+
+    for (let slot = 0; slot < textureIndexes.length; slot += 1) {
+        const idx = textureIndexes[slot];
+        const param = list[idx];
+        if (!param) continue;
+        param.value = String(slot);
+        if (String(param?.sourceType || "value").toLowerCase() === "connection"
+            && !String(param?.connection || "").trim()) {
+            param.connection = String(slot);
+        }
+    }
+    return list;
+}
+
 function areParamListsEquivalent(a = [], b = []) {
     const left = Array.isArray(a) ? a : [];
     const right = Array.isArray(b) ? b : [];
@@ -698,6 +792,7 @@ function syncNodeParamsFromShaderSource(node) {
             syncParamsFromUniformSource(prev, node.fragmentSource),
             getPostInputTextureMinCount(node.inputs)
         );
+    normalizeTextureParamSlots(next);
 
     let changed = inputChanged;
     if (!areParamListsEquivalent(prev, next)) {
@@ -765,10 +860,18 @@ function syncModelShaderUniformDecls(draft, extraManagedNames = []) {
 
 function syncNodeShaderUniformDecls(node, extraManagedNames = []) {
     if (!node) return;
+    const textureParamNames = new Set(
+        (Array.isArray(node.params) ? node.params : [])
+            .filter((p) => String(p?.type || "").toLowerCase() === "texture")
+            .map((p) => String(p?.name || "").trim())
+            .filter(Boolean)
+    );
+    const legacyTextureAliases = ["tDiffuse", "tex", "samp"].filter((name) => !textureParamNames.has(name));
     const prevManaged = Array.isArray(node.__autoUniformNames) ? node.__autoUniformNames : [];
     const mergedManaged = Array.from(new Set([
         ...prevManaged,
-        ...(extraManagedNames || [])
+        ...(extraManagedNames || []),
+        ...legacyTextureAliases
     ].map((n) => String(n || "").trim()).filter(Boolean)));
     const synced = syncUniformDeclarationsInSource(node.fragmentSource, node.params || [], mergedManaged);
     node.fragmentSource = synced.source;
@@ -1283,6 +1386,29 @@ const graphEditor = new GraphEditor({
                 }
             }, { reason: "node-move-many", forceKotlin: true });
         },
+        onMoveSystemNodes(moves = []) {
+            const list = Array.isArray(moves) ? moves : [];
+            if (!list.length) return;
+            store.patch((draft) => {
+                if (!draft.post || typeof draft.post !== "object") draft.post = {};
+                if (!draft.post.systemNodePositions || typeof draft.post.systemNodePositions !== "object") {
+                    draft.post.systemNodePositions = {};
+                }
+                if (!draft.post.systemNodeUserMoved || typeof draft.post.systemNodeUserMoved !== "object") {
+                    draft.post.systemNodeUserMoved = {};
+                }
+                for (const item of list) {
+                    const id = String(item?.id || "");
+                    if (id !== GRAPH_INPUT_ID && id !== GRAPH_OUTPUT_ID) continue;
+                    const x = Number(item?.x);
+                    const y = Number(item?.y);
+                    if (Number.isFinite(x) && Number.isFinite(y)) {
+                        draft.post.systemNodePositions[id] = { x, y };
+                    }
+                    draft.post.systemNodeUserMoved[id] = !!item?.userMoved;
+                }
+            }, { reason: "system-node-move", skipHistory: true, silentUI: true });
+        },
         onCreateLink(link) {
             const state = store.getState();
             const fromNode = String(link?.fromNode || "");
@@ -1776,6 +1902,7 @@ function addPostNode({ presetType = null, askType = true } = {}) {
         if (targetType === NODE_TYPE_TEXTURE) {
             enforceTextureNodeUploadOnly(node);
         }
+        syncNodeShaderUniformDecls(node);
 
         draft.post.nodes.push(node);
         draft.selectedNodeId = node.id;
@@ -2830,13 +2957,13 @@ function bindModelEvents() {
     els.btnExportModelVertex?.addEventListener("click", () => {
         const state = store.getState();
         const name = fileNameFromPath(state.model.shader.vertexPath, "model.vsh");
-        downloadText(name, String(state.model.shader.vertexSource || ""));
+        downloadText(name, normalizeShaderForGlsl300Es(state.model.shader.vertexSource, { stage: "vertex" }));
     });
 
     els.btnExportModelFragment?.addEventListener("click", () => {
         const state = store.getState();
         const name = fileNameFromPath(state.model.shader.fragmentPath, "model.fsh");
-        downloadText(name, String(state.model.shader.fragmentSource || ""));
+        downloadText(name, normalizeShaderForGlsl300Es(state.model.shader.fragmentSource, { stage: "fragment" }));
     });
 }
 
@@ -3038,7 +3165,7 @@ function bindNodeEvents() {
         const node = findPostNode(state, state.selectedNodeId);
         if (!node) return;
         const name = fileNameFromPath(node.fragmentPath, `${node.name || "post"}.fsh`);
-        downloadText(name, String(node.fragmentSource || ""));
+        downloadText(name, normalizeShaderForGlsl300Es(node.fragmentSource, { stage: "fragment" }));
     });
 
     els.btnDeleteNode?.addEventListener("click", () => {
@@ -3247,8 +3374,8 @@ async function exportAllBundle() {
         normalizeResourcePath(state.model?.shader?.fragmentPath, "core/fragment/model.fsh"),
         ".fsh"
     );
-    zip.file(modelVertexPath, String(state.model?.shader?.vertexSource || ""));
-    zip.file(modelFragmentPath, String(state.model?.shader?.fragmentSource || ""));
+    zip.file(modelVertexPath, normalizeShaderForGlsl300Es(state.model?.shader?.vertexSource, { stage: "vertex" }));
+    zip.file(modelFragmentPath, normalizeShaderForGlsl300Es(state.model?.shader?.fragmentSource, { stage: "fragment" }));
 
     for (const node of state.post?.nodes || []) {
         const safeName = String(node.name || "post").replace(/[^a-zA-Z0-9_.-]/g, "_");
@@ -3256,7 +3383,7 @@ async function exportAllBundle() {
             normalizeResourcePath(node.fragmentPath, `core/post/${safeName}.fsh`),
             ".fsh"
         );
-        zip.file(fPath, String(node.fragmentSource || ""));
+        zip.file(fPath, normalizeShaderForGlsl300Es(node.fragmentSource, { stage: "fragment" }));
     }
 
     const exportedTextures = [];

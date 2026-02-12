@@ -291,8 +291,9 @@ function dedupeCompletions(items) {
 }
 
 export const BASE_GLSL_COMPLETIONS = dedupeCompletions(toCompletionObjects([
-    { label: "#version 330 core", insertText: "#version 330 core\n", detail: "MC 1.21.1 GLSL target", priority: 100 },
+    { label: "#version 300 es", insertText: "#version 300 es\n", detail: "GLSL ES 3.00 target", priority: 100 },
     { label: "precision highp float;", insertText: "precision highp float;\n", detail: "Precision declaration", priority: 100 },
+    { label: "precision highp int;", insertText: "precision highp int;\n", detail: "Precision declaration", priority: 100 },
     { label: "uniform float uTime;", insertText: "uniform float uTime;\n", detail: "Time uniform", priority: 100 },
     { label: "uniform vec3 CameraPos;", insertText: "uniform vec3 CameraPos;\n", detail: "Camera position uniform", priority: 100 },
     { label: "uniform vec3 uColor;", insertText: "uniform vec3 uColor;\n", detail: "Color uniform", priority: 100 },
@@ -303,11 +304,15 @@ export const BASE_GLSL_COMPLETIONS = dedupeCompletions(toCompletionObjects([
     { label: "partialTicks", insertText: "partialTicks", detail: "Common uniform symbol", priority: 210 },
     { label: "uResolution", insertText: "uResolution", detail: "Common uniform symbol", priority: 210 },
     { label: "uMouse", insertText: "uMouse", detail: "Common uniform symbol", priority: 210 },
-    { label: "varying vec2 vUv;", insertText: "varying vec2 vUv;\n", detail: "UV varying", priority: 100 },
-    { label: "varying vec3 vNormal;", insertText: "varying vec3 vNormal;\n", detail: "Normal varying", priority: 100 },
+    { label: "out vec2 vUv;", insertText: "out vec2 vUv;\n", detail: "Vertex->fragment varying", priority: 100 },
+    { label: "in vec2 vUv;", insertText: "in vec2 vUv;\n", detail: "Fragment input varying", priority: 100 },
+    { label: "out vec3 vNormal;", insertText: "out vec3 vNormal;\n", detail: "Vertex->fragment varying", priority: 100 },
+    { label: "in vec3 vNormal;", insertText: "in vec3 vNormal;\n", detail: "Fragment input varying", priority: 100 },
+    { label: "out vec4 FragColor;", insertText: "out vec4 FragColor;\n", detail: "Fragment output", priority: 100 },
     { label: "gl_Position", insertText: "gl_Position", detail: "Built-in vertex output", priority: 100 },
-    { label: "gl_FragColor", insertText: "gl_FragColor", detail: "Built-in fragment output", priority: 100 },
-    { label: "texture2D", insertText: "texture2D", detail: "Texture sampling", priority: 100 },
+    { label: "gl_FragColor", insertText: "gl_FragColor", detail: "Legacy fragment output", priority: 60 },
+    { label: "texture", insertText: "texture", detail: "Texture sampling", priority: 100 },
+    { label: "texture2D", insertText: "texture2D", detail: "Legacy texture sampling", priority: 60 },
     { label: "normalize", insertText: "normalize", detail: "Vector normalize", priority: 100 },
     { label: "mix", insertText: "mix", detail: "Linear interpolation", priority: 100 },
     { label: "dot", insertText: "dot", detail: "Dot product", priority: 100 },
@@ -958,6 +963,9 @@ export class ShaderCodeEditor {
 
             if (!isMod && !ev.altKey && ev.code === "Tab") {
                 ev.preventDefault();
+                if (!ev.shiftKey && this.jumpOutOfClosingDelimiter()) {
+                    return;
+                }
                 this.insertIndentAtCaret(ev.shiftKey ? -1 : 1);
                 return;
             }
@@ -1413,6 +1421,19 @@ export class ShaderCodeEditor {
         this.closeSuggest();
     }
 
+    jumpOutOfClosingDelimiter() {
+        const start = this.textarea.selectionStart || 0;
+        const end = this.textarea.selectionEnd || start;
+        if (start !== end) return false;
+        const text = String(this.textarea.value || "");
+        const ch = text[start] || "";
+        if (!")]}>'\"`".includes(ch)) return false;
+        this.textarea.selectionStart = start + 1;
+        this.textarea.selectionEnd = start + 1;
+        this.closeSuggest();
+        return true;
+    }
+
     insertPair(open, close) {
         const start = this.textarea.selectionStart || 0;
         const end = this.textarea.selectionEnd || start;
@@ -1618,12 +1639,18 @@ export class ShaderCodeEditor {
                 formattedLines.push("");
                 continue;
             }
-            if (trimmed.startsWith("}")) depth = Math.max(0, depth - 1);
+            const cleanLine = stripCommentStringLike(line);
+            const leadingCloseMatch = /^\s*(\}+)/.exec(cleanLine);
+            const leadingCloseCount = leadingCloseMatch ? leadingCloseMatch[1].length : 0;
+            if (leadingCloseCount > 0) {
+                depth = Math.max(0, depth - leadingCloseCount);
+            }
             const indent = this.indentUnit.repeat(depth);
             formattedLines.push(`${indent}${trimmed}`);
-            const openCount = (trimmed.match(/\{/g) || []).length;
-            const closeCount = (trimmed.match(/\}/g) || []).length;
-            depth = Math.max(0, depth + openCount - closeCount);
+            const openCount = (cleanLine.match(/\{/g) || []).length;
+            const closeCount = (cleanLine.match(/\}/g) || []).length;
+            const trailingCloseCount = Math.max(0, closeCount - leadingCloseCount);
+            depth = Math.max(0, depth + openCount - trailingCloseCount);
         }
 
         const formatted = formattedLines.join("\n");
