@@ -818,6 +818,12 @@
       .face-field.active {
         display: block;
       }
+      .vel-field {
+        display: none;
+      }
+      .vel-field.active {
+        display: block;
+      }
 .add-row {
         position: sticky;
         top: 0;
@@ -1105,6 +1111,373 @@
       }
       .cmdSignWrap .cmdSignInput {
         max-width: 160px;
+      }
+      .cmdLifeWrap {
+        margin-top: 10px;
+        border: 1px solid var(--line2);
+        border-radius: 12px;
+        padding: 10px;
+        background: color-mix(in srgb, var(--panel-soft) 74%, transparent);
+      }
+      .cmdLifeWrap .field {
+        margin: 0;
+      }
+      .cmdLifeHead {
+        display: grid;
+        grid-template-columns: minmax(140px, 0.9fr) minmax(170px, 1fr);
+        gap: 8px;
+        align-items: end;
+      }
+      .cmdLifeBody {
+        margin-top: 8px;
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+      }
+      .cmdLifeWrap.is-disabled .lifeRuleTools,
+      .cmdLifeWrap.is-disabled .cmdLifeBody {
+        display: none;
+      }
+      .kv-list {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        padding: 0 14px 10px 14px;
+      }
+      .kv-row {
+        display: grid;
+        grid-template-columns: 1.2fr 0.7fr 1fr auto;
+        gap: 8px;
+        align-items: center;
+      }
+      .kv-row.kv-row-var {
+        grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+        grid-template-areas:
+          "name type"
+          "def del"
+          "minFlag minValue"
+          "maxFlag maxValue";
+        align-items: end;
+        gap: 10px;
+        padding: 10px;
+        border: 1px solid var(--line2);
+        border-radius: 12px;
+        background: color-mix(in srgb, var(--panel-soft) 72%, transparent);
+      }
+      .kv-row.kv-row-var .globalVarInput[data-key="name"] {
+        grid-area: name;
+      }
+      .kv-row.kv-row-var .globalVarInput[data-key="type"] {
+        grid-area: type;
+      }
+      .kv-row.kv-row-var .globalVarInput[data-key="defaultValue"] {
+        grid-area: def;
+      }
+      .kv-row.kv-row-var .kv-min-flag {
+        grid-area: minFlag;
+      }
+      .kv-row.kv-row-var .globalVarInput[data-key="minValue"] {
+        grid-area: minValue;
+      }
+      .kv-row.kv-row-var .kv-max-flag {
+        grid-area: maxFlag;
+      }
+      .kv-row.kv-row-var .globalVarInput[data-key="maxValue"] {
+        grid-area: maxValue;
+      }
+      .kv-row.kv-row-var .btnDelGlobalVar {
+        grid-area: del;
+        align-self: center;
+      }
+      .kv-flag {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        font-size: 12px;
+        opacity: 0.9;
+        white-space: nowrap;
+      }
+      .kv-row .kv-del {
+        white-space: nowrap;
+      }
+      .kv-row-compact {
+        display: grid;
+        grid-template-columns: 1fr auto;
+        gap: 8px;
+        align-items: center;
+      }
+      .expr-rule-list {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+      }
+      .expr-rule-row,
+      .expr-action-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        align-items: flex-start;
+        padding: 8px;
+        border: 1px solid var(--line2);
+        border-radius: 12px;
+        background: color-mix(in srgb, var(--panel-soft) 72%, transparent);
+      }
+      .expr-rule-row {
+        position: relative;
+        overflow-x: clip;
+        overflow-x: hidden;
+      }
+      .expr-action-row > .input {
+        flex: 1 1 150px;
+        min-width: 130px;
+      }
+      .rule-main-line .input,
+      .calc-eq-row .input {
+        min-width: 0;
+      }
+      .rule-main-line {
+        flex: 1 1 100%;
+        display: grid;
+        grid-template-columns: 60px minmax(0, 1.05fr) 74px minmax(0, 1.25fr);
+        gap: 8px;
+        align-items: start;
+      }
+      .rule-main-line.first-row {
+        grid-template-columns: minmax(0, 1.05fr) 74px minmax(0, 1.25fr);
+      }
+      .rule-main-line.first-row .rule-left-wrap {
+        grid-column: 1;
+      }
+      .rule-main-line.first-row .ruleOp {
+        grid-column: 2;
+      }
+      .rule-main-line.first-row .rule-right-wrap {
+        grid-column: 3;
+      }
+      .rule-main-line.calc-link-only {
+        grid-template-columns: 64px 96px;
+      }
+      .rule-main-line.calc-link-only.calc-first-row {
+        grid-template-columns: 96px;
+      }
+      .rule-main-line.calc-link-only .ruleOp {
+        grid-column: 2;
+      }
+      .rule-main-line.calc-link-only.calc-first-row .ruleOp {
+        grid-column: 1;
+      }
+      .rule-left-wrap,
+      .rule-right-wrap {
+        min-width: 0;
+        display: grid;
+        grid-template-columns: minmax(0, 1fr);
+        gap: 8px;
+      }
+      .rule-left-wrap {
+        grid-template-columns: minmax(0, 1fr);
+      }
+      .expr-rule-row.right-has-extra .rule-right-wrap {
+        grid-template-columns: minmax(0, 1fr) minmax(0, 0.82fr);
+      }
+      .rule-main-line .ruleLink,
+      .rule-main-line .ruleOp,
+      .rule-left-wrap .ruleLeftVar,
+      .rule-right-wrap .ruleRightVar,
+      .rule-right-wrap .ruleRightNum,
+      .rule-right-wrap .ruleRightReason {
+        width: 100%;
+        min-width: 0;
+      }
+      .rule-main-line .ruleLink {
+        min-width: 0;
+      }
+      .rule-main-line .ruleOp {
+        min-width: 0;
+      }
+      .expr-rule-row .ruleOp {
+        flex: 0 0 auto;
+        min-width: 0;
+      }
+      .expr-action-row .actionOp {
+        flex: 0 0 90px;
+        min-width: 90px;
+      }
+      .expr-rule-row > .btn {
+        flex: 0 0 auto;
+        margin-left: auto;
+        align-self: flex-start;
+      }
+      .expr-action-row .actionVar {
+        flex: 1 1 160px;
+        min-width: 140px;
+      }
+      .expr-action-row .actionValueNum,
+      .expr-action-row .actionValueVar {
+        flex: 1 1 150px;
+        min-width: 130px;
+      }
+      .expr-action-row > .btn {
+        flex: 0 0 auto;
+        margin-left: auto;
+      }
+      .expr-action-cond {
+        flex: 1 0 100%;
+        border: 1px solid var(--line2);
+        border-radius: 10px;
+        padding: 8px;
+        background: color-mix(in srgb, var(--panel-soft) 70%, transparent);
+      }
+      .expr-action-cond-head {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        align-items: center;
+      }
+      .expr-action-cond-head > label {
+        min-width: 0;
+        opacity: 0.9;
+        margin: 0;
+      }
+      .expr-action-cond-head .tickCondEnabled {
+        flex: 0 0 110px;
+        min-width: 110px;
+      }
+      .expr-action-cond-body {
+        margin-top: 8px;
+      }
+      .expr-action-cond.is-disabled .btnAddTickCondRule,
+      .expr-action-cond.is-disabled .expr-action-cond-body {
+        display: none;
+      }
+      .calc-eq-row {
+        display: none;
+        flex: 1 0 100%;
+        flex-direction: column;
+        align-items: stretch;
+        gap: 6px;
+        padding: 6px;
+        border: 1px solid var(--line2);
+        border-radius: 10px;
+        background: color-mix(in srgb, var(--panel-soft) 66%, transparent);
+      }
+      .calc-eq-row.is-visible {
+        display: flex;
+      }
+      .calc-mode-row {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 8px;
+      }
+      .calc-mode-row label {
+        font-size: 12px;
+        color: var(--muted);
+        min-width: 60px;
+      }
+      .calc-mode-row .calcValueMode {
+        flex: 0 0 120px;
+        min-width: 120px;
+      }
+      .calc-box-inline,
+      .calc-expr-inline {
+        width: 100%;
+      }
+      .calcFormHint {
+        color: var(--muted);
+        margin: 2px 0 6px;
+      }
+      .calc-chain {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+        gap: 8px;
+        align-items: start;
+      }
+      .calc-slot {
+        max-width: 100%;
+        min-width: 0;
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+      }
+      .calc-slot-op {
+        grid-column: auto;
+      }
+      .calc-slot-cmp {
+        grid-column: auto;
+      }
+      .calc-slot-target-mode {
+        grid-column: auto;
+      }
+      .calc-slot-label {
+        font-size: 12px;
+        color: var(--muted);
+        line-height: 1.25;
+      }
+      .calc-slot-target {
+        grid-column: 1 / -1;
+      }
+      .calc-target-chain {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 8px;
+      }
+      .calc-target-chain .calcEqCOp {
+        flex: 0 0 86px;
+        min-width: 86px;
+      }
+      .calc-mode-row > .input,
+      .calc-expr-inline > .input,
+      .calc-slot > .input,
+      .calc-target-chain > .input,
+      .calc-term > .input {
+        flex: 0 0 auto;
+      }
+      .calc-eq-row .calcEqOp {
+        min-width: 72px;
+      }
+      .calc-term {
+        display: grid;
+        grid-template-columns: 92px minmax(0, 1fr);
+        align-items: center;
+        gap: 8px;
+        width: 100%;
+        min-width: 0;
+      }
+      .calc-term .calcTermType {
+        min-width: 0;
+      }
+      .calc-term .calcTermNum,
+      .calc-term .calcTermVar {
+        min-width: 0;
+      }
+      .calc-term .calcTermBuiltin {
+        display: none;
+        grid-column: 2;
+        font-size: 12px;
+        padding: 7px 10px;
+        border: 1px solid var(--line2);
+        border-radius: 10px;
+        background: color-mix(in srgb, var(--panel-head) 52%, transparent);
+        color: color-mix(in srgb, var(--text) 92%, transparent);
+        white-space: nowrap;
+        align-self: center;
+      }
+      .calc-expr-inline .calcBooleanExpr {
+        width: 100%;
+      }
+      .calc-expr-inline .calcBooleanExpr.is-invalid {
+        border-color: var(--danger);
+        box-shadow: 0 0 0 1px color-mix(in srgb, var(--danger) 35%, transparent);
+      }
+      .calcExprHint {
+        margin-top: 4px;
+        color: var(--muted);
+      }
+      .calcExprError {
+        display: none;
+        margin-top: 4px;
+        color: var(--danger);
       }
       .filter-wrap {
         position: relative;
@@ -1748,7 +2121,7 @@
   max-height: min(360px, 42vh);
 }
 
-@media (max-width: 980px) {
+      @media (max-width: 980px) {
   .settings-layout{
     grid-template-columns: 1fr;
   }
@@ -1762,4 +2135,125 @@
   .hk-btns{
     flex-wrap: wrap;
   }
+  .kv-row{
+    grid-template-columns: 1fr;
+  }
+  .kv-row.kv-row-var{
+    grid-template-columns: 1fr;
+    grid-template-areas:
+      "name"
+      "type"
+      "def"
+      "del"
+      "minFlag"
+      "minValue"
+      "maxFlag"
+      "maxValue";
+  }
+  .cmdLifeHead{
+    grid-template-columns: 1fr;
+  }
+  .kv-row-compact{
+    grid-template-columns: 1fr;
+  }
+  .expr-action-row > .input{
+    flex: 1 1 100%;
+    min-width: 0;
+  }
+  .rule-main-line .input,
+  .calc-eq-row .input{
+    min-width: 0;
+  }
+  .rule-main-line{
+    grid-template-columns: 1fr;
+  }
+  .rule-main-line.first-row{
+    grid-template-columns: 1fr;
+  }
+  .rule-main-line.first-row .rule-left-wrap,
+  .rule-main-line.first-row .ruleOp,
+  .rule-main-line.first-row .rule-right-wrap{
+    grid-column: 1;
+  }
+  .rule-main-line.calc-link-only{
+    grid-template-columns: 1fr;
+  }
+  .rule-main-line.calc-link-only.calc-first-row{
+    grid-template-columns: 1fr;
+  }
+  .rule-main-line.calc-link-only .ruleOp{
+    grid-column: 1;
+  }
+  .rule-left-wrap,
+  .rule-right-wrap{
+    grid-template-columns: 1fr;
+  }
+  .expr-rule-row.right-has-extra .rule-right-wrap{
+    grid-template-columns: 1fr;
+  }
+  .expr-rule-row .ruleOp,
+  .expr-action-row .actionOp,
+  .expr-action-row .actionType{
+    flex: 1 1 100%;
+    min-width: 0;
+  }
+  .calc-eq-row .input,
+  .calc-eq-row .calcEqOp{
+    flex: 0 0 auto;
+    width: 100%;
+    min-width: 0;
+  }
+  .calc-mode-row .calcValueMode{
+    flex: 1 1 100%;
+    min-width: 0;
+  }
+  .calc-chain{
+    grid-template-columns: 1fr;
+  }
+  .calc-slot-op,
+  .calc-slot-cmp,
+  .calc-slot-target-mode,
+  .calc-slot-target{
+    grid-column: 1;
+  }
+  .calc-term{
+    display: grid;
+    grid-template-columns: 1fr;
+    align-items: stretch;
+    min-width: 0;
+  }
+  .calc-term .calcTermType,
+  .calc-term .calcTermNum,
+  .calc-term .calcTermVar{
+    flex: 0 0 auto;
+    width: 100%;
+    min-width: 0;
+  }
+  .calc-term .calcTermBuiltin{
+    grid-column: 1;
+    width: auto;
+    text-align: left;
+  }
+  .calc-target-chain{
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .calc-target-chain .calcEqCOp{
+    flex: 0 0 auto;
+    width: 100%;
+    min-width: 0;
+  }
+  .expr-rule-row > .btn,
+  .expr-action-row > .btn{
+    margin-left: 0;
+  }
+  .expr-action-cond-head{
+    flex-direction: column;
+    align-items: stretch;
+  }
 }
+      .expr-rule-row .input,
+      .expr-action-row .input,
+      .calc-eq-row .input {
+        padding: 8px 10px;
+      }

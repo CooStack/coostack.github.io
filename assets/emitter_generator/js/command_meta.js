@@ -7,6 +7,16 @@
     chain,
     deepCopy,
 } from "./utils.js";
+import { createConditionFilter, normalizeConditionFilter } from "./expression_cards.js";
+
+function fmtIExpr(v, fallback = 0) {
+    const n = Number(v);
+    if (Number.isFinite(n)) return String(Math.trunc(n));
+    const raw = String(v ?? "").trim();
+    if (!raw) return String(Math.trunc(fallback));
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(raw)) return String(Math.trunc(fallback));
+    return `(${raw}).toInt()`;
+}
 
 export const COMMAND_META = {
     ParticleNoiseCommand: {
@@ -289,7 +299,7 @@ export const COMMAND_META = {
                 `.followStrength(${fmtD(p.followStrength)})`,
                 `.maxStep(${fmtD(p.maxStep)})`,
                 `.baseAxial(${fmtD(p.baseAxial)})`,
-                `.seedOffset(${Math.trunc(Number(p.seedOffset) || 0)})`,
+                `.seedOffset(${fmtIExpr(p.seedOffset, 0)})`,
                 `.useLifeCurve(${fmtB(p.useLifeCurve)})`,
             ]);
         },
@@ -445,7 +455,15 @@ export function newCommand(type) {
     const params = {};
     meta.fields.forEach(f => params[f.k] = f.def);
     // signs: 生效标识列表（为空表示对所有粒子生效）
-    return {id: cryptoRandomId(), type, enabled: true, params, signs: [], ui: { collapsed: false }};
+    return {
+        id: cryptoRandomId(),
+        type,
+        enabled: true,
+        params,
+        signs: [],
+        lifeFilter: createConditionFilter(),
+        ui: { collapsed: false },
+    };
 }
 
 export function cryptoRandomId() {
@@ -545,5 +563,17 @@ export function normalizeCommand(raw) {
         }
         base.signs = out;
     }
+
+    // 生命周期过滤（兼容旧字段）
+    const lf = raw.lifeFilter && typeof raw.lifeFilter === "object" ? raw.lifeFilter : {};
+    const legacyExpr = String(raw.lifeExpr ?? raw.ageExpr ?? "");
+    const legacyEnabled = (raw.lifeFilterEnabled ?? raw.ageFilterEnabled);
+    const enabled = (legacyEnabled !== undefined) ? !!legacyEnabled : !!lf.enabled;
+    base.lifeFilter = normalizeConditionFilter({
+        enabled,
+        rules: lf.rules,
+        expr: String(lf.expr ?? legacyExpr),
+    }, { allowReason: false });
+
     return base;
 }

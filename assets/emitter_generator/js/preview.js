@@ -1,6 +1,10 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
-import { clamp, lerp, rand, randInt, safeNum } from "./utils.js";
+import { clamp, lerp, rand, randInt } from "./utils.js";
+import { normalizeEmitterBehavior } from "./emitter_behavior.js";
+import {
+    normalizeConditionFilter,
+} from "./expression_cards.js";
 
 export function initPreview(ctx = {}) {
     const {
@@ -15,11 +19,23 @@ export function initPreview(ctx = {}) {
     let pointScale = 1.0;
 
     const MAX_POINTS = 65536;
+    const WHITE_COLOR = { r: 1, g: 1, b: 1 };
+    const IDENT_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
+    const BOOL_EXPR_SAFE_RE = /^[0-9A-Za-z_+\-*/%().<>=!&|?: \t\r\n]+$/;
+    const BOOL_EXPR_BLOCK_RE = /\b(?:new|function|=>|while|for|if|return|class|import|export|this|window|globalThis|constructor|prototype)\b/;
+    const CALC_MATH_OP_SET = new Set(["+", "-", "*", "/", "%"]);
+    const CALC_CMP_SET = new Set(["==", "!=", ">", ">=", "<", "<="]);
+    const BOOL_EXPR_FN_CACHE = new Map();
     const sim = {
         tickAcc: 0,
         lastTime: performance.now(),
         particles: [],
         emitRuntime: new Map(), // emitterId -> { burstTick:number, emittedOnce:boolean }
+        behaviorRuntime: {
+            sig: "",
+            vars: {},
+            tick: 0,
+        },
     };
 
 
@@ -228,12 +244,7 @@ export function initPreview(ctx = {}) {
         return {r, g, b};
     }
 
-    function lerp3(a, b, t) {
-        return {r: lerp(a.r, b.r, t), g: lerp(a.g, b.g, t), b: lerp(a.b, b.b, t)};
-    }
-
     function updatePointsBuffer() {
-        const state = getState();
         const pArr = sim.particles;
         const posAttr = pointsGeo.getAttribute("position");
         const colAttr = pointsGeo.getAttribute("aColor");
@@ -241,8 +252,6 @@ export function initPreview(ctx = {}) {
         const alpha = clamp(sim.tickAcc, 0, 1);
 
         const n = Math.min(pArr.length, MAX_POINTS);
-
-        const white = {r: 1, g: 1, b: 1};
 
         for (let i = 0; i < n; i++) {
             const p = pArr[i];
@@ -256,10 +265,11 @@ export function initPreview(ctx = {}) {
             posAttr.array[i * 3 + 2] = iz;
 
             const t = clamp(p.age / Math.max(1, p.life), 0, 1);
-            const c = lerp3(p.c0 || white, p.c1 || white, t);
-            colAttr.array[i * 3 + 0] = c.r;
-            colAttr.array[i * 3 + 1] = c.g;
-            colAttr.array[i * 3 + 2] = c.b;
+            const c0 = p.c0 || WHITE_COLOR;
+            const c1 = p.c1 || WHITE_COLOR;
+            colAttr.array[i * 3 + 0] = lerp(c0.r, c1.r, t);
+            colAttr.array[i * 3 + 1] = lerp(c0.g, c1.g, t);
+            colAttr.array[i * 3 + 2] = lerp(c0.b, c1.b, t);
 
             sizeAttr.array[i] = p.size * pointScale;
         }
@@ -300,17 +310,499 @@ export function initPreview(ctx = {}) {
         }
     }
 
-        function tickOnce() {
+    const REMOVE_REASON = {
+        AGE: "AGE",
+        COLLISION: "COLLISION",
+        OUT_OF_RANGE: "OUT_OF_RANGE",
+        MANUAL: "MANUAL",
+        UNKNOWN: "UNKNOWN",
+    };
+    const REMOVE_REASON_SET = new Set(Object.values(REMOVE_REASON));
+
+    function toReasonTokenFast(raw) {
+        const s = String(raw || "").trim();
+        if (!s) return REMOVE_REASON.AGE;
+        if (REMOVE_REASON_SET.has(s)) return s;
+        if (s.startsWith("RemoveReason.")) {
+            const sub = s.slice("RemoveReason.".length).trim();
+            if (REMOVE_REASON_SET.has(sub)) return sub;
+        }
+        return REMOVE_REASON.AGE;
+    }
+
+    function readNamedNumberFast(name, age, life, sign, respawnCount, tick, vars, fallback = 0) {
+        const keyRaw = String(name || "").trim();
+        const key = (keyRaw === "life") ? "maxAge" : keyRaw;
+        if (!key) return fallback;
+        if (key === "age") return Number.isFinite(age) ? age : fallback;
+        if (key === "maxAge") return Number.isFinite(life) ? life : fallback;
+        if (key === "sign") return Number.isFinite(sign) ? sign : fallback;
+        if (key === "respawnCount") return Number.isFinite(respawnCount) ? respawnCount : fallback;
+        if (key === "tick" || key === "time") return Number.isFinite(tick) ? tick : fallback;
+        if (vars && Object.prototype.hasOwnProperty.call(vars, key)) {
+            const n = Number(vars[key]);
+            if (Number.isFinite(n)) return n;
+        }
+        if (key === "maxAge" && vars && Object.prototype.hasOwnProperty.call(vars, "life")) {
+            const n = Number(vars.life);
+            if (Number.isFinite(n)) return n;
+        }
+        return fallback;
+    }
+
+    function evalNumberFast(raw, fallback, age, life, sign, respawnCount, tick, vars, intMode = false, min = null, max = null) {
+        let n = fallback;
+        if (typeof raw === "number") {
+            n = raw;
+        } else if (typeof raw === "string") {
+            const s = raw.trim();
+            if (!s) {
+                n = fallback;
+            } else {
+                const num = Number(s);
+                if (Number.isFinite(num)) n = num;
+                else if (IDENT_RE.test(s)) n = readNamedNumberFast(s, age, life, sign, respawnCount, tick, vars, fallback);
+                else n = fallback;
+            }
+        } else {
+            const v = Number(raw);
+            if (Number.isFinite(v)) n = v;
+        }
+        if (!Number.isFinite(n)) n = fallback;
+        if (intMode) n = Math.trunc(n);
+        if (typeof min === "number") n = Math.max(min, n);
+        if (typeof max === "number") n = Math.min(max, n);
+        return n;
+    }
+
+    function evalNumberExpr(raw, fallback = 0, extra = {}, opts = {}) {
+        const vars = (sim.behaviorRuntime && sim.behaviorRuntime.vars) ? sim.behaviorRuntime.vars : {};
+        const age = Number(extra?.age);
+        const life = Number(extra?.life);
+        const sign = Number(extra?.sign);
+        const respawnCount = Number(extra?.respawnCount);
+        const tickVal = (extra && extra.tick !== undefined) ? Number(extra.tick) : Number(sim.behaviorRuntime.tick);
+        const min = (opts && typeof opts.min === "number") ? opts.min : null;
+        const max = (opts && typeof opts.max === "number") ? opts.max : null;
+        return evalNumberFast(
+            raw,
+            fallback,
+            Number.isFinite(age) ? age : 0,
+            Number.isFinite(life) ? life : 0,
+            Number.isFinite(sign) ? sign : 0,
+            Number.isFinite(respawnCount) ? respawnCount : 0,
+            Number.isFinite(tickVal) ? tickVal : 0,
+            vars,
+            !!opts?.int,
+            min,
+            max
+        );
+    }
+
+    function evalIntExpr(raw, fallback = 0, extra = {}, opts = {}) {
+        const vars = (sim.behaviorRuntime && sim.behaviorRuntime.vars) ? sim.behaviorRuntime.vars : {};
+        const age = Number(extra?.age);
+        const life = Number(extra?.life);
+        const sign = Number(extra?.sign);
+        const respawnCount = Number(extra?.respawnCount);
+        const tickVal = (extra && extra.tick !== undefined) ? Number(extra.tick) : Number(sim.behaviorRuntime.tick);
+        const min = (opts && typeof opts.min === "number") ? opts.min : null;
+        const max = (opts && typeof opts.max === "number") ? opts.max : null;
+        return evalNumberFast(
+            raw,
+            fallback,
+            Number.isFinite(age) ? age : 0,
+            Number.isFinite(life) ? life : 0,
+            Number.isFinite(sign) ? sign : 0,
+            Number.isFinite(respawnCount) ? respawnCount : 0,
+            Number.isFinite(tickVal) ? tickVal : 0,
+            vars,
+            true,
+            min,
+            max
+        );
+    }
+
+    function compareConditionFast(lhs, op, rhs) {
+        if (op === "calc_eq") {
+            const ln = Number(lhs);
+            const rn = Number(rhs);
+            if (!Number.isFinite(ln) || !Number.isFinite(rn)) return false;
+            return Math.abs(ln - rn) <= 1e-6;
+        }
+        if (op === "==" || op === "!=") {
+            const out = lhs === rhs;
+            return op === "==" ? out : !out;
+        }
+        const ln = Number(lhs);
+        const rn = Number(rhs);
+        if (!Number.isFinite(ln) || !Number.isFinite(rn)) return false;
+        if (op === ">") return ln > rn;
+        if (op === ">=") return ln >= rn;
+        if (op === "<") return ln < rn;
+        if (op === "<=") return ln <= rn;
+        return false;
+    }
+
+    function normalizeCalcMathOpFast(raw) {
+        const op = String(raw || "").trim();
+        return CALC_MATH_OP_SET.has(op) ? op : "-";
+    }
+
+    function normalizeCalcCmpFast(raw) {
+        const cmp = String(raw || "").trim();
+        return CALC_CMP_SET.has(cmp) ? cmp : "==";
+    }
+
+    function evalMathBinaryFast(a, op, b) {
+        const l = Number(a);
+        const r = Number(b);
+        if (!Number.isFinite(l) || !Number.isFinite(r)) return 0;
+        if (op === "+") return l + r;
+        if (op === "-") return l - r;
+        if (op === "*") return l * r;
+        if (op === "/") return Math.abs(r) < 1e-12 ? 0 : l / r;
+        if (op === "%") return Math.abs(r) < 1e-12 ? 0 : l % r;
+        return l - r;
+    }
+
+    function compareCalcFast(lhs, cmp, rhs) {
+        const ln = Number(lhs);
+        const rn = Number(rhs);
+        if (!Number.isFinite(ln) || !Number.isFinite(rn)) return false;
+        if (cmp === "==") return Math.abs(ln - rn) <= 1e-6;
+        if (cmp === "!=") return Math.abs(ln - rn) > 1e-6;
+        if (cmp === ">") return ln > rn;
+        if (cmp === ">=") return ln >= rn;
+        if (cmp === "<") return ln < rn;
+        if (cmp === "<=") return ln <= rn;
+        return false;
+    }
+
+    function compileBooleanExprFast(rawExpr) {
+        const key = String(rawExpr || "").trim();
+        if (!key) return null;
+        if (BOOL_EXPR_FN_CACHE.has(key)) return BOOL_EXPR_FN_CACHE.get(key);
+        if (!BOOL_EXPR_SAFE_RE.test(key) || BOOL_EXPR_BLOCK_RE.test(key)) {
+            BOOL_EXPR_FN_CACHE.set(key, null);
+            return null;
+        }
+        try {
+            const fn = new Function(
+                "age", "maxAge", "life", "sign", "respawnCount", "tick", "vars", "Math", "abs",
+                `try { with (vars || {}) { return !!(${key}); } } catch (_) { return false; }`
+            );
+            BOOL_EXPR_FN_CACHE.set(key, fn);
+            return fn;
+        } catch {
+            BOOL_EXPR_FN_CACHE.set(key, null);
+            return null;
+        }
+    }
+
+    function evalBooleanExprFast(rawExpr, age, life, sign, respawnCount, tick, vars) {
+        const fn = compileBooleanExprFast(rawExpr);
+        if (!fn) return false;
+        try {
+            return !!fn(age, life, life, sign, respawnCount, tick, vars || {}, Math, Math.abs);
+        } catch {
+            return false;
+        }
+    }
+
+    function resolveCalcTermFast(type, value, age, life, sign, respawnCount, tick, vars, fallback = 0) {
+        const tRaw = String(type || "").trim();
+        const t = (tRaw === "life") ? "maxAge" : tRaw;
+        if (t === "number") return evalNumberFast(value, fallback, age, life, sign, respawnCount, tick, vars || {}, false);
+        if (t === "var") return readNamedNumberFast(value, age, life, sign, respawnCount, tick, vars || {}, fallback);
+        if (t === "age" || t === "maxAge" || t === "sign" || t === "respawnCount" || t === "tick") {
+            return readNamedNumberFast(t, age, life, sign, respawnCount, tick, vars || {}, fallback);
+        }
+        return fallback;
+    }
+
+    function evaluateCalcEqRuleFast(row, age, life, sign, respawnCount, tick, reason, vars, fallbackLeft = 0, fallbackRight = 0) {
+        const mode = String(row?.calcValueMode || "box");
+        if (mode === "expr") {
+            return evalBooleanExprFast(row?.calcBooleanExpr, age, life, sign, respawnCount, tick, vars);
+        }
+        const mainOp = normalizeCalcMathOpFast(row?.calcMathOp);
+        const cmp = normalizeCalcCmpFast(row?.calcResultCmp);
+        const a = resolveCalcTermFast(
+            row?.calcLeftTermType,
+            row?.calcLeftTermValue,
+            age, life, sign, respawnCount, tick, vars,
+            Number.isFinite(Number(fallbackLeft)) ? Number(fallbackLeft) : 0
+        );
+        const b = resolveCalcTermFast(
+            row?.calcRightTermType,
+            row?.calcRightTermValue,
+            age, life, sign, respawnCount, tick, vars,
+            Number.isFinite(Number(fallbackRight)) ? Number(fallbackRight) : 0
+        );
+        const lhs = evalMathBinaryFast(a, mainOp, b);
+        let rhs = 0;
+        if (String(row?.calcResultMode || "fixed") === "calc") {
+            const cOp = normalizeCalcMathOpFast(row?.calcExpectMathOp);
+            const c1 = resolveCalcTermFast(row?.calcExpectLeftTermType, row?.calcExpectLeftTermValue, age, life, sign, respawnCount, tick, vars, 0);
+            const c2 = resolveCalcTermFast(row?.calcExpectRightTermType, row?.calcExpectRightTermValue, age, life, sign, respawnCount, tick, vars, 0);
+            rhs = evalMathBinaryFast(c1, cOp, c2);
+        } else {
+            rhs = resolveCalcTermFast(row?.calcFixedTermType, row?.calcFixedTermValue, age, life, sign, respawnCount, tick, vars, 0);
+        }
+        return compareCalcFast(lhs, cmp, rhs);
+    }
+
+    function resolveConditionTokenFast(type, value, age, life, sign, respawnCount, tick, reason, vars) {
+        if (type === "number") return evalNumberFast(value, 0, age, life, sign, respawnCount, tick, vars, false);
+        if (type === "var") return readNamedNumberFast(value, age, life, sign, respawnCount, tick, vars, 0);
+        if (type === "age" || type === "maxAge" || type === "life" || type === "sign" || type === "respawnCount" || type === "tick") {
+            return readNamedNumberFast(type, age, life, sign, respawnCount, tick, vars, 0);
+        }
+        if (type === "reason") return toReasonTokenFast(value ?? reason);
+        return 0;
+    }
+
+    function evaluateConditionFilterFast(filter, allowReason, age, life, sign, respawnCount, tick, reason) {
+        const normalized = (filter && typeof filter === "object" && Array.isArray(filter.rules))
+            ? filter
+            : normalizeConditionFilter(filter, { allowReason });
+        if (!normalized.enabled) return true;
+        const rules = Array.isArray(normalized.rules) ? normalized.rules : [];
+        if (!rules.length) return true;
+        const vars = sim.behaviorRuntime.vars || {};
+        let result = null;
+        for (let i = 0; i < rules.length; i++) {
+            const row = rules[i];
+            let lhs;
+            if (row.left === "var") lhs = readNamedNumberFast(row.leftVar, age, life, sign, respawnCount, tick, vars, 0);
+            else if (row.left === "reason") lhs = toReasonTokenFast(reason);
+            else lhs = resolveConditionTokenFast(row.left, row.left, age, life, sign, respawnCount, tick, reason, vars);
+
+            let rhs;
+            if (row.right === "var") rhs = readNamedNumberFast(row.rightValue, age, life, sign, respawnCount, tick, vars, 0);
+            else if (row.right === "reason") rhs = toReasonTokenFast(row.rightValue);
+            else rhs = resolveConditionTokenFast(row.right, row.rightValue, age, life, sign, respawnCount, tick, reason, vars);
+
+            const useCalcCompare = (row.op === "calc_eq")
+                || (row.op === "==" && row.left !== "reason" && row.right !== "reason");
+            const ok = useCalcCompare
+                ? evaluateCalcEqRuleFast(row, age, life, sign, respawnCount, tick, reason, vars, lhs, rhs)
+                : compareConditionFast(lhs, row.op, rhs);
+            if (result == null) result = ok;
+            else if (row.link === "or") result = result || ok;
+            else result = result && ok;
+        }
+        return result == null ? true : !!result;
+    }
+
+    function resolveVarActionValueFast(action, age, life, sign, respawnCount, tick, reason) {
+        const type = String(action?.valueType || "number");
+        const value = action?.value;
+        if (type === "number") return evalNumberFast(value, 0, age, life, sign, respawnCount, tick, sim.behaviorRuntime.vars || {}, false);
+        if (type === "var") return readNamedNumberFast(value, age, life, sign, respawnCount, tick, sim.behaviorRuntime.vars || {}, 0);
+        return resolveConditionTokenFast(type, value, age, life, sign, respawnCount, tick, reason, sim.behaviorRuntime.vars || {});
+    }
+
+    function ensureBehaviorRuntime(behavior) {
+        const varsDef = Array.isArray(behavior?.emitterVars) ? behavior.emitterVars : [];
+        const sig = JSON.stringify(varsDef.map((v) => ({
+            name: v.name,
+            type: v.type,
+            defaultValue: v.defaultValue,
+            minEnabled: v.minEnabled,
+            minValue: v.minValue,
+            maxEnabled: v.maxEnabled,
+            maxValue: v.maxValue,
+        })));
+        if (sim.behaviorRuntime.sig !== sig) {
+            sim.behaviorRuntime.sig = sig;
+            sim.behaviorRuntime.vars = {};
+            for (const v of varsDef) {
+                if (!v?.name) continue;
+                const isInt = String(v.type) === "int";
+                const def = evalNumberExpr(v.defaultValue, 0, {}, { int: isInt });
+                sim.behaviorRuntime.vars[v.name] = def;
+            }
+        } else {
+            for (const v of varsDef) {
+                if (!v?.name) continue;
+                if (sim.behaviorRuntime.vars[v.name] === undefined) {
+                    const isInt = String(v.type) === "int";
+                    sim.behaviorRuntime.vars[v.name] = evalNumberExpr(v.defaultValue, 0, {}, { int: isInt });
+                }
+            }
+        }
+        applyVarBounds(behavior);
+    }
+
+    function applyVarBounds(behavior) {
+        const varsDef = Array.isArray(behavior?.emitterVars) ? behavior.emitterVars : [];
+        const store = sim.behaviorRuntime.vars || {};
+        for (const v of varsDef) {
+            const name = String(v?.name || "").trim();
+            if (!name || store[name] === undefined) continue;
+            const isInt = String(v.type) === "int";
+            let n = Number(store[name]);
+            if (!Number.isFinite(n)) n = evalNumberExpr(v.defaultValue, 0, {}, { int: isInt });
+            if (v.minEnabled) {
+                const lo = evalNumberExpr(v.minValue, isInt ? 0 : -Infinity, {}, { int: isInt });
+                if (n < lo) n = lo;
+            }
+            if (v.maxEnabled) {
+                const hi = evalNumberExpr(v.maxValue, isInt ? 0 : Infinity, {}, { int: isInt });
+                if (n > hi) n = hi;
+            }
+            if (isInt) n = Math.trunc(n);
+            store[name] = n;
+        }
+    }
+
+    function applyStructuredVarAction(action, extra = {}) {
+        const vars = sim.behaviorRuntime.vars || {};
+        if (!action || typeof action !== "object") return false;
+        const varName = String(action.varName || "").trim();
+        if (!IDENT_RE.test(varName)) return false;
+        if (!Object.prototype.hasOwnProperty.call(vars, varName)) return false;
+
+        const age = Number.isFinite(Number(extra?.age)) ? Number(extra.age) : 0;
+        const life = Number.isFinite(Number(extra?.life)) ? Number(extra.life) : 0;
+        const sign = Number.isFinite(Number(extra?.sign)) ? Number(extra.sign) : 0;
+        const respawnCount = Number.isFinite(Number(extra?.respawnCount)) ? Number(extra.respawnCount) : 0;
+        const tick = Number.isFinite(Number(extra?.tick)) ? Number(extra.tick) : Number(sim.behaviorRuntime.tick || 0);
+        const reason = toReasonTokenFast(extra?.reason);
+
+        let cur = Number(vars[varName]);
+        if (!Number.isFinite(cur)) cur = 0;
+        const op = String(action.op || "set");
+        if (op === "inc") {
+            vars[varName] = cur + 1;
+            return true;
+        }
+        if (op === "dec") {
+            vars[varName] = cur - 1;
+            return true;
+        }
+        const rhs = Number(resolveVarActionValueFast(action, age, life, sign, respawnCount, tick, reason));
+        const val = Number.isFinite(rhs) ? rhs : 0;
+        if (op === "set") vars[varName] = val;
+        else if (op === "add") vars[varName] = cur + val;
+        else if (op === "sub") vars[varName] = cur - val;
+        else if (op === "mul") vars[varName] = cur * val;
+        else if (op === "div") vars[varName] = Math.abs(val) < 1e-12 ? cur : cur / val;
+        else return false;
+        return true;
+    }
+
+    function runDoTickActions(behavior) {
+        const actions = Array.isArray(behavior?.tickActions) ? behavior.tickActions : [];
+        const tick = Number(sim.behaviorRuntime.tick) || 0;
+        for (const action of actions) {
+            if (!evaluateConditionFilterFast(action?.condition, false, 0, 0, 0, 0, tick, REMOVE_REASON.UNKNOWN)) continue;
+            applyStructuredVarAction(action, { tick });
+        }
+        applyVarBounds(behavior);
+    }
+
+    function evaluateLifeFilter(filter, age, life, sign = 0, respawnCount = 0, tick = 0) {
+        return evaluateConditionFilterFast(
+            filter,
+            false,
+            Number(age) || 0,
+            Number(life) || 0,
+            Number(sign) || 0,
+            Number(respawnCount) || 0,
+            Number(tick) || 0,
+            REMOVE_REASON.UNKNOWN
+        );
+    }
+
+    function evalDeathMaxAge(death, fallback, age, life, sign, respawnCount, tick) {
+        if (!death?.maxAgeEnabled) return fallback;
+        const vars = sim.behaviorRuntime.vars || {};
+        const tRaw = String(death.maxAgeValueType || "number");
+        const t = (tRaw === "life") ? "maxAge" : tRaw;
+        if (t === "var") {
+            return evalNumberFast(String(death.maxAgeValue || ""), fallback, age, life, sign, respawnCount, tick, vars, true, 1);
+        }
+        if (t === "age" || t === "maxAge" || t === "respawnCount" || t === "tick") {
+            return evalNumberFast(t, fallback, age, life, sign, respawnCount, tick, vars, true, 1);
+        }
+        return evalNumberFast(death.maxAgeValue, fallback, age, life, sign, respawnCount, tick, vars, true, 1);
+    }
+
+    function runDeathAction(particle, behavior) {
+        const death = behavior?.death || {};
+        const reason = REMOVE_REASON.AGE;
+        const respawnCount = Math.max(0, Math.trunc(Number(particle.respawnCount) || 0)) + 1;
+        const vars = sim.behaviorRuntime.vars || {};
+        const age = Number(particle.age) || 0;
+        const life = Number(particle.life) || 0;
+        const sign = Number(particle.sign) || 0;
+        const tick = Number(sim.behaviorRuntime.tick) || 0;
+
+        if (!evaluateConditionFilterFast(death.condition, true, age, life, sign, respawnCount, tick, reason)) return [];
+
+        const varActions = Array.isArray(death.varActions) ? death.varActions : [];
+        for (const action of varActions) {
+            applyStructuredVarAction(action, { age, maxAge: life, life, sign, respawnCount, reason, tick });
+        }
+        applyVarBounds(behavior);
+
+        if (!death.enabled || death.mode !== "respawn") return [];
+
+        const count = evalNumberFast(death.respawnCount, 1, age, life, sign, respawnCount, tick, vars, true, 0);
+        if (count <= 0) return [];
+        const offX = evalNumberFast(death.offset?.x, 0, age, life, sign, respawnCount, tick, vars, false);
+        const offY = evalNumberFast(death.offset?.y, 0, age, life, sign, respawnCount, tick, vars, false);
+        const offZ = evalNumberFast(death.offset?.z, 0, age, life, sign, respawnCount, tick, vars, false);
+        const sizeMul = evalNumberFast(death.sizeMul, 1, age, life, sign, respawnCount, tick, vars, false);
+        const speedMul = evalNumberFast(death.speedMul, 1, age, life, sign, respawnCount, tick, vars, false);
+
+        const out = [];
+        const px = particle.pos.x + offX;
+        const py = particle.pos.y + offY;
+        const pz = particle.pos.z + offZ;
+        for (let i = 0; i < count; i++) {
+            const np = {
+                pos: new THREE.Vector3(px, py, pz),
+                prevPos: new THREE.Vector3(px, py, pz),
+                vel: particle.vel.clone().multiplyScalar(speedMul),
+                age: 0,
+                life: particle.life,
+                size: particle.size * sizeMul,
+                c0: particle.c0,
+                c1: particle.c1,
+                sign: particle.sign,
+                respawnCount,
+                seed: particle.seed,
+            };
+            if (death.signMode === "set") {
+                np.sign = evalNumberFast(death.signValue, particle.sign, age, life, sign, respawnCount, tick, vars, true);
+            }
+            np.life = evalDeathMaxAge(death, np.life, age, life, sign, respawnCount, tick);
+            out.push(np);
+        }
+        return out;
+    }
+
+    function tickOnce() {
         const state = getState();
         const emitters = getEmittersFromState(state);
         ensureEmitterRuntime(emitters);
+        const behavior = normalizeEmitterBehavior(state?.emitterBehavior);
+        ensureBehaviorRuntime(behavior);
+        sim.behaviorRuntime.tick += 1;
+        runDoTickActions(behavior);
 
         const tps = Math.max(1, Number(state.ticksPerSecond) || 20);
+        const vars = sim.behaviorRuntime.vars || {};
+        const tick = Number(sim.behaviorRuntime.tick) || 0;
 
         const spawnFor = (card) => {
             const pp = (card && card.particle) ? card.particle : {};
-            const minC = Math.max(0, Math.trunc(Number(pp.countMin) || 0));
-            const maxC = Math.max(minC, Math.trunc(Number(pp.countMax) || 0));
+            const minC = Math.max(0, evalNumberFast(pp.countMin, 0, 0, 0, 0, 0, tick, vars, true));
+            const maxC = Math.max(minC, evalNumberFast(pp.countMax, minC, 0, 0, 0, 0, tick, vars, true));
             const cnt = randInt(minC, maxC);
             for (let i = 0; i < cnt; i++) {
                 if (sim.particles.length >= MAX_POINTS) break;
@@ -331,7 +823,7 @@ export function initPreview(ctx = {}) {
                     rt.emittedOnce = true;
                 }
             } else if (mode === "burst") {
-                const intervalSec = Math.max(0.01, safeNum(card.emission?.burstInterval, 0.5));
+                const intervalSec = Math.max(0.01, evalNumberFast(card.emission?.burstInterval, 0.5, 0, 0, 0, 0, tick, vars, false, 0.01));
                 const intervalTicks = Math.max(1, Math.round(intervalSec * tps));
                 if (rt.burstTick >= intervalTicks) {
                     spawnFor(card);
@@ -343,47 +835,77 @@ export function initPreview(ctx = {}) {
             }
         }
 
-        const cmds = (state.commands || []).filter(c => c && c.enabled);
+        const cmds = [];
+        for (const c of (state.commands || [])) {
+            if (!c || !c.enabled) continue;
+            let signSet = null;
+            if (Array.isArray(c.signs) && c.signs.length) {
+                signSet = new Set();
+                for (const s of c.signs) {
+                    const v = Math.trunc(Number(s));
+                    if (Number.isFinite(v)) signSet.add(v);
+                }
+            }
+            const lf = normalizeConditionFilter(c.lifeFilter, { allowReason: false });
+            const hasLifeFilter = !!(lf && typeof lf === "object" && lf.enabled);
+            cmds.push({ cmd: c, signSet, hasLifeFilter, lifeFilter: lf });
+        }
+
         for (let i = sim.particles.length - 1; i >= 0; i--) {
             const p = sim.particles[i];
             p.age++;
+            const ps = Math.trunc(Number(p.sign) || 0);
 
-            for (const c of cmds) {
-                const signs = c && c.signs;
-                if (Array.isArray(signs) && signs.length) {
-                    const ps = Math.trunc(Number(p.sign) || 0);
-                    let ok = false;
-                    for (const s of signs) {
-                        if (Math.trunc(Number(s)) === ps) { ok = true; break; }
-                    }
-                    if (!ok) continue;
-                }
-                applyCommandJS(c, p, 1);
+            for (const item of cmds) {
+                if (item.signSet && !item.signSet.has(ps)) continue;
+                if (item.hasLifeFilter && !evaluateLifeFilter(item.lifeFilter, p.age, p.life, ps, p.respawnCount, tick)) continue;
+                applyCommandJS(item.cmd, p, 1);
             }
-            p.prevPos = p.pos;
-            p.pos = p.pos.clone().add(p.vel);
-            if (p.age >= p.life) sim.particles.splice(i, 1);
+            p.prevPos.copy(p.pos);
+            p.pos.add(p.vel);
+            if (p.age >= p.life) {
+                const spawned = runDeathAction(p, behavior);
+                const last = sim.particles.length - 1;
+                if (i !== last) sim.particles[i] = sim.particles[last];
+                sim.particles.pop();
+                for (const np of spawned) {
+                    if (sim.particles.length >= MAX_POINTS) break;
+                    sim.particles.push(np);
+                }
+            }
         }
     }
 
-        function makeParticle(card) {
+    function makeParticle(card) {
         const pp = (card && card.particle) ? card.particle : {};
         const pos = sampleEmitterPosition(card);
+        const vars = sim.behaviorRuntime.vars || {};
+        const tick = Number(sim.behaviorRuntime.tick) || 0;
+        const num = (v, def = 0, min = null, max = null) => evalNumberFast(v, def, 0, 0, 0, 0, tick, vars, false, min, max);
+        const intNum = (v, def = 0, min = null, max = null) => evalNumberFast(v, def, 0, 0, 0, 0, tick, vars, true, min, max);
 
-        const lifeMin = Math.max(1, Math.trunc(Number(pp.lifeMin) || 40));
-        const lifeMax = Math.max(lifeMin, Math.trunc(Number(pp.lifeMax) || 120));
+        const lifeMin = Math.max(1, intNum(pp.lifeMin, 40, 1));
+        const lifeMax = Math.max(lifeMin, intNum(pp.lifeMax, 120, 1));
         const life = randInt(lifeMin, lifeMax);
 
-        const sizeMin = Math.max(0.001, Number(pp.sizeMin) || 0.08);
-        const sizeMax = Math.max(sizeMin, Number(pp.sizeMax) || 0.18);
+        const sizeMin = Math.max(0.001, num(pp.sizeMin, 0.08, 0.001));
+        const sizeMax = Math.max(sizeMin, num(pp.sizeMax, 0.18, 0.001));
         const size = rand(sizeMin, sizeMax);
 
+        const velMode = String(pp.velMode || "fixed");
         const v0 = pp.vel || {};
-        const vdir = new THREE.Vector3(Number(v0.x) || 0, Number(v0.y) || 0, Number(v0.z) || 0);
-        if (vdir.lengthSq() < 1e-10) vdir.set(0, 0, 0);
-        else {
-            const minSpeed = Math.max(0, Number(pp.velSpeedMin) || 0);
-            const maxSpeed = Math.max(minSpeed, Number(pp.velSpeedMax) || minSpeed);
+        const vdir = (velMode === "spawn_rel")
+            ? pos.clone()
+            : new THREE.Vector3(
+                num(v0.x, 0),
+                num(v0.y, 0),
+                num(v0.z, 0)
+            );
+        if (vdir.lengthSq() < 1e-10) {
+            vdir.set(0, 0, 0);
+        } else {
+            const minSpeed = Math.max(0, num(pp.velSpeedMin, 0, 0));
+            const maxSpeed = Math.max(minSpeed, num(pp.velSpeedMax, minSpeed, 0));
             const speed = rand(minSpeed, maxSpeed);
             vdir.normalize().multiplyScalar(speed);
         }
@@ -400,7 +922,8 @@ export function initPreview(ctx = {}) {
             size,
             c0,
             c1,
-            sign: Math.trunc(Number(card?.template?.sign) || 0),
+            sign: intNum(card?.template?.sign, 0),
+            respawnCount: 0,
             seed: (Math.random() * 1e9) | 0,
         };
     }
@@ -414,23 +937,23 @@ export function initPreview(ctx = {}) {
         return vec.applyQuaternion(q);
     }
 
-        function sampleEmitterPosition(card) {
+    function sampleEmitterPosition(card) {
         const e = (card && card.emitter) ? card.emitter : {};
         const pp = (card && card.particle) ? card.particle : {};
         const t = e.type || "point";
         const off = new THREE.Vector3(
-            Number(e.offset?.x) || 0,
-            Number(e.offset?.y) || 0,
-            Number(e.offset?.z) || 0
+            evalNumberExpr(e.offset?.x, 0),
+            evalNumberExpr(e.offset?.y, 0),
+            evalNumberExpr(e.offset?.z, 0)
         );
         if (t === "point") return new THREE.Vector3(0, 0, 0).add(off);
 
         if (t === "box") {
-            const bx = Number(e.box?.x) || 1;
-            const by = Number(e.box?.y) || 1;
-            const bz = Number(e.box?.z) || 1;
+            const bx = evalNumberExpr(e.box?.x, 1, {}, { min: 0.001 });
+            const by = evalNumberExpr(e.box?.y, 1, {}, { min: 0.001 });
+            const bz = evalNumberExpr(e.box?.z, 1, {}, { min: 0.001 });
             const surface = !!e.box?.surface;
-            const density = clamp(Number(e.box?.density) || 0, 0, 1);
+            const density = evalNumberExpr(e.box?.density, 0, {}, { min: 0, max: 1 });
 
             function biased(u) {
                 if (density <= 0) return u;
@@ -454,7 +977,7 @@ export function initPreview(ctx = {}) {
         }
 
         if (t === "sphere") {
-            const r = Math.max(0.001, Number(e.sphere?.r) || 1);
+            const r = evalNumberExpr(e.sphere?.r, 1, {}, { min: 0.001 });
             const u = Math.random();
             const v = Math.random();
             const theta = 2 * Math.PI * u;
@@ -469,7 +992,7 @@ export function initPreview(ctx = {}) {
         }
 
         if (t === "sphere_surface") {
-            const r = Math.max(0.001, Number(e.sphereSurface?.r) || 1);
+            const r = evalNumberExpr(e.sphereSurface?.r, 1, {}, { min: 0.001 });
             const u = Math.random();
             const v = Math.random();
             const theta = 2 * Math.PI * u;
@@ -484,9 +1007,13 @@ export function initPreview(ctx = {}) {
 
         if (t === "line") {
             const d = e.line?.dir || {x: 1, y: 0, z: 0};
-            const dir = new THREE.Vector3(Number(d.x) || 0, Number(d.y) || 0, Number(d.z) || 0);
-            const step = Math.max(0.0001, Number(e.line?.step) || 0.25);
-            const count = Math.max(1, Math.trunc(Number(pp.countMax) || 1));
+            const dir = new THREE.Vector3(
+                evalNumberExpr(d.x, 0),
+                evalNumberExpr(d.y, 0),
+                evalNumberExpr(d.z, 0)
+            );
+            const step = evalNumberExpr(e.line?.step, 0.25, {}, { min: 0.0001 });
+            const count = Math.max(1, evalIntExpr(pp.countMax, 1));
             if (dir.lengthSq() < 1e-8) dir.set(1, 0, 0);
             dir.normalize();
             const idx = randInt(0, Math.max(0, count - 1));
@@ -494,46 +1021,58 @@ export function initPreview(ctx = {}) {
         }
 
         if (t === "circle") {
-            const r = Math.max(0.001, Number(e.circle?.r) || 1);
+            const r = evalNumberExpr(e.circle?.r, 1, {}, { min: 0.001 });
             const a = rand(0, Math.PI * 2);
             const vec = new THREE.Vector3(Math.cos(a) * r, 0, Math.sin(a) * r);
             const ax0 = e.circle?.axis || {x: 0, y: 1, z: 0};
-            const axis = new THREE.Vector3(safeNum(ax0.x, 0), safeNum(ax0.y, 1), safeNum(ax0.z, 0));
+            const axis = new THREE.Vector3(
+                evalNumberExpr(ax0.x, 0),
+                evalNumberExpr(ax0.y, 1),
+                evalNumberExpr(ax0.z, 0)
+            );
             return rotateToAxis(vec, axis).add(off);
         }
 
         if (t === "arc") {
-            const r = Math.max(0.001, Number(e.arc?.r) || 1);
-            let a0 = safeNum(e.arc?.start, 0) * DEG_TO_RAD;
-            let a1 = safeNum(e.arc?.end, 0) * DEG_TO_RAD;
+            const r = evalNumberExpr(e.arc?.r, 1, {}, { min: 0.001 });
+            let a0 = evalNumberExpr(e.arc?.start, 0) * DEG_TO_RAD;
+            let a1 = evalNumberExpr(e.arc?.end, 0) * DEG_TO_RAD;
             if (a1 < a0) [a0, a1] = [a1, a0];
-            const rot = safeNum(e.arc?.rotate, 0) * DEG_TO_RAD;
+            const rot = evalNumberExpr(e.arc?.rotate, 0) * DEG_TO_RAD;
             const a = rand(a0, a1) + rot;
             const vec = new THREE.Vector3(Math.cos(a) * r, 0, Math.sin(a) * r);
             const ax0 = e.arc?.axis || {x: 0, y: 1, z: 0};
-            const axis = new THREE.Vector3(safeNum(ax0.x, 0), safeNum(ax0.y, 1), safeNum(ax0.z, 0));
+            const axis = new THREE.Vector3(
+                evalNumberExpr(ax0.x, 0),
+                evalNumberExpr(ax0.y, 1),
+                evalNumberExpr(ax0.z, 0)
+            );
             return rotateToAxis(vec, axis).add(off);
         }
 
         if (t === "spiral") {
             const s = e.spiral || {};
-            const count = Math.max(2, Math.trunc(Number(pp.countMax) || 2));
+            const count = Math.max(2, evalIntExpr(pp.countMax, 2, {}, { min: 2 }));
             const idx = randInt(0, count - 1);
             const process = idx / Math.max(1, count - 1);
-            const rBias = Math.pow(process, Math.max(0.01, Number(s.rBias) || 1.0));
-            const hBias = Math.pow(process, Math.max(0.01, Number(s.hBias) || 1.0));
-            const radius = lerp(Number(s.startR) || 0.5, Number(s.endR) || 2.5, rBias);
-            const height = lerp(0, Number(s.height) || 2.0, hBias);
-            const angle = idx * (Number(s.rotateSpeed) || 0);
+            const rBias = Math.pow(process, evalNumberExpr(s.rBias, 1.0, {}, { min: 0.01 }));
+            const hBias = Math.pow(process, evalNumberExpr(s.hBias, 1.0, {}, { min: 0.01 }));
+            const radius = lerp(evalNumberExpr(s.startR, 0.5), evalNumberExpr(s.endR, 2.5), rBias);
+            const height = lerp(0, evalNumberExpr(s.height, 2.0), hBias);
+            const angle = idx * evalNumberExpr(s.rotateSpeed, 0);
             const vec = new THREE.Vector3(Math.cos(angle) * radius, height, Math.sin(angle) * radius);
             const ax0 = s.axis || {x: 0, y: 1, z: 0};
-            const axis = new THREE.Vector3(safeNum(ax0.x, 0), safeNum(ax0.y, 1), safeNum(ax0.z, 0));
+            const axis = new THREE.Vector3(
+                evalNumberExpr(ax0.x, 0),
+                evalNumberExpr(ax0.y, 1),
+                evalNumberExpr(ax0.z, 0)
+            );
             return rotateToAxis(vec, axis).add(off);
         }
 
         // ring fallback
-        const rr = Math.max(0.001, Number(e.ring?.r) || 1);
-        const th = Math.max(0, Number(e.ring?.thickness) || 0);
+        const rr = evalNumberExpr(e.ring?.r, 1, {}, { min: 0.001 });
+        const th = evalNumberExpr(e.ring?.thickness, 0, {}, { min: 0 });
         const a = rand(0, Math.PI * 2);
         let x = Math.cos(a) * rr;
         let z = Math.sin(a) * rr;
@@ -548,7 +1087,11 @@ export function initPreview(ctx = {}) {
         }
 
         const ax0 = e.ring?.axis || {x: 0, y: 1, z: 0};
-        const axis = new THREE.Vector3(safeNum(ax0.x, 0), safeNum(ax0.y, 1), safeNum(ax0.z, 0));
+        const axis = new THREE.Vector3(
+            evalNumberExpr(ax0.x, 0),
+            evalNumberExpr(ax0.y, 1),
+            evalNumberExpr(ax0.z, 0)
+        );
         return rotateToAxis(new THREE.Vector3(x, y, z), axis).add(off);
     }
 
@@ -571,14 +1114,14 @@ export function initPreview(ctx = {}) {
         return ((n & 0x7fffffff) / 2147483647.0);
     }
 
-    function valueNoise3K(p, seed) {
-        const x0 = Math.floor(p.x) | 0;
-        const y0 = Math.floor(p.y) | 0;
-        const z0 = Math.floor(p.z) | 0;
+    function valueNoise3KXYZ(x, y, z, seed) {
+        const x0 = Math.floor(x) | 0;
+        const y0 = Math.floor(y) | 0;
+        const z0 = Math.floor(z) | 0;
 
-        const fx = p.x - x0;
-        const fy = p.y - y0;
-        const fz = p.z - z0;
+        const fx = x - x0;
+        const fy = y - y0;
+        const fz = z - z0;
 
         const u = fadeK(fx);
         const v = fadeK(fy);
@@ -606,13 +1149,8 @@ export function initPreview(ctx = {}) {
         return lerpK(nxy0, nxy1, w);
     }
 
-    function noiseVec3K(pos, seed) {
-        const nx = valueNoise3K(pos, (seed + 11)) * 2 - 1;
-        const ny = valueNoise3K(pos, (seed + 23)) * 2 - 1;
-        const nz = valueNoise3K(pos, (seed + 37)) * 2 - 1;
-        const v = new THREE.Vector3(nx, ny, nz);
-        if (v.lengthSq() < 1e-9) return new THREE.Vector3(0, 0, 0);
-        return v.normalize();
+    function valueNoise3K(p, seed) {
+        return valueNoise3KXYZ(p.x, p.y, p.z, seed);
     }
 
     function inversePowerFalloff(dist, range, power) {
@@ -631,45 +1169,75 @@ export function initPreview(ctx = {}) {
 
     function applyCommandJS(cmd, particle, dt) {
         const p = cmd.params;
+        const vars = sim.behaviorRuntime.vars || {};
+        const baseAge = Number(particle.age) || 0;
+        const baseLife = Number(particle.life) || 0;
+        const baseSign = Number(particle.sign) || 0;
+        const baseRespawn = Number(particle.respawnCount) || 0;
+        const baseTick = Number(sim.behaviorRuntime.tick) || 0;
+        const num = (v, def = 0, extra = null, opts = null) => {
+            const age = (extra && Number.isFinite(Number(extra.age))) ? Number(extra.age) : baseAge;
+            const life = (extra && Number.isFinite(Number(extra.life))) ? Number(extra.life) : baseLife;
+            const sign = (extra && Number.isFinite(Number(extra.sign))) ? Number(extra.sign) : baseSign;
+            const respawnCount = (extra && Number.isFinite(Number(extra.respawnCount))) ? Number(extra.respawnCount) : baseRespawn;
+            const tick = (extra && extra.tick !== undefined && Number.isFinite(Number(extra.tick))) ? Number(extra.tick) : baseTick;
+            const intMode = !!opts?.int;
+            const min = (opts && typeof opts.min === "number") ? opts.min : null;
+            const max = (opts && typeof opts.max === "number") ? opts.max : null;
+            return evalNumberFast(v, def, age, life, sign, respawnCount, tick, vars, intMode, min, max);
+        };
 
         switch (cmd.type) {
             case "ParticleNoiseCommand": {
-                const t01 = (particle.life > 0) ? (particle.age / particle.life) : 0.0;
+                const t01 = (baseLife > 0) ? (baseAge / baseLife) : 0.0;
                 const seed = (particle.seed | 0);
 
-                const strength = safeNum(p.strength, 0.03);
-                const frequency = safeNum(p.frequency, 0.15);
-                const speed = safeNum(p.speed, 0.12);
-                const affectY = safeNum(p.affectY, 1.0);
-                const clampSpeed = Math.max(0.0001, safeNum(p.clampSpeed, 0.8));
+                const strength = num(p.strength, 0.03);
+                const frequency = num(p.frequency, 0.15);
+                const speed = num(p.speed, 0.12);
+                const affectY = num(p.affectY, 1.0);
+                const clampSpeed = Math.max(0.0001, num(p.clampSpeed, 0.8, null, { min: 0.0001 }));
                 const useLifeCurve = !!p.useLifeCurve;
 
-                const time = particle.age * speed;
-                const samplePos = new THREE.Vector3(particle.pos.x, particle.pos.y, particle.pos.z)
-                    .multiplyScalar(frequency)
-                    .add(new THREE.Vector3(time, time * 0.7, time * 1.3));
+                const time = baseAge * speed;
+                const sampleX = particle.pos.x * frequency + time;
+                const sampleY = particle.pos.y * frequency + time * 0.7;
+                const sampleZ = particle.pos.z * frequency + time * 1.3;
 
-                const n = noiseVec3K(samplePos, seed);
+                let nx = valueNoise3KXYZ(sampleX, sampleY, sampleZ, seed + 11) * 2 - 1;
+                let ny = valueNoise3KXYZ(sampleX, sampleY, sampleZ, seed + 23) * 2 - 1;
+                let nz = valueNoise3KXYZ(sampleX, sampleY, sampleZ, seed + 37) * 2 - 1;
+                const len2 = nx * nx + ny * ny + nz * nz;
+                if (len2 > 1e-9) {
+                    const inv = 1.0 / Math.sqrt(len2);
+                    nx *= inv;
+                    ny *= inv;
+                    nz *= inv;
+                } else {
+                    nx = 0;
+                    ny = 0;
+                    nz = 0;
+                }
 
                 let amp = strength;
                 if (useLifeCurve) amp *= (1.0 - clamp(t01, 0, 1));
 
-                const dv = new THREE.Vector3(n.x, n.y * affectY, n.z).multiplyScalar(amp);
+                particle.vel.x += nx * amp;
+                particle.vel.y += ny * affectY * amp;
+                particle.vel.z += nz * amp;
 
-                particle.vel.add(dv);
-
-                const sp2 = particle.vel.lengthSq();
+                const sp2 = particle.vel.x * particle.vel.x + particle.vel.y * particle.vel.y + particle.vel.z * particle.vel.z;
                 const max2 = clampSpeed * clampSpeed;
-                if (sp2 > max2) {
-                    particle.vel.normalize().multiplyScalar(clampSpeed);
+                if (sp2 > max2 && sp2 > 1e-12) {
+                    particle.vel.multiplyScalar(clampSpeed / Math.sqrt(sp2));
                 }
                 break;
             }
 
             case "ParticleDragCommand": {
-                const damping = safeNum(p.damping, 0.15);
-                const minSpeed = safeNum(p.minSpeed, 0.0);
-                const linear = safeNum(p.linear, 0.0);
+                const damping = num(p.damping, 0.15);
+                const minSpeed = num(p.minSpeed, 0.0);
+                const linear = num(p.linear, 0.0);
 
                 const sp = particle.vel.length();
                 if (minSpeed > 0 && sp <= minSpeed) {
@@ -682,79 +1250,70 @@ export function initPreview(ctx = {}) {
             }
 
             case "ParticleFlowFieldCommand": {
-                const amplitude = safeNum(p.amplitude, 0.15);
-                const frequency = safeNum(p.frequency, 0.25);
-                const timeScale = safeNum(p.timeScale, 0.06);
-                const phaseOffset = safeNum(p.phaseOffset, 0.0);
+                const amplitude = num(p.amplitude, 0.15);
+                const frequency = num(p.frequency, 0.25);
+                const timeScale = num(p.timeScale, 0.06);
+                const phaseOffset = num(p.phaseOffset, 0.0);
 
-                const ox = safeNum(p.worldOffsetX, 0.0);
-                const oy = safeNum(p.worldOffsetY, 0.0);
-                const oz = safeNum(p.worldOffsetZ, 0.0);
+                const ox = num(p.worldOffsetX, 0.0);
+                const oy = num(p.worldOffsetY, 0.0);
+                const oz = num(p.worldOffsetZ, 0.0);
 
-                const samplePos = new THREE.Vector3(
-                    particle.pos.x + ox,
-                    particle.pos.y + oy,
-                    particle.pos.z + oz
-                );
+                const sx = particle.pos.x + ox;
+                const sy = particle.pos.y + oy;
+                const sz = particle.pos.z + oz;
+                const t = (baseAge * timeScale) + phaseOffset;
 
-                const t = (particle.age * timeScale) + phaseOffset;
+                const fx = Math.sin((sy + t) * frequency) + Math.cos((sz - t) * frequency);
+                const fy = Math.sin((sz + t) * frequency) + Math.cos((sx + t) * frequency);
+                const fz = Math.sin((sx - t) * frequency) + Math.cos((sy - t) * frequency);
 
-                const fx =
-                    Math.sin((samplePos.y + t) * frequency) +
-                    Math.cos((samplePos.z - t) * frequency);
-
-                const fy =
-                    Math.sin((samplePos.z + t) * frequency) +
-                    Math.cos((samplePos.x + t) * frequency);
-
-                const fz =
-                    Math.sin((samplePos.x - t) * frequency) +
-                    Math.cos((samplePos.y - t) * frequency);
-
-                const scale = 0.5;
-                const dv = new THREE.Vector3(fx * scale, fy * scale, fz * scale)
-                    .multiplyScalar(amplitude);
-
-                particle.vel.add(dv);
+                const gain = amplitude * 0.5;
+                particle.vel.x += fx * gain;
+                particle.vel.y += fy * gain;
+                particle.vel.z += fz * gain;
                 break;
             }
 
             case "ParticleAttractionCommand": {
-                const tx = Number(p.targetX) || 0;
-                const ty = Number(p.targetY) || 0;
-                const tz = Number(p.targetZ) || 0;
+                const tx = num(p.targetX, 0);
+                const ty = num(p.targetY, 0);
+                const tz = num(p.targetZ, 0);
 
-                const strength = Number(p.strength) || 0;
-                const range = Number(p.range) || 1;
-                const falloffPower = Number(p.falloffPower) || 2;
-                const minDistance = Math.max(1e-6, Number(p.minDistance) || 0.25);
+                const strength = num(p.strength, 0);
+                const range = num(p.range, 1);
+                const falloffPower = num(p.falloffPower, 2);
+                const minDistance = Math.max(1e-6, num(p.minDistance, 0.25, null, { min: 1e-6 }));
 
-                const dir = new THREE.Vector3(tx, ty, tz).sub(particle.pos);
-                const rawDist = dir.length();
+                const dx = tx - particle.pos.x;
+                const dy = ty - particle.pos.y;
+                const dz = tz - particle.pos.z;
+                const rawDist = Math.sqrt(dx * dx + dy * dy + dz * dz);
                 if (rawDist < 1e-9) break;
 
                 const dist = Math.max(rawDist, minDistance);
                 const falloff = inversePowerFalloff(dist, range, falloffPower);
-
-                const a = dir.multiplyScalar(1.0 / dist).multiplyScalar(strength * falloff);
-                particle.vel.add(a);
+                const scale = (strength * falloff) / dist;
+                particle.vel.x += dx * scale;
+                particle.vel.y += dy * scale;
+                particle.vel.z += dz * scale;
                 break;
             }
 
             case "ParticleOrbitCommand": {
-                const cx = Number(p.centerX) || 0, cy = Number(p.centerY) || 0, cz = Number(p.centerZ) || 0;
+                const cx = num(p.centerX, 0), cy = num(p.centerY, 0), cz = num(p.centerZ, 0);
 
-                const ax = Number(p.axisX) || 0, ay = Number(p.axisY) || 1, az = Number(p.axisZ) || 0;
+                const ax = num(p.axisX, 0), ay = num(p.axisY, 1), az = num(p.axisZ, 0);
                 const axis = new THREE.Vector3(ax, ay, az);
                 const axisLen = axis.length();
                 if (axisLen < 1e-9) break;
                 axis.multiplyScalar(1.0 / axisLen);
 
-                const radius = Number(p.radius) || 0;
-                const angularSpeed = Number(p.angularSpeed) || 0;
-                const radialCorrect = Number(p.radialCorrect) || 0;
-                const minDistance = Math.max(1e-6, Number(p.minDistance) || 0.2);
-                const maxRadialStep = Number(p.maxRadialStep) || 0.5;
+                const radius = num(p.radius, 0);
+                const angularSpeed = num(p.angularSpeed, 0);
+                const radialCorrect = num(p.radialCorrect, 0);
+                const minDistance = Math.max(1e-6, num(p.minDistance, 0.2, null, { min: 1e-6 }));
+                const maxRadialStep = num(p.maxRadialStep, 0.5);
                 const mode = (p.mode || "PHYSICAL");
 
                 const center = new THREE.Vector3(cx, cy, cz);
@@ -793,21 +1352,21 @@ export function initPreview(ctx = {}) {
             }
 
             case "ParticleVortexCommand": {
-                const cx = Number(p.centerX) || 0, cy = Number(p.centerY) || 0, cz = Number(p.centerZ) || 0;
+                const cx = num(p.centerX, 0), cy = num(p.centerY, 0), cz = num(p.centerZ, 0);
 
-                const ax0 = Number(p.axisX) || 0, ay0 = Number(p.axisY) || 1, az0 = Number(p.axisZ) || 0;
+                const ax0 = num(p.axisX, 0), ay0 = num(p.axisY, 1), az0 = num(p.axisZ, 0);
                 const axis = new THREE.Vector3(ax0, ay0, az0);
                 const axisLen = axis.length();
                 if (axisLen < 1e-9) break;
                 axis.multiplyScalar(1.0 / axisLen);
 
-                const swirlStrength = Number(p.swirlStrength) || 0;
-                const radialPull = Number(p.radialPull) || 0;
-                const axialLift = Number(p.axialLift) || 0;
+                const swirlStrength = num(p.swirlStrength, 0);
+                const radialPull = num(p.radialPull, 0);
+                const axialLift = num(p.axialLift, 0);
 
-                const range = Number(p.range) || 1;
-                const falloffPower = Number(p.falloffPower) || 1;
-                const minDistance = Math.max(1e-6, Number(p.minDistance) || 0.2);
+                const range = num(p.range, 1);
+                const falloffPower = num(p.falloffPower, 1);
+                const minDistance = Math.max(1e-6, num(p.minDistance, 0.2, null, { min: 1e-6 }));
 
                 const center = new THREE.Vector3(cx, cy, cz);
 
@@ -835,17 +1394,17 @@ export function initPreview(ctx = {}) {
             }
 
             case "ParticleRotationForceCommand": {
-                const cx = Number(p.centerX) || 0, cy = Number(p.centerY) || 0, cz = Number(p.centerZ) || 0;
+                const cx = num(p.centerX, 0), cy = num(p.centerY, 0), cz = num(p.centerZ, 0);
 
-                const ax0 = Number(p.axisX) || 0, ay0 = Number(p.axisY) || 1, az0 = Number(p.axisZ) || 0;
+                const ax0 = num(p.axisX, 0), ay0 = num(p.axisY, 1), az0 = num(p.axisZ, 0);
                 const ax = new THREE.Vector3(ax0, ay0, az0);
                 const axLen = ax.length();
                 if (axLen < 1e-9) break;
                 ax.multiplyScalar(1.0 / axLen);
 
-                const strength = Number(p.strength) || 0;
-                const range = Number(p.range) || 1;
-                const falloffPower = Number(p.falloffPower) || 1;
+                const strength = num(p.strength, 0);
+                const range = num(p.range, 1);
+                const falloffPower = num(p.falloffPower, 1);
 
                 const r = particle.pos.clone().sub(new THREE.Vector3(cx, cy, cz));
                 const dist = r.length();
@@ -864,13 +1423,13 @@ export function initPreview(ctx = {}) {
             }
 
             case "ParticleDistortionCommand": {
-                const cx = Number(p.centerX) || 0;
-                const cy = Number(p.centerY) || 0;
-                const cz = Number(p.centerZ) || 0;
+                const cx = num(p.centerX, 0);
+                const cy = num(p.centerY, 0);
+                const cz = num(p.centerZ, 0);
 
-                const ax0 = Number(p.axisX) || 0;
-                const ay0 = Number(p.axisY) || 1;
-                const az0 = Number(p.axisZ) || 0;
+                const ax0 = num(p.axisX, 0);
+                const ay0 = num(p.axisY, 1);
+                const az0 = num(p.axisZ, 0);
                 const axis = new THREE.Vector3(ax0, ay0, az0);
                 const axisLen = axis.length();
                 if (axisLen < 1e-9) {
@@ -879,17 +1438,17 @@ export function initPreview(ctx = {}) {
                     axis.multiplyScalar(1.0 / axisLen);
                 }
 
-                const radius = Number(p.radius) || 0;
-                const radialStrength = Number(p.radialStrength) || 0;
-                const axialStrength = Number(p.axialStrength) || 0;
-                const tangentialStrength = Number(p.tangentialStrength) || 0;
-                const frequency = Number(p.frequency) || 0;
-                const timeScale = Number(p.timeScale) || 0;
-                const phaseOffset = Number(p.phaseOffset) || 0;
-                const followStrength = Number(p.followStrength) || 0;
-                const maxStep = Number(p.maxStep) || 0;
-                const baseAxial = Number(p.baseAxial) || 0;
-                const seedOffset = Math.trunc(Number(p.seedOffset) || 0);
+                const radius = num(p.radius, 0);
+                const radialStrength = num(p.radialStrength, 0);
+                const axialStrength = num(p.axialStrength, 0);
+                const tangentialStrength = num(p.tangentialStrength, 0);
+                const frequency = num(p.frequency, 0);
+                const timeScale = num(p.timeScale, 0);
+                const phaseOffset = num(p.phaseOffset, 0);
+                const followStrength = num(p.followStrength, 0);
+                const maxStep = num(p.maxStep, 0);
+                const baseAxial = num(p.baseAxial, 0);
+                const seedOffset = Math.trunc(num(p.seedOffset, 0));
                 const useLifeCurve = !!p.useLifeCurve;
 
                 const center = new THREE.Vector3(cx, cy, cz);
@@ -957,7 +1516,7 @@ export function initPreview(ctx = {}) {
         if (resetEmit) resetEmission();
     }
 
-        function resetEmission() {
+    function resetEmission() {
         const state = getState();
         const emitters = getEmittersFromState(state);
         ensureEmitterRuntime(emitters);
@@ -965,6 +1524,9 @@ export function initPreview(ctx = {}) {
             rt.emittedOnce = false;
             rt.burstTick = 1e9;
         }
+        sim.behaviorRuntime.tick = 0;
+        sim.behaviorRuntime.sig = "";
+        sim.behaviorRuntime.vars = {};
     }
 
     function setShowAxes(show) {

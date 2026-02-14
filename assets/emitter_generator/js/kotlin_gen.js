@@ -1,5 +1,7 @@
 import { COMMAND_META } from "./command_meta.js";
-import { fmtD, indent, kSupplierVec3, kVec3 } from "./utils.js";
+import { conditionFilterToKotlin, normalizeConditionFilter } from "./expression_cards.js";
+import { fmtD, indent, kSupplierVec3, kVec3, sanitizeKNumExpr } from "./utils.js";
+import { genEmitterBehaviorKotlin } from "./emitter_behavior.js";
 
 function safeIdent(raw, fallback) {
   const s = String(raw ?? "").trim();
@@ -11,13 +13,54 @@ function safeIdent(raw, fallback) {
 
 function fmtF(n) {
   // Kotlin Float literal
-  return `${fmtD(n)}f`;
+  const x = Number(n);
+  if (Number.isFinite(x)) return `${fmtD(x)}f`;
+  const expr = sanitizeKNumExpr(n);
+  return expr ? `(${expr}).toFloat()` : "0f";
 }
 
 function fmtI(n) {
   const x = Number(n);
-  if (!Number.isFinite(x)) return "0";
+  if (!Number.isFinite(x)) {
+    const expr = sanitizeKNumExpr(n);
+    return expr ? `(${expr}).toInt()` : "0";
+  }
   return String(Math.trunc(x));
+}
+
+function fmtNumLiteral(v, fallback = 0) {
+  const n = Number(v);
+  if (Number.isFinite(n)) {
+    if (Math.trunc(n) === n) return String(Math.trunc(n));
+    return fmtD(n);
+  }
+  const f = Number(fallback);
+  if (Number.isFinite(f)) {
+    if (Math.trunc(f) === f) return String(Math.trunc(f));
+    return fmtD(f);
+  }
+  return "0";
+}
+
+function numOrExpr(v, fallback) {
+  const n = Number(v);
+  if (Number.isFinite(n)) return n;
+  const expr = sanitizeKNumExpr(v);
+  if (expr) return expr;
+  return fallback;
+}
+
+function nonZeroLiteralVec(v) {
+  const x = Number(v?.x);
+  const y = Number(v?.y);
+  const z = Number(v?.z);
+  if (Number.isFinite(x) && Number.isFinite(y) && Number.isFinite(z)) {
+    return (x * x + y * y + z * z) > 1e-12;
+  }
+  const ex = sanitizeKNumExpr(v?.x);
+  const ey = sanitizeKNumExpr(v?.y);
+  const ez = sanitizeKNumExpr(v?.z);
+  return !!(ex || ey || ez);
 }
 
 function fmtHex(hex) {
@@ -30,7 +73,7 @@ function buildEmitterDataApplyLines(card) {
   const p = card?.particle || {};
   const lines = [];
 
-  // These names are intentionally close to UI字段；如果你的 API 不同，手动改成对应的 setter。
+  // 字段名尽量贴近 UI；如果你的 API 不同，请改成对应 setter。
   lines.push(`lifeMin = ${fmtI(p.lifeMin)}`);
   lines.push(`lifeMax = ${fmtI(p.lifeMax)}`);
   lines.push(`sizeMin = ${fmtF(p.sizeMin)}`);
@@ -249,6 +292,7 @@ function buildEmitterLocationsBlock(card, dataName) {
 export function genCommandKotlin(state) {
   const cmds = (state?.commands || []).filter((c) => !!c);
   const varName = safeIdent(state?.kotlin?.varName, "command");
+  const kRefName = safeIdent(state?.kotlin?.kRefName, "emitter");
 
   const uniqSigns = (arr) => {
     if (!Array.isArray(arr)) return [];
@@ -272,13 +316,36 @@ export function genCommandKotlin(state) {
     return `data.sign in setOf(${s.map((x) => fmtI(x)).join(", ")})`;
   };
 
+  const lifePredicate = (lifeFilter) => {
+    const normalized = normalizeConditionFilter(lifeFilter, { allowReason: false });
+    if (!normalized.enabled) return "";
+    const expr = conditionFilterToKotlin(normalized, {
+      age: "age",
+      maxAge: "maxAge",
+      life: "maxAge",
+      sign: "data.sign",
+      respawnCount: "0",
+      tick: "0",
+    }, {
+      allowReason: false,
+      numFmt: (v) => fmtNumLiteral(v, 0),
+    });
+    if (!expr) return "";
+    return `run { val age = particle.currentAge; val maxAge = particle.lifetime; (${expr}) }`;
+  };
+
   const lines = [];
   lines.push(`val ${varName} = ParticleCommandQueue()`);
   for (const c of cmds) {
     const meta = COMMAND_META[c.type];
     if (!meta || typeof meta.toKotlin !== "function") continue;
-    const kotlin = meta.toKotlin(c);
-    const pred = signPredicate(c.signs);
+    const kotlin = meta.toKotlin(c, { kRefName });
+    const predicates = [];
+    const signPred = signPredicate(c.signs);
+    const lifePred = lifePredicate(c.lifeFilter);
+    if (signPred) predicates.push(`(${signPred})`);
+    if (lifePred) predicates.push(`(${lifePred})`);
+    const pred = predicates.join(" && ");
     let block = `.add(\n${indent(kotlin, 4)}\n)`;
     if (pred) {
       block += ` { data, particle ->\n${indent(pred, 4)}\n}`;
@@ -295,9 +362,9 @@ export function genEmitterKotlin(state, settings = {}) {
   if (!emitters.length) return "";
 
   // Kotlin 变量命名：
-  // - 每个发射器卡片可在 vars.template / vars.data 指定
-  // - 留空则自动命名为 templateN / dataN（N=卡片序号）
-  // - externalTemplate/externalData 会输出到类作用域；即使导入了冲突数据，这里也会兜底去重
+  // - 每个发射器卡片可通过 vars.template / vars.data 指定
+  // - 留空时自动命名为 templateN / dataN
+  // - externalTemplate/externalData 会提升到类作用域，这里会额外做去重
   const varCache = new Map();
 
   function baseVar(card, index, kind) {
@@ -357,8 +424,6 @@ export function genEmitterKotlin(state, settings = {}) {
     return name;
   }
 
-  const tps = Math.max(1, Math.trunc(Number(state?.ticksPerSecond) || 20));
-
   const modeOf = (c) => String(c?.emission?.mode || "continuous");
   const hasPersistent = emitters.some(c => modeOf(c) !== "once");
   const allOnce = emitters.every(c => modeOf(c) === "once");
@@ -375,27 +440,29 @@ export function genEmitterKotlin(state, settings = {}) {
   };
 
   const isNonZeroVec = (v) => {
-    const x = Number(v?.x) || 0;
-    const y = Number(v?.y) || 0;
-    const z = Number(v?.z) || 0;
-    return (x * x + y * y + z * z) > 1e-12;
+    return nonZeroLiteralVec(v);
   };
 function buildBaseTemplateAssignLines(card) {
   const p = card?.particle || {};
   const t = card?.template || {};
   const v = p.vel || {};
-  const vx = Number(v.x) || 0;
-  const vy = Number(v.y) || 0;
-  const vz = Number(v.z) || 0;
+  const vx = numOrExpr(v.x, 0);
+  const vy = numOrExpr(v.y, 0);
+  const vz = numOrExpr(v.z, 0);
 
   const lines = [];
-  // 基础模板参数（外放模板参数时不写，交给外部配置）
-  lines.push(`velocity = ${kVec3(vx, vy, vz)}`);
+  // 基础模板参数（外放模板时不在局部重复写入）
+  const velMode = String(p.velMode || "fixed");
+  if (velMode === "fixed") {
+    lines.push(`velocity = ${kVec3(vx, vy, vz)}`);
+  } else {
+    lines.push(`velocity = Vec3.ZERO`);
+  }
   lines.push(`visibleRange = ${fmtF(p.visibleRange ?? 128)}`);
   const { r, g, b } = hexToRgb01(p.colorStart);
   lines.push(`color = Vector3f(${fmtF(r)}, ${fmtF(g)}, ${fmtF(b)})`);
 
-  // 高级模板参数
+  // 进阶模板参数
   lines.push(`alpha = ${fmtF(t.alpha ?? 1.0)}`);
   lines.push(`light = ${fmtI(t.light ?? 15)}`);
   const face = (t.faceToCamera !== false);
@@ -413,7 +480,7 @@ function buildBaseTemplateAssignLines(card) {
 function buildLocalDataApplyLines(card) {
   const p = card?.particle || {};
   const lines = [];
-  // SimpleRandomParticleData.kt API 映射（与你提供的源码一致）
+  // 对应 SimpleRandomParticleData 的字段映射
   lines.push(`minAge = ${fmtI(p.lifeMin)}`);
   lines.push(`maxAge = ${fmtI(p.lifeMax)}`);
   lines.push(`minCount = ${fmtI(p.countMin)}`);
@@ -430,10 +497,10 @@ function buildLocalDataApplyLines(card) {
     const type = String(e.type || "point");
 
     const off = e.offset || { x: 0, y: 0, z: 0 };
-    const ox = Number(off.x) || 0;
-    const oy = Number(off.y) || 0;
-    const oz = Number(off.z) || 0;
-    const hasOffset = (ox * ox + oy * oy + oz * oz) > 1e-12;
+    const ox = numOrExpr(off.x, 0);
+    const oy = numOrExpr(off.y, 0);
+    const oz = numOrExpr(off.z, 0);
+    const hasOffset = nonZeroLiteralVec({ x: ox, y: oy, z: oz });
     const offsetStr = fmtRel(ox, oy, oz);
 
     const countExpr = `${dataVar}.getRandomCount()`;
@@ -455,19 +522,19 @@ function buildLocalDataApplyLines(card) {
       lines.push(pad(chainIndent + 4) + `}`);
       lines.push(pad(chainIndent + 4) + `locs`);
       lines.push(pad(chainIndent) + `}`);
-      // point 已经把 offset 直接编码进点里，不再 pointsOnEach
+      // point 已直接写入 offset，不再重复 pointsOnEach
     } else if (type === "line") {
       const l = e.line || {};
       const d = l.dir || { x: 0, y: 1, z: 0 };
-      const dx = Number(d.x) || 0;
-      const dy = Number(d.y) || 1;
-      const dz = Number(d.z) || 0;
-      const step = Number(l.step) || 0.2;
+      const dx = numOrExpr(d.x, 0);
+      const dy = numOrExpr(d.y, 1);
+      const dz = numOrExpr(d.z, 0);
+      const step = numOrExpr(l.step, 0.2);
       addChainLine(`.addLine(${fmtRel(dx, dy, dz)}, ${fmtD(step)}, ${countExpr})`);
       if (hasOffset) addChainLine(`.pointsOnEach { it.add(${offsetStr}) }`);
     } else if (type === "circle") {
       const c = e.circle || {};
-      const r = Math.max(0.001, Number(c.r) || 1);
+      const r = numOrExpr(c.r, 1);
       addChainLine(`.addCircle(${fmtD(r)}, ${countExpr})`);
 
       const axis = c.axis || { x: 0, y: 1, z: 0 };
@@ -477,8 +544,8 @@ function buildLocalDataApplyLines(card) {
       if (hasOffset) addChainLine(`.pointsOnEach { it.add(${offsetStr}) }`);
     } else if (type === "ring") {
       const r0 = e.ring || {};
-      const r = Math.max(0.001, Number(r0.r) || 1);
-      const th = Math.max(0, Number(r0.thickness) || 0);
+      const r = numOrExpr(r0.r, 1);
+      const th = numOrExpr(r0.thickness, 0);
       addChainLine(`.addDiscreteCircleXZ(${fmtD(r)}, ${countExpr}, ${fmtD(th)})`);
 
       const axis = r0.axis || { x: 0, y: 1, z: 0 };
@@ -488,21 +555,34 @@ function buildLocalDataApplyLines(card) {
       if (hasOffset) addChainLine(`.pointsOnEach { it.add(${offsetStr}) }`);
     } else if (type === "arc") {
       const a = e.arc || {};
-      const r = Math.max(0.001, Number(a.r) || 1);
-      const s0 = Number(a.start) || 0;
-      const s1 = Number(a.end) || 180;
-      const start = Math.min(s0, s1);
-      const end = Math.max(s0, s1);
-      const rotate = Number(a.rotate) || 0;
-      const unit = String(a.unit || "deg");
+      const r = numOrExpr(a.r, 1);
+      const s0 = numOrExpr(a.start, 0);
+      const s1 = numOrExpr(a.end, 180);
+      const rotate = numOrExpr(a.rotate, 0);
+      const unit = String(e.arcUnit || a.unit || "deg");
       const toRad = (v) => (unit === "rad") ? fmtD(v) : `${fmtD(v)} * Math.PI / 180.0`;
+      const canOrder = Number.isFinite(Number(s0)) && Number.isFinite(Number(s1));
+      const start = canOrder ? Math.min(Number(s0), Number(s1)) : s0;
+      const end = canOrder ? Math.max(Number(s0), Number(s1)) : s1;
 
       if (a.center) {
-        const extent = Math.abs(end - start);
-        const mid = (start + end) / 2.0;
-        addChainLine(
-          `.addRadianCenter(${fmtD(r)}, ${countExpr}, ${toRad(extent)}, ${toRad(mid + rotate)})`
-        );
+        const canRotateNum = Number.isFinite(Number(rotate));
+        if (canOrder && canRotateNum) {
+          const extent = Math.abs(Number(end) - Number(start));
+          const mid = ((Number(start) + Number(end)) / 2.0) + Number(rotate);
+          addChainLine(
+            `.addRadianCenter(${fmtD(r)}, ${countExpr}, ${toRad(extent)}, ${toRad(mid)})`
+          );
+        } else {
+          const startRad = toRad(start);
+          const endRad = toRad(end);
+          const rotateRad = toRad(rotate);
+          const extentExpr = `kotlin.math.abs(${endRad} - ${startRad})`;
+          const midExpr = `((${startRad} + ${endRad}) / 2.0) + (${rotateRad})`;
+          addChainLine(
+            `.addRadianCenter(${fmtD(r)}, ${countExpr}, ${extentExpr}, ${midExpr})`
+          );
+        }
       } else {
         addChainLine(
           `.addRadian(${fmtD(r)}, ${countExpr}, ${toRad(start)}, ${toRad(end)}, ${toRad(rotate)})`
@@ -516,12 +596,12 @@ function buildLocalDataApplyLines(card) {
       if (hasOffset) addChainLine(`.pointsOnEach { it.add(${offsetStr}) }`);
     } else if (type === "spiral") {
       const sp = e.spiral || {};
-      const startR = Math.max(0.001, Number(sp.startR) || 0.5);
-      const endR = Math.max(0.001, Number(sp.endR) || 1.5);
-      const height = Number(sp.height) || 2.0;
-      const rotateSpeed = Number(sp.rotateSpeed) || 0.4;
-      const radiusBias = Math.max(0.01, Number(sp.radiusBias) || 1.0);
-      const heightBias = Math.max(0.01, Number(sp.heightBias) || 1.0);
+      const startR = numOrExpr(sp.startR, 0.5);
+      const endR = numOrExpr(sp.endR, 1.5);
+      const height = numOrExpr(sp.height, 2.0);
+      const rotateSpeed = numOrExpr(sp.rotateSpeed, 0.4);
+      const radiusBias = numOrExpr(sp.rBias ?? sp.radiusBias, 1.0);
+      const heightBias = numOrExpr(sp.hBias ?? sp.heightBias, 1.0);
 
       addChainLine(
         `.addSpiral(${fmtD(startR)}, ${fmtD(endR)}, ${fmtD(height)}, (${countExpr}).coerceAtLeast(2), ${fmtD(rotateSpeed)}, ${fmtD(radiusBias)}, ${fmtD(heightBias)})`
@@ -533,8 +613,8 @@ function buildLocalDataApplyLines(card) {
       }
       if (hasOffset) addChainLine(`.pointsOnEach { it.add(${offsetStr}) }`);
     } else if (type === "sphere" || type === "sphere_surface") {
-      const sph = e.sphere || {};
-      const r = Math.max(0.001, Number(sph.r) || 1);
+      const sph = type === "sphere_surface" ? (e.sphereSurface || {}) : (e.sphere || {});
+      const r = numOrExpr(sph.r, 1);
 
       addChainLine(".addWith {");
       lines.push(pad(chainIndent + 4) + `val rand = kotlin.random.Random.Default`);
@@ -557,13 +637,13 @@ function buildLocalDataApplyLines(card) {
       lines.push(pad(chainIndent + 4) + `}`);
       lines.push(pad(chainIndent + 4) + `locs`);
       lines.push(pad(chainIndent) + `}`);
-      // sphere 已经编码 offset，不再 pointsOnEach
+      // sphere 已直接写入 offset，不再重复 pointsOnEach
     } else if (type === "box") {
       const b = e.box || {};
-      const bx = Number(b.x) || 2;
-      const by = Number(b.y) || 1;
-      const bz = Number(b.z) || 2;
-      const density = Math.max(0, Math.min(1, Number(b.density) || 0));
+      const bx = numOrExpr(b.x, 2);
+      const by = numOrExpr(b.y, 1);
+      const bz = numOrExpr(b.z, 2);
+      const density = numOrExpr(b.density, 0);
       const surface = !!b.surface;
 
       addChainLine(".addWith {");
@@ -600,7 +680,7 @@ function buildLocalDataApplyLines(card) {
   const out = [];
   const push = (s = "") => out.push(s);
 
-  // 外置 var 参数（启用外放时输出；参数默认值通过 .apply 写入）
+  // 外放变量参数（启用 externalTemplate / externalData 时输出）
   const declaredTemplate = new Set();
   const declaredData = new Set();
   emitters.forEach((card, i) => {
@@ -625,7 +705,7 @@ function buildLocalDataApplyLines(card) {
     }
   });
 
-  // 只有一次性发射的情况下才设置 maxTick = 1
+  // 全部发射器均为 once 模式时，maxTick = 1
   if (allOnce) {
     push("init {");
     push("    maxTick = 1");
@@ -649,8 +729,12 @@ function buildLocalDataApplyLines(card) {
 
     const tVar = cardVar(card, i, "template");
     const dVar = cardVar(card, i, "data");
+    const velMode = String(card?.particle?.velMode || "fixed");
+    const fixedVX = numOrExpr(card?.particle?.vel?.x, 0);
+    const fixedVY = numOrExpr(card?.particle?.vel?.y, 0);
+    const fixedVZ = numOrExpr(card?.particle?.vel?.z, 0);
 
-    push(`    // 发射器 ${n}：${label}`);
+    push(`    // 发射器 ${n}: ${label}`);
 
     // wrapper
     let openLines = [];
@@ -662,7 +746,7 @@ function buildLocalDataApplyLines(card) {
       closeLines.push(`    }`);
       innerIndent = 8;
     } else if (mode === "burst") {
-      const interval = Math.max(0.05, Number(card?.emission?.burstInterval) || 0.5);
+      const interval = numOrExpr(card?.emission?.burstInterval, 0.5);
       const intervalVar = `intervalTicks${n}`;
       openLines.push(`    val ${intervalVar} = Math.round(${fmtD(interval)} / tickSec).toInt().coerceAtLeast(1)`);
       openLines.push(`    if ((tick - 1) % ${intervalVar} == 0) {`);
@@ -675,7 +759,7 @@ function buildLocalDataApplyLines(card) {
     const pad = " ".repeat(innerIndent);
     const pad2 = " ".repeat(innerIndent + 4);
 
-    // 每个卡片用 run { } 做作用域隔离，避免局部变量名互相冲突
+    // 每个卡片用 run { } 做作用域隔离，避免局部变量重名
     push(`${pad}run {`);
 
     // local data
@@ -705,12 +789,19 @@ function buildLocalDataApplyLines(card) {
     const chainIndent = innerIndent + 12;
     const mapIndent = innerIndent + 12;
     pbLines.push(" ".repeat(chainIndent) + ".createWithoutClone()");
-    pbLines.push(" ".repeat(mapIndent) + ".map {");
+    pbLines.push(" ".repeat(mapIndent) + ".map { rel ->");
+    pbLines.push(" ".repeat(mapIndent + 4) + `val speed = ${dVar}.getRandomSpeed()`);
     pbLines.push(" ".repeat(mapIndent + 4) + `${tVar}.clone().apply {`);
     pbLines.push(" ".repeat(mapIndent + 8) + `maxAge = ${dVar}.getRandomParticleMaxAge()`);
     pbLines.push(" ".repeat(mapIndent + 8) + `size = ${dVar}.getRandomSize().toFloat()`);
-    pbLines.push(" ".repeat(mapIndent + 8) + `speed = ${dVar}.getRandomSpeed()`);
-    pbLines.push(" ".repeat(mapIndent + 4) + `} to it`);
+    if (velMode === "spawn_rel") {
+      pbLines.push(" ".repeat(mapIndent + 8) + `val dir = rel.toVector()`);
+      pbLines.push(" ".repeat(mapIndent + 8) + `velocity = if (dir.lengthSqr() < 1e-8) Vec3.ZERO else dir.normalize().scale(speed)`);
+    } else {
+      pbLines.push(" ".repeat(mapIndent + 8) + `val baseDir = Vec3(${fmtD(fixedVX)}, ${fmtD(fixedVY)}, ${fmtD(fixedVZ)})`);
+      pbLines.push(" ".repeat(mapIndent + 8) + `velocity = if (baseDir.lengthSqr() < 1e-8) Vec3.ZERO else baseDir.normalize().scale(speed)`);
+    }
+    pbLines.push(" ".repeat(mapIndent + 4) + `} to rel`);
     pbLines.push(" ".repeat(mapIndent) + `}`);
 
     pbLines.forEach(l => push(l));
@@ -728,5 +819,13 @@ function buildLocalDataApplyLines(card) {
   push("    return res");
   push("}");
 
+  const behaviorText = genEmitterBehaviorKotlin(state?.emitterBehavior);
+  if (behaviorText) {
+    push("");
+    push(behaviorText);
+  }
+
   return out.join("\n");
 }
+
+

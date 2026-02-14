@@ -6,6 +6,20 @@ import { initSettingsSystem } from "./settings.js";
 import { initHotkeysSystem } from "./hotkeys.js";
 import { initLayoutSystem } from "./layout.js";
 import { clamp, safeNum, escapeHtml, deepCopy, deepAssign } from "./utils.js";
+import {
+    createConditionRule,
+    normalizeConditionFilter,
+    validateBooleanExpr,
+} from "./expression_cards.js";
+import {
+    createEmitterVar,
+    createTickAction,
+    createDeathVarAction,
+    loadEmitterBehavior,
+    saveEmitterBehavior,
+    normalizeEmitterBehavior,
+    isValidEmitterVarName,
+} from "./emitter_behavior.js";
 
 (() => {
     const EMITTER_TYPE_META = {
@@ -46,6 +60,7 @@ import { clamp, safeNum, escapeHtml, deepCopy, deepAssign } from "./utils.js";
         "particle.vel.x": "初始速度方向 X（向量分量）。",
         "particle.vel.y": "初始速度方向 Y（向量分量）。",
         "particle.vel.z": "初始速度方向 Z（向量分量）。",
+        "particle.velMode": "初速度方向模式：固定方向 或 按出生点相对发射器方向。",
         "particle.velSpeedMin": "速度倍率下限。",
         "particle.velSpeedMax": "速度倍率上限。",
         "particle.visibleRange": "可见范围（作用于游戏渲染距离）。",
@@ -138,6 +153,7 @@ import { clamp, safeNum, escapeHtml, deepCopy, deepAssign } from "./utils.js";
             sizeMax: 0.18,
             countMin: 2,
             countMax: 6,
+            velMode: "fixed",
             vel: {x: 0, y: 0.15, z: 0},
             velSpeedMin: 1.0,
             velSpeedMax: 1.2,
@@ -173,7 +189,8 @@ import { clamp, safeNum, escapeHtml, deepCopy, deepAssign } from "./utils.js";
         kotlin: {
             varName: "command",
             kRefName: "emitter",
-        }
+        },
+        emitterBehavior: loadEmitterBehavior(),
     };
 
     const STORAGE_KEY = "pe_state_v2";
@@ -194,13 +211,14 @@ import { clamp, safeNum, escapeHtml, deepCopy, deepAssign } from "./utils.js";
 
     function buildPersistPayload() {
         return {
-            version: 4,
+            version: 6,
             savedAt: new Date().toISOString(),
             state: {
                 commands: deepCopy(state.commands),
                 emitters: deepCopy(state.emitters),
                 ticksPerSecond: state.ticksPerSecond,
                 kotlin: deepCopy(state.kotlin),
+                emitterBehavior: deepCopy(state.emitterBehavior),
             }
         };
     }
@@ -208,6 +226,7 @@ import { clamp, safeNum, escapeHtml, deepCopy, deepAssign } from "./utils.js";
     let saveTimer = 0;
     function saveNow() {
         try {
+            saveEmitterBehavior(state.emitterBehavior);
             localStorage.setItem(STORAGE_KEY, JSON.stringify(buildPersistPayload()));
         } catch (_) {
         }
@@ -216,6 +235,42 @@ import { clamp, safeNum, escapeHtml, deepCopy, deepAssign } from "./utils.js";
     function scheduleSave() {
         clearTimeout(saveTimer);
         saveTimer = setTimeout(saveNow, 200);
+    }
+
+    function isNumericLiteral(value) {
+        const s = String(value ?? "").trim();
+        if (!s) return false;
+        const n = Number(s);
+        return Number.isFinite(n);
+    }
+
+    function maybeNumericLiteral(value) {
+        if (!isNumericLiteral(value)) return null;
+        return Number(String(value).trim());
+    }
+
+    function normalizeNumExpr(value, fallback, opts = {}) {
+        const raw = String(value ?? "").trim();
+        if (raw && !isNumericLiteral(raw)) {
+            if (/^[A-Za-z_][A-Za-z0-9_]*$/.test(raw)) return raw;
+            return fallback;
+        }
+
+        let out = safeNum(raw === "" ? fallback : raw, fallback);
+        if (opts.int) out = Math.trunc(out);
+        if (typeof opts.min === "number") out = Math.max(opts.min, out);
+        if (typeof opts.max === "number") out = Math.min(opts.max, out);
+        if (typeof opts.step === "number" && opts.step > 0) out = Math.round(out / opts.step) * opts.step;
+        if (typeof opts.fixed === "number" && opts.fixed >= 0) out = Number(out.toFixed(opts.fixed));
+        return out;
+    }
+
+    function parseNumOrExprInput(value, fallback = 0) {
+        const raw = String(value ?? "").trim();
+        if (!raw) return fallback;
+        if (isNumericLiteral(raw)) return Number(raw);
+        if (/^[A-Za-z_][A-Za-z0-9_]*$/.test(raw)) return raw;
+        return fallback;
     }
 
     function sanitizeEmitterCard(card) {
@@ -236,105 +291,118 @@ import { clamp, safeNum, escapeHtml, deepCopy, deepAssign } from "./utils.js";
 
         const emission = card.emission || (card.emission = {});
         emission.mode = (emission.mode === "burst" || emission.mode === "once") ? emission.mode : "continuous";
-                const biRaw = Math.max(0.05, safeNum(emission.burstInterval, 0.5));
-        const biQ = Math.round(biRaw / 0.05) * 0.05;
-        emission.burstInterval = Number(biQ.toFixed(4));
+        emission.burstInterval = normalizeNumExpr(emission.burstInterval, 0.5, { min: 0.05, step: 0.05, fixed: 4 });
 
         const emitter = card.emitter || (card.emitter = {});
         emitter.type = EMITTER_TYPE_META[emitter.type] ? emitter.type : "point";
         emitter.offset = emitter.offset || {x: 0, y: 0, z: 0};
-        emitter.offset.x = safeNum(emitter.offset.x, 0);
-        emitter.offset.y = safeNum(emitter.offset.y, 0);
-        emitter.offset.z = safeNum(emitter.offset.z, 0);
+        emitter.offset.x = normalizeNumExpr(emitter.offset.x, 0);
+        emitter.offset.y = normalizeNumExpr(emitter.offset.y, 0);
+        emitter.offset.z = normalizeNumExpr(emitter.offset.z, 0);
 
         emitter.box = emitter.box || {x: 2, y: 1, z: 2, density: 0.0, surface: false};
-        emitter.box.x = Math.max(0.001, safeNum(emitter.box.x, 2.0));
-        emitter.box.y = Math.max(0.001, safeNum(emitter.box.y, 1.0));
-        emitter.box.z = Math.max(0.001, safeNum(emitter.box.z, 2.0));
-        emitter.box.density = clamp(safeNum(emitter.box.density, 0.0), 0, 1);
+        emitter.box.x = normalizeNumExpr(emitter.box.x, 2.0, { min: 0.001 });
+        emitter.box.y = normalizeNumExpr(emitter.box.y, 1.0, { min: 0.001 });
+        emitter.box.z = normalizeNumExpr(emitter.box.z, 2.0, { min: 0.001 });
+        emitter.box.density = normalizeNumExpr(emitter.box.density, 0.0, { min: 0, max: 1 });
         emitter.box.surface = !!emitter.box.surface;
 
         emitter.sphere = emitter.sphere || {r: 2};
-        emitter.sphere.r = Math.max(0.001, safeNum(emitter.sphere.r, 2.0));
+        emitter.sphere.r = normalizeNumExpr(emitter.sphere.r, 2.0, { min: 0.001 });
 
         emitter.sphereSurface = emitter.sphereSurface || {r: 2};
-        emitter.sphereSurface.r = Math.max(0.001, safeNum(emitter.sphereSurface.r, 2.0));
+        emitter.sphereSurface.r = normalizeNumExpr(emitter.sphereSurface.r, 2.0, { min: 0.001 });
 
         emitter.ring = emitter.ring || {r: 2.5, thickness: 0.15, axis: {x: 0, y: 1, z: 0}};
-        emitter.ring.r = Math.max(0.001, safeNum(emitter.ring.r, 2.5));
-        emitter.ring.thickness = Math.max(0, safeNum(emitter.ring.thickness, 0.15));
+        emitter.ring.r = normalizeNumExpr(emitter.ring.r, 2.5, { min: 0.001 });
+        emitter.ring.thickness = normalizeNumExpr(emitter.ring.thickness, 0.15, { min: 0 });
         emitter.ring.axis = emitter.ring.axis || {x: 0, y: 1, z: 0};
-        emitter.ring.axis.x = safeNum(emitter.ring.axis.x, 0);
-        emitter.ring.axis.y = safeNum(emitter.ring.axis.y, 1);
-        emitter.ring.axis.z = safeNum(emitter.ring.axis.z, 0);
+        emitter.ring.axis.x = normalizeNumExpr(emitter.ring.axis.x, 0);
+        emitter.ring.axis.y = normalizeNumExpr(emitter.ring.axis.y, 1);
+        emitter.ring.axis.z = normalizeNumExpr(emitter.ring.axis.z, 0);
 
         emitter.line = emitter.line || {step: 0.2, dir: {x: 1, y: 0, z: 0}};
-        emitter.line.step = Math.max(0.0001, safeNum(emitter.line.step, 0.2));
+        emitter.line.step = normalizeNumExpr(emitter.line.step, 0.2, { min: 0.0001 });
         emitter.line.dir = emitter.line.dir || {x: 1, y: 0, z: 0};
-        emitter.line.dir.x = safeNum(emitter.line.dir.x, 1);
-        emitter.line.dir.y = safeNum(emitter.line.dir.y, 0);
-        emitter.line.dir.z = safeNum(emitter.line.dir.z, 0);
+        emitter.line.dir.x = normalizeNumExpr(emitter.line.dir.x, 1);
+        emitter.line.dir.y = normalizeNumExpr(emitter.line.dir.y, 0);
+        emitter.line.dir.z = normalizeNumExpr(emitter.line.dir.z, 0);
 
         emitter.circle = emitter.circle || {r: 2.5, axis: {x: 0, y: 1, z: 0}};
-        emitter.circle.r = Math.max(0.001, safeNum(emitter.circle.r, 2.5));
+        emitter.circle.r = normalizeNumExpr(emitter.circle.r, 2.5, { min: 0.001 });
         emitter.circle.axis = emitter.circle.axis || {x: 0, y: 1, z: 0};
-        emitter.circle.axis.x = safeNum(emitter.circle.axis.x, 0);
-        emitter.circle.axis.y = safeNum(emitter.circle.axis.y, 1);
-        emitter.circle.axis.z = safeNum(emitter.circle.axis.z, 0);
+        emitter.circle.axis.x = normalizeNumExpr(emitter.circle.axis.x, 0);
+        emitter.circle.axis.y = normalizeNumExpr(emitter.circle.axis.y, 1);
+        emitter.circle.axis.z = normalizeNumExpr(emitter.circle.axis.z, 0);
 
         emitter.arc = emitter.arc || {r: 2.5, start: 0, end: 180, rotate: 0, axis: {x: 0, y: 1, z: 0}};
-        emitter.arc.r = Math.max(0.001, safeNum(emitter.arc.r, 2.5));
-        emitter.arc.start = safeNum(emitter.arc.start, 0);
-        emitter.arc.end = safeNum(emitter.arc.end, 180);
-        emitter.arc.rotate = safeNum(emitter.arc.rotate, 0);
+        emitter.arc.r = normalizeNumExpr(emitter.arc.r, 2.5, { min: 0.001 });
+        emitter.arc.start = normalizeNumExpr(emitter.arc.start, 0);
+        emitter.arc.end = normalizeNumExpr(emitter.arc.end, 180);
+        emitter.arc.rotate = normalizeNumExpr(emitter.arc.rotate, 0);
         emitter.arc.axis = emitter.arc.axis || {x: 0, y: 1, z: 0};
-        emitter.arc.axis.x = safeNum(emitter.arc.axis.x, 0);
-        emitter.arc.axis.y = safeNum(emitter.arc.axis.y, 1);
-        emitter.arc.axis.z = safeNum(emitter.arc.axis.z, 0);
+        emitter.arc.axis.x = normalizeNumExpr(emitter.arc.axis.x, 0);
+        emitter.arc.axis.y = normalizeNumExpr(emitter.arc.axis.y, 1);
+        emitter.arc.axis.z = normalizeNumExpr(emitter.arc.axis.z, 0);
         emitter.arcUnit = "deg";
 
         emitter.spiral = emitter.spiral || {startR: 0.5, endR: 2.5, height: 2.0, rotateSpeed: 0.35, rBias: 1.0, hBias: 1.0, axis: {x: 0, y: 1, z: 0}};
-        emitter.spiral.startR = Math.max(0.001, safeNum(emitter.spiral.startR, 0.5));
-        emitter.spiral.endR = Math.max(0.001, safeNum(emitter.spiral.endR, 2.5));
-        emitter.spiral.height = safeNum(emitter.spiral.height, 2.0);
-        emitter.spiral.rotateSpeed = safeNum(emitter.spiral.rotateSpeed, 0.35);
-        emitter.spiral.rBias = Math.max(0.01, safeNum(emitter.spiral.rBias, 1.0));
-        emitter.spiral.hBias = Math.max(0.01, safeNum(emitter.spiral.hBias, 1.0));
+        emitter.spiral.startR = normalizeNumExpr(emitter.spiral.startR, 0.5, { min: 0.001 });
+        emitter.spiral.endR = normalizeNumExpr(emitter.spiral.endR, 2.5, { min: 0.001 });
+        emitter.spiral.height = normalizeNumExpr(emitter.spiral.height, 2.0);
+        emitter.spiral.rotateSpeed = normalizeNumExpr(emitter.spiral.rotateSpeed, 0.35);
+        emitter.spiral.rBias = normalizeNumExpr(emitter.spiral.rBias, 1.0, { min: 0.01 });
+        emitter.spiral.hBias = normalizeNumExpr(emitter.spiral.hBias, 1.0, { min: 0.01 });
         emitter.spiral.axis = emitter.spiral.axis || {x: 0, y: 1, z: 0};
-        emitter.spiral.axis.x = safeNum(emitter.spiral.axis.x, 0);
-        emitter.spiral.axis.y = safeNum(emitter.spiral.axis.y, 1);
-        emitter.spiral.axis.z = safeNum(emitter.spiral.axis.z, 0);
+        emitter.spiral.axis.x = normalizeNumExpr(emitter.spiral.axis.x, 0);
+        emitter.spiral.axis.y = normalizeNumExpr(emitter.spiral.axis.y, 1);
+        emitter.spiral.axis.z = normalizeNumExpr(emitter.spiral.axis.z, 0);
 
         const particle = card.particle || (card.particle = {});
-        particle.lifeMin = Math.max(1, safeNum(particle.lifeMin, 40));
-        particle.lifeMax = Math.max(particle.lifeMin, safeNum(particle.lifeMax, 120));
-        particle.sizeMin = Math.max(0.001, safeNum(particle.sizeMin, 0.08));
-        particle.sizeMax = Math.max(particle.sizeMin, safeNum(particle.sizeMax, 0.18));
-        particle.countMin = Math.max(0, safeNum(particle.countMin, 2));
-        particle.countMax = Math.max(particle.countMin, safeNum(particle.countMax, 6));
+        particle.lifeMin = normalizeNumExpr(particle.lifeMin, 40, { min: 1 });
+        particle.lifeMax = normalizeNumExpr(particle.lifeMax, 120, { min: 1 });
+        particle.sizeMin = normalizeNumExpr(particle.sizeMin, 0.08, { min: 0.001 });
+        particle.sizeMax = normalizeNumExpr(particle.sizeMax, 0.18, { min: 0.001 });
+        particle.countMin = normalizeNumExpr(particle.countMin, 2, { min: 0 });
+        particle.countMax = normalizeNumExpr(particle.countMax, 6, { min: 0 });
+        particle.velMode = (particle.velMode === "spawn_rel") ? "spawn_rel" : "fixed";
         particle.vel = particle.vel || {x: 0, y: 0.15, z: 0};
-        particle.vel.x = safeNum(particle.vel.x, 0);
-        particle.vel.y = safeNum(particle.vel.y, 0.15);
-        particle.vel.z = safeNum(particle.vel.z, 0);
-        const vMin = Math.max(0, safeNum(particle.velSpeedMin, 1.0));
-        const vMax = Math.max(vMin, safeNum(particle.velSpeedMax, 1.2));
-        particle.velSpeedMin = vMin;
-        particle.velSpeedMax = vMax;
-        particle.visibleRange = Math.max(1, safeNum(particle.visibleRange, 128));
+        particle.vel.x = normalizeNumExpr(particle.vel.x, 0);
+        particle.vel.y = normalizeNumExpr(particle.vel.y, 0.15);
+        particle.vel.z = normalizeNumExpr(particle.vel.z, 0);
+        particle.velSpeedMin = normalizeNumExpr(particle.velSpeedMin, 1.0, { min: 0 });
+        particle.velSpeedMax = normalizeNumExpr(particle.velSpeedMax, 1.2, { min: 0 });
+        particle.visibleRange = normalizeNumExpr(particle.visibleRange, 128, { min: 1 });
         particle.colorStart = (particle.colorStart || "#4df3ff").trim();
         particle.colorEnd = (particle.colorEnd || "#d04dff").trim();
+
+        const lifeMinN = maybeNumericLiteral(particle.lifeMin);
+        const lifeMaxN = maybeNumericLiteral(particle.lifeMax);
+        if (lifeMinN != null && lifeMaxN != null && lifeMaxN < lifeMinN) particle.lifeMax = lifeMinN;
+
+        const sizeMinN = maybeNumericLiteral(particle.sizeMin);
+        const sizeMaxN = maybeNumericLiteral(particle.sizeMax);
+        if (sizeMinN != null && sizeMaxN != null && sizeMaxN < sizeMinN) particle.sizeMax = sizeMinN;
+
+        const countMinN = maybeNumericLiteral(particle.countMin);
+        const countMaxN = maybeNumericLiteral(particle.countMax);
+        if (countMinN != null && countMaxN != null && countMaxN < countMinN) particle.countMax = countMinN;
+
+        const vMinN = maybeNumericLiteral(particle.velSpeedMin);
+        const vMaxN = maybeNumericLiteral(particle.velSpeedMax);
+        if (vMinN != null && vMaxN != null && vMaxN < vMinN) particle.velSpeedMax = vMinN;
     
 
 
         const template = card.template || (card.template = {});
-        template.alpha = clamp(safeNum(template.alpha, 1.0), 0, 1);
-        template.light = Math.max(0, Math.min(15, Math.trunc(safeNum(template.light, 15))));
+        template.alpha = normalizeNumExpr(template.alpha, 1.0, { min: 0, max: 1 });
+        template.light = normalizeNumExpr(template.light, 15, { int: true, min: 0, max: 15 });
         template.faceToCamera = (template.faceToCamera !== false);
-        template.yaw = safeNum(template.yaw, 0.0);
-        template.pitch = safeNum(template.pitch, 0.0);
-        template.roll = safeNum(template.roll, 0.0);
-        template.speedLimit = Math.max(0.01, safeNum(template.speedLimit, 32.0));
-        template.sign = Math.trunc(safeNum(template.sign, 0));
+        template.yaw = normalizeNumExpr(template.yaw, 0.0);
+        template.pitch = normalizeNumExpr(template.pitch, 0.0);
+        template.roll = normalizeNumExpr(template.roll, 0.0);
+        template.speedLimit = normalizeNumExpr(template.speedLimit, 32.0, { min: 0.01 });
+        template.sign = normalizeNumExpr(template.sign, 0, { int: true });
     }
 
     function normalizeEmitterCard(raw, fallbackId) {
@@ -351,9 +419,12 @@ import { clamp, safeNum, escapeHtml, deepCopy, deepAssign } from "./utils.js";
         }
         card.id = (raw && raw.id) ? raw.id : (fallbackId || uid());
         if (raw && raw.emitter && raw.emitter.arcUnit && raw.emitter.arcUnit !== "deg" && card.emitter.arc) {
-            card.emitter.arc.start = safeNum(card.emitter.arc.start, 0) * RAD_TO_DEG;
-            card.emitter.arc.end = safeNum(card.emitter.arc.end, 0) * RAD_TO_DEG;
-            card.emitter.arc.rotate = safeNum(card.emitter.arc.rotate, 0) * RAD_TO_DEG;
+            const a0 = maybeNumericLiteral(card.emitter.arc.start);
+            const a1 = maybeNumericLiteral(card.emitter.arc.end);
+            const ar = maybeNumericLiteral(card.emitter.arc.rotate);
+            if (a0 != null) card.emitter.arc.start = a0 * RAD_TO_DEG;
+            if (a1 != null) card.emitter.arc.end = a1 * RAD_TO_DEG;
+            if (ar != null) card.emitter.arc.rotate = ar * RAD_TO_DEG;
         }
         if (card.particle.velSpeedMin === undefined && card.particle.velSpeed !== undefined) {
             const v = Number(card.particle.velSpeed) || 0;
@@ -369,6 +440,7 @@ import { clamp, safeNum, escapeHtml, deepCopy, deepAssign } from "./utils.js";
 
         if (typeof s.ticksPerSecond === "number") state.ticksPerSecond = s.ticksPerSecond;
         if (s.kotlin) deepAssign(state.kotlin, s.kotlin);
+        if (s.emitterBehavior) state.emitterBehavior = normalizeEmitterBehavior(s.emitterBehavior);
         if (Array.isArray(s.emitters) && s.emitters.length) {
             state.emitters = s.emitters.map((em, idx) => normalizeEmitterCard(em, `em_${idx}`));
         } else if (s.emitter || s.particle || s.emission) {
@@ -386,9 +458,11 @@ import { clamp, safeNum, escapeHtml, deepCopy, deepAssign } from "./utils.js";
         const cmds = Array.isArray(s.commands) ? s.commands : [];
         const norm = cmds.map(normalizeCommand).filter(Boolean);
         state.commands = norm;
+        state.commands.forEach((cmd) => sanitizeCommandLifeFilter(cmd));
 
         if (!state.commands.length) {
             state.commands = makeDefaultCommands();
+            state.commands.forEach((cmd) => sanitizeCommandLifeFilter(cmd));
         }
         return true;
     }
@@ -460,7 +534,9 @@ import { clamp, safeNum, escapeHtml, deepCopy, deepAssign } from "./utils.js";
 
     function autoGenKotlin() {
         readBaseForm();
+        ensureEmitterBehaviorState();
         state.emitters.forEach(sanitizeEmitterCard);
+        state.commands.forEach((cmd) => sanitizeCommandLifeFilter(cmd));
         const cmdText = genCommandKotlin(state);
         const emitterText = genEmitterKotlin(state);
         setKotlinOut("command", cmdText);
@@ -750,6 +826,7 @@ import { clamp, safeNum, escapeHtml, deepCopy, deepAssign } from "./utils.js";
         state.emitters = [makeDefaultEmitterCard()];
         state.ticksPerSecond = DEFAULT_BASE_STATE.ticksPerSecond;
         state.kotlin = deepCopy(DEFAULT_BASE_STATE.kotlin);
+        state.emitterBehavior = normalizeEmitterBehavior(null);
         if (typeof clearEmitterSyncTargets === "function") clearEmitterSyncTargets();
         if (typeof clearCommandSyncTargets === "function") clearCommandSyncTargets();
         applyStateToForm();
@@ -784,6 +861,13 @@ function setFaceToCameraSection($card, faceToCamera) {
     if (!on) $card.find('.face-field[data-face="manual"]').addClass("active");
 }
 
+function setVelocitySection($card, mode) {
+    if (!$card || !$card.length) return;
+    const m = (mode === "spawn_rel") ? "spawn_rel" : "fixed";
+    $card.find(".vel-field").removeClass("active");
+    $card.find(`.vel-field[data-vel="${m}"]`).addClass("active");
+}
+
 
 
     function getEmitterTypeLabel(type) {
@@ -791,10 +875,807 @@ function setFaceToCameraSection($card, faceToCamera) {
         return (meta && meta.title) ? meta.title : (type || "未命名");
     }
 
+    function ensureEmitterBehaviorState() {
+        state.emitterBehavior = normalizeEmitterBehavior(state.emitterBehavior);
+    }
+
+    const COND_LINK_OPTS = [
+        ["and", "且"],
+        ["or", "或"],
+    ];
+    const COND_CMP_OPTS = [
+        [">", ">"],
+        [">=", ">="],
+        ["<", "<"],
+        ["<=", "<="],
+        ["calc_eq", "计算"],
+        ["==", "=="],
+        ["!=", "!="],
+    ];
+    const CALC_MATH_OPTS = [
+        ["+", "+"],
+        ["-", "-"],
+        ["*", "*"],
+        ["/", "/"],
+        ["%", "%"],
+    ];
+    const CALC_VALUE_MODE_OPTS = [
+        ["box", "框"],
+        ["expr", "表达式"],
+    ];
+    function buildCalcTermTypeOptions(includeRespawn = true) {
+        const opts = [
+            ["number", "常量"],
+            ["var", "变量"],
+            ["age", "age"],
+            ["maxAge", "maxAge"],
+            ["sign", "sign"],
+        ];
+        if (includeRespawn) opts.push(["respawnCount", "respawnCount"]);
+        opts.push(["tick", "tick"]);
+        return opts;
+    }
+    const CALC_RESULT_MODE_OPTS = [
+        ["fixed", "固定值"],
+        ["calc", "计算值"],
+    ];
+    const CALC_RESULT_CMP_OPTS = [
+        ["==", "=="],
+        ["!=", "!="],
+        [">", ">"],
+        [">=", ">="],
+        ["<", "<"],
+        ["<=", "<="],
+    ];
+    const REASON_OPTS = [
+        ["AGE", "AGE"],
+        ["COLLISION", "COLLISION"],
+        ["OUT_OF_RANGE", "OUT_OF_RANGE"],
+        ["MANUAL", "MANUAL"],
+        ["UNKNOWN", "UNKNOWN"],
+    ];
+    const ACTION_OPTS = [
+        ["set", "="],
+        ["add", "+="],
+        ["sub", "-="],
+        ["mul", "*="],
+        ["div", "/="],
+        ["inc", "++"],
+        ["dec", "--"],
+    ];
+    const ACTION_VALUE_TYPES_TICK = [
+        ["number", "常量"],
+        ["var", "变量"],
+        ["tick", "tick"],
+    ];
+    const ACTION_VALUE_TYPES_DEATH = [
+        ["number", "常量"],
+        ["var", "变量"],
+        ["age", "age"],
+        ["maxAge", "maxAge"],
+        ["sign", "sign"],
+        ["respawnCount", "respawnCount"],
+    ];
+    const TICK_COND_LEFT_OPTS = [
+        ["tick", "tick"],
+        ["var", "变量"],
+    ];
+    const TICK_COND_RIGHT_OPTS = [
+        ["number", "常量"],
+        ["var", "变量"],
+        ["tick", "tick"],
+    ];
+
+    function getEmitterVarNames() {
+        ensureEmitterBehaviorState();
+        const vars = Array.isArray(state.emitterBehavior?.emitterVars) ? state.emitterBehavior.emitterVars : [];
+        const out = [];
+        const seen = new Set();
+        for (const it of vars) {
+            const name = String(it?.name || "").trim();
+            if (!name) continue;
+            if (!isValidEmitterVarName(name)) continue;
+            if (seen.has(name)) continue;
+            seen.add(name);
+            out.push(name);
+        }
+        return out;
+    }
+
+    function renderOptions(opts, selected) {
+        const sel = String(selected ?? "");
+        return (opts || []).map(([v, label]) => {
+            const vv = String(v);
+            const ss = (vv === sel) ? " selected" : "";
+            return `<option value="${escapeHtml(vv)}"${ss}>${escapeHtml(String(label))}</option>`;
+        }).join("");
+    }
+
+    function renderVarNameOptions(names, selected) {
+        const opts = [];
+        if (!Array.isArray(names) || !names.length) {
+            opts.push(["", "(无可用变量)"]);
+        } else {
+            for (const name of names) opts.push([name, name]);
+        }
+        return renderOptions(opts, selected);
+    }
+
+    function refreshVarSelect($select, names) {
+        if (!$select || !$select.length) return;
+        const cur = String($select.val() || "");
+        $select.html(renderVarNameOptions(names, cur));
+        if (cur && names.includes(cur)) $select.val(cur);
+    }
+
+    function conditionSourceLabel(value) {
+        const v = String(value || "");
+        if (v === "number") return "常量";
+        if (v === "var") return "变量";
+        if (v === "life") return "maxAge";
+        return v || "";
+    }
+
+    function encodeConditionSourceSelection(typeRaw, valueRaw) {
+        const type = String(typeRaw || "").trim();
+        if (!type) return "";
+        if (type === "var") {
+            const name = String(valueRaw || "").trim();
+            return name ? `var:${name}` : "";
+        }
+        if (type === "life") return "maxAge";
+        return type;
+    }
+
+    function decodeConditionSourceSelection(selectionRaw, side = "left") {
+        const raw = String(selectionRaw || "").trim();
+        if (!raw) {
+            return side === "right"
+                ? { type: "number", value: "" }
+                : { type: "age", value: "" };
+        }
+        if (raw.startsWith("var:")) {
+            return { type: "var", value: raw.slice(4).trim() };
+        }
+        if (raw === "life") return { type: "maxAge", value: "" };
+        return { type: raw, value: "" };
+    }
+
+    function buildConditionSourceOptions(values, names, selectedRaw) {
+        const opts = [];
+        const seen = new Set();
+        const selected = String(selectedRaw || "");
+        const varNames = Array.isArray(names) ? names : [];
+        for (const vRaw of (values || [])) {
+            const v = String(vRaw || "").trim();
+            if (!v) continue;
+            if (v === "var") {
+                for (const nameRaw of varNames) {
+                    const name = String(nameRaw || "").trim();
+                    if (!name) continue;
+                    const key = `var:${name}`;
+                    if (seen.has(key)) continue;
+                    seen.add(key);
+                    opts.push([key, name]);
+                }
+                continue;
+            }
+            if (seen.has(v)) continue;
+            seen.add(v);
+            opts.push([v, conditionSourceLabel(v)]);
+        }
+        if (selected.startsWith("var:") && !seen.has(selected)) {
+            const name = selected.slice(4).trim();
+            if (name) opts.push([selected, `${name} (变量)`]);
+        }
+        if (!opts.length) opts.push(["number", "常量"]);
+        return opts;
+    }
+
+    function renderConditionSourceOptions(values, names, selected) {
+        return renderOptions(buildConditionSourceOptions(values, names, selected), selected);
+    }
+
+    function getConditionOptValuesFromRow($row, side) {
+        if (!$row || !$row.length) return [];
+        const key = (side === "right") ? "rightOptValues" : "leftOptValues";
+        const raw = String($row.attr(`data-${key}`) || "").trim();
+        if (raw) return raw.split("|").map((it) => String(it || "").trim()).filter(Boolean);
+        const allowReason = String($row.data("allow-reason") || "") === "1";
+        const includeRespawn = String($row.data("include-respawn") || "1") === "1";
+        const fallback = side === "right"
+            ? conditionRightOptions({ allowReason, includeRespawn })
+            : conditionLeftOptions({ allowReason, includeRespawn });
+        return fallback.map(([v]) => String(v));
+    }
+
+    function refreshConditionRowSourceSelects($row, names) {
+        if (!$row || !$row.length) return;
+        const leftVals = getConditionOptValuesFromRow($row, "left");
+        const rightVals = getConditionOptValuesFromRow($row, "right");
+        const $left = $row.find(".ruleLeftVar");
+        const $right = $row.find(".ruleRightVar");
+        const leftCur = String($left.val() || "");
+        const rightCur = String($right.val() || "");
+        $left.html(renderConditionSourceOptions(leftVals, names, leftCur));
+        $right.html(renderConditionSourceOptions(rightVals, names, rightCur));
+        if (leftCur) $left.val(leftCur);
+        if (rightCur) $right.val(rightCur);
+    }
+
+    function refreshConditionRowVarBindings($row, names) {
+        if (!$row || !$row.length) return;
+        refreshConditionRowSourceSelects($row, names);
+        [
+            "calcLeftTerm",
+            "calcRightTerm",
+            "calcFixedTerm",
+            "calcExpectLeftTerm",
+            "calcExpectRightTerm",
+        ].forEach((prefix) => refreshVarSelect($row.find(`.${prefix}Var`), names));
+        const includeRespawn = String($row.data("include-respawn") || "1") === "1";
+        const hintVars = ["age", "maxAge", "sign", ...(includeRespawn ? ["respawnCount"] : []), "tick", ...names].join(", ");
+        $row.find(".calcExprHint").text(`可用变量: ${hintVars}`);
+        refreshConditionRowVisibility($row);
+    }
+
+    function refreshAllVarBindings() {
+        const names = getEmitterVarNames();
+        $("#cmdList .expr-rule-row, #tickActionList .expr-rule-row, #deathConditionList .expr-rule-row").each((_, el) => {
+            refreshConditionRowVarBindings($(el), names);
+        });
+        $("#tickActionList .actionVar, #tickActionList .actionValueVar, #deathVarActionList .actionVar, #deathVarActionList .actionValueVar").each((_, el) => {
+            refreshVarSelect($(el), names);
+        });
+    }
+
+    function calcBuiltinLabel(type) {
+        if (type === "age" || type === "maxAge" || type === "sign" || type === "respawnCount" || type === "tick") {
+            return type;
+        }
+        if (type === "life") {
+            return "maxAge";
+        }
+        return "";
+    }
+
+    function renderCalcTerm(prefix, typeRaw, valueRaw, names, placeholder = "常量", includeRespawn = true) {
+        const type = String(typeRaw || "number");
+        const numVal = (type === "number")
+            ? String(Number.isFinite(Number(valueRaw)) ? Number(valueRaw) : 0)
+            : "0";
+        const varVal = (type === "var") ? String(valueRaw || "") : "";
+        const builtin = calcBuiltinLabel(type);
+        return `
+<div class="calc-term ${escapeHtml(prefix)}">
+  <select class="input exprInput calcTermType ${escapeHtml(prefix)}Type">${renderOptions(buildCalcTermTypeOptions(includeRespawn), type)}</select>
+  <input class="input exprInput calcTermNum ${escapeHtml(prefix)}Num" type="text" inputmode="decimal" value="${escapeHtml(numVal)}" placeholder="${escapeHtml(placeholder)}"/>
+  <select class="input exprInput calcTermVar ${escapeHtml(prefix)}Var">${renderVarNameOptions(names, varVal)}</select>
+  <span class="calcTermBuiltin ${escapeHtml(prefix)}Builtin">${escapeHtml(builtin)}</span>
+</div>`;
+    }
+
+    function readCalcTermFromRow($row, prefix) {
+        const type = String($row.find(`.${prefix}Type`).val() || "number");
+        if (type === "number") {
+            return { type, value: safeNum($row.find(`.${prefix}Num`).val(), 0) };
+        }
+        if (type === "var") {
+            return { type, value: String($row.find(`.${prefix}Var`).val() || "").trim() };
+        }
+        return { type, value: 0 };
+    }
+
+    function refreshCalcTermVisibility($row, prefix) {
+        const type = String($row.find(`.${prefix}Type`).val() || "number");
+        const $num = $row.find(`.${prefix}Num`);
+        const $var = $row.find(`.${prefix}Var`);
+        const $tag = $row.find(`.${prefix}Builtin`);
+        $num.toggle(type === "number");
+        $var.toggle(type === "var");
+        const label = calcBuiltinLabel(type);
+        $tag.toggle(!!label).text(label);
+    }
+
+    function conditionLeftOptions(opts = {}) {
+        const allowReason = !!opts.allowReason;
+        const includeRespawn = opts.includeRespawn !== false;
+        const base = [
+            ["age", "age"],
+            ["maxAge", "maxAge"],
+            ["sign", "sign"],
+            ["var", "变量"],
+        ];
+        if (includeRespawn) base.push(["respawnCount", "respawnCount"]);
+        if (allowReason) base.push(["reason", "reason"]);
+        return base;
+    }
+
+    function conditionRightOptions(opts = {}) {
+        const allowReason = !!opts.allowReason;
+        const includeRespawn = opts.includeRespawn !== false;
+        const base = [
+            ["number", "常量"],
+            ["var", "变量"],
+            ["age", "age"],
+            ["maxAge", "maxAge"],
+            ["sign", "sign"],
+        ];
+        if (includeRespawn) base.push(["respawnCount", "respawnCount"]);
+        if (allowReason) base.push(["reason", "reason"]);
+        return base;
+    }
+
+    function renderConditionRuleRow(rule, index, names, allowReason, rowClass, delClass, includeRespawn = true, leftOpts = null, rightOpts = null) {
+        const row = createConditionRule(rule, { allowReason: !!allowReason });
+        const leftOptValues = (leftOpts || conditionLeftOptions({ allowReason, includeRespawn })).map(([v]) => String(v));
+        const rightOptValues = (rightOpts || conditionRightOptions({ allowReason, includeRespawn })).map(([v]) => String(v));
+        const linkSel = renderOptions(COND_LINK_OPTS, row.link);
+        const leftSel = renderConditionSourceOptions(leftOptValues, names, encodeConditionSourceSelection(row.left, row.leftVar));
+        const cmpSel = renderOptions(COND_CMP_OPTS, row.op);
+        const rightSel = renderConditionSourceOptions(rightOptValues, names, encodeConditionSourceSelection(row.right, row.rightValue));
+        const rightNum = (row.right === "number")
+            ? String(row.rightValue ?? 0)
+            : "0";
+        const rightReason = (row.right === "reason")
+            ? String(row.rightValue || "AGE")
+            : "AGE";
+        const calcValueMode = String(row.calcValueMode || "box");
+        const calcResultMode = String(row.calcResultMode || "fixed");
+        const calcResultCmp = String(row.calcResultCmp || "==");
+        const calcBooleanExpr = String(row.calcBooleanExpr || "");
+        const calcOp = String(row.calcMathOp || "-");
+        const calcCOp = String(row.calcExpectMathOp || "+");
+        const leftTerm = { type: String(row.calcLeftTermType || "age"), value: row.calcLeftTermValue ?? 0 };
+        const rightTerm = { type: String(row.calcRightTermType || "number"), value: row.calcRightTermValue ?? 0 };
+        const fixedTerm = { type: String(row.calcFixedTermType || "number"), value: row.calcFixedTermValue ?? 0 };
+        const expectLeftTerm = { type: String(row.calcExpectLeftTermType || "number"), value: row.calcExpectLeftTermValue ?? 0 };
+        const expectRightTerm = { type: String(row.calcExpectRightTermType || "number"), value: row.calcExpectRightTermValue ?? 0 };
+        const hintVars = ["age", "maxAge", "sign", ...(includeRespawn ? ["respawnCount"] : []), "tick", ...names].join(", ");
+        return `
+<div class="expr-rule-row ${escapeHtml(rowClass)}" data-id="${escapeHtml(row.id)}" data-index="${index}" data-allow-reason="${allowReason ? "1" : "0"}" data-include-respawn="${includeRespawn ? "1" : "0"}" data-left-opt-values="${escapeHtml(leftOptValues.join("|"))}" data-right-opt-values="${escapeHtml(rightOptValues.join("|"))}">
+  <div class="rule-main-line">
+    <select class="input exprInput ruleLink" data-key="link">${linkSel}</select>
+    <div class="rule-left-wrap">
+      <select class="input exprInput ruleLeftVar ruleLeftSource" data-key="leftSource">${leftSel}</select>
+    </div>
+    <select class="input exprInput ruleOp" data-key="op">${cmpSel}</select>
+    <div class="rule-right-wrap">
+      <select class="input exprInput ruleRightVar ruleRightSource" data-key="rightSource">${rightSel}</select>
+      <input class="input exprInput ruleRightNum" data-key="rightValueNumber" type="number" step="0.1" value="${escapeHtml(rightNum)}"/>
+      <select class="input exprInput ruleRightReason" data-key="rightValueReason">${renderOptions(REASON_OPTS, rightReason)}</select>
+    </div>
+  </div>
+  <div class="calc-eq-row">
+    <div class="calc-mode-row">
+      <label>计算方式</label>
+      <select class="input exprInput calcValueMode" data-key="calcValueMode">${renderOptions(CALC_VALUE_MODE_OPTS, calcValueMode)}</select>
+    </div>
+    <div class="calc-box-inline">
+      <div class="small calcFormHint">框模式顺序: [左值] [运算] [右值] [比较] [目标]</div>
+      <div class="calc-chain">
+        <div class="calc-slot calc-slot-term">
+          <div class="calc-slot-label">左值</div>
+          ${renderCalcTerm("calcLeftTerm", leftTerm.type, leftTerm.value, names, "左值常量", includeRespawn)}
+        </div>
+        <div class="calc-slot calc-slot-op">
+          <div class="calc-slot-label">运算</div>
+          <select class="input exprInput calcEqOp calcMainOp" data-key="calcMathOp">${renderOptions(CALC_MATH_OPTS, calcOp)}</select>
+        </div>
+        <div class="calc-slot calc-slot-term">
+          <div class="calc-slot-label">右值</div>
+          ${renderCalcTerm("calcRightTerm", rightTerm.type, rightTerm.value, names, "右值常量", includeRespawn)}
+        </div>
+        <div class="calc-slot calc-slot-cmp">
+          <div class="calc-slot-label">比较</div>
+          <select class="input exprInput calcResultCmp" data-key="calcResultCmp">${renderOptions(CALC_RESULT_CMP_OPTS, calcResultCmp)}</select>
+        </div>
+        <div class="calc-slot calc-slot-target-mode">
+          <div class="calc-slot-label">目标模式</div>
+          <select class="input exprInput calcResultMode" data-key="calcResultMode">${renderOptions(CALC_RESULT_MODE_OPTS, calcResultMode)}</select>
+        </div>
+        <div class="calc-slot calc-slot-target calc-fixed-term-wrap">
+          <div class="calc-slot-label">固定结果</div>
+          ${renderCalcTerm("calcFixedTerm", fixedTerm.type, fixedTerm.value, names, "固定结果", includeRespawn)}
+        </div>
+        <div class="calc-slot calc-slot-target calc-result-calc-inline">
+          <div class="calc-slot-label">计算结果</div>
+          <div class="calc-target-chain">
+            ${renderCalcTerm("calcExpectLeftTerm", expectLeftTerm.type, expectLeftTerm.value, names, "结果左值", includeRespawn)}
+            <select class="input exprInput calcEqCOp calcExpectOp" data-key="calcExpectMathOp">${renderOptions(CALC_MATH_OPTS, calcCOp)}</select>
+            ${renderCalcTerm("calcExpectRightTerm", expectRightTerm.type, expectRightTerm.value, names, "结果右值", includeRespawn)}
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="calc-expr-inline">
+      <div class="calc-slot-label">布尔表达式</div>
+      <input class="input exprInput calcBooleanExpr" data-key="calcBooleanExpr" type="text" value="${escapeHtml(calcBooleanExpr)}" placeholder="布尔表达式，例如: (tick % 20) == 0 && maxAge > 5"/>
+      <div class="small calcExprHint">可用变量: ${escapeHtml(hintVars)}</div>
+      <div class="small calcExprError"></div>
+    </div>
+  </div>
+  <button class="btn small ${escapeHtml(delClass)}" type="button">删除</button>
+</div>`;
+    }
+
+    function refreshConditionRowVisibility($scope) {
+        const leftParsed = decodeConditionSourceSelection($scope.find(".ruleLeftVar").val(), "left");
+        const rightParsed = decodeConditionSourceSelection($scope.find(".ruleRightVar").val(), "right");
+        const left = leftParsed.type;
+        let right = rightParsed.type;
+        const op = String($scope.find(".ruleOp").val() || ">=");
+        const idx = Number($scope.data("index") || 0);
+        const allowReason = String($scope.data("allow-reason") || "") === "1";
+        const reasonCompare = allowReason && (left === "reason" || right === "reason");
+        const hasCalcPayload = String($scope.find(".calcBooleanExpr").val() || "").trim().length > 0
+            || String($scope.find(".calcValueMode").val() || "box") !== "box"
+            || [
+                "calcLeftTermType",
+                "calcRightTermType",
+                "calcFixedTermType",
+                "calcExpectLeftTermType",
+                "calcExpectRightTermType",
+            ].some((cls) => String($scope.find(`.${cls}`).val() || "number") !== "number");
+        const useCalcEq = (op === "calc_eq")
+            || (op === "==" && !reasonCompare)
+            || (!reasonCompare && hasCalcPayload && ![">", ">=", "<", "<=", "!="].includes(op));
+        const calcValueMode = String($scope.find(".calcValueMode").val() || "box");
+        const calcResultMode = String($scope.find(".calcResultMode").val() || "fixed");
+        if (useCalcEq && !reasonCompare && op === "==") {
+            $scope.find(".ruleOp").val("calc_eq");
+        }
+
+        if (!useCalcEq && allowReason && left === "reason" && right !== "reason") {
+            right = "reason";
+            $scope.find(".ruleRightVar").val("reason");
+        }
+
+        const showMainLine = true;
+        const $ruleLink = $scope.find(".ruleLink");
+        const $mainLine = $scope.find(".rule-main-line");
+        $mainLine.toggle(showMainLine);
+        $mainLine.toggleClass("first-row", idx <= 0);
+        $mainLine.toggleClass("calc-link-only", useCalcEq);
+        $mainLine.toggleClass("calc-first-row", useCalcEq && idx <= 0);
+        if (idx > 0) {
+            $ruleLink.show();
+            $ruleLink.css("visibility", "visible");
+            $ruleLink.prop("disabled", false);
+        } else {
+            $ruleLink.hide();
+            $ruleLink.css("visibility", "hidden");
+            $ruleLink.prop("disabled", true);
+        }
+        $scope.find(".rule-left-wrap, .rule-right-wrap, .ruleLeftVar, .ruleRightVar, .ruleRightNum, .ruleRightReason").toggle(!useCalcEq);
+        $scope.find(".ruleOp").show();
+        $scope.find(".calc-eq-row").toggleClass("is-visible", useCalcEq);
+
+        const rightHasExtra = !useCalcEq && (right === "number" || right === "reason");
+        $scope.toggleClass("right-has-extra", rightHasExtra);
+        $scope.find(".ruleRightNum").toggle(!useCalcEq && right === "number");
+        $scope.find(".ruleRightReason").toggle(!useCalcEq && right === "reason");
+
+        $scope.find(".calc-mode-row").toggle(useCalcEq);
+        $scope.find(".calc-box-inline").toggle(useCalcEq && calcValueMode === "box");
+        $scope.find(".calc-expr-inline").toggle(useCalcEq && calcValueMode === "expr");
+        $scope.find(".calc-fixed-term-wrap").toggle(useCalcEq && calcValueMode === "box" && calcResultMode !== "calc");
+        $scope.find(".calc-result-calc-inline").toggle(useCalcEq && calcValueMode === "box" && calcResultMode === "calc");
+        const $calcExpr = $scope.find(".calcBooleanExpr");
+        const $calcErr = $scope.find(".calcExprError");
+        if (useCalcEq && calcValueMode === "expr") {
+            const expr = String($calcExpr.val() || "").trim();
+            const check = validateBooleanExpr(expr);
+            if (!check.ok) {
+                $calcExpr.addClass("is-invalid");
+                $calcErr.text(`表达式错误：${check.error}，将按 false 处理`).show();
+            } else {
+                $calcExpr.removeClass("is-invalid");
+                $calcErr.hide().text("");
+            }
+        } else {
+            $calcExpr.removeClass("is-invalid");
+            $calcErr.hide().text("");
+        }
+
+        ["calcLeftTerm", "calcRightTerm", "calcFixedTerm", "calcExpectLeftTerm", "calcExpectRightTerm"].forEach((prefix) => {
+            refreshCalcTermVisibility($scope, prefix);
+        });
+
+        if (!useCalcEq && allowReason && (left === "reason" || right === "reason")) {
+            if (op !== "==" && op !== "!=") $scope.find(".ruleOp").val("==");
+        }
+    }
+
+    function readConditionRulesFromDom($container) {
+        const out = [];
+        $container.find(".expr-rule-row").each((idx, el) => {
+            const $row = $(el);
+            const allowReason = String($row.data("allow-reason") || "") === "1";
+            const leftParsed = decodeConditionSourceSelection($row.find(".ruleLeftVar").val(), "left");
+            const rightParsed = decodeConditionSourceSelection($row.find(".ruleRightVar").val(), "right");
+            const left = leftParsed.type;
+            const right = rightParsed.type;
+            let op = String($row.find(".ruleOp").val() || ">=");
+            const reasonCompare = allowReason && (left === "reason" || right === "reason");
+            if (!reasonCompare && op === "==") op = "calc_eq";
+            const calcValueMode = String($row.find(".calcValueMode").val() || "box");
+            const calcResultMode = String($row.find(".calcResultMode").val() || "fixed");
+            const calcMathOp = String($row.find(".calcMainOp").val() || "-");
+            const calcExpectMathOp = String($row.find(".calcExpectOp").val() || "+");
+            const leftTerm = readCalcTermFromRow($row, "calcLeftTerm");
+            const rightTerm = readCalcTermFromRow($row, "calcRightTerm");
+            const fixedTerm = readCalcTermFromRow($row, "calcFixedTerm");
+            const expectLeftTerm = readCalcTermFromRow($row, "calcExpectLeftTerm");
+            const expectRightTerm = readCalcTermFromRow($row, "calcExpectRightTerm");
+            const rule = createConditionRule({
+                id: String($row.data("id") || ""),
+                link: String($row.find(".ruleLink").val() || "and"),
+                left,
+                leftVar: (left === "var") ? leftParsed.value : "",
+                op,
+                right,
+                rightValue: 0,
+                calcValueMode,
+                calcLeftExpr: "",
+                calcMathOp,
+                calcRightExpr: "",
+                calcExpectExpr: "",
+                calcBooleanExpr: String($row.find(".calcBooleanExpr").val() || ""),
+                calcResultMode,
+                calcResultCmp: String($row.find(".calcResultCmp").val() || "=="),
+                calcExpectLeftExpr: "",
+                calcExpectMathOp,
+                calcExpectRightExpr: "",
+                calcLeftTermType: leftTerm.type,
+                calcLeftTermValue: leftTerm.value,
+                calcRightTermType: rightTerm.type,
+                calcRightTermValue: rightTerm.value,
+                calcFixedTermType: fixedTerm.type,
+                calcFixedTermValue: fixedTerm.value,
+                calcExpectLeftTermType: expectLeftTerm.type,
+                calcExpectLeftTermValue: expectLeftTerm.value,
+                calcExpectRightTermType: expectRightTerm.type,
+                calcExpectRightTermValue: expectRightTerm.value,
+            }, { allowReason });
+
+            if (rule.right === "number") {
+                rule.rightValue = safeNum($row.find(".ruleRightNum").val(), 0);
+            } else if (rule.right === "var") {
+                rule.rightValue = String(rightParsed.value || "").trim();
+            } else if (rule.right === "reason") {
+                rule.rightValue = String($row.find(".ruleRightReason").val() || "AGE");
+            } else {
+                rule.rightValue = 0;
+            }
+            rule.link = idx === 0 ? "and" : rule.link;
+            out.push(rule);
+        });
+        return out;
+    }
+
+    function renderActionRow(action, names, valueTypes, rowClass, delClass, opts = {}) {
+        const a = createTickAction();
+        Object.assign(a, action || {});
+        const opSel = renderOptions(ACTION_OPTS, a.op);
+        const typeSel = renderOptions(valueTypes, a.valueType);
+        const valNum = String(Number.isFinite(Number(a.value)) ? Number(a.value) : 0);
+        const valVar = String(typeof a.value === "string" ? a.value : "");
+        const withCondition = !!opts.withCondition;
+        const cond = normalizeConditionFilter(a.condition, { allowReason: false });
+        const condRows = (Array.isArray(cond.rules) ? cond.rules : []).map((r, idx) =>
+            renderConditionRuleRow(
+                r,
+                idx,
+                names,
+                false,
+                "tickCondRule",
+                "btnDelTickCondRule",
+                false,
+                TICK_COND_LEFT_OPTS,
+                TICK_COND_RIGHT_OPTS
+            )
+        ).join("");
+        const condHtml = withCondition ? `
+  <div class="expr-action-cond${cond.enabled ? "" : " is-disabled"}">
+    <div class="expr-action-cond-head">
+      <label>条件</label>
+      <select class="input exprInput tickCondEnabled" data-key="condition.enabled">
+        <option value="true"${cond.enabled ? " selected" : ""}>true</option>
+        <option value="false"${cond.enabled ? "" : " selected"}>false</option>
+      </select>
+      <button class="btn small btnAddTickCondRule" type="button">➕ 添加条件</button>
+    </div>
+    <div class="expr-action-cond-body">
+      <div class="expr-rule-list tickCondRuleList">${condRows || `<div class="small">暂无条件卡片。</div>`}</div>
+    </div>
+  </div>` : "";
+        return `
+<div class="expr-action-row ${escapeHtml(rowClass)}" data-id="${escapeHtml(a.id)}">
+  <select class="input exprInput actionVar" data-key="varName">${renderVarNameOptions(names, a.varName)}</select>
+  <select class="input exprInput actionOp" data-key="op">${opSel}</select>
+  <select class="input exprInput actionType" data-key="valueType">${typeSel}</select>
+  <input class="input exprInput actionValueNum" data-key="valueNumber" type="number" step="0.1" value="${escapeHtml(valNum)}"/>
+  <select class="input exprInput actionValueVar" data-key="valueVar">${renderVarNameOptions(names, valVar)}</select>
+  <button class="btn small ${escapeHtml(delClass)}" type="button">删除</button>
+  ${condHtml}
+</div>`;
+    }
+
+    function refreshActionConditionVisibility($scope) {
+        const $cond = $scope.find(".expr-action-cond");
+        if (!$cond.length) return;
+        const enabled = String($scope.find(".tickCondEnabled").val() || "false") === "true";
+        $cond.toggleClass("is-disabled", !enabled);
+    }
+
+    function refreshActionRowVisibility($scope) {
+        const op = String($scope.find(".actionOp").val() || "set");
+        const valueType = String($scope.find(".actionType").val() || "number");
+        const hasValue = (op !== "inc" && op !== "dec");
+        $scope.find(".actionType").toggle(hasValue);
+        $scope.find(".actionValueNum").toggle(hasValue && valueType === "number");
+        $scope.find(".actionValueVar").toggle(hasValue && valueType === "var");
+        refreshActionConditionVisibility($scope);
+        $scope.find(".tickCondRuleList .expr-rule-row").each((_, el) => refreshConditionRowVisibility($(el)));
+    }
+
+    function readActionFromRow($row) {
+        const action = createTickAction();
+        action.id = String($row.data("id") || action.id);
+        action.varName = String($row.find(".actionVar").val() || "").trim();
+        action.op = String($row.find(".actionOp").val() || "set");
+        if (action.op === "inc" || action.op === "dec") {
+            action.valueType = "number";
+            action.value = 1;
+        } else {
+            action.valueType = String($row.find(".actionType").val() || "number");
+            if (action.valueType === "number") {
+                action.value = safeNum($row.find(".actionValueNum").val(), 0);
+            } else if (action.valueType === "var") {
+                action.value = String($row.find(".actionValueVar").val() || "").trim();
+            } else {
+                action.value = 0;
+            }
+        }
+        const $condEnabled = $row.find(".tickCondEnabled");
+        const $condList = $row.find(".tickCondRuleList");
+        if ($condEnabled.length && $condList.length) {
+            action.condition = normalizeConditionFilter({
+                enabled: String($condEnabled.val() || "false") === "true",
+                rules: readConditionRulesFromDom($condList),
+            }, { allowReason: false });
+        } else {
+            delete action.condition;
+        }
+        return action;
+    }
+
+    function renderEmitterBehaviorEditors() {
+        ensureEmitterBehaviorState();
+        const behavior = state.emitterBehavior;
+        const varNames = getEmitterVarNames();
+
+        const $varList = $("#globalVarList");
+        if ($varList.length) {
+            $varList.empty();
+            if (!behavior.emitterVars.length) {
+                $varList.append(`<div class="small">暂无变量。可添加 <code>Int</code>/<code>Double</code> 并生成 <code>@CodecField var ...</code></div>`);
+            } else {
+                behavior.emitterVars.forEach((v) => {
+                    const row = `
+<div class="kv-row kv-row-var" data-id="${escapeHtml(v.id)}">
+  <input class="input globalVarInput" data-key="name" type="text" value="${escapeHtml(v.name)}" placeholder="变量名（如 wavePhase）" />
+  <select class="input globalVarInput" data-key="type">
+    <option value="double">Double</option>
+    <option value="int">Int</option>
+  </select>
+  <input class="input globalVarInput" data-key="defaultValue" type="text" inputmode="decimal" value="${escapeHtml(String(v.defaultValue))}" placeholder="默认值" />
+  <label class="kv-flag kv-min-flag"><input class="globalVarInput" data-key="minEnabled" type="checkbox" ${v.minEnabled ? "checked" : ""}/>min</label>
+  <input class="input globalVarInput" data-key="minValue" type="text" inputmode="decimal" value="${escapeHtml(String(v.minValue))}" placeholder="最小值" />
+  <label class="kv-flag kv-max-flag"><input class="globalVarInput" data-key="maxEnabled" type="checkbox" ${v.maxEnabled ? "checked" : ""}/>max</label>
+  <input class="input globalVarInput" data-key="maxValue" type="text" inputmode="decimal" value="${escapeHtml(String(v.maxValue))}" placeholder="最大值" />
+  <button class="btn small kv-del btnDelGlobalVar" type="button">删除</button>
+</div>`;
+                    $varList.append(row);
+                });
+                $varList.find('.globalVarInput[data-key="type"]').each((_, el) => {
+                    const id = $(el).closest(".kv-row").data("id");
+                    const target = behavior.emitterVars.find((it) => it.id === id);
+                    if (target) $(el).val(target.type);
+                });
+            }
+        }
+
+        const $tickList = $("#tickActionList");
+        if ($tickList.length) {
+            $tickList.empty();
+            if (!behavior.tickActions.length) {
+                $tickList.append(`<div class="small">暂无 doTick 变量修改卡片。</div>`);
+            } else {
+                behavior.tickActions.forEach((t) => {
+                    $tickList.append(renderActionRow(
+                        t,
+                        varNames,
+                        ACTION_VALUE_TYPES_TICK,
+                        "tickActionRow",
+                        "btnDelTickAction",
+                        { withCondition: true }
+                    ));
+                });
+                $tickList.find(".expr-action-row").each((_, el) => refreshActionRowVisibility($(el)));
+            }
+        }
+
+        const death = behavior.death || {};
+        const condCfg = normalizeConditionFilter(death.condition, { allowReason: true });
+        const $deathEnabled = $("#deathEnabled");
+        if ($deathEnabled.length) {
+            $deathEnabled.val(death.enabled ? "true" : "false");
+            $("#deathMode").val(death.mode || "dissipate");
+            $("#deathConditionEnabled").val(condCfg.enabled ? "true" : "false");
+            $("#deathRespawnCount").val(String(death.respawnCount ?? 1));
+            $("#deathSizeMul").val(String(death.sizeMul ?? 1));
+            $("#deathSpeedMul").val(String(death.speedMul ?? 1));
+            $("#deathOffX").val(String(death.offset?.x ?? 0));
+            $("#deathOffY").val(String(death.offset?.y ?? 0));
+            $("#deathOffZ").val(String(death.offset?.z ?? 0));
+            $("#deathSignMode").val(death.signMode || "keep");
+            $("#deathSignValue").val(String(death.signValue ?? 0));
+            $("#deathMaxAgeEnabled").val(death.maxAgeEnabled ? "true" : "false");
+            $("#deathMaxAgeType").val(String(death.maxAgeValueType || "number"));
+            $("#deathMaxAgeValueNum").val(String(Number.isFinite(Number(death.maxAgeValue)) ? Number(death.maxAgeValue) : 1));
+            $("#deathMaxAgeValueVar").html(renderVarNameOptions(varNames, String(death.maxAgeValue || "")));
+            $("#deathRespawnBlock").toggle(!!death.enabled && death.mode === "respawn");
+            $("#deathSignValueWrap").toggle(death.signMode === "set");
+            const maxType = String(death.maxAgeValueType || "number");
+            const maxEnabled = !!death.maxAgeEnabled;
+            $("#deathMaxAgeType").prop("disabled", !maxEnabled);
+            $("#deathMaxAgeValueNum").toggle(maxType === "number").prop("disabled", !maxEnabled || maxType !== "number");
+            $("#deathMaxAgeValueVar").toggle(maxType === "var").prop("disabled", !maxEnabled || maxType !== "var");
+        }
+
+        const $deathCondList = $("#deathConditionList");
+        if ($deathCondList.length) {
+            $deathCondList.empty();
+            const rules = Array.isArray(condCfg.rules) ? condCfg.rules : [];
+            if (!rules.length) {
+                $deathCondList.append(`<div class="small">暂无死亡条件卡片。</div>`);
+            } else {
+                rules.forEach((r, idx) => {
+                    $deathCondList.append(renderConditionRuleRow(r, idx, varNames, true, "deathCondRule", "btnDelDeathCondRule", true));
+                });
+                $deathCondList.find(".expr-rule-row").each((_, el) => refreshConditionRowVisibility($(el)));
+            }
+        }
+
+        const $deathVarActionList = $("#deathVarActionList");
+        if ($deathVarActionList.length) {
+            $deathVarActionList.empty();
+            const actions = Array.isArray(death.varActions) ? death.varActions : [];
+            if (!actions.length) {
+                $deathVarActionList.append(`<div class="small">暂无死亡时变量修改语句。</div>`);
+            } else {
+                actions.forEach((a) => {
+                    $deathVarActionList.append(renderActionRow(a, varNames, ACTION_VALUE_TYPES_DEATH, "deathVarActionRow", "btnDelDeathVarAction"));
+                });
+                $deathVarActionList.find(".expr-action-row").each((_, el) => refreshActionRowVisibility($(el)));
+            }
+        }
+
+        const deathEnabled = !!death.enabled;
+        const deathCondEnabled = deathEnabled && !!condCfg.enabled;
+        $("#deathMode").closest(".field").toggle(deathEnabled);
+        $("#deathLogicBody").toggle(deathEnabled);
+        $("#deathConditionTools").toggle(deathCondEnabled);
+        $("#deathConditionList").toggle(deathCondEnabled);
+    }
+
     function applyStateToForm() {
         $("#ticksPerSecond").val(state.ticksPerSecond);
         $("#kVarName").val(state.kotlin.varName);
         $("#kRefName").val(state.kotlin.kRefName);
+        renderEmitterBehaviorEditors();
         renderEmitterList();
         renderCommandList();
     }
@@ -931,13 +1812,27 @@ function setFaceToCameraSection($card, faceToCamera) {
                 `        <input class="emitInput" data-key="particle.countMax" data-type="number" type="number" step="1" min="0" value="${esc(card.particle.countMax)}" data-step-fixed="1" />`,
                 `      </div>`,
                 `    </div>`,
-                `    <div class="vec3Row">`,
-                `      <div class="miniLabel">速度方向 Vec3</div>`,
-                `      <div class="vec3">`,
-                `        <input class="emitInput" data-key="particle.vel.x" data-type="number" type="number" step="0.01" value="${esc(card.particle.vel.x)}" />`,
-                `        <input class="emitInput" data-key="particle.vel.y" data-type="number" type="number" step="0.01" value="${esc(card.particle.vel.y)}" />`,
-                `        <input class="emitInput" data-key="particle.vel.z" data-type="number" type="number" step="0.01" value="${esc(card.particle.vel.z)}" />`,
+                `    <div class="grid1">`,
+                `      <div class="field">`,
+                `        <label>初速度方向模式</label>`,
+                `        <select class="emitInput" data-key="particle.velMode" data-type="select">`,
+                `          <option value="fixed">固定方向</option>`,
+                `          <option value="spawn_rel">按出生相对位置方向</option>`,
+                `        </select>`,
                 `      </div>`,
+                `    </div>`,
+                `    <div class="vel-field" data-vel="fixed">`,
+                `      <div class="vec3Row">`,
+                `        <div class="miniLabel">固定方向 Vec3</div>`,
+                `        <div class="vec3">`,
+                `          <input class="emitInput" data-key="particle.vel.x" data-type="number" type="number" step="0.01" value="${esc(card.particle.vel.x)}" />`,
+                `          <input class="emitInput" data-key="particle.vel.y" data-type="number" type="number" step="0.01" value="${esc(card.particle.vel.y)}" />`,
+                `          <input class="emitInput" data-key="particle.vel.z" data-type="number" type="number" step="0.01" value="${esc(card.particle.vel.z)}" />`,
+                `        </div>`,
+                `      </div>`,
+                `    </div>`,
+                `    <div class="vel-field" data-vel="spawn_rel">`,
+                `      <div class="hint">速度方向将使用出生点相对发射器的位置向量（<code>rel.toVector()</code>）并按随机速度倍率归一化缩放。</div>`,
                 `    </div>`,
                 `    <div class="grid2">`,
                 `      <div class="field">`,
@@ -1181,17 +2076,20 @@ function setFaceToCameraSection($card, faceToCamera) {
             ];
 
             const $card = $(lines.join("\n"));
+            $card.find('.emitInput[data-type="number"]').attr("type", "text").attr("inputmode", "decimal");
             $card.find('[data-key="emitter.type"]').val(card.emitter.type);
             $card.find('[data-key="emitter.type"]').val(card.emitter.type);
             $card.find('[data-key="emission.mode"]').val(card.emission.mode);
             $card.find('[data-key="externalTemplate"]').val(card.externalTemplate ? "1" : "0");
             $card.find('[data-key="externalData"]').val(card.externalData ? "1" : "0");
+            $card.find('[data-key="particle.velMode"]').val(card.particle && card.particle.velMode ? card.particle.velMode : "fixed");
             $card.find('[data-key="template.faceToCamera"]').val((card.template && card.template.faceToCamera === false) ? "0" : "1");
             $card.find('[data-key="emitter.box.surface"]').val(card.emitter.box.surface ? "1" : "0");
 
             setEmitterSection($card, card.emitter.type);
             setEmissionSection($card, card.emission.mode);
             setFaceToCameraSection($card, (card.template && card.template.faceToCamera === false) ? false : true);
+            setVelocitySection($card, card.particle && card.particle.velMode);
             applyEmitterTips($card);
 
             if (emitterSync && emitterSync.selectedIds && emitterSync.selectedIds.has(card.id)) {
@@ -1317,6 +2215,7 @@ function setFaceToCameraSection($card, faceToCamera) {
         setEmitterSection($root, card.emitter.type);
         setEmissionSection($root, card.emission.mode);
         setFaceToCameraSection($root, (card.template && card.template.faceToCamera === false) ? false : true);
+        setVelocitySection($root, card.particle && card.particle.velMode);
     }
 
     function setAllEmittersCollapsed(collapsed) {
@@ -1427,6 +2326,7 @@ function setFaceToCameraSection($card, faceToCamera) {
         "template.roll",
         "template.speedLimit",
         "template.sign",
+        "particle.velMode",
         "particle.vel.x",
         "particle.vel.y",
         "particle.vel.z",
@@ -1581,6 +2481,11 @@ function setFaceToCameraSection($card, faceToCamera) {
         return { ok: true };
     }
 
+    function sanitizeCommandLifeFilter(cmd) {
+        if (!cmd || typeof cmd !== "object") return;
+        cmd.lifeFilter = normalizeConditionFilter(cmd.lifeFilter, { allowReason: false });
+    }
+
     function normalizeSignList(arr) {
         const out = [];
         const seen = new Set();
@@ -1657,7 +2562,7 @@ function setFaceToCameraSection($card, faceToCamera) {
             value = raw;
         } else {
             if (type === "number") {
-                value = safeNum(value, 0);
+                value = parseNumOrExprInput(value, 0);
             } else if (type === "bool") {
                 value = (value === "1" || value === "true");
             }
@@ -1704,6 +2609,12 @@ function setFaceToCameraSection($card, faceToCamera) {
                 setFaceToCameraSection($syncWrap, (card.template && card.template.faceToCamera === false) ? false : true);
             }
         }
+        if (path === "particle.velMode") {
+            setVelocitySection($card, card.particle && card.particle.velMode);
+            if ($syncWrap && $syncWrap.length) {
+                setVelocitySection($syncWrap, card.particle && card.particle.velMode);
+            }
+        }
 
         const canSync = emitterSync && emitterSync.open && emitterSync.selectedIds
             && emitterSync.selectedIds.has(id)
@@ -1747,23 +2658,38 @@ function setFaceToCameraSection($card, faceToCamera) {
         if (!cmd) return;
         const key = $input.data("key");
         if (!key) return;
+        sanitizeCommandLifeFilter(cmd);
         const meta = COMMAND_META[cmd.type];
         const field = meta.fields.find(f => f.k === key);
+        const fieldType = field ? field.t : String($input.data("type") || "");
 
         let v;
-        if (field.t === "bool") v = ($input.val() === "true");
-        else if (field.t === "select") v = $input.val();
-        else if (field.t === "text") v = $input.val();
-        else v = safeNum($input.val(), field.def);
+        if (fieldType === "bool") v = ($input.val() === "true");
+        else if (fieldType === "select") v = $input.val();
+        else if (fieldType === "text") v = String($input.val() || "");
+        else v = parseNumOrExprInput($input.val(), field ? field.def : 0);
 
-        cmd.params[key] = v;
+        if (String(key).startsWith("lifeFilter.")) {
+            setByPath(cmd, key, v);
+            sanitizeCommandLifeFilter(cmd);
+            v = getByPath(cmd, key);
+        } else {
+            cmd.params[key] = v;
+        }
 
         if (sourceId) {
             const $mirror = $(`#cmdList .cmdCard[data-id="${id}"] .cmdInput[data-key="${key}"]`);
             if ($mirror.length) {
-                if (field.t === "bool") $mirror.val(v ? "true" : "false");
+                if (fieldType === "bool") $mirror.val(v ? "true" : "false");
                 else $mirror.val(v);
             }
+        }
+
+        if (key === "lifeFilter.enabled") {
+            const $card = sourceId
+                ? $(`#cmdList .cmdCard[data-id="${id}"]`)
+                : $input.closest(".cmdCard");
+            refreshCommandLifeFilterVisibility($card);
         }
 
         const canSync = commandSync && commandSync.open && commandSync.selectedIds && commandSync.selectedIds.has(id);
@@ -1796,6 +2722,7 @@ function setFaceToCameraSection($card, faceToCamera) {
                 kotlin: state.kotlin,
                 emitters: state.emitters,
                 commands: state.commands,
+                emitterBehavior: state.emitterBehavior,
             });
         },
         applySnapshot(snap) {
@@ -1804,7 +2731,10 @@ function setFaceToCameraSection($card, faceToCamera) {
             state.ticksPerSecond = Math.max(1, safeNum(snap.ticksPerSecond, state.ticksPerSecond));
             state.kotlin = deepCopy(snap.kotlin || state.kotlin);
             state.emitters = Array.isArray(snap.emitters) ? snap.emitters.map(normalizeEmitterCard) : state.emitters;
-            state.commands = Array.isArray(snap.commands) ? snap.commands.map(normalizeCommand) : state.commands;
+            state.commands = Array.isArray(snap.commands) ? snap.commands.map(normalizeCommand).filter(Boolean) : state.commands;
+            state.commands.forEach((cmd) => sanitizeCommandLifeFilter(cmd));
+            state.emitterBehavior = normalizeEmitterBehavior(snap.emitterBehavior || state.emitterBehavior);
+            if (!state.commands.length) state.commands = makeDefaultCommands();
 
             // 清理同步目标（避免撤回/重做后引用不存在的 id）
             if (emitterSync && emitterSync.selectedIds) {
@@ -2635,7 +3565,12 @@ function setFaceToCameraSection($card, faceToCamera) {
             if (id === sourceId) continue;
             const target = state.commands.find((it) => it.id === id);
             if (!target || target.type !== kind) continue;
-            target.params[key] = value;
+            if (String(key).startsWith("lifeFilter.")) {
+                setByPath(target, key, value);
+                sanitizeCommandLifeFilter(target);
+            } else {
+                target.params[key] = value;
+            }
             changed = true;
         }
         return changed;
@@ -2653,6 +3588,23 @@ function setFaceToCameraSection($card, faceToCamera) {
             const target = state.commands.find((it) => it.id === id);
             if (!target || target.type !== kind) continue;
             target.signs = deepCopy(signs);
+            changed = true;
+        }
+        return changed;
+    }
+
+    function syncCommandLifeFilter(sourceId, lifeFilter) {
+        if (!commandSync || !commandSync.open) return false;
+        if (!commandSync.selectedIds || !commandSync.selectedIds.has(sourceId)) return false;
+        const source = state.commands.find((it) => it.id === sourceId);
+        if (!source) return false;
+        const kind = source.type;
+        let changed = false;
+        for (const id of commandSync.selectedIds) {
+            if (id === sourceId) continue;
+            const target = state.commands.find((it) => it.id === id);
+            if (!target || target.type !== kind) continue;
+            target.lifeFilter = normalizeConditionFilter(deepCopy(lifeFilter), { allowReason: false });
             changed = true;
         }
         return changed;
@@ -2740,6 +3692,7 @@ function setFaceToCameraSection($card, faceToCamera) {
         const meta = COMMAND_META[cmd.type];
         if (!meta || !Array.isArray(meta.fields) || !meta.fields.length) return;
         const fieldIdx = meta.fields.findIndex((f) => f.k === key);
+        if (fieldIdx < 0) return;
 
         let targetId = id;
         let targetKey = null;
@@ -2762,6 +3715,38 @@ function setFaceToCameraSection($card, faceToCamera) {
             const target = document.querySelector(selector);
             if (target) target.focus();
         }, 0);
+    }
+
+    function applyCommandLifeFilterFromCard($card) {
+        if (!$card || !$card.length) return;
+        const id = $card.data("id");
+        const cmd = state.commands.find((it) => it.id === id);
+        if (!cmd) return;
+        const enabled = $card.find('.cmdInput[data-key="lifeFilter.enabled"]').val() === "true";
+        const $list = $card.find(".cmdLifeRuleList");
+        const rules = readConditionRulesFromDom($list);
+        cmd.lifeFilter = normalizeConditionFilter({
+            enabled,
+            rules,
+        }, { allowReason: false });
+        const syncChanged = syncCommandLifeFilter(id, cmd.lifeFilter);
+        scheduleHistoryPush();
+        scheduleSave();
+        autoGenKotlin();
+        if (syncChanged) {
+            renderCommandList();
+            renderCommandSyncMenu();
+        }
+    }
+
+    function applyDeathConditionFromPanel() {
+        ensureEmitterBehaviorState();
+        const enabled = $("#deathConditionEnabled").val() === "true";
+        const rules = readConditionRulesFromDom($("#deathConditionList"));
+        state.emitterBehavior.death.condition = normalizeConditionFilter({
+            enabled,
+            rules,
+        }, { allowReason: true });
     }
 
     function focusCmdSignInputById(id, selectAll = true) {
@@ -2833,6 +3818,12 @@ function setFaceToCameraSection($card, faceToCamera) {
         }
     }
 
+    function refreshCommandLifeFilterVisibility($card) {
+        if (!$card || !$card.length) return;
+        const enabled = $card.find('.cmdInput[data-key="lifeFilter.enabled"]').val() === "true";
+        $card.find(".cmdLifeWrap").toggleClass("is-disabled", !enabled);
+    }
+
     function renderCommandList() {
         hideCmdTip();
         const $list = $("#cmdList");
@@ -2840,6 +3831,7 @@ function setFaceToCameraSection($card, faceToCamera) {
 
         for (const c of state.commands) {
             const meta = COMMAND_META[c.type];
+            sanitizeCommandLifeFilter(c);
             if (!c.ui || typeof c.ui !== "object") c.ui = { collapsed: false };
             const foldIcon = (c.ui && c.ui.collapsed) ? "▸" : "▾";
             const $card = $(`
@@ -2904,7 +3896,7 @@ function setFaceToCameraSection($card, faceToCamera) {
                     const $f = $(`
             <div class="field">
               <label>${humanFieldName(f.k)}</label>
-              <input class="cmdInput" data-key="${f.k}" type="number" ${step} value="${val}"/>
+              <input class="cmdInput" data-key="${f.k}" data-type="number" type="text" inputmode="decimal" ${step} value="${escapeHtml(String(val ?? ""))}"/>
             </div>
           `);
                     if (f.tip) $f.find(".cmdInput").attr("data-tip", f.tip);
@@ -2950,8 +3942,47 @@ function setFaceToCameraSection($card, faceToCamera) {
             $card.find('.cmdBody').append($signCtl);
             $signCtl.find(".cmdSignInput").attr("data-tip", "生效标识 sign：为空=对所有粒子生效；否则仅当 data.sign 在列表中时生效。");
 
-            const helpSuffix = (Array.isArray(c.signs) && c.signs.length)
-                ? " ) { data, particle -> data.sign == ... }"
+            const lifeFilter = normalizeConditionFilter(c.lifeFilter, { allowReason: false });
+            c.lifeFilter = lifeFilter;
+            const lifeEnabled = !!lifeFilter.enabled;
+            const lifeRules = Array.isArray(lifeFilter.rules) ? lifeFilter.rules : [];
+            const varNames = getEmitterVarNames();
+            const ruleRows = lifeRules.map((r, idx) =>
+                renderConditionRuleRow(r, idx, varNames, false, "cmdLifeRule", "btnDelCmdLifeRule", false)
+            ).join("");
+            const $lifeCtl = $(
+                `<div class="cmdLifeWrap${lifeEnabled ? "" : " is-disabled"}">
+                    <div class="field field-wide">
+                      <label>额外条件</label>
+                      <div class="cmdLifeHead">
+                        <div class="field">
+                          <label>启用</label>
+                          <select class="cmdInput" data-key="lifeFilter.enabled" data-type="bool">
+                            <option value="true">true</option>
+                            <option value="false">false</option>
+                          </select>
+                        </div>
+                        <div class="field lifeRuleTools">
+                          <label>条件卡片</label>
+                          <button class="btn small btnAddCmdLifeRule" type="button">➕ 添加条件</button>
+                        </div>
+                      </div>
+                      <div class="cmdLifeBody">
+                        <div class="expr-rule-list cmdLifeRuleList">${ruleRows || '<div class="small">暂无条件卡片。</div>'}</div>
+                        <div class="small lifeRuleHint">最终会与 sign 条件一起使用 <code>&&</code> 判定。</div>
+                      </div>
+                    </div>
+                 </div>`
+            );
+            $lifeCtl.find('select[data-key="lifeFilter.enabled"]').val(lifeEnabled ? "true" : "false");
+            $lifeCtl.find(".expr-rule-row").each((_, el) => refreshConditionRowVisibility($(el)));
+            $card.find('.cmdBody').append($lifeCtl);
+            refreshCommandLifeFilterVisibility($card);
+
+            const hasSign = Array.isArray(c.signs) && c.signs.length;
+            const hasLife = lifeEnabled && lifeRules.length > 0;
+            const helpSuffix = (hasSign || hasLife)
+                ? " ) { data, particle -> (sign) && (maxAge) }"
                 : " )";
             const $help = $("<div class=\"small\">Kotlin 会生成：<code>.add( " + c.type + "() ..." + helpSuffix + "</code></div>");
             $card.append($help);
@@ -3008,7 +4039,7 @@ function setFaceToCameraSection($card, faceToCamera) {
         if (renderCommandList._eventsBound) return;
         renderCommandList._eventsBound = true;
 
-        $("#cmdList").on("focusin", ".cmdInput, .cmdSignInput", function () {
+        $("#cmdList").on("focusin", ".cmdInput, .cmdSignInput, .cmdLifeRule .exprInput", function () {
             const id = $(this).closest(".cmdCard").data("id");
             if (!id) return;
             if (focusedCommandId !== id) {
@@ -3017,7 +4048,7 @@ function setFaceToCameraSection($card, faceToCamera) {
             }
         });
 
-        $("#cmdList").on("focusout", ".cmdInput, .cmdSignInput", function (e) {
+        $("#cmdList").on("focusout", ".cmdInput, .cmdSignInput, .cmdLifeRule .exprInput", function (e) {
             const to = e.relatedTarget;
             if (to && $(to).closest("#cmdList .cmdCard").length) return;
             if (!focusedCommandId) return;
@@ -3037,7 +4068,7 @@ function setFaceToCameraSection($card, faceToCamera) {
                 cmd.ui.collapsed = false;
                 applyCommandCollapseUI($card, false);
                 scheduleSave();
-                const $first = $card.find(".cmdInput, .cmdSignInput").first();
+                const $first = $card.find(".cmdInput, .cmdSignInput, .exprInput").first();
                 if ($first.length) $first.trigger("focus");
             }
         });
@@ -3099,13 +4130,13 @@ function setFaceToCameraSection($card, faceToCamera) {
             applyCommandSignAdd($card, { keepFocus: true });
         });
 
-        $(document).on("mouseenter", ".emitInput, .cmdInput, .cmdSignInput", function () {
+        $(document).on("mouseenter", ".emitInput, .cmdInput, .cmdSignInput, .exprInput", function () {
             scheduleCmdTip(this);
         });
-        $(document).on("mouseleave", ".emitInput, .cmdInput, .cmdSignInput", function () {
+        $(document).on("mouseleave", ".emitInput, .cmdInput, .cmdSignInput, .exprInput", function () {
             hideCmdTip();
         });
-        $(document).on("mousedown", ".emitInput, .cmdInput, .cmdSignInput", function () {
+        $(document).on("mousedown", ".emitInput, .cmdInput, .cmdSignInput, .exprInput", function () {
             hideCmdTip();
         });
         window.addEventListener("scroll", hideCmdTip, true);
@@ -3145,6 +4176,56 @@ function setFaceToCameraSection($card, faceToCamera) {
             renderCommandList();
             scheduleSave();
             autoGenKotlin();
+        });
+
+        $("#cmdList").on("click", ".btnAddCmdLifeRule", function (e) {
+            e.stopPropagation();
+            const $card = $(this).closest(".cmdCard");
+            const id = $card.data("id");
+            const cmd = state.commands.find((it) => it.id === id);
+            if (!cmd) return;
+            const life = normalizeConditionFilter(cmd.lifeFilter, { allowReason: false });
+            const rules = Array.isArray(life.rules) ? life.rules.slice() : [];
+            rules.push(createConditionRule({}, { allowReason: false }));
+            cmd.lifeFilter = normalizeConditionFilter({
+                enabled: life.enabled,
+                rules,
+            }, { allowReason: false });
+            const syncChanged = syncCommandLifeFilter(cmd.id, cmd.lifeFilter);
+            cardHistory.push();
+            renderCommandList();
+            if (syncChanged) renderCommandSyncMenu();
+            scheduleSave();
+            autoGenKotlin();
+        });
+
+        $("#cmdList").on("click", ".btnDelCmdLifeRule", function (e) {
+            e.stopPropagation();
+            const $card = $(this).closest(".cmdCard");
+            const id = $card.data("id");
+            const cmd = state.commands.find((it) => it.id === id);
+            if (!cmd) return;
+            const life = normalizeConditionFilter(cmd.lifeFilter, { allowReason: false });
+            const rid = String($(this).closest(".expr-rule-row").data("id") || "");
+            let rules = Array.isArray(life.rules) ? life.rules.filter((it) => String(it.id) !== rid) : [];
+            if (!rules.length) rules = [createConditionRule({}, { allowReason: false })];
+            cmd.lifeFilter = normalizeConditionFilter({
+                enabled: life.enabled,
+                rules,
+            }, { allowReason: false });
+            const syncChanged = syncCommandLifeFilter(cmd.id, cmd.lifeFilter);
+            cardHistory.push();
+            renderCommandList();
+            if (syncChanged) renderCommandSyncMenu();
+            scheduleSave();
+            autoGenKotlin();
+        });
+
+        $("#cmdList").on("input change", ".cmdLifeRule .exprInput", function () {
+            const $row = $(this).closest(".expr-rule-row");
+            if ($row.length) refreshConditionRowVisibility($row);
+            const $card = $(this).closest(".cmdCard");
+            applyCommandLifeFilterFromCard($card);
         });
 
         $("#emitList").on("input change", ".emitInput", function () {
@@ -3293,6 +4374,325 @@ function setFaceToCameraSection($card, faceToCamera) {
             cardHistory.push();
             scheduleSave();
             renderCommandList();
+            autoGenKotlin();
+        });
+
+        $("#btnAddGlobalVar").on("click", () => {
+            ensureEmitterBehaviorState();
+            state.emitterBehavior.emitterVars.push(createEmitterVar());
+            cardHistory.push();
+            renderEmitterBehaviorEditors();
+            refreshAllVarBindings();
+            scheduleSave();
+            autoGenKotlin();
+        });
+
+        $("#btnAddTickAction").on("click", () => {
+            ensureEmitterBehaviorState();
+            const item = createTickAction();
+            const vars = getEmitterVarNames();
+            if (vars.length) item.varName = vars[0];
+            state.emitterBehavior.tickActions.push(item);
+            cardHistory.push();
+            renderEmitterBehaviorEditors();
+            scheduleSave();
+            autoGenKotlin();
+        });
+
+        $("#globalVarList").on("input change", ".globalVarInput", function (e) {
+            ensureEmitterBehaviorState();
+            const $row = $(this).closest(".kv-row");
+            const id = $row.data("id");
+            const key = String($(this).data("key") || "");
+            const item = state.emitterBehavior.emitterVars.find((it) => it.id === id);
+            if (!item || !key) return;
+
+            if (key === "name") {
+                const raw = String($(this).val() || "").trim();
+                item.name = raw;
+                if (raw && !isValidEmitterVarName(raw) && e && e.type === "change") {
+                    toast("变量名不合法（仅支持 [A-Za-z_][A-Za-z0-9_]* ）", "error");
+                }
+            } else if (key === "type") {
+                item.type = ($(this).val() === "int") ? "int" : "double";
+                item.defaultValue = item.type === "int"
+                    ? Math.trunc(safeNum(item.defaultValue, 0))
+                    : safeNum(item.defaultValue, 0);
+                item.minValue = item.type === "int"
+                    ? Math.trunc(safeNum(item.minValue, 0))
+                    : safeNum(item.minValue, 0);
+                item.maxValue = item.type === "int"
+                    ? Math.trunc(safeNum(item.maxValue, 0))
+                    : safeNum(item.maxValue, 0);
+            } else if (key === "defaultValue") {
+                item.defaultValue = safeNum($(this).val(), item.defaultValue);
+                if (item.type === "int") item.defaultValue = Math.trunc(item.defaultValue);
+            } else if (key === "minEnabled") {
+                item.minEnabled = $(this).is(":checked");
+            } else if (key === "maxEnabled") {
+                item.maxEnabled = $(this).is(":checked");
+            } else if (key === "minValue") {
+                item.minValue = safeNum($(this).val(), item.minValue);
+                if (item.type === "int") item.minValue = Math.trunc(item.minValue);
+            } else if (key === "maxValue") {
+                item.maxValue = safeNum($(this).val(), item.maxValue);
+                if (item.type === "int") item.maxValue = Math.trunc(item.maxValue);
+            }
+            if (item.minEnabled && item.maxEnabled && item.minValue > item.maxValue) {
+                const t = item.minValue;
+                item.minValue = item.maxValue;
+                item.maxValue = t;
+            }
+            const varSchemaChanged = (key === "name" || key === "type");
+            if (varSchemaChanged && e && e.type === "change") {
+                renderEmitterBehaviorEditors();
+            }
+            if (varSchemaChanged) {
+                refreshAllVarBindings();
+            }
+            scheduleHistoryPush();
+            scheduleSave();
+            autoGenKotlin();
+        });
+
+        $("#globalVarList").on("click", ".btnDelGlobalVar", function () {
+            ensureEmitterBehaviorState();
+            const id = $(this).closest(".kv-row").data("id");
+            state.emitterBehavior.emitterVars = state.emitterBehavior.emitterVars.filter((it) => it.id !== id);
+            cardHistory.push();
+            renderEmitterBehaviorEditors();
+            refreshAllVarBindings();
+            scheduleSave();
+            autoGenKotlin();
+        });
+
+        $("#tickActionList").on("input change", ".exprInput", function () {
+            ensureEmitterBehaviorState();
+            const $row = $(this).closest(".expr-action-row");
+            if (!$row.length) return;
+            refreshActionRowVisibility($row);
+            const id = String($row.data("id") || "");
+            const next = readActionFromRow($row);
+            const item = state.emitterBehavior.tickActions.find((it) => String(it.id) === id);
+            if (item) Object.assign(item, next);
+            else state.emitterBehavior.tickActions.push(next);
+            scheduleHistoryPush();
+            scheduleSave();
+            autoGenKotlin();
+        });
+
+        $("#tickActionList").on("click", ".btnAddTickCondRule", function () {
+            ensureEmitterBehaviorState();
+            const $row = $(this).closest(".expr-action-row");
+            if (!$row.length) return;
+            const id = String($row.data("id") || "");
+            const item = state.emitterBehavior.tickActions.find((it) => String(it.id) === id);
+            const next = item ? deepCopy(item) : readActionFromRow($row);
+            const cond = normalizeConditionFilter(next.condition, { allowReason: false });
+            const rules = Array.isArray(cond.rules) ? cond.rules.slice() : [];
+            rules.push(createConditionRule({}, { allowReason: false }));
+            next.condition = normalizeConditionFilter({
+                enabled: cond.enabled,
+                rules,
+            }, { allowReason: false });
+            if (item) Object.assign(item, next);
+            else state.emitterBehavior.tickActions.push(next);
+            cardHistory.push();
+            renderEmitterBehaviorEditors();
+            scheduleSave();
+            autoGenKotlin();
+        });
+
+        $("#tickActionList").on("click", ".btnDelTickCondRule", function () {
+            ensureEmitterBehaviorState();
+            const $row = $(this).closest(".expr-action-row");
+            if (!$row.length) return;
+            const rid = String($(this).closest(".expr-rule-row").data("id") || "");
+            const id = String($row.data("id") || "");
+            const item = state.emitterBehavior.tickActions.find((it) => String(it.id) === id);
+            if (!item) return;
+            const cond = normalizeConditionFilter(item.condition, { allowReason: false });
+            let rules = Array.isArray(cond.rules) ? cond.rules.filter((it) => String(it.id) !== rid) : [];
+            if (!rules.length) rules = [createConditionRule({}, { allowReason: false })];
+            item.condition = normalizeConditionFilter({
+                enabled: cond.enabled,
+                rules,
+            }, { allowReason: false });
+            cardHistory.push();
+            renderEmitterBehaviorEditors();
+            scheduleSave();
+            autoGenKotlin();
+        });
+
+        $("#tickActionList").on("click", ".btnDelTickAction", function () {
+            ensureEmitterBehaviorState();
+            const id = $(this).closest(".expr-action-row").data("id");
+            state.emitterBehavior.tickActions = state.emitterBehavior.tickActions.filter((it) => it.id !== id);
+            cardHistory.push();
+            renderEmitterBehaviorEditors();
+            scheduleSave();
+            autoGenKotlin();
+        });
+
+        $("#btnAddDeathVarAction").on("click", () => {
+            ensureEmitterBehaviorState();
+            if (!Array.isArray(state.emitterBehavior.death.varActions)) state.emitterBehavior.death.varActions = [];
+            const item = createDeathVarAction();
+            const vars = getEmitterVarNames();
+            if (vars.length) item.varName = vars[0];
+            state.emitterBehavior.death.varActions.push(item);
+            cardHistory.push();
+            renderEmitterBehaviorEditors();
+            scheduleSave();
+            autoGenKotlin();
+        });
+
+        $("#btnAddDeathCondRule").on("click", () => {
+            ensureEmitterBehaviorState();
+            const cond = normalizeConditionFilter(state.emitterBehavior.death.condition, { allowReason: true });
+            const enabled = $("#deathConditionEnabled").val() === "true";
+            const rules = Array.isArray(cond.rules) ? cond.rules.slice() : [];
+            rules.push(createConditionRule({}, { allowReason: true }));
+            state.emitterBehavior.death.condition = normalizeConditionFilter({
+                enabled,
+                rules,
+            }, { allowReason: true });
+            cardHistory.push();
+            renderEmitterBehaviorEditors();
+            scheduleSave();
+            autoGenKotlin();
+        });
+
+        $("#deathConditionList").on("click", ".btnDelDeathCondRule", function () {
+            ensureEmitterBehaviorState();
+            const cond = normalizeConditionFilter(state.emitterBehavior.death.condition, { allowReason: true });
+            const rid = String($(this).closest(".expr-rule-row").data("id") || "");
+            let rules = Array.isArray(cond.rules) ? cond.rules.filter((it) => String(it.id) !== rid) : [];
+            if (!rules.length) rules = [createConditionRule({}, { allowReason: true })];
+            state.emitterBehavior.death.condition = normalizeConditionFilter({
+                enabled: cond.enabled,
+                rules,
+            }, { allowReason: true });
+            cardHistory.push();
+            renderEmitterBehaviorEditors();
+            scheduleSave();
+            autoGenKotlin();
+        });
+
+        $("#deathConditionList").on("input change", ".deathCondRule .exprInput", function () {
+            const $row = $(this).closest(".expr-rule-row");
+            if ($row.length) refreshConditionRowVisibility($row);
+            applyDeathConditionFromPanel();
+            scheduleHistoryPush();
+            scheduleSave();
+            autoGenKotlin();
+        });
+
+        $("#deathVarActionList").on("input change", ".exprInput", function () {
+            ensureEmitterBehaviorState();
+            const $row = $(this).closest(".expr-action-row");
+            if (!$row.length) return;
+            refreshActionRowVisibility($row);
+            const id = String($row.data("id") || "");
+            const next = readActionFromRow($row);
+            const item = state.emitterBehavior.death.varActions.find((it) => String(it.id) === id);
+            if (item) Object.assign(item, next);
+            else state.emitterBehavior.death.varActions.push(next);
+            scheduleHistoryPush();
+            scheduleSave();
+            autoGenKotlin();
+        });
+
+        $("#deathVarActionList").on("click", ".btnDelDeathVarAction", function () {
+            ensureEmitterBehaviorState();
+            const id = $(this).closest(".expr-action-row").data("id");
+            state.emitterBehavior.death.varActions = state.emitterBehavior.death.varActions.filter((it) => it.id !== id);
+            cardHistory.push();
+            renderEmitterBehaviorEditors();
+            scheduleSave();
+            autoGenKotlin();
+        });
+
+        $("#deathEnabled").on("change", function () {
+            ensureEmitterBehaviorState();
+            state.emitterBehavior.death.enabled = ($(this).val() === "true");
+            scheduleHistoryPush();
+            renderEmitterBehaviorEditors();
+            scheduleSave();
+            autoGenKotlin();
+        });
+
+        $("#deathMode").on("change", function () {
+            ensureEmitterBehaviorState();
+            state.emitterBehavior.death.mode = ($(this).val() === "respawn") ? "respawn" : "dissipate";
+            scheduleHistoryPush();
+            renderEmitterBehaviorEditors();
+            scheduleSave();
+            autoGenKotlin();
+        });
+
+        $("#deathSignMode").on("change", function () {
+            ensureEmitterBehaviorState();
+            state.emitterBehavior.death.signMode = ($(this).val() === "set") ? "set" : "keep";
+            scheduleHistoryPush();
+            renderEmitterBehaviorEditors();
+            scheduleSave();
+            autoGenKotlin();
+        });
+
+        $("#deathConditionEnabled").on("change", function () {
+            applyDeathConditionFromPanel();
+            scheduleHistoryPush();
+            renderEmitterBehaviorEditors();
+            scheduleSave();
+            autoGenKotlin();
+        });
+
+        $("#deathMaxAgeEnabled").on("change", function () {
+            ensureEmitterBehaviorState();
+            state.emitterBehavior.death.maxAgeEnabled = ($(this).val() === "true");
+            scheduleHistoryPush();
+            renderEmitterBehaviorEditors();
+            scheduleSave();
+            autoGenKotlin();
+        });
+
+        $("#deathMaxAgeType").on("change", function () {
+            ensureEmitterBehaviorState();
+            state.emitterBehavior.death.maxAgeValueType = String($(this).val() || "number");
+            scheduleHistoryPush();
+            renderEmitterBehaviorEditors();
+            scheduleSave();
+            autoGenKotlin();
+        });
+
+        $("#deathMaxAgeValueNum, #deathMaxAgeValueVar").on("input change", function () {
+            ensureEmitterBehaviorState();
+            const type = String(state.emitterBehavior.death.maxAgeValueType || "number");
+            if (type === "var") {
+                state.emitterBehavior.death.maxAgeValue = String($("#deathMaxAgeValueVar").val() || "").trim();
+            } else {
+                state.emitterBehavior.death.maxAgeValue = safeNum($("#deathMaxAgeValueNum").val(), 1);
+            }
+            scheduleHistoryPush();
+            scheduleSave();
+            autoGenKotlin();
+        });
+
+        $("#deathRespawnCount, #deathSizeMul, #deathSpeedMul, #deathOffX, #deathOffY, #deathOffZ, #deathSignValue").on("input change", function () {
+            ensureEmitterBehaviorState();
+            const key = this.id;
+            const raw = String($(this).val() || "").trim();
+            const val = parseNumOrExprInput(raw, 0);
+            if (key === "deathRespawnCount") state.emitterBehavior.death.respawnCount = val;
+            else if (key === "deathSizeMul") state.emitterBehavior.death.sizeMul = val;
+            else if (key === "deathSpeedMul") state.emitterBehavior.death.speedMul = val;
+            else if (key === "deathOffX") state.emitterBehavior.death.offset.x = val;
+            else if (key === "deathOffY") state.emitterBehavior.death.offset.y = val;
+            else if (key === "deathOffZ") state.emitterBehavior.death.offset.z = val;
+            else if (key === "deathSignValue") state.emitterBehavior.death.signValue = val;
+            scheduleHistoryPush();
+            scheduleSave();
             autoGenKotlin();
         });
 

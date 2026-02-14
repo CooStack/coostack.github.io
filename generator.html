@@ -89,6 +89,118 @@
                     <input id="kRefName" type="text" value="emitter"/>
                 </div>
             </div>
+            <div class="panel-subtitle">全局发射器变量</div>
+            <div id="globalVarList" class="kv-list"></div>
+            <div class="add-row">
+                <button class="btn small" id="btnAddGlobalVar">➕ 添加变量</button>
+            </div>
+
+            <div class="panel-subtitle">doTick 修改语句</div>
+            <div id="tickActionList" class="kv-list"></div>
+            <div class="add-row">
+                <button class="btn small" id="btnAddTickAction">➕ 添加修改卡片</button>
+            </div>
+
+            <div class="panel-subtitle">死亡行为（singleParticleDeathAction）</div>
+            <div class="grid2" id="deathBaseRow">
+                <div class="field">
+                    <label>启用死亡逻辑</label>
+                    <select id="deathEnabled" class="input">
+                        <option value="true">true</option>
+                        <option value="false">false</option>
+                    </select>
+                </div>
+                <div class="field">
+                    <label>模式</label>
+                    <select id="deathMode" class="input">
+                        <option value="dissipate">直接消散</option>
+                        <option value="respawn">重生粒子</option>
+                    </select>
+                </div>
+            </div>
+            <div id="deathLogicBody">
+                <div class="grid2" id="deathConditionHead">
+                    <div class="field">
+                        <label>条件启用</label>
+                        <select id="deathConditionEnabled" class="input">
+                            <option value="true">true</option>
+                            <option value="false">false</option>
+                        </select>
+                    </div>
+                    <div class="field" id="deathConditionTools">
+                        <label>条件卡片</label>
+                        <button class="btn small" id="btnAddDeathCondRule" type="button">➕ 添加条件</button>
+                    </div>
+                </div>
+                <div id="deathConditionList" class="kv-list expr-rule-list"></div>
+                <div id="deathRespawnBlock">
+                    <div class="grid3">
+                        <div class="field">
+                            <label>重生数量</label>
+                            <input id="deathRespawnCount" class="input" type="text" inputmode="decimal" value="1"/>
+                        </div>
+                        <div class="field">
+                            <label>size 倍率</label>
+                            <input id="deathSizeMul" class="input" type="text" inputmode="decimal" value="1.0"/>
+                        </div>
+                        <div class="field">
+                            <label>speed 倍率</label>
+                            <input id="deathSpeedMul" class="input" type="text" inputmode="decimal" value="1.0"/>
+                        </div>
+                    </div>
+                    <div class="vec3Row">
+                        <div class="miniLabel">重生偏移 Vec3</div>
+                        <div class="vec3">
+                            <input id="deathOffX" class="input" type="text" inputmode="decimal" value="0"/>
+                            <input id="deathOffY" class="input" type="text" inputmode="decimal" value="0"/>
+                            <input id="deathOffZ" class="input" type="text" inputmode="decimal" value="0"/>
+                        </div>
+                    </div>
+                    <div class="grid2">
+                        <div class="field">
+                            <label>sign 处理</label>
+                            <select id="deathSignMode" class="input">
+                                <option value="keep">保持旧 sign</option>
+                                <option value="set">覆盖 sign</option>
+                            </select>
+                        </div>
+                        <div class="field" id="deathSignValueWrap">
+                            <label>sign 值</label>
+                            <input id="deathSignValue" class="input" type="text" inputmode="decimal" value="0"/>
+                        </div>
+                    </div>
+                    <div class="grid3">
+                        <div class="field">
+                            <label>maxAge 覆盖</label>
+                            <select id="deathMaxAgeEnabled" class="input">
+                                <option value="false">false</option>
+                                <option value="true">true</option>
+                            </select>
+                        </div>
+                        <div class="field">
+                            <label>来源</label>
+                            <select id="deathMaxAgeType" class="input">
+                                <option value="number">常量</option>
+                                <option value="var">变量</option>
+                                <option value="age">age</option>
+                                <option value="maxAge">maxAge</option>
+                                <option value="respawnCount">respawnCount</option>
+                            </select>
+                        </div>
+                        <div class="field">
+                            <label>值</label>
+                            <input id="deathMaxAgeValueNum" class="input" type="number" step="1" min="1" value="1"/>
+                            <select id="deathMaxAgeValueVar" class="input"></select>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="panel-subtitle" id="deathVarActionTitle">死亡时变量修改语句</div>
+                <div id="deathVarActionList" class="kv-list"></div>
+                <div class="add-row" id="deathVarActionAddRow">
+                    <button class="btn small" id="btnAddDeathVarAction">➕ 添加修改卡片</button>
+                </div>
+            </div>
             <div class="hint">
                 预览相机操作：<strong>中键旋转</strong> /
                 <strong>右键平移</strong> / <strong>方向键平移</strong> /

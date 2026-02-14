@@ -8,9 +8,27 @@ export const safeNum = (v, def = 0) => {
     return Number.isFinite(n) ? n : def;
 };
 
+export function isNumericLiteral(v) {
+    const s = String(v ?? "").trim();
+    if (!s) return false;
+    const n = Number(s);
+    return Number.isFinite(n);
+}
+
+export function sanitizeKNumExpr(raw) {
+    const s = String(raw ?? "").trim();
+    if (!s) return "";
+    if (/^[A-Za-z_][A-Za-z0-9_]*$/.test(s)) return s;
+    return "";
+}
+
 export const fmtD = (n) => {
-    if (!Number.isFinite(n)) return "0.0";
-    let s = (Math.round(n * 1000000) / 1000000).toString();
+    const num = Number(n);
+    if (!Number.isFinite(num)) {
+        const expr = sanitizeKNumExpr(n);
+        return expr ? `(${expr}).toDouble()` : "0.0";
+    }
+    let s = (Math.round(num * 1000000) / 1000000).toString();
     if (!s.includes(".")) s += ".0";
     return s;
 };
