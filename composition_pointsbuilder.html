@@ -299,7 +299,8 @@
             const params = new URLSearchParams(window.location.search);
             const returnPage = params.get("return") || "composition_builder.html";
             const cardId = params.get("card") || "";
-            const target = params.get("target") === "shape" ? "shape" : "root";
+            const rawTarget = String(params.get("target") || "").trim();
+            const target = (/^shape_level:\d+$/.test(rawTarget) || rawTarget === "shape" || rawTarget === "shape_child") ? rawTarget : "root";
             back.addEventListener("click", (ev) => {
                 ev.preventDefault();
                 if (window.parent && window.parent !== window) {

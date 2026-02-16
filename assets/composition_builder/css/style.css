@@ -550,6 +550,14 @@ body[data-theme^="light"] select.input option {
     align-items: center;
 }
 
+.pinit-value.preset-only {
+    grid-template-columns: minmax(170px, .95fr);
+}
+
+.pinit-manual-hidden {
+    display: none !important;
+}
+
 .kv-row.grid-const > :nth-child(1) {
     grid-column: 1;
 }
@@ -717,6 +725,11 @@ body[data-theme^="light"] select.input option {
 .subgroup.subgroup-tight {
     padding: 6px;
     gap: 6px;
+}
+
+.nested-shape-level {
+    margin-top: 8px;
+    border-style: dashed;
 }
 
 .subgroup-head {

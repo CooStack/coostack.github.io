@@ -78,10 +78,12 @@ const GLOBAL_VAR_TYPES = [
     "Vector3f"
 ];
 
+const DEFAULT_EFFECT_CLASS = "ControlableEndRodEffect";
+
 const EFFECT_CLASS_OPTIONS = [
+    "ControlableEndRodEffect",
     "ControlableEnchantmentEffect",
     "ControlableCloudEffect",
-    "ControlableEndRodEffect",
     "ControlableFallingDustEffect",
     "ControlableSplashEffect",
     "ControlableFlashEffect",
@@ -100,13 +102,9 @@ const CONTROLLER_VAR_TYPES = [
 const PARTICLE_INIT_TARGET_OPTIONS = [
     "color",
     "size",
+    "particleAlpha",
     "currentAge",
-    "age",
-    "alpha",
-    "textureSheet",
-    "particleColor",
-    "particleSize",
-    "particleAlpha"
+    "textureSheet"
 ];
 
 const CONTROLLER_ACTION_TYPES = [
@@ -315,6 +313,8 @@ const JS_LINT_GLOBALS = new Set([
     "PI", "age", "tick", "index",
     "rotateTo", "rotateAsAxis", "rotateToWithAngle", "addSingle", "addMultiple", "addPreTickAction",
     "setReversedScaleOnCompositionStatus", "particle",
+    "thisAt",
+    "color", "size", "alpha", "particleColor", "particleSize", "particleAlpha", "currentAge", "textureSheet",
     "RelativeLocation", "Vec3", "Vector3f"
 ]);
 
@@ -492,6 +492,31 @@ function normalizeBuilderState(raw) {
     return base;
 }
 
+function normalizeShapeNestedLevel(raw, index = 0) {
+    const x = Object.assign({}, raw || {});
+    x.id = x.id || uid();
+    x.collapsed = !!x.collapsed;
+    x.type = ["single", "particle_shape", "sequenced_shape"].includes(String(x.type || "")) ? String(x.type) : "single";
+    x.effectClass = String(x.effectClass || DEFAULT_EFFECT_CLASS);
+    x.bindMode = x.bindMode === "builder" ? "builder" : "point";
+    x.point = x.point && typeof x.point === "object" ? x.point : { x: 0, y: 0, z: 0 };
+    x.point.x = num(x.point.x);
+    x.point.y = num(x.point.y);
+    x.point.z = num(x.point.z);
+    x.builderState = normalizeBuilderState(x.builderState);
+    x.axisPreset = String(x.axisPreset || "RelativeLocation.yAxis()");
+    x.axisExpr = String(x.axisExpr || x.axisPreset || "RelativeLocation.yAxis()");
+    x.axisManualCtor = normalizeVectorCtor(x.axisManualCtor || parseCtorInLiteral(x.axisExpr, "RelativeLocation"));
+    x.axisManualX = Number.isFinite(Number(x.axisManualX)) ? num(x.axisManualX) : 0;
+    x.axisManualY = Number.isFinite(Number(x.axisManualY)) ? num(x.axisManualY) : 1;
+    x.axisManualZ = Number.isFinite(Number(x.axisManualZ)) ? num(x.axisManualZ) : 0;
+    x.displayActions = Array.isArray(x.displayActions) ? x.displayActions.map((a) => normalizeDisplayAction(a)) : [];
+    x.scale = normalizeScaleHelperConfig(x.scale, { type: "none" });
+    x.growthAnimates = Array.isArray(x.growthAnimates) ? x.growthAnimates.map((it) => normalizeAnimate(it)) : [];
+    x.name = String(x.name || `嵌套层 ${index + 2}`);
+    return x;
+}
+
 function normalizeCard(card, index = 0) {
     const x = Object.assign({}, card || {});
     x.id = x.id || uid();
@@ -506,7 +531,7 @@ function normalizeCard(card, index = 0) {
     x.builderState = normalizeBuilderState(x.builderState);
     x.builderKotlinOverride = String(x.builderKotlinOverride || "");
     x.dataType = ["single", "particle_shape", "sequenced_shape"].includes(x.dataType) ? x.dataType : "single";
-    x.singleEffectClass = String(x.singleEffectClass || "ControlableEnchantmentEffect");
+    x.singleEffectClass = String(x.singleEffectClass || DEFAULT_EFFECT_CLASS);
     x.particleInit = Array.isArray(x.particleInit) ? x.particleInit : [];
     x.controllerVars = Array.isArray(x.controllerVars) ? x.controllerVars : [];
     x.particleInit = x.particleInit.map((it) => {
@@ -514,7 +539,7 @@ function normalizeCard(card, index = 0) {
         const expr = String(it?.expr || preset || "");
         return {
             id: it?.id || uid(),
-            target: String(it?.target || "color"),
+            target: String(it?.target || "size"),
             expr,
             exprPreset: preset
         };
@@ -559,7 +584,14 @@ function normalizeCard(card, index = 0) {
     x.shapeChildType = ["single", "particle_shape", "sequenced_shape"].includes(String(x.shapeChildType || ""))
         ? String(x.shapeChildType)
         : "single";
-    x.shapeChildEffectClass = String(x.shapeChildEffectClass || x.singleEffectClass || "ControlableEnchantmentEffect");
+    x.shapeChildEffectClass = String(x.shapeChildEffectClass || x.singleEffectClass || DEFAULT_EFFECT_CLASS);
+    x.shapeChildCollapsed = !!x.shapeChildCollapsed;
+    x.shapeChildBindMode = x.shapeChildBindMode === "builder" ? "builder" : "point";
+    x.shapeChildPoint = x.shapeChildPoint && typeof x.shapeChildPoint === "object" ? x.shapeChildPoint : { x: 0, y: 0, z: 0 };
+    x.shapeChildPoint.x = num(x.shapeChildPoint.x);
+    x.shapeChildPoint.y = num(x.shapeChildPoint.y);
+    x.shapeChildPoint.z = num(x.shapeChildPoint.z);
+    x.shapeChildBuilderState = normalizeBuilderState(x.shapeChildBuilderState);
     x.shapeChildAxisPreset = String(x.shapeChildAxisPreset || "RelativeLocation.yAxis()");
     x.shapeChildAxisExpr = String(x.shapeChildAxisExpr || x.shapeChildAxisPreset || "RelativeLocation.yAxis()");
     x.shapeChildAxisManualCtor = normalizeVectorCtor(x.shapeChildAxisManualCtor || parseCtorInLiteral(x.shapeChildAxisExpr, "RelativeLocation"));
@@ -569,6 +601,9 @@ function normalizeCard(card, index = 0) {
     x.shapeChildDisplayActions = Array.isArray(x.shapeChildDisplayActions) ? x.shapeChildDisplayActions.map((a) => normalizeDisplayAction(a)) : [];
     x.shapeChildScale = normalizeScaleHelperConfig(x.shapeChildScale, { type: "none" });
     x.shapeChildGrowthAnimates = Array.isArray(x.shapeChildGrowthAnimates) ? x.shapeChildGrowthAnimates.map((it) => normalizeAnimate(it)) : [];
+    x.shapeChildLevels = Array.isArray(x.shapeChildLevels)
+        ? x.shapeChildLevels.map((it, i) => normalizeShapeNestedLevel(it, i))
+        : [];
     return x;
 }
 
@@ -579,7 +614,7 @@ function createDefaultCard(index = 0) {
         point: { x: 0, y: 0, z: 0 },
         builderState: createDefaultBuilderState(),
         dataType: "single",
-        singleEffectClass: "ControlableEnchantmentEffect",
+        singleEffectClass: DEFAULT_EFFECT_CLASS,
         particleInit: [],
         controllerVars: [],
         controllerActions: [],
@@ -608,7 +643,11 @@ function createDefaultCard(index = 0) {
         shapePoint: { x: 0, y: 0, z: 0 },
         shapeBuilderState: createDefaultBuilderState(),
         shapeChildType: "single",
-        shapeChildEffectClass: "ControlableEnchantmentEffect",
+        shapeChildEffectClass: DEFAULT_EFFECT_CLASS,
+        shapeChildCollapsed: false,
+        shapeChildBindMode: "point",
+        shapeChildPoint: { x: 0, y: 0, z: 0 },
+        shapeChildBuilderState: createDefaultBuilderState(),
         shapeChildAxisPreset: "RelativeLocation.yAxis()",
         shapeChildAxisExpr: "RelativeLocation.yAxis()",
         shapeChildAxisManualCtor: "RelativeLocation",
@@ -618,6 +657,7 @@ function createDefaultCard(index = 0) {
         shapeChildDisplayActions: [],
         shapeChildScale: { type: "none" },
         shapeChildGrowthAnimates: [],
+        shapeChildLevels: [],
         sectionCollapse: createDefaultCardSectionCollapse()
     }, index);
 }
@@ -740,6 +780,13 @@ function createDefaultState() {
         },
         hotkeys: deepClone(DEFAULT_HOTKEYS)
     });
+}
+
+function normalizeBuilderTarget(targetRaw) {
+    const target = String(targetRaw || "").trim();
+    if (/^shape_level:\d+$/.test(target)) return target;
+    if (target === "shape" || target === "shape_child") return target;
+    return "root";
 }
 
 function loadStateFromStorage() {
@@ -951,9 +998,12 @@ class CompositionBuilderApp {
         this.previewLocalBase = [];
         this.previewAnchorRef = [];
         this.previewLocalRef = [];
+        this.previewLevelBases = [];
+        this.previewLevelRefs = [];
         this.previewUseLocalOps = [];
         this.previewVisibleMask = [];
         this.previewSizeFactors = [];
+        this.previewAlphaFactors = [];
         this.cardColorCache = new Map();
         this.previewAnimStart = performance.now();
         this.previewPerfLastTs = 0;
@@ -966,6 +1016,9 @@ class CompositionBuilderApp {
         this.previewExprPrefixCache = new Map();
         this.previewExprFnCache = new Map();
         this.previewCondFnCache = new Map();
+        this.previewNumericFnCache = new Map();
+        this.previewRuntimeGlobals = null;
+        this.previewRuntimeAppliedTick = -1;
         this.lastExportedStateSig = this.readExportedSignature();
 
         this.selectState = null;
@@ -1258,13 +1311,22 @@ class CompositionBuilderApp {
         this.pointsMat = new THREE.PointsMaterial({
             size: this.state.settings.pointSize,
             sizeAttenuation: true,
-            vertexColors: true
+            vertexColors: true,
+            transparent: true
         });
         this.pointsMat.onBeforeCompile = (shader) => {
-            shader.vertexShader = `attribute float aSize;\n${shader.vertexShader}`;
-            shader.vertexShader = shader.vertexShader.replace(/gl_PointSize\s*=\s*size\s*;/g, "gl_PointSize = size * max(aSize, 0.05);");
+            shader.vertexShader = `attribute float aSize;\nattribute float aAlpha;\nvarying float vAlpha;\n${shader.vertexShader}`;
+            shader.vertexShader = shader.vertexShader.replace(
+                /gl_PointSize\s*=\s*size\s*;/g,
+                "gl_PointSize = size * max(aSize, 0.05);\n    vAlpha = clamp(aAlpha, 0.0, 1.0);"
+            );
+            shader.fragmentShader = `varying float vAlpha;\n${shader.fragmentShader}`;
+            shader.fragmentShader = shader.fragmentShader.replace(
+                /vec4\s+diffuseColor\s*=\s*vec4\(\s*diffuse\s*,\s*opacity\s*\)\s*;/g,
+                "vec4 diffuseColor = vec4( diffuse, opacity * clamp(vAlpha, 0.0, 1.0) );"
+            );
         };
-        this.pointsMat.customProgramCacheKey = () => "cb_points_size_v1";
+        this.pointsMat.customProgramCacheKey = () => "cb_points_size_alpha_v2";
         this.pointsMesh = new THREE.Points(this.pointsGeom, this.pointsMat);
         this.pointsMesh.frustumCulled = false;
         this.scene.add(this.pointsMesh);
@@ -2075,12 +2137,190 @@ class CompositionBuilderApp {
         }
     }
 
+    getRootShapeChildLevel(card) {
+        if (!card) return normalizeShapeNestedLevel({});
+        return normalizeShapeNestedLevel({
+            collapsed: !!card.shapeChildCollapsed,
+            type: card.shapeChildType,
+            effectClass: card.shapeChildEffectClass,
+            bindMode: card.shapeChildBindMode,
+            point: card.shapeChildPoint,
+            builderState: card.shapeChildBuilderState,
+            axisPreset: card.shapeChildAxisPreset,
+            axisExpr: card.shapeChildAxisExpr,
+            axisManualCtor: card.shapeChildAxisManualCtor,
+            axisManualX: card.shapeChildAxisManualX,
+            axisManualY: card.shapeChildAxisManualY,
+            axisManualZ: card.shapeChildAxisManualZ,
+            displayActions: card.shapeChildDisplayActions,
+            scale: card.shapeChildScale,
+            growthAnimates: card.shapeChildGrowthAnimates
+        }, 0);
+    }
+
+    setRootShapeChildLevel(card, levelRaw) {
+        if (!card) return;
+        const level = normalizeShapeNestedLevel(levelRaw, 0);
+        card.shapeChildCollapsed = !!level.collapsed;
+        card.shapeChildType = level.type;
+        card.shapeChildEffectClass = level.effectClass;
+        card.shapeChildBindMode = level.bindMode;
+        card.shapeChildPoint = { x: num(level.point?.x), y: num(level.point?.y), z: num(level.point?.z) };
+        card.shapeChildBuilderState = normalizeBuilderState(level.builderState);
+        card.shapeChildAxisPreset = String(level.axisPreset || "");
+        card.shapeChildAxisExpr = String(level.axisExpr || "");
+        card.shapeChildAxisManualCtor = normalizeVectorCtor(level.axisManualCtor || "RelativeLocation");
+        card.shapeChildAxisManualX = num(level.axisManualX);
+        card.shapeChildAxisManualY = num(level.axisManualY);
+        card.shapeChildAxisManualZ = num(level.axisManualZ);
+        card.shapeChildDisplayActions = (level.displayActions || []).map((a) => normalizeDisplayAction(a));
+        card.shapeChildScale = normalizeScaleHelperConfig(level.scale, { type: "none" });
+        card.shapeChildGrowthAnimates = (level.growthAnimates || []).map((a) => normalizeAnimate(a));
+    }
+
+    getNestedShapeLevel(card, levelIdx, create = false) {
+        if (!card) return null;
+        const idx = int(levelIdx);
+        if (idx <= 0) return this.getRootShapeChildLevel(card);
+        if (!Array.isArray(card.shapeChildLevels)) card.shapeChildLevels = [];
+        if (create) {
+            while (card.shapeChildLevels.length < idx) {
+                card.shapeChildLevels.push(normalizeShapeNestedLevel({}, card.shapeChildLevels.length));
+            }
+        }
+        const hit = card.shapeChildLevels[idx - 1];
+        return hit ? normalizeShapeNestedLevel(hit, idx - 1) : null;
+    }
+
+    setNestedShapeLevel(card, levelIdx, levelRaw) {
+        if (!card) return;
+        const idx = int(levelIdx);
+        if (idx <= 0) {
+            this.setRootShapeChildLevel(card, levelRaw);
+            return;
+        }
+        if (!Array.isArray(card.shapeChildLevels)) card.shapeChildLevels = [];
+        while (card.shapeChildLevels.length < idx) {
+            card.shapeChildLevels.push(normalizeShapeNestedLevel({}, card.shapeChildLevels.length));
+        }
+        card.shapeChildLevels[idx - 1] = normalizeShapeNestedLevel(levelRaw, idx - 1);
+    }
+
+    addNestedShapeLevel(card, parentLevelIdx = 0) {
+        if (!card) return;
+        const parentIdx = Math.max(0, int(parentLevelIdx));
+        const keep = Math.max(0, parentIdx);
+        if (!Array.isArray(card.shapeChildLevels)) card.shapeChildLevels = [];
+        card.shapeChildLevels = card.shapeChildLevels.slice(0, keep);
+        card.shapeChildLevels.push(normalizeShapeNestedLevel({}, keep));
+    }
+
+    removeNestedShapeLevel(card, levelIdx = 1) {
+        if (!card) return;
+        const idx = int(levelIdx);
+        if (idx <= 0) return;
+        if (!Array.isArray(card.shapeChildLevels)) card.shapeChildLevels = [];
+        if (idx - 1 < card.shapeChildLevels.length) {
+            card.shapeChildLevels = card.shapeChildLevels.slice(0, Math.max(0, idx - 1));
+        }
+    }
+
+    pruneNestedShapeLevels(card) {
+        if (!card || !Array.isArray(card.shapeChildLevels)) return;
+        const kept = [];
+        let parentType = String(card.shapeChildType || "single");
+        for (let i = 0; i < card.shapeChildLevels.length; i++) {
+            if (parentType === "single") break;
+            const lv = normalizeShapeNestedLevel(card.shapeChildLevels[i], i);
+            kept.push(lv);
+            parentType = lv.type;
+        }
+        card.shapeChildLevels = kept;
+    }
+
+    getShapeChildChain(card) {
+        if (!card) return [];
+        this.pruneNestedShapeLevels(card);
+        const root = this.getRootShapeChildLevel(card);
+        const out = [root];
+        for (let i = 0; i < (card.shapeChildLevels || []).length; i++) {
+            const lv = normalizeShapeNestedLevel(card.shapeChildLevels[i], i);
+            out.push(lv);
+            if (lv.type === "single") break;
+        }
+        return out;
+    }
+
+    syncNestedLevelAxisManualFromExpr(level) {
+        if (!level) return;
+        const expr = String(level.axisExpr || level.axisPreset || "RelativeLocation.yAxis()");
+        const vec = this.exprRuntime.parseVecLikeValue(expr);
+        level.axisManualCtor = normalizeVectorCtor(parseCtorInLiteral(expr, level.axisManualCtor || "RelativeLocation"));
+        level.axisManualX = num(vec.x);
+        level.axisManualY = num(vec.y);
+        level.axisManualZ = num(vec.z);
+    }
+
+    applyNestedLevelAxisField(level, field, target) {
+        if (!level) return;
+        if (field === "axisPreset") {
+            level.axisPreset = String(target.value || "");
+            if (level.axisPreset) {
+                level.axisExpr = level.axisPreset;
+                this.syncNestedLevelAxisManualFromExpr(level);
+            }
+            return;
+        }
+        if (field === "axisExpr") {
+            level.axisExpr = String(target.value || "");
+            level.axisPreset = "";
+            this.syncNestedLevelAxisManualFromExpr(level);
+            return;
+        }
+        if (field === "axisManualCtor") {
+            level.axisManualCtor = normalizeVectorCtor(target.value || "RelativeLocation");
+            level.axisExpr = formatVectorLiteral(level.axisManualCtor, level.axisManualX, level.axisManualY, level.axisManualZ);
+            level.axisPreset = "";
+            return;
+        }
+        if (field === "axisManualX" || field === "axisManualY" || field === "axisManualZ") {
+            if (field === "axisManualX") level.axisManualX = num(target.value);
+            else if (field === "axisManualY") level.axisManualY = num(target.value);
+            else level.axisManualZ = num(target.value);
+            level.axisExpr = formatVectorLiteral(level.axisManualCtor, level.axisManualX, level.axisManualY, level.axisManualZ);
+            level.axisPreset = "";
+        }
+    }
+
+    applyNestedLevelScaleField(level, field, target) {
+        if (!level) return;
+        const scale = Object.assign({}, normalizeScaleHelperConfig(level.scale, { type: "none" }));
+        level.scale = scale;
+        if (field === "type") {
+            const next = String(target.value || "none");
+            scale.type = SCALE_HELPER_TYPES.includes(next) ? next : "none";
+            return;
+        }
+        if (field === "reversedOnDisable") {
+            scale.reversedOnDisable = !!target.checked;
+            return;
+        }
+        if (field === "tick") {
+            scale.tick = Math.max(1, int(target.value || 1));
+            return;
+        }
+        if (["min", "max", "c1x", "c1y", "c1z", "c2x", "c2y", "c2z"].includes(field)) {
+            scale[field] = num(target.value);
+        }
+    }
+
     onCardClick(e) {
         const btn = e.target.closest("button[data-act]");
         if (btn) {
             const act = btn.dataset.act;
             const cardId = btn.dataset.cardId || null;
             const idx = int(btn.dataset.idx);
+            const levelIdx = int(btn.dataset.shapeLevelIdx);
             if (act === "select-card") {
                 this.selectCardById(cardId, e.ctrlKey || e.metaKey);
                 return;
@@ -2093,6 +2333,25 @@ class CompositionBuilderApp {
             }
             if (act === "toggle-section-fold") {
                 this.toggleCardSectionFold(cardId, btn.dataset.sectionKey || "");
+                this.renderCards();
+                this.scheduleSave();
+                return;
+            }
+            if (act === "toggle-shape-child-fold") {
+                const card = this.getCardById(cardId);
+                if (!card) return;
+                card.shapeChildCollapsed = !card.shapeChildCollapsed;
+                this.renderCards();
+                this.scheduleSave();
+                return;
+            }
+            if (act === "toggle-shape-level-fold") {
+                const card = this.getCardById(cardId);
+                if (!card) return;
+                const level = this.getNestedShapeLevel(card, levelIdx, true);
+                if (!level) return;
+                level.collapsed = !level.collapsed;
+                this.setNestedShapeLevel(card, levelIdx, level);
                 this.renderCards();
                 this.scheduleSave();
                 return;
@@ -2163,6 +2422,32 @@ class CompositionBuilderApp {
                 this.afterValueMutate({ rerenderCards: true, rebuildPreview: true });
                 return;
             }
+            if (act === "apply-shape-level-axis-manual") {
+                const card = this.getCardById(cardId);
+                if (!card) return;
+                const level = this.getNestedShapeLevel(card, levelIdx, true);
+                if (!level) return;
+                this.pushHistory();
+                level.axisExpr = formatVectorLiteral(level.axisManualCtor, level.axisManualX, level.axisManualY, level.axisManualZ);
+                level.axisPreset = "";
+                this.setNestedShapeLevel(card, levelIdx, level);
+                this.afterValueMutate({ rerenderCards: true, rebuildPreview: true });
+                return;
+            }
+            if (act === "apply-shape-level-display-manual-to") {
+                const card = this.getCardById(cardId);
+                if (!card) return;
+                const level = this.getNestedShapeLevel(card, levelIdx, true);
+                if (!level) return;
+                const item = level.displayActions[int(btn.dataset.shapeLevelDisplayIdx)];
+                if (!item) return;
+                this.pushHistory();
+                item.toExpr = formatVectorLiteral(item.toManualCtor, item.toManualX, item.toManualY, item.toManualZ);
+                item.toPreset = "";
+                this.setNestedShapeLevel(card, levelIdx, level);
+                this.afterValueMutate({ rerenderCards: true, rebuildPreview: true });
+                return;
+            }
             if (act === "open-card-bezier-tool") {
                 this.openBezierTool("card", cardId);
                 return;
@@ -2171,12 +2456,22 @@ class CompositionBuilderApp {
                 this.openBezierTool("shape_child", cardId);
                 return;
             }
+            if (act === "open-shape-level-bezier-tool") {
+                this.openBezierTool("shape_level", cardId, levelIdx);
+                return;
+            }
             const skipHistory = act === "open-builder-editor"
                 || act === "open-shape-builder-editor"
+                || act === "open-shape-child-builder-editor"
+                || act === "open-shape-level-builder-editor"
                 || act === "import-builder-json"
                 || act === "import-shape-builder-json"
+                || act === "import-shape-child-builder-json"
+                || act === "import-shape-level-builder-json"
                 || act === "export-builder-json"
-                || act === "export-shape-builder-json";
+                || act === "export-shape-builder-json"
+                || act === "export-shape-child-builder-json"
+                || act === "export-shape-level-builder-json";
             if (!skipHistory) this.pushHistory();
             switch (act) {
                 case "delete-card":
@@ -2245,6 +2540,53 @@ class CompositionBuilderApp {
                 case "remove-shape-child-growth-animate":
                     this.removeCardAnimate(cardId, "shapeChildGrowthAnimates", idx);
                     break;
+                case "add-shape-child-level": {
+                    const card = this.getCardById(cardId);
+                    if (card) this.addNestedShapeLevel(card, levelIdx);
+                    break;
+                }
+                case "remove-shape-child-level": {
+                    const card = this.getCardById(cardId);
+                    if (card) this.removeNestedShapeLevel(card, levelIdx);
+                    break;
+                }
+                case "add-shape-level-display-action": {
+                    const card = this.getCardById(cardId);
+                    const level = this.getNestedShapeLevel(card, levelIdx, true);
+                    if (level) {
+                        level.displayActions.push(normalizeDisplayAction({}));
+                        this.setNestedShapeLevel(card, levelIdx, level);
+                    }
+                    break;
+                }
+                case "remove-shape-level-display-action": {
+                    const card = this.getCardById(cardId);
+                    const level = this.getNestedShapeLevel(card, levelIdx, true);
+                    if (level && idx >= 0 && idx < level.displayActions.length) {
+                        level.displayActions.splice(idx, 1);
+                        this.setNestedShapeLevel(card, levelIdx, level);
+                    }
+                    break;
+                }
+                case "add-shape-level-growth-animate": {
+                    const card = this.getCardById(cardId);
+                    const level = this.getNestedShapeLevel(card, levelIdx, true);
+                    if (level) {
+                        if (!Array.isArray(level.growthAnimates)) level.growthAnimates = [];
+                        level.growthAnimates.push(normalizeAnimate({ count: 1, condition: "age > 1" }));
+                        this.setNestedShapeLevel(card, levelIdx, level);
+                    }
+                    break;
+                }
+                case "remove-shape-level-growth-animate": {
+                    const card = this.getCardById(cardId);
+                    const level = this.getNestedShapeLevel(card, levelIdx, true);
+                    if (level && idx >= 0 && idx < level.growthAnimates.length) {
+                        level.growthAnimates.splice(idx, 1);
+                        this.setNestedShapeLevel(card, levelIdx, level);
+                    }
+                    break;
+                }
                 case "add-seq-animate":
                     this.addCardAnimate(cardId, "sequencedAnimates");
                     break;
@@ -2257,11 +2599,23 @@ class CompositionBuilderApp {
                 case "open-shape-builder-editor":
                     this.openBuilderEditor(cardId, "shape");
                     return;
+                case "open-shape-child-builder-editor":
+                    this.openBuilderEditor(cardId, "shape_child");
+                    return;
+                case "open-shape-level-builder-editor":
+                    this.openBuilderEditor(cardId, `shape_level:${levelIdx}`);
+                    return;
                 case "import-builder-json":
                     this.importBuilderJson(cardId);
                     return;
                 case "import-shape-builder-json":
                     this.importBuilderJson(cardId, "shape");
+                    return;
+                case "import-shape-child-builder-json":
+                    this.importBuilderJson(cardId, "shape_child");
+                    return;
+                case "import-shape-level-builder-json":
+                    this.importBuilderJson(cardId, `shape_level:${levelIdx}`);
                     return;
                 case "export-builder-json":
                     this.exportBuilderJson(cardId);
@@ -2269,15 +2623,29 @@ class CompositionBuilderApp {
                 case "export-shape-builder-json":
                     this.exportBuilderJson(cardId, "shape");
                     return;
+                case "export-shape-child-builder-json":
+                    this.exportBuilderJson(cardId, "shape_child");
+                    return;
+                case "export-shape-level-builder-json":
+                    this.exportBuilderJson(cardId, `shape_level:${levelIdx}`);
+                    return;
                 case "clear-builder":
                     this.clearBuilder(cardId);
                     break;
                 case "clear-shape-builder":
                     this.clearBuilder(cardId, "shape");
                     break;
+                case "clear-shape-child-builder":
+                    this.clearBuilder(cardId, "shape_child");
+                    break;
+                case "clear-shape-level-builder":
+                    this.clearBuilder(cardId, `shape_level:${levelIdx}`);
+                    break;
                 default:
                     return;
             }
+            const card = this.getCardById(cardId);
+            if (card) this.pruneNestedShapeLevels(card);
             this.afterStructureMutate({ rerenderProject: false, rerenderCards: true, rebuildPreview: true });
             return;
         }
@@ -2362,14 +2730,113 @@ class CompositionBuilderApp {
             const field = String(t.dataset.cardShapeChildField || "");
             if (field === "shapeChildType") {
                 card.shapeChildType = ["single", "particle_shape", "sequenced_shape"].includes(String(t.value || "")) ? String(t.value) : "single";
+                if (card.shapeChildType === "single") {
+                    card.shapeChildCollapsed = false;
+                    card.shapeChildLevels = [];
+                } else if (!Array.isArray(card.shapeChildLevels) || !card.shapeChildLevels.length) {
+                    card.shapeChildLevels = [normalizeShapeNestedLevel({ type: "single" }, 0)];
+                }
+                this.pruneNestedShapeLevels(card);
                 this.afterStructureMutate({ rerenderCards: true, rebuildPreview: true, rerenderProject: false });
                 return;
             }
-            if (field === "shapeChildEffectClass") {
-                card.shapeChildEffectClass = String(t.value || "ControlableEnchantmentEffect");
+            if (field === "bindMode") {
+                card.shapeChildBindMode = t.value === "builder" ? "builder" : "point";
+                this.afterStructureMutate({ rerenderCards: true, rebuildPreview: true, rerenderProject: false });
+                return;
+            }
+            if (field === "pointX" || field === "pointY" || field === "pointZ") {
+                if (field === "pointX") card.shapeChildPoint.x = num(t.value);
+                if (field === "pointY") card.shapeChildPoint.y = num(t.value);
+                if (field === "pointZ") card.shapeChildPoint.z = num(t.value);
                 this.afterValueMutate({ rebuildPreview: true });
                 return;
             }
+            if (field === "shapeChildEffectClass") {
+                card.shapeChildEffectClass = String(t.value || DEFAULT_EFFECT_CLASS);
+                this.afterValueMutate({ rebuildPreview: true });
+                return;
+            }
+        }
+
+        if (t.dataset.shapeLevelIdx !== undefined) {
+            const levelIdx = int(t.dataset.shapeLevelIdx);
+            const field = String(t.dataset.shapeLevelField || "");
+            const level = this.getNestedShapeLevel(card, levelIdx, true);
+            if (!level) return;
+            if (field === "type") {
+                level.type = ["single", "particle_shape", "sequenced_shape"].includes(String(t.value || "")) ? String(t.value) : "single";
+                this.setNestedShapeLevel(card, levelIdx, level);
+                if (level.type === "single") {
+                    this.removeNestedShapeLevel(card, levelIdx + 1);
+                } else {
+                    const next = this.getNestedShapeLevel(card, levelIdx + 1, true);
+                    if (next) {
+                        next.type = ["single", "particle_shape", "sequenced_shape"].includes(String(next.type || "")) ? String(next.type) : "single";
+                        this.setNestedShapeLevel(card, levelIdx + 1, next);
+                    }
+                }
+                this.pruneNestedShapeLevels(card);
+                this.afterStructureMutate({ rerenderCards: true, rebuildPreview: true, rerenderProject: false });
+                return;
+            }
+            if (field === "bindMode") {
+                level.bindMode = t.value === "builder" ? "builder" : "point";
+                this.setNestedShapeLevel(card, levelIdx, level);
+                this.afterStructureMutate({ rerenderCards: true, rebuildPreview: true, rerenderProject: false });
+                return;
+            }
+            if (field === "pointX" || field === "pointY" || field === "pointZ") {
+                if (field === "pointX") level.point.x = num(t.value);
+                if (field === "pointY") level.point.y = num(t.value);
+                if (field === "pointZ") level.point.z = num(t.value);
+                this.setNestedShapeLevel(card, levelIdx, level);
+                this.afterValueMutate({ rebuildPreview: true });
+                return;
+            }
+            if (field === "effectClass") {
+                level.effectClass = String(t.value || DEFAULT_EFFECT_CLASS);
+                this.setNestedShapeLevel(card, levelIdx, level);
+                this.afterValueMutate({ rebuildPreview: true });
+                return;
+            }
+        }
+
+        if (t.dataset.shapeLevelAxisField) {
+            const levelIdx = int(t.dataset.shapeLevelIdx);
+            const level = this.getNestedShapeLevel(card, levelIdx, true);
+            if (!level) return;
+            this.applyNestedLevelAxisField(level, t.dataset.shapeLevelAxisField, t);
+            this.setNestedShapeLevel(card, levelIdx, level);
+            const rerender = ["axisPreset", "axisManualCtor"].includes(t.dataset.shapeLevelAxisField);
+            this.afterValueMutate({ rerenderCards: rerender, rebuildPreview: true });
+            return;
+        }
+
+        if (t.dataset.shapeLevelScaleField) {
+            const levelIdx = int(t.dataset.shapeLevelIdx);
+            const level = this.getNestedShapeLevel(card, levelIdx, true);
+            if (!level) return;
+            this.applyNestedLevelScaleField(level, t.dataset.shapeLevelScaleField, t);
+            this.setNestedShapeLevel(card, levelIdx, level);
+            this.afterValueMutate({ rerenderCards: t.dataset.shapeLevelScaleField === "type", rebuildPreview: true });
+            return;
+        }
+
+        if (t.dataset.shapeLevelDisplayIdx !== undefined) {
+            const levelIdx = int(t.dataset.shapeLevelIdx);
+            const level = this.getNestedShapeLevel(card, levelIdx, true);
+            if (!level) return;
+            const item = level.displayActions[int(t.dataset.shapeLevelDisplayIdx)];
+            if (!item) return;
+            this.applyDisplayActionField(item, t.dataset.shapeLevelDisplayField, t);
+            this.setNestedShapeLevel(card, levelIdx, level);
+            if (["type", "angleMode", "toPreset"].includes(t.dataset.shapeLevelDisplayField)) {
+                this.afterStructureMutate({ rerenderCards: true, rebuildPreview: true, rerenderProject: false });
+            } else {
+                this.afterValueMutate({ rebuildPreview: true });
+            }
+            return;
         }
 
         if (t.dataset.cardShapeChildAxisField) {
@@ -2426,19 +2893,39 @@ class CompositionBuilderApp {
             if (!item) return;
             const field = String(t.dataset.pinitField || "");
             if (field === "target") {
-                item.target = String(t.value || "color");
-                this.afterValueMutate({ rebuildPreview: true });
+                const prevTarget = String(item.target || "");
+                const prevDefault = this.getParticleInitDefaultExprByTarget(prevTarget);
+                const hadPreset = !!String(item.exprPreset || "").trim();
+                item.target = String(t.value || "size");
+                let nextExpr = String(item.expr || "").trim();
+                if (!hadPreset) {
+                    if (!nextExpr || nextExpr === prevDefault) {
+                        nextExpr = this.getParticleInitDefaultExprByTarget(item.target);
+                    }
+                }
+                let nextPreset = this.resolveParticleInitPresetExpr(nextExpr, item.target);
+                if (hadPreset && !nextPreset) {
+                    nextExpr = this.getParticleInitDefaultExprByTarget(item.target);
+                    nextPreset = this.resolveParticleInitPresetExpr(nextExpr, item.target);
+                }
+                item.expr = nextExpr;
+                item.exprPreset = nextPreset;
+                this.afterValueMutate({ rebuildPreview: true, rerenderCards: true });
                 return;
             }
             if (field === "exprPreset") {
+                const prevPreset = String(item.exprPreset || "").trim();
                 item.exprPreset = String(t.value || "");
                 if (item.exprPreset) item.expr = item.exprPreset;
-                this.afterValueMutate({ rebuildPreview: true });
+                else if (!String(item.expr || "").trim() || String(item.expr || "").trim() === prevPreset) {
+                    item.expr = this.getParticleInitDefaultExprByTarget(item.target);
+                }
+                this.afterValueMutate({ rebuildPreview: true, rerenderCards: true });
                 return;
             }
             if (field === "expr") {
                 item.expr = String(t.value || "");
-                item.exprPreset = this.resolveParticleInitPresetExpr(item.expr);
+                item.exprPreset = this.resolveParticleInitPresetExpr(item.expr, item.target);
                 this.afterValueMutate({ rebuildPreview: true });
                 return;
             }
@@ -2466,7 +2953,19 @@ class CompositionBuilderApp {
         if (t.dataset.cardAnimateIdx !== undefined) {
             const idx = int(t.dataset.cardAnimateIdx);
             const key = t.dataset.cardAnimateType;
-            if (!key || !["growthAnimates", "sequencedAnimates", "shapeChildGrowthAnimates"].includes(key)) return;
+            if (!key) return;
+            if (String(key).startsWith("shapeLevelGrowth:")) {
+                const levelIdx = int(String(key).split(":")[1]);
+                const level = this.getNestedShapeLevel(card, levelIdx, true);
+                if (!level || !Array.isArray(level.growthAnimates)) return;
+                const item = level.growthAnimates[idx];
+                if (!item) return;
+                this.applyAnimateField(item, t.dataset.cardAnimateField, t);
+                this.setNestedShapeLevel(card, levelIdx, level);
+                this.afterValueMutate({ rebuildPreview: false });
+                return;
+            }
+            if (!["growthAnimates", "sequencedAnimates", "shapeChildGrowthAnimates"].includes(key)) return;
             const item = card[key] && card[key][idx];
             if (!item) return;
             this.applyAnimateField(item, t.dataset.cardAnimateField, t);
@@ -2735,6 +3234,13 @@ class CompositionBuilderApp {
         cloned.shapeDisplayActions = (cloned.shapeDisplayActions || []).map((it) => ({ ...it, id: uid() }));
         cloned.shapeChildDisplayActions = (cloned.shapeChildDisplayActions || []).map((it) => ({ ...it, id: uid() }));
         cloned.shapeChildGrowthAnimates = (cloned.shapeChildGrowthAnimates || []).map((it) => ({ ...it, id: uid() }));
+        cloned.shapeChildLevels = (cloned.shapeChildLevels || []).map((lv, i) => {
+            const level = normalizeShapeNestedLevel(lv, i);
+            level.id = uid();
+            level.displayActions = (level.displayActions || []).map((it) => ({ ...it, id: uid() }));
+            level.growthAnimates = (level.growthAnimates || []).map((it) => ({ ...it, id: uid() }));
+            return level;
+        });
         this.state.cards.splice(idx + 1, 0, cloned);
         this.focusedCardId = cloned.id;
         this.selectedCardIds = new Set([cloned.id]);
@@ -2793,7 +3299,13 @@ class CompositionBuilderApp {
     addParticleInit(cardId) {
         const card = this.getCardById(cardId);
         if (!card) return;
-        card.particleInit.push({ id: uid(), target: "color", expr: "", exprPreset: "" });
+        const target = "size";
+        card.particleInit.push({
+            id: uid(),
+            target,
+            expr: this.getParticleInitDefaultExprByTarget(target),
+            exprPreset: ""
+        });
     }
 
     removeParticleInit(cardId, idx) {
@@ -2829,9 +3341,24 @@ class CompositionBuilderApp {
     clearBuilder(cardId, target = "root") {
         const card = this.getCardById(cardId);
         if (!card) return;
-        if (target === "shape") {
+        const normalizedTarget = normalizeBuilderTarget(target);
+        if (/^shape_level:\d+$/.test(normalizedTarget)) {
+            const levelIdx = int(normalizedTarget.split(":")[1]);
+            const level = this.getNestedShapeLevel(card, levelIdx, true);
+            if (!level) return;
+            level.bindMode = "builder";
+            level.builderState = createDefaultBuilderState();
+            this.setNestedShapeLevel(card, levelIdx, level);
+            return;
+        }
+        if (normalizedTarget === "shape") {
             card.shapeBuilderState = createDefaultBuilderState();
             card.shapeBindMode = "builder";
+            return;
+        }
+        if (normalizedTarget === "shape_child") {
+            card.shapeChildBuilderState = createDefaultBuilderState();
+            card.shapeChildBindMode = "builder";
             return;
         }
         card.builderState = createDefaultBuilderState();
@@ -3525,25 +4052,210 @@ class CompositionBuilderApp {
         `;
     }
 
+    renderShapeLevelDisplayActionRow(cardId, levelIdx, action, idx) {
+        const cid = esc(cardId);
+        let html = this.renderShapeDisplayActionRow(cardId, action, idx);
+        html = html
+            .replaceAll(`data-card-id="${cid}"`, `data-card-id="${cid}" data-shape-level-idx="${levelIdx}"`)
+            .replaceAll("data-card-shape-display-idx", "data-shape-level-display-idx")
+            .replaceAll("data-card-shape-display-field", "data-shape-level-display-field")
+            .replaceAll("remove-shape-display-action", "remove-shape-level-display-action")
+            .replaceAll("apply-shape-display-manual-to", "apply-shape-level-display-manual-to")
+            .replaceAll("data-shape-display-idx", "data-shape-level-display-idx");
+        return html;
+    }
+
+    renderNestedShapeLevelBlock(card, levelRaw, levelIdx) {
+        const level = normalizeShapeNestedLevel(levelRaw, levelIdx - 1);
+        const collapsed = !!level.collapsed;
+        const foldIcon = collapsed ? "▶" : "▼";
+        const childType = level.type;
+        const bindMode = level.bindMode === "builder" ? "builder" : "point";
+        const builderStats = this.evaluateBuilderPoints(level.builderState);
+        const builderNodeCount = this.countBuilderNodes(level.builderState?.root?.children || []);
+        const builderPointCount = (builderStats.points || []).length;
+        const growthBlock = childType === "sequenced_shape"
+            ? this.renderCardAnimates(
+                card.id,
+                `shapeLevelGrowth:${levelIdx}`,
+                level.growthAnimates,
+                `嵌套层 ${levelIdx + 1} 生长动画`,
+                "add-shape-level-growth-animate",
+                "remove-shape-level-growth-animate",
+                { embedOnly: true }
+            ).replaceAll(`data-card-id="${card.id}"`, `data-card-id="${card.id}" data-shape-level-idx="${levelIdx}"`)
+            : "";
+        const effectHtml = this.getEffectOptionsHtml(level.effectClass || card.singleEffectClass || DEFAULT_EFFECT_CLASS);
+        return `
+            <div class="subgroup subgroup-tight nested-shape-level ${collapsed ? "collapsed" : ""}" data-shape-level="${levelIdx}">
+                <div class="subgroup-head">
+                    <button class="iconbtn subgroup-toggle" data-act="toggle-shape-level-fold" data-card-id="${card.id}" data-shape-level-idx="${levelIdx}" title="${collapsed ? "展开" : "折叠"}">${foldIcon}</button>
+                    <div class="subgroup-title">嵌套层 ${levelIdx + 1}</div>
+                </div>
+                <div class="subgroup-body">
+                    <div class="grid2">
+                        <label class="field">
+                            <span>子点类型</span>
+                            <select class="input" data-card-id="${card.id}" data-shape-level-idx="${levelIdx}" data-shape-level-field="type">
+                                <option value="single" ${childType === "single" ? "selected" : ""}>single</option>
+                                <option value="particle_shape" ${childType === "particle_shape" ? "selected" : ""}>ParticleShapeComposition</option>
+                                <option value="sequenced_shape" ${childType === "sequenced_shape" ? "selected" : ""}>SequencedParticleShapeComposition</option>
+                            </select>
+                        </label>
+                        ${childType === "single"
+                            ? `<label class="field">
+                                <span>子点 Effect</span>
+                                <select class="input" data-card-id="${card.id}" data-shape-level-idx="${levelIdx}" data-shape-level-field="effectClass">${effectHtml}</select>
+                            </label>`
+                            : `<div class="mini-note">非 single 可继续嵌套</div>`}
+                    </div>
+                    ${childType === "single" ? `
+                        <div class="mini-note">Single 详细参数（沿用当前卡片）</div>
+                        <div class="list-tools">
+                            <button class="btn small primary" data-act="add-pinit" data-card-id="${card.id}">添加 init</button>
+                        </div>
+                        <div class="kv-list">
+                            ${this.renderParticleInitRows(card)}
+                        </div>
+                        <div class="list-tools">
+                            <button class="btn small primary" data-act="add-cvar" data-card-id="${card.id}">添加局部变量</button>
+                            <button class="btn small primary" data-act="add-caction" data-card-id="${card.id}">添加 tick action</button>
+                        </div>
+                        <div class="kv-list">
+                            ${card.controllerVars.map((it, cIdx) => `
+                                <div class="kv-row grid-var">
+                                    <input class="input" data-card-id="${card.id}" data-cvar-idx="${cIdx}" data-cvar-field="name" value="${esc(it.name)}" placeholder="name"/>
+                                    <select class="input" data-card-id="${card.id}" data-cvar-idx="${cIdx}" data-cvar-field="type">
+                                        ${CONTROLLER_VAR_TYPES.map((tp) => `<option value="${esc(tp)}" ${it.type === tp ? "selected" : ""}>${esc(tp)}</option>`).join("")}
+                                    </select>
+                                    <input class="input" data-card-id="${card.id}" data-cvar-idx="${cIdx}" data-cvar-field="expr" value="${esc(it.expr)}" placeholder="初值"/>
+                                    <div></div><div></div>
+                                    <button class="btn small" data-act="remove-cvar" data-card-id="${card.id}" data-idx="${cIdx}">删除</button>
+                                </div>
+                            `).join("")}
+                        </div>
+                        <div class="kv-list">
+                            ${(card.controllerActions || []).map((a, aIdx) => this.renderControllerActionRow(card.id, a, aIdx)).join("")}
+                        </div>
+                    ` : `
+                        <div class="mini-note">子点来源</div>
+                        <div class="grid2">
+                            <label class="field">
+                                <span>子点基础选项</span>
+                                <select class="input" data-card-id="${card.id}" data-shape-level-idx="${levelIdx}" data-shape-level-field="bindMode">
+                                    <option value="point" ${bindMode === "point" ? "selected" : ""}>point</option>
+                                    <option value="builder" ${bindMode === "builder" ? "selected" : ""}>PointsBuilder</option>
+                                </select>
+                            </label>
+                        </div>
+                        ${bindMode === "point" ? `
+                            <div class="grid3">
+                                <label class="field"><span>X</span><input class="input" type="number" step="${this.state.settings.paramStep}" data-card-id="${card.id}" data-shape-level-idx="${levelIdx}" data-shape-level-field="pointX" value="${esc(formatNumberCompact(level.point?.x))}"/></label>
+                                <label class="field"><span>Y</span><input class="input" type="number" step="${this.state.settings.paramStep}" data-card-id="${card.id}" data-shape-level-idx="${levelIdx}" data-shape-level-field="pointY" value="${esc(formatNumberCompact(level.point?.y))}"/></label>
+                                <label class="field"><span>Z</span><input class="input" type="number" step="${this.state.settings.paramStep}" data-card-id="${card.id}" data-shape-level-idx="${levelIdx}" data-shape-level-field="pointZ" value="${esc(formatNumberCompact(level.point?.z))}"/></label>
+                            </div>
+                        ` : `
+                            <div class="kv-list">
+                                <div class="kv-row display-row">
+                                    <div class="builder-actions">
+                                        <button class="btn small primary" data-act="open-shape-level-builder-editor" data-card-id="${card.id}" data-shape-level-idx="${levelIdx}">编辑嵌套层 Builder</button>
+                                        <button class="btn small" data-act="import-shape-level-builder-json" data-card-id="${card.id}" data-shape-level-idx="${levelIdx}">导入 JSON</button>
+                                        <button class="btn small" data-act="export-shape-level-builder-json" data-card-id="${card.id}" data-shape-level-idx="${levelIdx}">导出 JSON</button>
+                                        <button class="btn small" data-act="clear-shape-level-builder" data-card-id="${card.id}" data-shape-level-idx="${levelIdx}">清空</button>
+                                    </div>
+                                </div>
+                                <div class="kv-row display-row">
+                                    <div class="builder-meta">节点 ${builderNodeCount} / 预览点 ${builderPointCount}</div>
+                                </div>
+                            </div>
+                        `}
+                        <div class="mini-note">子点 Axis</div>
+                        <div class="grid2">
+                            <label class="field">
+                                <span>axis 预设</span>
+                                <select class="input expr-input" data-card-id="${card.id}" data-shape-level-idx="${levelIdx}" data-shape-level-axis-field="axisPreset">${this.getRelativeTargetPresetOptionsHtml(level.axisPreset || level.axisExpr)}</select>
+                            </label>
+                            <label class="field">
+                                <span>axis 输入</span>
+                                <input class="input expr-input" data-card-id="${card.id}" data-shape-level-idx="${levelIdx}" data-shape-level-axis-field="axisExpr" value="${esc(level.axisExpr || "")}" placeholder="axis 表达式"/>
+                            </label>
+                        </div>
+                        <div class="grid5 vector-inputs">
+                            <select class="input vector-ctor" data-card-id="${card.id}" data-shape-level-idx="${levelIdx}" data-shape-level-axis-field="axisManualCtor">
+                                ${["Vec3", "RelativeLocation", "Vector3f"].map((it) => `<option value="${it}" ${level.axisManualCtor === it ? "selected" : ""}>${it}</option>`).join("")}
+                            </select>
+                            <input class="input" type="number" step="${this.state.settings.paramStep}" data-card-id="${card.id}" data-shape-level-idx="${levelIdx}" data-shape-level-axis-field="axisManualX" value="${esc(formatNumberCompact(level.axisManualX))}" placeholder="x"/>
+                            <input class="input" type="number" step="${this.state.settings.paramStep}" data-card-id="${card.id}" data-shape-level-idx="${levelIdx}" data-shape-level-axis-field="axisManualY" value="${esc(formatNumberCompact(level.axisManualY))}" placeholder="y"/>
+                            <input class="input" type="number" step="${this.state.settings.paramStep}" data-card-id="${card.id}" data-shape-level-idx="${levelIdx}" data-shape-level-axis-field="axisManualZ" value="${esc(formatNumberCompact(level.axisManualZ))}" placeholder="z"/>
+                            <button class="btn small primary" data-act="apply-shape-level-axis-manual" data-card-id="${card.id}" data-shape-level-idx="${levelIdx}">套用手动输入</button>
+                        </div>
+                        <div class="mini-note">子点 Display 行为</div>
+                        <div class="list-tools">
+                            <button class="btn small primary" data-act="add-shape-level-display-action" data-card-id="${card.id}" data-shape-level-idx="${levelIdx}">添加子点 display action</button>
+                        </div>
+                        <div class="kv-list">
+                            ${(level.displayActions || []).map((a, aIdx) => this.renderShapeLevelDisplayActionRow(card.id, levelIdx, a, aIdx)).join("")}
+                        </div>
+                        <div class="mini-note">缩放助手-嵌套${levelIdx + 1}（可选）</div>
+                        ${this.renderScaleHelperEditor({
+                            scope: "shape_level",
+                            cardId: card.id,
+                            levelIdx,
+                            scale: level.scale,
+                            helperName: `缩放助手-嵌套${levelIdx + 1}`,
+                            embedOnly: true
+                        })}
+                        ${growthBlock}
+                    `}
+                </div>
+            </div>
+        `;
+    }
+
+    renderNestedShapeLevels(card) {
+        if (!card) return "";
+        this.pruneNestedShapeLevels(card);
+        const blocks = [];
+        let parentType = String(card.shapeChildType || "single");
+        for (let i = 0; i < (card.shapeChildLevels || []).length; i++) {
+            if (parentType === "single") break;
+            const level = normalizeShapeNestedLevel(card.shapeChildLevels[i], i);
+            const levelIdx = i + 1;
+            blocks.push(this.renderNestedShapeLevelBlock(card, level, levelIdx));
+            parentType = level.type;
+        }
+        return blocks.join("");
+    }
+
     renderScaleHelperEditor(opts = {}) {
         const scope = opts.scope === "card"
             ? "card"
-            : (opts.scope === "shape_child" ? "shape_child" : "project");
+            : (opts.scope === "shape_child"
+                ? "shape_child"
+                : (opts.scope === "shape_level" ? "shape_level" : "project"));
         const cardId = String(opts.cardId || "");
+        const levelIdx = Math.max(0, int(opts.levelIdx));
         const embedOnly = !!opts.embedOnly;
         const title = String(opts.title || "缩放助手（可选）");
+        const helperName = String(opts.helperName || "缩放助手");
         const sectionKeyAttr = opts.sectionKey ? ` data-section-key="${esc(String(opts.sectionKey))}"` : "";
         const scale = normalizeScaleHelperConfig(opts.scale, { type: "none" });
         const fieldAttr = scope === "project"
             ? "data-project-scale-field"
-            : (scope === "card" ? "data-card-scale-field" : "data-card-shape-child-scale-field");
-        const cardAttr = scope === "project" ? "" : `data-card-id="${esc(cardId)}"`;
+            : (scope === "card"
+                ? "data-card-scale-field"
+                : (scope === "shape_child" ? "data-card-shape-child-scale-field" : "data-shape-level-scale-field"));
+        const cardAttr = scope === "project"
+            ? ""
+            : `data-card-id="${esc(cardId)}"${scope === "shape_level" ? ` data-shape-level-idx="${levelIdx}"` : ""}`;
         const openBezierAct = scope === "project"
             ? "open-project-bezier-tool"
-            : (scope === "shape_child" ? "open-child-bezier-tool" : "open-card-bezier-tool");
+            : (scope === "shape_child"
+                ? "open-child-bezier-tool"
+                : (scope === "shape_level" ? "open-shape-level-bezier-tool" : "open-card-bezier-tool"));
         const typeSelect = `
             <label class="field">
-                <span>缩放助手</span>
+                <span>${esc(helperName)}</span>
                 <select class="input" ${cardAttr} ${fieldAttr}="type">
                     <option value="none" ${scale.type === "none" ? "selected" : ""}>不使用</option>
                     <option value="linear" ${scale.type === "linear" ? "selected" : ""}>loadScaleValue</option>
@@ -3748,32 +4460,66 @@ class CompositionBuilderApp {
     }
 
     getParticleInitTargetOptionsHtml(selectedTarget = "") {
-        const selected = String(selectedTarget || "").trim() || "color";
+        const selected = String(selectedTarget || "").trim() || "size";
         const rows = [];
         if (!PARTICLE_INIT_TARGET_OPTIONS.includes(selected)) {
             rows.push({ value: selected, label: `${selected} (自定义)` });
         }
         for (const target of PARTICLE_INIT_TARGET_OPTIONS) {
-            rows.push({ value: target, label: target });
+            rows.push({ value: target, label: this.getParticleInitTargetLabel(target) });
         }
         return rows.map((row) => `<option value="${esc(row.value)}" ${row.value === selected ? "selected" : ""}>${esc(row.label)}</option>`).join("");
     }
 
-    getParticleInitValuePresetOptionsHtml(selectedExpr = "") {
+    getParticleInitTargetLabel(targetRaw = "") {
+        const target = String(targetRaw || "").trim();
+        if (target === "size" || target === "particleSize") return `${target} (粒子尺寸)`;
+        if (target === "particleAlpha" || target === "alpha") return `${target} (透明度)`;
+        if (target === "currentAge" || target === "age") return `${target} (年龄)`;
+        if (target === "textureSheet") return "textureSheet (贴图序号)";
+        if (target === "color" || target === "particleColor") return `${target} (颜色 Vec3)`;
+        return target;
+    }
+
+    isParticleInitVectorTarget(targetRaw = "") {
+        const target = String(targetRaw || "").trim().toLowerCase();
+        return target === "color" || target === "particlecolor" || target === "particle.particlecolor";
+    }
+
+    getParticleInitDefaultExprByTarget(targetRaw = "") {
+        const target = String(targetRaw || "").trim().toLowerCase();
+        if (target === "size" || target === "particlesize" || target === "particle.particlesize") return "0.2";
+        if (target === "alpha" || target === "particlealpha" || target === "particle.particlealpha") return "1.0";
+        if (target === "currentage" || target === "age") return "0";
+        if (target === "texturesheet") return "0";
+        if (target === "color" || target === "particlecolor" || target === "particle.particlecolor") return "Vec3(0.0, 0.0, 0.0)";
+        return "0";
+    }
+
+    getParticleInitValuePresetOptionsHtml(selectedExpr = "", targetRaw = "") {
         const selected = String(selectedExpr || "").trim();
-        const rows = [{ value: "", label: "选择全局变量/常量" }];
+        const useVector = this.isParticleInitVectorTarget(targetRaw);
+        const projectClass = sanitizeKotlinClassName(this.state.projectName || "NewComposition");
+        const rows = [{ value: "", label: "手动输入常量" }];
         for (const g of (this.state.globalVars || [])) {
             const name = String(g?.name || "").trim();
+            const type = String(g?.type || "").trim();
             if (!name) continue;
+            const isVector = type === "Vec3" || type === "RelativeLocation" || type === "Vector3f";
+            const isNumeric = type === "Int" || type === "Long" || type === "Float" || type === "Double";
+            if (useVector && !isVector) continue;
+            if (!useVector && !isNumeric) continue;
             rows.push({
-                value: `this@TestComposition.${name}`,
-                label: `${name}（全局变量）`
+                value: `this@${projectClass}.${name}`,
+                label: `${name}（全局变量 ${type}）`
             });
         }
-        for (const c of (this.state.globalConsts || [])) {
-            const name = String(c?.name || "").trim();
-            if (!name) continue;
-            rows.push({ value: name, label: `${name}（全局常量）` });
+        if (!useVector) {
+            for (const c of (this.state.globalConsts || [])) {
+                const name = String(c?.name || "").trim();
+                if (!name) continue;
+                rows.push({ value: name, label: `${name}（全局常量）` });
+            }
         }
         const uniq = [];
         const used = new Set();
@@ -3793,14 +4539,37 @@ class CompositionBuilderApp {
         }).join("");
     }
 
-    resolveParticleInitPresetExpr(exprRaw = "") {
+    resolveParticleInitPresetExpr(exprRaw = "", targetRaw = "") {
         const expr = String(exprRaw || "").trim();
         if (!expr) return "";
+        const useVector = this.isParticleInitVectorTarget(targetRaw);
+        const projectClass = sanitizeKotlinClassName(this.state.projectName || "NewComposition");
+        const classRef = expr.match(/^this@[A-Za-z_][A-Za-z0-9_]*\.([A-Za-z_][A-Za-z0-9_]*)$/);
+        if (classRef) {
+            const name = classRef[1];
+            for (const g of (this.state.globalVars || [])) {
+                if (String(g?.name || "").trim() !== name) continue;
+                const type = String(g?.type || "").trim();
+                const isVector = type === "Vec3" || type === "RelativeLocation" || type === "Vector3f";
+                const isNumeric = type === "Int" || type === "Long" || type === "Float" || type === "Double";
+                if (useVector ? isVector : isNumeric) {
+                    return `this@${projectClass}.${name}`;
+                }
+                return "";
+            }
+            return "";
+        }
         for (const g of (this.state.globalVars || [])) {
             const name = String(g?.name || "").trim();
             if (!name) continue;
-            if (expr === `this@TestComposition.${name}`) return expr;
+            const type = String(g?.type || "").trim();
+            const isVector = type === "Vec3" || type === "RelativeLocation" || type === "Vector3f";
+            const isNumeric = type === "Int" || type === "Long" || type === "Float" || type === "Double";
+            if (useVector ? !isVector : !isNumeric) continue;
+            const expected = `this@${projectClass}.${name}`;
+            if (expr === expected) return expected;
         }
+        if (useVector) return "";
         for (const c of (this.state.globalConsts || [])) {
             const name = String(c?.name || "").trim();
             if (!name) continue;
@@ -3813,14 +4582,16 @@ class CompositionBuilderApp {
         const list = Array.isArray(card?.particleInit) ? card.particleInit : [];
         return list.map((it, pIdx) => {
             const targetOptions = this.getParticleInitTargetOptionsHtml(it.target);
-            const presetSelected = String(it.exprPreset || "").trim() || this.resolveParticleInitPresetExpr(it.expr || "");
-            const valuePresetOptions = this.getParticleInitValuePresetOptionsHtml(presetSelected);
+            const presetSelected = String(it.exprPreset || "").trim() || this.resolveParticleInitPresetExpr(it.expr || "", it.target);
+            const valuePresetOptions = this.getParticleInitValuePresetOptionsHtml(presetSelected, it.target);
+            const manualVisible = !presetSelected;
+            const manualPlaceholder = this.getParticleInitDefaultExprByTarget(it.target);
             return `
                 <div class="kv-row grid-pinit">
                     <select class="input" data-card-id="${card.id}" data-pinit-idx="${pIdx}" data-pinit-field="target">${targetOptions}</select>
-                    <div class="pinit-value">
+                    <div class="pinit-value ${manualVisible ? "" : "preset-only"}">
                         <select class="input expr-input" data-card-id="${card.id}" data-pinit-idx="${pIdx}" data-pinit-field="exprPreset">${valuePresetOptions}</select>
-                        <input class="input expr-input mono" data-card-id="${card.id}" data-pinit-idx="${pIdx}" data-pinit-field="expr" value="${esc(it.expr || "")}" placeholder="值 / 表达式"/>
+                        <input class="input expr-input mono ${manualVisible ? "" : "pinit-manual-hidden"}" data-card-id="${card.id}" data-pinit-idx="${pIdx}" data-pinit-field="expr" value="${esc(it.expr || "")}" placeholder="${esc(manualPlaceholder)}"/>
                     </div>
                     <button class="btn small" data-act="remove-pinit" data-card-id="${card.id}" data-idx="${pIdx}">删除</button>
                 </div>
@@ -3913,9 +4684,6 @@ class CompositionBuilderApp {
         const builderStats = this.evaluateBuilderPoints(card.builderState);
         const builderNodeCount = this.countBuilderNodes(card.builderState?.root?.children || []);
         const builderPointCount = (builderStats.points || []).length;
-        const shapeBuilderStats = this.evaluateBuilderPoints(card.shapeBuilderState);
-        const shapeBuilderNodeCount = this.countBuilderNodes(card.shapeBuilderState?.root?.children || []);
-        const shapeBuilderPointCount = (shapeBuilderStats.points || []).length;
         const effectOptions = card.dataType === "single" ? this.getEffectOptionsHtml(card.singleEffectClass) : "";
         const shapeBindMode = card.shapeBindMode === "builder" ? "builder" : "point";
 
@@ -4025,40 +4793,6 @@ class CompositionBuilderApp {
                                 </div>
                             </div>
                         ` : `
-                            <div class="subgroup" data-section-key="shape_base">
-                                <div class="subgroup-title">Shape 点设置</div>
-                                <div class="grid2">
-                                    <label class="field">
-                                        <span>子点来源</span>
-                                        <select class="input" data-card-id="${card.id}" data-card-shape-field="bindMode">
-                                            <option value="point" ${shapeBindMode === "point" ? "selected" : ""}>point</option>
-                                            <option value="builder" ${shapeBindMode === "builder" ? "selected" : ""}>PointsBuilder</option>
-                                        </select>
-                                    </label>
-                                </div>
-                                ${shapeBindMode === "point" ? `
-                                    <div class="grid3">
-                                        <label class="field"><span>X</span><input class="input" type="number" step="${this.state.settings.paramStep}" data-card-id="${card.id}" data-card-shape-field="pointX" value="${esc(formatNumberCompact(card.shapePoint?.x))}"/></label>
-                                        <label class="field"><span>Y</span><input class="input" type="number" step="${this.state.settings.paramStep}" data-card-id="${card.id}" data-card-shape-field="pointY" value="${esc(formatNumberCompact(card.shapePoint?.y))}"/></label>
-                                        <label class="field"><span>Z</span><input class="input" type="number" step="${this.state.settings.paramStep}" data-card-id="${card.id}" data-card-shape-field="pointZ" value="${esc(formatNumberCompact(card.shapePoint?.z))}"/></label>
-                                    </div>
-                                ` : `
-                                    <div class="kv-list">
-                                        <div class="kv-row display-row">
-                                            <div class="builder-actions">
-                                                <button class="btn small primary" data-act="open-shape-builder-editor" data-card-id="${card.id}">编辑 Shape Builder</button>
-                                                <button class="btn small" data-act="import-shape-builder-json" data-card-id="${card.id}">导入 JSON</button>
-                                                <button class="btn small" data-act="export-shape-builder-json" data-card-id="${card.id}">导出 JSON</button>
-                                                <button class="btn small" data-act="clear-shape-builder" data-card-id="${card.id}">清空</button>
-                                            </div>
-                                        </div>
-                                        <div class="kv-row display-row">
-                                            <div class="builder-meta">节点 ${shapeBuilderNodeCount} / 预览点 ${shapeBuilderPointCount}</div>
-                                        </div>
-                                    </div>
-                                `}
-                            </div>
-
                             <div class="subgroup" data-section-key="shape_axis">
                                 <div class="subgroup-title">形状 Axis</div>
                                 <div class="grid2">
@@ -4097,6 +4831,7 @@ class CompositionBuilderApp {
                                 scope: "card",
                                 cardId: card.id,
                                 scale: card.shapeScale,
+                                helperName: "缩放助手-卡片",
                                 sectionKey: "shape_scale"
                             })}
                         `}
@@ -4111,10 +4846,47 @@ class CompositionBuilderApp {
     }
 
     renderShapeChildParamsSection(card, shapeBindMode = "point") {
-        if (!card || shapeBindMode !== "builder") return "";
+        if (!card) return "";
+        const normalizedShapeBindMode = shapeBindMode === "builder" ? "builder" : "point";
+        const shapeBuilderStats = this.evaluateBuilderPoints(card.shapeBuilderState);
+        const shapeBuilderNodeCount = this.countBuilderNodes(card.shapeBuilderState?.root?.children || []);
+        const shapeBuilderPointCount = (shapeBuilderStats.points || []).length;
         const childType = ["single", "particle_shape", "sequenced_shape"].includes(String(card.shapeChildType || ""))
             ? String(card.shapeChildType)
             : "single";
+        const shapeBaseBlock = `
+            <div class="mini-note">Shape 点设置</div>
+            <div class="grid2">
+                <label class="field">
+                    <span>子点来源</span>
+                    <select class="input" data-card-id="${card.id}" data-card-shape-field="bindMode">
+                        <option value="point" ${normalizedShapeBindMode === "point" ? "selected" : ""}>point</option>
+                        <option value="builder" ${normalizedShapeBindMode === "builder" ? "selected" : ""}>PointsBuilder</option>
+                    </select>
+                </label>
+            </div>
+            ${normalizedShapeBindMode === "point" ? `
+                <div class="grid3">
+                    <label class="field"><span>X</span><input class="input" type="number" step="${this.state.settings.paramStep}" data-card-id="${card.id}" data-card-shape-field="pointX" value="${esc(formatNumberCompact(card.shapePoint?.x))}"/></label>
+                    <label class="field"><span>Y</span><input class="input" type="number" step="${this.state.settings.paramStep}" data-card-id="${card.id}" data-card-shape-field="pointY" value="${esc(formatNumberCompact(card.shapePoint?.y))}"/></label>
+                    <label class="field"><span>Z</span><input class="input" type="number" step="${this.state.settings.paramStep}" data-card-id="${card.id}" data-card-shape-field="pointZ" value="${esc(formatNumberCompact(card.shapePoint?.z))}"/></label>
+                </div>
+            ` : `
+                <div class="kv-list">
+                    <div class="kv-row display-row">
+                        <div class="builder-actions">
+                            <button class="btn small primary" data-act="open-shape-builder-editor" data-card-id="${card.id}">编辑 Shape Builder</button>
+                            <button class="btn small" data-act="import-shape-builder-json" data-card-id="${card.id}">导入 JSON</button>
+                            <button class="btn small" data-act="export-shape-builder-json" data-card-id="${card.id}">导出 JSON</button>
+                            <button class="btn small" data-act="clear-shape-builder" data-card-id="${card.id}">清空</button>
+                        </div>
+                    </div>
+                    <div class="kv-row display-row">
+                        <div class="builder-meta">节点 ${shapeBuilderNodeCount} / 预览点 ${shapeBuilderPointCount}</div>
+                    </div>
+                </div>
+            `}
+        `;
         const typeSelector = `
             <div class="grid2">
                 <label class="field">
@@ -4130,7 +4902,7 @@ class CompositionBuilderApp {
                         <span>子点 Effect</span>
                         <select class="input" data-card-id="${card.id}" data-card-shape-child-field="shapeChildEffectClass">${this.getEffectOptionsHtml(card.shapeChildEffectClass || card.singleEffectClass)}</select>
                     </label>`
-                    : `<div class="mini-note">非 single 子点将使用对应 ShapeComposition 默认构造</div>`}
+                    : `<div class="mini-note">非 single 子点可继续配置子点来源与子点行为</div>`}
             </div>
         `;
 
@@ -4138,6 +4910,7 @@ class CompositionBuilderApp {
             return `
                 <div class="subgroup subgroup-tight" data-section-key="shape_child_params">
                     <div class="subgroup-title">子点类型参数</div>
+                    ${shapeBaseBlock}
                     ${typeSelector}
                     <div class="mini-note">Single: Particle Init</div>
                     <div class="list-tools">
@@ -4171,6 +4944,11 @@ class CompositionBuilderApp {
             `;
         }
 
+        const childBindMode = card.shapeChildBindMode === "builder" ? "builder" : "point";
+        const childBuilderStats = this.evaluateBuilderPoints(card.shapeChildBuilderState);
+        const childBuilderNodeCount = this.countBuilderNodes(card.shapeChildBuilderState?.root?.children || []);
+        const childBuilderPointCount = (childBuilderStats.points || []).length;
+
         const growthBlock = childType === "sequenced_shape"
             ? this.renderCardAnimates(
                 card.id,
@@ -4182,46 +4960,92 @@ class CompositionBuilderApp {
                 { embedOnly: true }
             )
             : "";
+        const childCollapsed = !!card.shapeChildCollapsed;
+        const childFoldIcon = childCollapsed ? "▶" : "▼";
+        const nestedBlocks = this.renderNestedShapeLevels(card);
 
         return `
             <div class="subgroup subgroup-tight" data-section-key="shape_child_params">
                 <div class="subgroup-title">子点类型参数</div>
+                ${shapeBaseBlock}
                 ${typeSelector}
-                <div class="mini-note">子点 Axis</div>
-                <div class="grid2">
-                    <label class="field">
-                        <span>child axis 预设</span>
-                        <select class="input expr-input" data-card-id="${card.id}" data-card-shape-child-axis-field="axisPreset">${this.getRelativeTargetPresetOptionsHtml(card.shapeChildAxisPreset || card.shapeChildAxisExpr)}</select>
-                    </label>
-                    <label class="field">
-                        <span>child axis 输入</span>
-                        <input class="input expr-input" data-card-id="${card.id}" data-card-shape-child-axis-field="axisExpr" value="${esc(card.shapeChildAxisExpr || "")}" placeholder="axis 表达式"/>
-                    </label>
+                <div class="subgroup subgroup-tight nested-shape-level ${childCollapsed ? "collapsed" : ""}" data-shape-level="0">
+                    <div class="subgroup-head">
+                        <button class="iconbtn subgroup-toggle" data-act="toggle-shape-child-fold" data-card-id="${card.id}" title="${childCollapsed ? "展开" : "折叠"}">${childFoldIcon}</button>
+                        <div class="subgroup-title">嵌套层 1</div>
+                    </div>
+                    <div class="subgroup-body">
+                        <div class="mini-note">子点来源</div>
+                        <div class="grid2">
+                            <label class="field">
+                                <span>子点基础选项</span>
+                                <select class="input" data-card-id="${card.id}" data-card-shape-child-field="bindMode">
+                                    <option value="point" ${childBindMode === "point" ? "selected" : ""}>point</option>
+                                    <option value="builder" ${childBindMode === "builder" ? "selected" : ""}>PointsBuilder</option>
+                                </select>
+                            </label>
+                        </div>
+                        ${childBindMode === "point" ? `
+                            <div class="grid3">
+                                <label class="field"><span>X</span><input class="input" type="number" step="${this.state.settings.paramStep}" data-card-id="${card.id}" data-card-shape-child-field="pointX" value="${esc(formatNumberCompact(card.shapeChildPoint?.x))}"/></label>
+                                <label class="field"><span>Y</span><input class="input" type="number" step="${this.state.settings.paramStep}" data-card-id="${card.id}" data-card-shape-child-field="pointY" value="${esc(formatNumberCompact(card.shapeChildPoint?.y))}"/></label>
+                                <label class="field"><span>Z</span><input class="input" type="number" step="${this.state.settings.paramStep}" data-card-id="${card.id}" data-card-shape-child-field="pointZ" value="${esc(formatNumberCompact(card.shapeChildPoint?.z))}"/></label>
+                            </div>
+                        ` : `
+                            <div class="kv-list">
+                                <div class="kv-row display-row">
+                                    <div class="builder-actions">
+                                        <button class="btn small primary" data-act="open-shape-child-builder-editor" data-card-id="${card.id}">编辑子点 Builder</button>
+                                        <button class="btn small" data-act="import-shape-child-builder-json" data-card-id="${card.id}">导入 JSON</button>
+                                        <button class="btn small" data-act="export-shape-child-builder-json" data-card-id="${card.id}">导出 JSON</button>
+                                        <button class="btn small" data-act="clear-shape-child-builder" data-card-id="${card.id}">清空</button>
+                                    </div>
+                                </div>
+                                <div class="kv-row display-row">
+                                    <div class="builder-meta">节点 ${childBuilderNodeCount} / 预览点 ${childBuilderPointCount}</div>
+                                </div>
+                            </div>
+                        `}
+                        <div class="mini-note">子点 Axis</div>
+                        <div class="grid2">
+                            <label class="field">
+                                <span>child axis 预设</span>
+                                <select class="input expr-input" data-card-id="${card.id}" data-card-shape-child-axis-field="axisPreset">${this.getRelativeTargetPresetOptionsHtml(card.shapeChildAxisPreset || card.shapeChildAxisExpr)}</select>
+                            </label>
+                            <label class="field">
+                                <span>child axis 输入</span>
+                                <input class="input expr-input" data-card-id="${card.id}" data-card-shape-child-axis-field="axisExpr" value="${esc(card.shapeChildAxisExpr || "")}" placeholder="axis 表达式"/>
+                            </label>
+                        </div>
+                        <div class="grid5 vector-inputs">
+                            <select class="input vector-ctor" data-card-id="${card.id}" data-card-shape-child-axis-field="axisManualCtor">
+                                ${["Vec3", "RelativeLocation", "Vector3f"].map((it) => `<option value="${it}" ${card.shapeChildAxisManualCtor === it ? "selected" : ""}>${it}</option>`).join("")}
+                            </select>
+                            <input class="input" type="number" step="${this.state.settings.paramStep}" data-card-id="${card.id}" data-card-shape-child-axis-field="axisManualX" value="${esc(formatNumberCompact(card.shapeChildAxisManualX))}" placeholder="x"/>
+                            <input class="input" type="number" step="${this.state.settings.paramStep}" data-card-id="${card.id}" data-card-shape-child-axis-field="axisManualY" value="${esc(formatNumberCompact(card.shapeChildAxisManualY))}" placeholder="y"/>
+                            <input class="input" type="number" step="${this.state.settings.paramStep}" data-card-id="${card.id}" data-card-shape-child-axis-field="axisManualZ" value="${esc(formatNumberCompact(card.shapeChildAxisManualZ))}" placeholder="z"/>
+                            <button class="btn small primary" data-act="apply-shape-child-axis-manual" data-card-id="${card.id}">套用手动输入</button>
+                        </div>
+                        <div class="mini-note">子点 Display 行为</div>
+                        <div class="list-tools">
+                            <button class="btn small primary" data-act="add-shape-child-display-action" data-card-id="${card.id}">添加子点 display action</button>
+                        </div>
+                        <div class="kv-list">
+                            ${(card.shapeChildDisplayActions || []).map((a, aIdx) => this.renderShapeChildDisplayActionRow(card.id, a, aIdx)).join("")}
+                        </div>
+                        <div class="mini-note">缩放助手-嵌套1（可选）</div>
+                        ${this.renderScaleHelperEditor({
+                            scope: "shape_child",
+                            cardId: card.id,
+                            scale: card.shapeChildScale,
+                            helperName: "缩放助手-嵌套1",
+                            embedOnly: true
+                        })}
+                        ${growthBlock}
+                    </div>
                 </div>
-                <div class="grid5 vector-inputs">
-                    <select class="input vector-ctor" data-card-id="${card.id}" data-card-shape-child-axis-field="axisManualCtor">
-                        ${["Vec3", "RelativeLocation", "Vector3f"].map((it) => `<option value="${it}" ${card.shapeChildAxisManualCtor === it ? "selected" : ""}>${it}</option>`).join("")}
-                    </select>
-                    <input class="input" type="number" step="${this.state.settings.paramStep}" data-card-id="${card.id}" data-card-shape-child-axis-field="axisManualX" value="${esc(formatNumberCompact(card.shapeChildAxisManualX))}" placeholder="x"/>
-                    <input class="input" type="number" step="${this.state.settings.paramStep}" data-card-id="${card.id}" data-card-shape-child-axis-field="axisManualY" value="${esc(formatNumberCompact(card.shapeChildAxisManualY))}" placeholder="y"/>
-                    <input class="input" type="number" step="${this.state.settings.paramStep}" data-card-id="${card.id}" data-card-shape-child-axis-field="axisManualZ" value="${esc(formatNumberCompact(card.shapeChildAxisManualZ))}" placeholder="z"/>
-                    <button class="btn small primary" data-act="apply-shape-child-axis-manual" data-card-id="${card.id}">套用手动输入</button>
-                </div>
-                <div class="mini-note">子点 Display 行为</div>
-                <div class="list-tools">
-                    <button class="btn small primary" data-act="add-shape-child-display-action" data-card-id="${card.id}">添加子点 display action</button>
-                </div>
-                <div class="kv-list">
-                    ${(card.shapeChildDisplayActions || []).map((a, aIdx) => this.renderShapeChildDisplayActionRow(card.id, a, aIdx)).join("")}
-                </div>
-                <div class="mini-note">子点缩放助手（可选）</div>
-                ${this.renderScaleHelperEditor({
-                    scope: "shape_child",
-                    cardId: card.id,
-                    scale: card.shapeChildScale,
-                    embedOnly: true
-                })}
-                ${growthBlock}
+                ${(card.shapeChildLevels || []).length ? `<div class="mini-note">已配置嵌套层 ${(card.shapeChildLevels || []).length}</div>` : ""}
+                ${nestedBlocks}
             </div>
         `;
     }
@@ -4280,6 +5104,9 @@ class CompositionBuilderApp {
         this.previewExprCountCache.clear();
         this.previewExprPrefixCache.clear();
         this.previewCondFnCache.clear();
+        this.previewNumericFnCache.clear();
+        this.previewRuntimeGlobals = null;
+        this.previewRuntimeAppliedTick = -1;
         const points = [];
         const owners = [];
         const birthOffsets = [];
@@ -4289,6 +5116,8 @@ class CompositionBuilderApp {
         const localBases = [];
         const anchorRefs = [];
         const localRefs = [];
+        const levelBases = [];
+        const levelRefs = [];
         const useLocalOpsList = [];
         const appendFlatPoints = (cardId, pointList) => {
             const src = Array.isArray(pointList) ? pointList : [];
@@ -4305,6 +5134,8 @@ class CompositionBuilderApp {
                 localBases.push(U.v(0, 0, 0));
                 anchorRefs.push(idx);
                 localRefs.push(0);
+                levelBases.push([]);
+                levelRefs.push([]);
                 useLocalOpsList.push(false);
             }
         };
@@ -4317,7 +5148,10 @@ class CompositionBuilderApp {
             for (let ai = 0; ai < anchorList.length; ai++) {
                 const a = U.v(num(anchorList[ai]?.x), num(anchorList[ai]?.y), num(anchorList[ai]?.z));
                 for (let li = 0; li < localList.length; li++) {
-                    const l = U.v(num(localList[li]?.x), num(localList[li]?.y), num(localList[li]?.z));
+                    const tuple = localList[li] || {};
+                    const tupleSum = tuple.sum || tuple.local || tuple;
+                    const l = U.v(num(tupleSum?.x), num(tupleSum?.y), num(tupleSum?.z));
+                    const tupleLevels = Array.isArray(tuple.levels) ? tuple.levels : [];
                     points.push(U.v(a.x + l.x, a.y + l.y, a.z + l.z));
                     owners.push(cardId);
                     birthOffsets.push(0);
@@ -4327,6 +5161,8 @@ class CompositionBuilderApp {
                     localBases.push(l);
                     anchorRefs.push(ai);
                     localRefs.push(li);
+                    levelBases.push(tupleLevels.map((it) => U.v(num(it?.vec?.x), num(it?.vec?.y), num(it?.vec?.z))));
+                    levelRefs.push(tupleLevels.map((it) => int(it?.ref || 0)));
                     useLocalOpsList.push(true);
                 }
             }
@@ -4342,20 +5178,11 @@ class CompositionBuilderApp {
                 }
             }
 
-            const useShapeBuilderPreview = card.dataType !== "single" && card.shapeBindMode === "builder";
-            if (useShapeBuilderPreview) {
-                const shapeBuilt = this.evaluateBuilderPoints(card.shapeBuilderState);
-                const shapePoints = Array.isArray(shapeBuilt?.points) ? shapeBuilt.points : [];
-                if (shapePoints.length && basePoints.length) {
-                    appendShapePoints(card.id, basePoints, shapePoints);
-                    continue;
+            if (card.dataType !== "single" && basePoints.length) {
+                const locals = this.buildShapeLocalTuplesForPreview(card);
+                if (locals.length) {
+                    appendShapePoints(card.id, basePoints, locals);
                 }
-            }
-
-            const useShapePointPreview = card.dataType !== "single" && card.shapeBindMode === "point";
-            if (useShapePointPreview && basePoints.length) {
-                const local = [U.v(card.shapePoint?.x, card.shapePoint?.y, card.shapePoint?.z)];
-                appendShapePoints(card.id, basePoints, local);
                 continue;
             }
 
@@ -4373,6 +5200,8 @@ class CompositionBuilderApp {
         this.previewLocalBase = localBases;
         this.previewAnchorRef = anchorRefs;
         this.previewLocalRef = localRefs;
+        this.previewLevelBases = levelBases;
+        this.previewLevelRefs = levelRefs;
         this.previewUseLocalOps = useLocalOpsList;
         this.previewAnimStart = performance.now();
         this.updatePreviewGeometry(points, owners);
@@ -4384,6 +5213,7 @@ class CompositionBuilderApp {
         const posAttr = this.pointsGeom.getAttribute("position");
         const colAttr = this.pointsGeom.getAttribute("color");
         const sizeAttr = this.pointsGeom.getAttribute("aSize");
+        const alphaAttr = this.pointsGeom.getAttribute("aAlpha");
         if (!posAttr || posAttr.array.length !== count * 3) {
             this.pointsGeom.setAttribute("position", new THREE.BufferAttribute(new Float32Array(count * 3), 3));
         }
@@ -4393,11 +5223,16 @@ class CompositionBuilderApp {
         if (!sizeAttr || sizeAttr.array.length !== count) {
             this.pointsGeom.setAttribute("aSize", new THREE.BufferAttribute(new Float32Array(count), 1));
         }
+        if (!alphaAttr || alphaAttr.array.length !== count) {
+            this.pointsGeom.setAttribute("aAlpha", new THREE.BufferAttribute(new Float32Array(count), 1));
+        }
         const positions = this.pointsGeom.getAttribute("position").array;
         const colors = this.pointsGeom.getAttribute("color").array;
         const sizes = this.pointsGeom.getAttribute("aSize").array;
+        const alphas = this.pointsGeom.getAttribute("aAlpha").array;
         this.previewVisibleMask = new Array(count).fill(true);
         this.previewSizeFactors = new Array(count).fill(1);
+        this.previewAlphaFactors = new Array(count).fill(1);
         const visualCache = new Map();
         const colorFactorCache = new Map();
         for (let i = 0; i < count; i++) {
@@ -4421,11 +5256,14 @@ class CompositionBuilderApp {
             colors[i * 3 + 1] = rgb[1] * k;
             colors[i * 3 + 2] = rgb[2] * k;
             sizes[i] = Math.max(0.05, num(visual.size));
+            alphas[i] = clamp(num(visual.alpha), 0, 1);
             this.previewSizeFactors[i] = Math.max(0.05, num(visual.size));
+            this.previewAlphaFactors[i] = clamp(num(visual.alpha), 0, 1);
         }
         this.pointsGeom.attributes.position.needsUpdate = true;
         this.pointsGeom.attributes.color.needsUpdate = true;
         this.pointsGeom.attributes.aSize.needsUpdate = true;
+        this.pointsGeom.attributes.aAlpha.needsUpdate = true;
         this.pointsGeom.computeBoundingSphere();
         if (this.pointsMat) this.pointsMat.size = this.state.settings.pointSize;
         const statusText = `点数: ${count}/${this.previewBasePoints.length || count}`;
@@ -4453,13 +5291,24 @@ class CompositionBuilderApp {
         const positions = this.pointsGeom.getAttribute("position")?.array;
         const colors = this.pointsGeom.getAttribute("color")?.array;
         const sizes = this.pointsGeom.getAttribute("aSize")?.array;
-        if (!positions || !colors || !sizes) return;
+        const alphas = this.pointsGeom.getAttribute("aAlpha")?.array;
+        if (!positions || !colors || !sizes || !alphas) return;
         const skipExprPerPoint = totalCount >= 50000;
         const runtimeActions = this.buildPreviewRuntimeActions(elapsedTick, this.state.displayActions || [], {
             skipExpression: skipExprPerPoint,
             scope: "display"
         });
         const globalAxis = this.resolveCompositionAxisDirection();
+        const tickStep = Math.max(0, Math.floor(elapsedTick));
+        if (!this.previewRuntimeGlobals || tickStep < this.previewRuntimeAppliedTick) {
+            this.previewRuntimeGlobals = this.buildPreviewRuntimeGlobals(0, 0, 0);
+            this.previewRuntimeAppliedTick = -1;
+        }
+        const frameRuntimeGlobals = this.previewRuntimeGlobals;
+        for (let t = this.previewRuntimeAppliedTick + 1; t <= tickStep; t++) {
+            this.applyExpressionGlobalsOnce(runtimeActions, t, t, frameRuntimeGlobals, globalAxis);
+        }
+        if (tickStep > this.previewRuntimeAppliedTick) this.previewRuntimeAppliedTick = tickStep;
         const ownerCache = new Map();
         const anchorCache = new Map();
         const localCache = new Map();
@@ -4487,21 +5336,21 @@ class CompositionBuilderApp {
             if (!cached) {
                 const age = ((elapsedTick - birthOffset) % cycleTotal + cycleTotal) % cycleTotal;
                 const card = this.getCardById(owner);
-                let cardRuntimeActions = [];
-                let cardAxis = globalAxis;
-                let cardScale = normalizeScaleHelperConfig({ type: "none" });
+                let shapeRuntimeLevels = [];
                 if (card) {
                     if (card.dataType !== "single") {
-                        cardRuntimeActions = this.buildPreviewRuntimeActions(elapsedTick, card.shapeDisplayActions || [], {
-                            skipExpression: skipExprPerPoint,
-                            scope: "shape_display",
-                            cardId: card.id
-                        });
-                        cardAxis = this.resolveRelativeDirection(card.shapeAxisExpr || card.shapeAxisPreset || "RelativeLocation.yAxis()");
-                        cardScale = normalizeScaleHelperConfig(card.shapeScale, { type: "none" });
+                        shapeRuntimeLevels = this.getShapeRuntimeLevelsForPreview(card, elapsedTick, skipExprPerPoint);
+                        for (const lv of shapeRuntimeLevels) {
+                            this.applyExpressionGlobalsOnce(lv.actions, elapsedTick, age, frameRuntimeGlobals, lv.axis || globalAxis);
+                        }
                     }
                 }
-                const visual = this.resolveCardPreviewVisual(owner);
+                const visual = this.resolveCardPreviewVisual(owner, {
+                    runtimeVars: frameRuntimeGlobals,
+                    elapsedTick,
+                    ageTick: age,
+                    pointIndex: 0
+                });
                 const visibleLimit = this.evaluateGrowthVisibleLimit(
                     owner,
                     ownerCount,
@@ -4509,17 +5358,15 @@ class CompositionBuilderApp {
                     globalCycleAge,
                     elapsedTick,
                     runtimeActions,
-                    cardRuntimeActions,
+                    shapeRuntimeLevels[0]?.actions || [],
                     cycleCfg
                 );
                 cached = {
                     ownerCount,
                     age,
-                    cardRuntimeActions,
-                    cardRuntimeHasExpression: !!cardRuntimeActions.__hasExpression,
+                    shapeRuntimeLevels,
+                    cardRuntimeHasExpression: shapeRuntimeLevels.some((lv) => !!lv.hasExpression),
                     cardHasShapeOps: !!(card && card.dataType !== "single"),
-                    cardAxis,
-                    cardScale,
                     visibleLimit,
                     visual
                 };
@@ -4544,7 +5391,11 @@ class CompositionBuilderApp {
             if (!anchor) {
                 const globalScale = this.resolveScaleFactor(this.state.projectScale, cached.age, cycleCfg);
                 anchor = this.applyScaleFactorToPoint(anchorBase, globalScale);
-                anchor = this.applyRuntimeActionsToPoint(anchor, runtimeActions, elapsedTick, cached.age, anchorRef, globalAxis, { skipExpression: skipExprPerPoint });
+                anchor = this.applyRuntimeActionsToPoint(anchor, runtimeActions, elapsedTick, cached.age, anchorRef, globalAxis, {
+                    skipExpression: skipExprPerPoint,
+                    runtimeVars: frameRuntimeGlobals,
+                    persistExpressionVars: false
+                });
                 anchorsByBirth[anchorRef] = anchor;
             }
 
@@ -4566,11 +5417,43 @@ class CompositionBuilderApp {
                 }
                 if (localCacheable) local = localsByBirth[localRef];
                 if (!local) {
-                    const cardScale = this.resolveScaleFactor(cached.cardScale, cached.age, cycleCfg);
-                    local = this.applyScaleFactorToPoint(localBase, cardScale);
-                    if (cached.cardRuntimeActions.length) {
-                        local = this.applyRuntimeActionsToPoint(local, cached.cardRuntimeActions, elapsedTick, cached.age, localRef, cached.cardAxis, { skipExpression: skipExprPerPoint });
+                    const levelBaseList = Array.isArray(this.previewLevelBases[i]) && this.previewLevelBases[i].length
+                        ? this.previewLevelBases[i]
+                        : [localBase];
+                    const levelRefList = Array.isArray(this.previewLevelRefs[i]) && this.previewLevelRefs[i].length
+                        ? this.previewLevelRefs[i]
+                        : [localRef];
+                    const runtimeLevels = Array.isArray(cached.shapeRuntimeLevels) ? cached.shapeRuntimeLevels : [];
+                    let localSum = U.v(0, 0, 0);
+                    for (let lvIdx = 0; lvIdx < levelBaseList.length; lvIdx++) {
+                        const lvBase = levelBaseList[lvIdx] || U.v(0, 0, 0);
+                        const lvPointRef = int(levelRefList[lvIdx] ?? localRef);
+                        const lvRuntime = runtimeLevels[lvIdx] || null;
+                        let lvPoint = U.clone(lvBase);
+                        if (lvRuntime) {
+                            const cardScale = this.resolveScaleFactor(lvRuntime.scale, cached.age, cycleCfg);
+                            lvPoint = this.applyScaleFactorToPoint(lvPoint, cardScale);
+                            if (lvRuntime.actions && lvRuntime.actions.length) {
+                                lvPoint = this.applyRuntimeActionsToPoint(
+                                    lvPoint,
+                                    lvRuntime.actions,
+                                    elapsedTick,
+                                    cached.age,
+                                    lvPointRef,
+                                    lvRuntime.axis || globalAxis,
+                                    {
+                                        skipExpression: skipExprPerPoint,
+                                        runtimeVars: frameRuntimeGlobals,
+                                        persistExpressionVars: false
+                                    }
+                                );
+                            }
+                        }
+                        localSum.x += num(lvPoint.x);
+                        localSum.y += num(lvPoint.y);
+                        localSum.z += num(lvPoint.z);
                     }
+                    local = localSum;
                     if (localCacheable) localsByBirth[localRef] = local;
                 }
                 px = anchor.x + local.x;
@@ -4602,11 +5485,13 @@ class CompositionBuilderApp {
             colors[i * 3 + 1] = rgb[1] * k;
             colors[i * 3 + 2] = rgb[2] * k;
             sizes[i] = Math.max(0.05, num(cached.visual.size)) * (isVisible ? 1 : 0.01);
+            alphas[i] = clamp(num(cached.visual.alpha), 0, 1) * (isVisible ? 1 : 0);
         }
 
         this.pointsGeom.attributes.position.needsUpdate = true;
         this.pointsGeom.attributes.color.needsUpdate = true;
         this.pointsGeom.attributes.aSize.needsUpdate = true;
+        this.pointsGeom.attributes.aAlpha.needsUpdate = true;
         const statusText = `点数: ${visible}/${this.previewBasePoints.length}`;
         if (this.lastPointsStatusText !== statusText) {
             this.lastPointsStatusText = statusText;
@@ -4759,7 +5644,12 @@ class CompositionBuilderApp {
         if (typeof actionsOrScript === "string") {
             const src = String(actionsOrScript || "").trim();
             if (src) {
-                expressionActions.push({ type: "expression", expression: src, fn: null });
+                expressionActions.push({
+                    type: "expression",
+                    expression: transpileKotlinThisQualifierToJs(src),
+                    expressionRaw: src,
+                    fn: null
+                });
                 sourceSignature = `s:${src}`;
             }
         } else {
@@ -4778,7 +5668,8 @@ class CompositionBuilderApp {
         if (!prefix) {
             const prepared = [];
             for (const act of expressionActions) {
-                const src = String(act.expression || "").trim();
+                const srcRaw = String(act.expressionRaw || act.expression || "").trim();
+                const src = transpileKotlinThisQualifierToJs(srcRaw);
                 if (!src) continue;
                 let fn = null;
                 if (this.previewExprFnCache.has(src)) {
@@ -4793,6 +5684,7 @@ class CompositionBuilderApp {
                             "rotateToWithAngle",
                             "addSingle",
                             "addMultiple",
+                            "thisAt",
                             `with(vars){ ${src} }; return point;`
                         );
                     } catch {
@@ -4812,7 +5704,16 @@ class CompositionBuilderApp {
         const actions = Array.isArray(prefix.actions) ? prefix.actions : [];
         for (let t = counts.length; t <= steps && visible < safeOwnerCount; t++) {
             for (const fn of actions) {
-                const vars = this.getExpressionVars(t, t, 0);
+                const thisAt = (this.previewRuntimeGlobals && typeof this.previewRuntimeGlobals === "object")
+                    ? this.previewRuntimeGlobals
+                    : {};
+                const baseVars = this.getExpressionVars(t, t, 0, { includeVectors: true });
+                const baseProto = Object.getPrototypeOf(baseVars) || {};
+                const vars = Object.assign({}, baseProto, baseVars);
+                if (thisAt && typeof thisAt === "object") {
+                    for (const [k, v] of Object.entries(thisAt)) vars[k] = v;
+                }
+                vars.thisAt = thisAt;
                 const noop = () => {};
                 const addSingle = () => {
                     visible += 1;
@@ -4821,7 +5722,7 @@ class CompositionBuilderApp {
                     visible += Math.max(1, int(n || 1));
                 };
                 try {
-                    fn(vars, U.v(0, 0, 0), noop, noop, noop, addSingle, addMultiple);
+                    fn(vars, U.v(0, 0, 0), noop, noop, noop, addSingle, addMultiple, thisAt);
                 } catch {
                 }
                 if (visible >= safeOwnerCount) break;
@@ -4904,22 +5805,229 @@ class CompositionBuilderApp {
         return U.v(point.x * s, point.y * s, point.z * s);
     }
 
-    resolveCardPreviewVisual(cardId) {
-        const fallback = { color: this.getCardColorRgb(cardId), size: 1 };
+    getShapeLeafType(card) {
+        if (!card || card.dataType === "single") return "single";
+        const chain = this.getShapeChildChain(card);
+        if (!chain.length) return "single";
+        for (const lv of chain) {
+            const t = String(lv?.type || "single");
+            if (t === "single") return "single";
+        }
+        return "single";
+    }
+
+    resolveShapeSourcePoints(bindMode, point, builderState) {
+        if (bindMode === "builder") {
+            const built = this.evaluateBuilderPoints(builderState);
+            const pts = [];
+            for (const p of (built?.points || [])) {
+                pts.push(U.v(num(p?.x), num(p?.y), num(p?.z)));
+            }
+            return pts;
+        }
+        return [U.v(num(point?.x), num(point?.y), num(point?.z))];
+    }
+
+    combineLocalPointSets(base, extra) {
+        const a = Array.isArray(base) ? base : [];
+        const b = Array.isArray(extra) ? extra : [];
+        if (!a.length || !b.length) return [];
+        const out = [];
+        for (const p of a) {
+            for (const q of b) {
+                out.push(U.v(num(p?.x) + num(q?.x), num(p?.y) + num(q?.y), num(p?.z) + num(q?.z)));
+            }
+        }
+        return out;
+    }
+
+    buildShapeLocalTuplesForPreview(card) {
+        if (!card || card.dataType === "single") return [];
+        const rootPoints = this.resolveShapeSourcePoints(card.shapeBindMode, card.shapePoint, card.shapeBuilderState);
+        let tuples = rootPoints.map((p, idx) => {
+            const vec = U.v(num(p?.x), num(p?.y), num(p?.z));
+            return {
+                sum: U.clone(vec),
+                levels: [{ vec, ref: idx }]
+            };
+        });
+        if (!tuples.length) return [];
+
+        const chain = this.getShapeChildChain(card);
+        for (const levelRaw of chain) {
+            const level = normalizeShapeNestedLevel(levelRaw);
+            if (String(level.type || "single") === "single") break;
+            const src = this.resolveShapeSourcePoints(level.bindMode, level.point, level.builderState);
+            if (!src.length) return [];
+            const next = [];
+            for (const tuple of tuples) {
+                const baseLevels = Array.isArray(tuple?.levels) ? tuple.levels : [];
+                const sumBase = tuple?.sum || U.v(0, 0, 0);
+                for (let si = 0; si < src.length; si++) {
+                    const sp = src[si];
+                    const sv = U.v(num(sp?.x), num(sp?.y), num(sp?.z));
+                    const levels = baseLevels.map((lv) => ({ vec: U.v(num(lv?.vec?.x), num(lv?.vec?.y), num(lv?.vec?.z)), ref: int(lv?.ref || 0) }));
+                    levels.push({ vec: U.clone(sv), ref: si });
+                    next.push({
+                        sum: U.v(num(sumBase?.x) + sv.x, num(sumBase?.y) + sv.y, num(sumBase?.z) + sv.z),
+                        levels
+                    });
+                }
+            }
+            tuples = next;
+            if (!tuples.length) break;
+        }
+        return tuples;
+    }
+
+    buildShapeLocalPointsForPreview(card) {
+        const tuples = this.buildShapeLocalTuplesForPreview(card);
+        return tuples.map((it) => U.v(num(it?.sum?.x), num(it?.sum?.y), num(it?.sum?.z)));
+    }
+
+    getShapeRuntimeLevelsForPreview(card, elapsedTick, skipExpression = false) {
+        if (!card || card.dataType === "single") return [];
+        const levels = [];
+        const rootActions = this.buildPreviewRuntimeActions(elapsedTick, card.shapeDisplayActions || [], {
+            skipExpression,
+            scope: "shape_display",
+            cardId: card.id
+        });
+        levels.push({
+            axis: this.resolveRelativeDirection(card.shapeAxisExpr || card.shapeAxisPreset || "RelativeLocation.yAxis()"),
+            scale: normalizeScaleHelperConfig(card.shapeScale, { type: "none" }),
+            actions: rootActions,
+            hasExpression: !!rootActions.__hasExpression
+        });
+        const chain = this.getShapeChildChain(card);
+        for (let i = 0; i < chain.length; i++) {
+            const lv = normalizeShapeNestedLevel(chain[i], i);
+            if (lv.type === "single") break;
+            const actions = this.buildPreviewRuntimeActions(elapsedTick, lv.displayActions || [], {
+                skipExpression,
+                scope: "shape_level_display",
+                cardId: card.id
+            });
+            levels.push({
+                axis: this.resolveRelativeDirection(lv.axisExpr || lv.axisPreset || "RelativeLocation.yAxis()"),
+                scale: normalizeScaleHelperConfig(lv.scale, { type: "none" }),
+                actions,
+                hasExpression: !!actions.__hasExpression
+            });
+        }
+        return levels;
+    }
+
+    extractLastAssignedExprInScript(scriptRaw, names = []) {
+        const src = String(scriptRaw || "");
+        if (!src || !Array.isArray(names) || !names.length) return "";
+        let out = "";
+        for (const rawName of names) {
+            const name = String(rawName || "").trim();
+            if (!name) continue;
+            const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+            const re = new RegExp(`(?:^|[;\\n])\\s*(?:let\\s+|var\\s+|const\\s+)?${escaped}\\s*=\\s*(?![=])([^;\\n]+)`, "g");
+            let m = null;
+            while ((m = re.exec(src)) !== null) {
+                const expr = String(m[1] || "").trim();
+                if (expr) out = expr;
+            }
+        }
+        return out;
+    }
+
+    applyControllerScriptVisual(visual, scriptRaw, opts = {}) {
+        if (!visual || !scriptRaw) return;
+        const runtimeVars = (opts.runtimeVars && typeof opts.runtimeVars === "object") ? opts.runtimeVars : null;
+        const runtimeCtx = Object.assign({}, runtimeVars || {});
+        const particleColor = U.v(
+            clamp(num(visual.color?.[0]), 0, 1),
+            clamp(num(visual.color?.[1]), 0, 1),
+            clamp(num(visual.color?.[2]), 0, 1)
+        );
+        runtimeCtx.color = particleColor;
+        runtimeCtx.particleColor = particleColor;
+        runtimeCtx.size = num(visual.size);
+        runtimeCtx.particleSize = num(visual.size);
+        runtimeCtx.alpha = num(visual.alpha);
+        runtimeCtx.particleAlpha = num(visual.alpha);
+        runtimeCtx.currentAge = num(runtimeCtx.currentAge || 0);
+        runtimeCtx.textureSheet = num(runtimeCtx.textureSheet || 0);
+        const elapsedTick = num(opts.elapsedTick);
+        const ageTick = num(opts.ageTick);
+        const pointIndex = int(opts.pointIndex || 0);
+        const readVec = (expr) => this.parseVecLikeValueWithRuntime(expr, runtimeCtx, { elapsedTick, ageTick, pointIndex });
+        const readNum = (expr) => this.evaluateNumericExpressionWithRuntime(expr, runtimeCtx, { elapsedTick, ageTick, pointIndex });
+
+        const colorExpr = String(this.extractLastAssignedExprInScript(scriptRaw, [
+            "color",
+            "this.color",
+            "particleColor",
+            "this.particleColor",
+            "particle.particleColor"
+        ]) || "").trim();
+        if (colorExpr) {
+            const vec = readVec(colorExpr);
+            visual.color = [clamp(num(vec.x), 0, 1), clamp(num(vec.y), 0, 1), clamp(num(vec.z), 0, 1)];
+        }
+
+        const sizeExpr = String(this.extractLastAssignedExprInScript(scriptRaw, [
+            "size",
+            "this.size",
+            "particleSize",
+            "this.particleSize",
+            "particle.particleSize"
+        ]) || "").trim();
+        if (sizeExpr) {
+            visual.size = Math.max(0.05, num(readNum(sizeExpr)));
+        }
+
+        const alphaExpr = String(this.extractLastAssignedExprInScript(scriptRaw, [
+            "alpha",
+            "this.alpha",
+            "particleAlpha",
+            "this.particleAlpha",
+            "particle.particleAlpha"
+        ]) || "").trim();
+        if (alphaExpr) {
+            visual.alpha = clamp(num(readNum(alphaExpr)), 0, 1);
+        }
+    }
+
+    resolveCardPreviewVisual(cardId, opts = {}) {
+        const runtimeVars = (opts.runtimeVars && typeof opts.runtimeVars === "object") ? opts.runtimeVars : null;
+        const elapsedTick = num(opts.elapsedTick);
+        const ageTick = num(opts.ageTick);
+        const pointIndex = int(opts.pointIndex || 0);
+        const fallback = { color: this.getCardColorRgb(cardId), size: 0.2, alpha: 1 };
         const card = this.getCardById(cardId);
-        if (!card || card.dataType !== "single") return fallback;
-        const visual = { color: [...fallback.color], size: 1 };
+        if (!card) return fallback;
+        const useSingleInit = card.dataType === "single"
+            || (card.dataType !== "single" && this.getShapeLeafType(card) === "single");
+        if (!useSingleInit) return fallback;
+        const visual = { color: [...fallback.color], size: 0.2, alpha: 1 };
         for (const it of (card.particleInit || [])) {
             const target = String(it.target || "").trim().toLowerCase();
-            const expr = String(it.expr || "").trim().replace(/this@[A-Za-z0-9_]+\./g, "");
+            const expr = String(it.expr || "").trim();
             if (!expr) continue;
             if (target === "color" || target === "particlecolor" || target === "particle.particlecolor") {
-                const vec = this.parseVecLikeValue(expr);
+                const vec = this.parseVecLikeValueWithRuntime(expr, runtimeVars, { elapsedTick, ageTick, pointIndex });
                 visual.color = [clamp(num(vec.x), 0, 1), clamp(num(vec.y), 0, 1), clamp(num(vec.z), 0, 1)];
             }
             if (target === "size" || target === "particlesize" || target === "particle.particlesize") {
-                visual.size = Math.max(0.05, num(this.evaluateNumericExpression(expr)));
+                visual.size = Math.max(0.05, num(this.evaluateNumericExpressionWithRuntime(expr, runtimeVars, { elapsedTick, ageTick, pointIndex })));
             }
+            if (target === "alpha" || target === "particlealpha" || target === "particle.particlealpha") {
+                visual.alpha = clamp(num(this.evaluateNumericExpressionWithRuntime(expr, runtimeVars, { elapsedTick, ageTick, pointIndex })), 0, 1);
+            }
+        }
+        for (const action of (card.controllerActions || [])) {
+            this.applyControllerScriptVisual(visual, String(action?.script || ""), {
+                runtimeVars,
+                elapsedTick,
+                ageTick,
+                pointIndex
+            });
         }
         return visual;
     }
@@ -4984,7 +6092,8 @@ class CompositionBuilderApp {
             }
             if (a.type === "expression") {
                 if (skipExpression) continue;
-                const src = String(a.expression || "").trim();
+                const srcRaw = String(a.expression || "").trim();
+                const src = transpileKotlinThisQualifierToJs(srcRaw);
                 let fn = null;
                 if (src) {
                     if (this.previewExprFnCache.has(src)) {
@@ -4999,6 +6108,7 @@ class CompositionBuilderApp {
                                 "rotateToWithAngle",
                                 "addSingle",
                                 "addMultiple",
+                                "thisAt",
                                 `with(vars){ try { ${src} } catch(_e) {} }; return point;`
                             );
                         } catch {
@@ -5009,7 +6119,7 @@ class CompositionBuilderApp {
                     }
                     hasExpression = true;
                 }
-                out.push({ type: a.type, expression: src, fn });
+                out.push({ type: a.type, expression: src, expressionRaw: srcRaw, fn });
             }
         }
         out.__hasExpression = hasExpression;
@@ -5020,6 +6130,8 @@ class CompositionBuilderApp {
         const list = Array.isArray(runtimeActions) ? runtimeActions : [];
         if (!list.length) return point;
         const skipExpression = !!opts.skipExpression;
+        const runtimeVars = (opts.runtimeVars && typeof opts.runtimeVars === "object") ? opts.runtimeVars : null;
+        const persistExpressionVars = !!opts.persistExpressionVars;
         if (skipExpression && list.every((a) => a?.type === "expression")) return point;
         let p = U.clone(point);
         let axis = this.parseJsVec(startAxis || this.resolveCompositionAxisDirection());
@@ -5041,7 +6153,10 @@ class CompositionBuilderApp {
             }
             if (a.type === "expression") {
                 if (skipExpression) continue;
-                const res = this.applyExpressionActionToPoint(a, p, elapsedTick, ageTick, pointIndex, axis);
+                const res = this.applyExpressionActionToPoint(a, p, elapsedTick, ageTick, pointIndex, axis, {
+                    runtimeVars,
+                    persistExpressionVars
+                });
                 p = res.point;
                 axis = res.axis;
             }
@@ -5070,6 +6185,137 @@ class CompositionBuilderApp {
         return this.exprRuntime.parseVecLikeValue(rawExpr);
     }
 
+    buildPreviewRuntimeGlobals(elapsedTick = 0, ageTick = 0, pointIndex = 0) {
+        const out = {};
+        const assign = (nameRaw, value) => {
+            const name = String(nameRaw || "").trim();
+            if (!/^[A-Za-z_$][A-Za-z0-9_$]*$/.test(name)) return;
+            out[name] = value;
+        };
+        for (const g of (this.state.globalVars || [])) {
+            const name = String(g?.name || "").trim();
+            if (!name) continue;
+            const type = String(g?.type || "").trim();
+            const expr = String(g?.value || "");
+            if (type === "Vec3" || type === "RelativeLocation" || type === "Vector3f") {
+                assign(name, this.parseVecLikeValue(expr));
+                continue;
+            }
+            if (type === "Boolean") {
+                assign(name, /^true$/i.test(expr.trim()));
+                continue;
+            }
+            if (type === "Int" || type === "Long" || type === "Float" || type === "Double") {
+                assign(name, this.evaluateNumericExpression(expr, { elapsedTick, ageTick, pointIndex, includeVectors: false }));
+                continue;
+            }
+            assign(name, expr);
+        }
+        for (const c of (this.state.globalConsts || [])) {
+            const name = String(c?.name || "").trim();
+            if (!name) continue;
+            const type = String(c?.type || "").trim();
+            const expr = String(c?.value || "0");
+            if (type === "Boolean") {
+                assign(name, /^true$/i.test(expr.trim()));
+            } else {
+                assign(name, this.evaluateNumericExpression(expr, { elapsedTick, ageTick, pointIndex, includeVectors: false }));
+            }
+        }
+        return out;
+    }
+
+    evaluateNumericExpressionWithRuntime(exprRaw, runtimeVars = null, opts = {}) {
+        const srcRaw = String(exprRaw || "").trim();
+        if (!srcRaw) return 0;
+        const src = transpileKotlinThisQualifierToJs(srcRaw).replace(/(\d+(?:\.\d+)?)[fFdDlL]\b/g, "$1");
+        const elapsedTick = num(opts.elapsedTick);
+        const ageTick = num(opts.ageTick);
+        const pointIndex = int(opts.pointIndex || 0);
+        const thisAt = (runtimeVars && typeof runtimeVars === "object") ? runtimeVars : {};
+        const baseVars = this.getExpressionVars(elapsedTick, ageTick, pointIndex, { includeVectors: true });
+        const baseProto = Object.getPrototypeOf(baseVars) || {};
+        const vars = Object.assign({}, baseProto, baseVars);
+        if (thisAt && typeof thisAt === "object") {
+            for (const [k, v] of Object.entries(thisAt)) vars[k] = v;
+        }
+        vars.thisAt = thisAt;
+        let fn = this.previewNumericFnCache.get(src);
+        if (fn === undefined) {
+            try {
+                fn = new Function("vars", "thisAt", `with(vars){ return (${src}); }`);
+            } catch {
+                fn = null;
+            }
+            if (this.previewNumericFnCache.size > 2048) this.previewNumericFnCache.clear();
+            this.previewNumericFnCache.set(src, fn);
+        }
+        if (typeof fn !== "function") return 0;
+        try {
+            const out = fn(vars, vars.thisAt);
+            return Number.isFinite(Number(out)) ? Number(out) : 0;
+        } catch {
+            return 0;
+        }
+    }
+
+    parseVecLikeValueWithRuntime(rawExpr, runtimeVars = null, opts = {}) {
+        const srcRaw = String(rawExpr || "").trim();
+        if (!srcRaw) return U.v(0, 0, 0);
+        const src = transpileKotlinThisQualifierToJs(srcRaw);
+        if (src === "Vec3.ZERO") return U.v(0, 0, 0);
+        if (src === "RelativeLocation.yAxis()") return U.v(0, 1, 0);
+        if (src.endsWith(".asRelative()")) {
+            return this.parseVecLikeValueWithRuntime(src.slice(0, -".asRelative()".length), runtimeVars, opts);
+        }
+        const elapsedTick = num(opts.elapsedTick);
+        const ageTick = num(opts.ageTick);
+        const pointIndex = int(opts.pointIndex || 0);
+        if (/^[A-Za-z_$][A-Za-z0-9_$]*$/.test(src)) {
+            if (runtimeVars && typeof runtimeVars === "object" && runtimeVars[src]) {
+                const v = runtimeVars[src];
+                if (v && Number.isFinite(v.x) && Number.isFinite(v.y) && Number.isFinite(v.z)) {
+                    return U.v(v.x, v.y, v.z);
+                }
+            }
+        }
+        const thisAtMatch = src.match(/^thisAt\.([A-Za-z_$][A-Za-z0-9_$]*)$/);
+        if (thisAtMatch && runtimeVars && typeof runtimeVars === "object") {
+            const v = runtimeVars[thisAtMatch[1]];
+            if (v && Number.isFinite(v.x) && Number.isFinite(v.y) && Number.isFinite(v.z)) {
+                return U.v(v.x, v.y, v.z);
+            }
+        }
+        const m = src.match(/(?:Vec3|RelativeLocation|Vector3f)\s*\(\s*([^,]+)\s*,\s*([^,]+)\s*,\s*([^)]+)\s*\)/i);
+        if (m) {
+            return U.v(
+                this.evaluateNumericExpressionWithRuntime(m[1], runtimeVars, { elapsedTick, ageTick, pointIndex }),
+                this.evaluateNumericExpressionWithRuntime(m[2], runtimeVars, { elapsedTick, ageTick, pointIndex }),
+                this.evaluateNumericExpressionWithRuntime(m[3], runtimeVars, { elapsedTick, ageTick, pointIndex })
+            );
+        }
+        return this.parseVecLikeValue(srcRaw);
+    }
+
+    applyExpressionGlobalsOnce(runtimeActions, elapsedTick, ageTick, runtimeVars, startAxis = null) {
+        const actions = Array.isArray(runtimeActions) ? runtimeActions : [];
+        if (!actions.length || !runtimeVars || typeof runtimeVars !== "object") return;
+        let axis = this.parseJsVec(startAxis || this.resolveCompositionAxisDirection());
+        for (const action of actions) {
+            if (action?.type !== "expression") continue;
+            const res = this.applyExpressionActionToPoint(
+                action,
+                U.v(0, 0, 0),
+                elapsedTick,
+                ageTick,
+                0,
+                axis,
+                { runtimeVars, persistExpressionVars: true }
+            );
+            axis = res?.axis || axis;
+        }
+    }
+
     rotatePointToDirection(point, toDir, fromAxis = null) {
         const axis = (fromAxis && U.len(fromAxis) > 1e-6) ? U.norm(fromAxis) : this.resolveCompositionAxisDirection();
         const points = [U.clone(point)];
@@ -5077,10 +6323,14 @@ class CompositionBuilderApp {
         return points[0] || point;
     }
 
-    applyExpressionActionToPoint(action, point, elapsedTick, ageTick, pointIndex, axisInput = null) {
-        const src = String(action?.expression || "").trim();
+    applyExpressionActionToPoint(action, point, elapsedTick, ageTick, pointIndex, axisInput = null, opts = {}) {
+        const srcRaw = String(action?.expressionRaw || action?.expression || "").trim();
+        const src = transpileKotlinThisQualifierToJs(srcRaw);
         const startAxis = this.parseJsVec(axisInput || this.resolveCompositionAxisDirection());
         if (!src) return { point, axis: startAxis };
+        const runtimeVars = (opts.runtimeVars && typeof opts.runtimeVars === "object") ? opts.runtimeVars : null;
+        const persistExpressionVars = !!opts.persistExpressionVars;
+        const thisAt = runtimeVars || {};
         const api = {
             point: U.clone(point),
             axis: U.clone(startAxis),
@@ -5106,10 +6356,25 @@ class CompositionBuilderApp {
             addSingle: () => {},
             addMultiple: () => {}
         };
-        const vars = this.getExpressionVars(elapsedTick, ageTick, pointIndex, { includeVectors: true });
+        const baseVars = this.getExpressionVars(elapsedTick, ageTick, pointIndex, { includeVectors: true });
+        const baseProto = Object.getPrototypeOf(baseVars) || {};
+        const vars = Object.assign({}, baseProto, baseVars);
+        if (runtimeVars && typeof runtimeVars === "object") {
+            for (const [k, v] of Object.entries(runtimeVars)) vars[k] = v;
+        }
+        vars.thisAt = thisAt;
         try {
             if (typeof action?.fn === "function") {
-                action.fn(vars, api.point, api.rotateTo, api.rotateAsAxis, api.rotateToWithAngle, api.addSingle, api.addMultiple);
+                action.fn(
+                    vars,
+                    api.point,
+                    api.rotateTo,
+                    api.rotateAsAxis,
+                    api.rotateToWithAngle,
+                    api.addSingle,
+                    api.addMultiple,
+                    thisAt
+                );
             } else {
                 const fn = new Function(
                     "vars",
@@ -5119,9 +6384,26 @@ class CompositionBuilderApp {
                     "rotateToWithAngle",
                     "addSingle",
                     "addMultiple",
+                    "thisAt",
                     `with(vars){ try { ${src} } catch(_e) {} }; return point;`
                 );
-                fn(vars, api.point, api.rotateTo, api.rotateAsAxis, api.rotateToWithAngle, api.addSingle, api.addMultiple);
+                fn(
+                    vars,
+                    api.point,
+                    api.rotateTo,
+                    api.rotateAsAxis,
+                    api.rotateToWithAngle,
+                    api.addSingle,
+                    api.addMultiple,
+                    thisAt
+                );
+            }
+            if (runtimeVars && persistExpressionVars) {
+                for (const key of Object.keys(runtimeVars)) {
+                    if (Object.prototype.hasOwnProperty.call(vars, key)) {
+                        runtimeVars[key] = vars[key];
+                    }
+                }
             }
             return { point: api.point, axis: api.axis };
         } catch {
@@ -5433,6 +6715,9 @@ class CompositionBuilderApp {
         this.previewExprCountCache.clear();
         this.previewExprPrefixCache.clear();
         this.previewCondFnCache.clear();
+        this.previewNumericFnCache.clear();
+        this.previewRuntimeGlobals = null;
+        this.previewRuntimeAppliedTick = -1;
     }
 
     jumpPreviewToPreFade() {
@@ -5440,6 +6725,8 @@ class CompositionBuilderApp {
         const nearFade = Math.max(0, num(cycle.appear + cycle.live - 0.001));
         this.previewAnimStart = performance.now() - nearFade * 50;
         this.previewPerfLastTs = 0;
+        this.previewRuntimeGlobals = null;
+        this.previewRuntimeAppliedTick = -1;
         if (this.previewPaused) {
             this.updatePreviewAnimation();
             if (this.renderer) this.renderer.render(this.scene, this.camera);
@@ -5616,13 +6903,14 @@ class CompositionBuilderApp {
         const value = String(input.value || "");
         const pos = int(input.selectionStart ?? value.length);
         const left = value.slice(0, pos);
-        const m = left.match(/[A-Za-z_][A-Za-z0-9_.()]*$/);
+        const m = left.match(/[A-Za-z_][A-Za-z0-9_.()@]*$/);
         if (!m) return { token: "", start: pos, end: pos };
         const token = m[0];
         return { token, start: pos - token.length, end: pos };
     }
 
     getExprCompletions() {
+        const projectClass = sanitizeKotlinClassName(this.state.projectName || "NewComposition");
         const base = [
             "age",
             "tick",
@@ -5637,15 +6925,16 @@ class CompositionBuilderApp {
             "particle.particleAlpha",
             "particle.particleColor",
             "particle.particleSize",
-            "Vec3($0, 1.0, 0.0)",
+            "Vec3($0)",
             "RelativeLocation.yAxis()",
-            "RelativeLocation($0, 1.0, 0.0)",
-            "Vector3f($0f, 1.0f, 0.0f)"
+            "RelativeLocation($0)",
+            "Vector3f($0)"
         ];
         for (const g of this.state.globalVars) {
             const name = String(g.name || "").trim();
             if (!name) continue;
             base.push(name);
+            base.push(`this@${projectClass}.${name}`);
             if (String(g.type || "") === "Vec3") base.push(`${name}.asRelative()`);
         }
         for (const c of this.state.globalConsts) {
@@ -5680,8 +6969,9 @@ class CompositionBuilderApp {
     }
 
     validateJsExpressionSource(source, opts = {}) {
-        const src = String(source || "").trim();
-        if (!src) return { valid: true, message: "" };
+        const srcRaw = String(source || "").trim();
+        if (!srcRaw) return { valid: true, message: "" };
+        const src = transpileKotlinThisQualifierToJs(srcRaw);
         try {
             new Function(
                 "vars",
@@ -5693,6 +6983,7 @@ class CompositionBuilderApp {
                 "addSingle",
                 "addMultiple",
                 "addPreTickAction",
+                "thisAt",
                 `with(vars){ ${src} }; return point;`
             );
         } catch (e) {
@@ -5711,8 +7002,9 @@ class CompositionBuilderApp {
         const isDisplayExpr = textarea.dataset.displayField === "expression";
         const isShapeDisplayExpr = textarea.dataset.cardShapeDisplayField === "expression";
         const isShapeChildDisplayExpr = textarea.dataset.cardShapeChildDisplayField === "expression";
+        const isShapeLevelDisplayExpr = textarea.dataset.shapeLevelDisplayField === "expression";
         const isControllerScript = textarea.dataset.cactField === "script";
-        if (!isDisplayExpr && !isShapeDisplayExpr && !isShapeChildDisplayExpr && !isControllerScript) {
+        if (!isDisplayExpr && !isShapeDisplayExpr && !isShapeChildDisplayExpr && !isShapeLevelDisplayExpr && !isControllerScript) {
             return { valid: true, message: "" };
         }
         const cardId = String(textarea.dataset.cardId || "");
@@ -5758,51 +7050,84 @@ class CompositionBuilderApp {
     }
 
     getCodeEditorCompletions(textarea) {
-        const base = [
-            { label: "if (...) { ... }", insertText: "if ($0) {\\n    \\n}", detail: "条件分支", priority: 140 },
-            { label: "rotateTo(to)", insertText: "rotateTo($0)", detail: "Display API", priority: 260 },
-            { label: "rotateAsAxis(angle)", insertText: "rotateAsAxis($0)", detail: "Display API", priority: 260 },
-            { label: "rotateToWithAngle(to, angle)", insertText: "rotateToWithAngle($0, 0.05)", detail: "Display API", priority: 260 },
-            { label: "addSingle()", insertText: "addSingle()", detail: "生长 API", priority: 260 },
-            { label: "addMultiple(n)", insertText: "addMultiple($0)", detail: "生长 API", priority: 260 },
-            { label: "addPreTickAction(() => {})", insertText: "addPreTickAction(() => {\\n    $0\\n})", detail: "控制器 API", priority: 220 },
-            { label: "RelativeLocation(x, y, z)", insertText: "RelativeLocation($0, 0.0, 0.0)", detail: "向量构造", priority: 225 },
-            { label: "Vec3(x, y, z)", insertText: "Vec3($0, 0.0, 0.0)", detail: "向量构造", priority: 225 },
-            { label: "Vector3f(x, y, z)", insertText: "Vector3f($0f, 0.0f, 0.0f)", detail: "向量构造", priority: 225 },
-            { label: "RelativeLocation.yAxis()", insertText: "RelativeLocation.yAxis()", detail: "轴向量", priority: 225 },
-            { label: "setReversedScaleOnCompositionStatus(comp)", insertText: "setReversedScaleOnCompositionStatus($0)", detail: "Scale API", priority: 215 },
-            { label: "particle.particleAlpha", detail: "粒子属性", priority: 240 },
-            { label: "particle.particleColor", detail: "粒子属性", priority: 240 },
-            { label: "particle.particleSize", detail: "粒子属性", priority: 240 },
-            { label: "age", detail: "当前 age", priority: 250 },
-            { label: "tick", detail: "当前 tick", priority: 250 },
-            { label: "index", detail: "点索引", priority: 250 },
-            { label: "PI", detail: "数学常量", priority: 230 },
-            { label: "Math.sin(x)", insertText: "Math.sin($0)", detail: "数学函数", priority: 180 },
-            { label: "Math.cos(x)", insertText: "Math.cos($0)", detail: "数学函数", priority: 180 },
-            { label: "Math.abs(x)", insertText: "Math.abs($0)", detail: "数学函数", priority: 180 },
-            { label: "Math.min(a, b)", insertText: "Math.min($0, )", cursorOffset: 11, detail: "数学函数", priority: 180 },
-            { label: "Math.max(a, b)", insertText: "Math.max($0, )", cursorOffset: 11, detail: "数学函数", priority: 180 }
-        ];
+        const isControllerScript = String(textarea?.dataset?.cactField || "") === "script";
+        const projectClass = sanitizeKotlinClassName(this.state.projectName || "NewComposition");
+        const base = isControllerScript
+            ? [
+                { label: "if (...) { ... }", insertText: "if ($0) {\\n    \\n}", detail: "条件分支", priority: 220 },
+                { label: "addSingle()", insertText: "addSingle()", detail: "生长 API", priority: 230 },
+                { label: "addMultiple(n)", insertText: "addMultiple($0)", detail: "生长 API", priority: 230 },
+                { label: "color = Vector3f()", insertText: "color = Vector3f($0)", detail: "粒子颜色", priority: 255 },
+                { label: "size = 0.2", insertText: "size = $0", detail: "粒子尺寸", priority: 255 },
+                { label: "particleAlpha = 1.0", insertText: "particleAlpha = $0", detail: "粒子透明度", priority: 255 },
+                { label: "currentAge = 0", insertText: "currentAge = $0", detail: "粒子年龄", priority: 250 },
+                { label: "textureSheet = 0", insertText: "textureSheet = $0", detail: "贴图序号", priority: 250 },
+                { label: "particle.particleColor = Vector3f()", insertText: "particle.particleColor = Vector3f($0)", detail: "粒子颜色", priority: 250 },
+                { label: "particle.particleSize = 0.2", insertText: "particle.particleSize = $0", detail: "粒子尺寸", priority: 250 },
+                { label: "particle.particleAlpha = 1.0", insertText: "particle.particleAlpha = $0", detail: "粒子透明度", priority: 250 },
+                { label: "RelativeLocation(x, y, z)", insertText: "RelativeLocation($0)", detail: "向量构造", priority: 220 },
+                { label: "Vec3(x, y, z)", insertText: "Vec3($0)", detail: "向量构造", priority: 220 },
+                { label: "Vector3f(x, y, z)", insertText: "Vector3f($0)", detail: "向量构造", priority: 220 },
+                { label: "PI", detail: "数学常量", priority: 210 },
+                { label: "Math.sin(x)", insertText: "Math.sin($0)", detail: "数学函数", priority: 180 },
+                { label: "Math.cos(x)", insertText: "Math.cos($0)", detail: "数学函数", priority: 180 },
+                { label: "Math.abs(x)", insertText: "Math.abs($0)", detail: "数学函数", priority: 180 },
+                { label: "Math.min(a, b)", insertText: "Math.min($0, )", cursorOffset: 11, detail: "数学函数", priority: 180 },
+                { label: "Math.max(a, b)", insertText: "Math.max($0, )", cursorOffset: 11, detail: "数学函数", priority: 180 }
+            ]
+            : [
+                { label: "if (...) { ... }", insertText: "if ($0) {\\n    \\n}", detail: "条件分支", priority: 140 },
+                { label: "rotateTo(to)", insertText: "rotateTo($0)", detail: "Display API", priority: 260 },
+                { label: "rotateAsAxis(angle)", insertText: "rotateAsAxis($0)", detail: "Display API", priority: 260 },
+                { label: "rotateToWithAngle(to, angle)", insertText: "rotateToWithAngle($0, 0.05)", detail: "Display API", priority: 260 },
+                { label: "addSingle()", insertText: "addSingle()", detail: "生长 API", priority: 260 },
+                { label: "addMultiple(n)", insertText: "addMultiple($0)", detail: "生长 API", priority: 260 },
+                { label: "addPreTickAction(() => {})", insertText: "addPreTickAction(() => {\\n    $0\\n})", detail: "控制器 API", priority: 220 },
+                { label: "RelativeLocation(x, y, z)", insertText: "RelativeLocation($0)", detail: "向量构造", priority: 225 },
+                { label: "Vec3(x, y, z)", insertText: "Vec3($0)", detail: "向量构造", priority: 225 },
+                { label: "Vector3f(x, y, z)", insertText: "Vector3f($0)", detail: "向量构造", priority: 225 },
+                { label: "RelativeLocation.yAxis()", insertText: "RelativeLocation.yAxis()", detail: "轴向量", priority: 225 },
+                { label: "setReversedScaleOnCompositionStatus(comp)", insertText: "setReversedScaleOnCompositionStatus($0)", detail: "Scale API", priority: 215 },
+                { label: "particle.particleAlpha", detail: "粒子属性", priority: 240 },
+                { label: "particle.particleColor", detail: "粒子属性", priority: 240 },
+                { label: "particle.particleSize", detail: "粒子属性", priority: 240 },
+                { label: "age", detail: "当前 age", priority: 250 },
+                { label: "tick", detail: "当前 tick", priority: 250 },
+                { label: "index", detail: "点索引", priority: 250 },
+                { label: "PI", detail: "数学常量", priority: 230 },
+                { label: "Math.sin(x)", insertText: "Math.sin($0)", detail: "数学函数", priority: 180 },
+                { label: "Math.cos(x)", insertText: "Math.cos($0)", detail: "数学函数", priority: 180 },
+                { label: "Math.abs(x)", insertText: "Math.abs($0)", detail: "数学函数", priority: 180 },
+                { label: "Math.min(a, b)", insertText: "Math.min($0, )", cursorOffset: 11, detail: "数学函数", priority: 180 },
+                { label: "Math.max(a, b)", insertText: "Math.max($0, )", cursorOffset: 11, detail: "数学函数", priority: 180 }
+            ];
 
         const vars = [];
         for (const g of this.state.globalVars) {
             const name = String(g.name || "").trim();
             if (!name) continue;
             vars.push({ label: name, detail: "全局变量", priority: 210 });
+            vars.push({
+                label: `this@${projectClass}.${name}`,
+                insertText: `this@${projectClass}.${name}`,
+                detail: "全局变量（限定访问）",
+                priority: 208
+            });
             if (String(g.type || "").trim() === "Vec3") {
                 vars.push({ label: `${name}.asRelative()`, detail: "Vec3 -> Relative", priority: 205 });
             }
         }
-        for (const c of this.state.globalConsts) {
-            const name = String(c.name || "").trim();
-            if (!name) continue;
-            vars.push({ label: name, detail: "全局常量", priority: 205 });
+        if (!isControllerScript) {
+            for (const c of this.state.globalConsts) {
+                const name = String(c.name || "").trim();
+                if (!name) continue;
+                vars.push({ label: name, detail: "全局常量", priority: 205 });
+            }
         }
 
         const cardVars = [];
         const cardId = String(textarea.dataset.cardId || "");
-        if (cardId) {
+        if (!isControllerScript && cardId) {
             const card = this.getCardById(cardId);
             if (card) {
                 for (const it of (card.controllerVars || [])) {
@@ -5952,13 +7277,14 @@ class CompositionBuilderApp {
     openBuilderEditor(cardId, target = "root") {
         const card = this.getCardById(cardId || this.focusedCardId);
         if (!card) return;
+        const normalizedTarget = normalizeBuilderTarget(target);
         this.builderModalCardId = card.id;
-        this.seedBuilderSandbox(card, target);
+        this.seedBuilderSandbox(card, normalizedTarget);
         this.saveStateNow();
         const q = new URLSearchParams({
             card: card.id,
             return: "composition_builder.html",
-            target: target === "shape" ? "shape" : "root",
+            target: normalizedTarget,
             t: String(Date.now())
         });
         window.location.href = `./composition_pointsbuilder.html?${q.toString()}`;
@@ -5969,7 +7295,7 @@ class CompositionBuilderApp {
         let target = "root";
         try {
             cardId = String(localStorage.getItem(CPB_RETURN_CARD_KEY) || "").trim();
-            target = String(localStorage.getItem(CPB_RETURN_TARGET_KEY) || "root").trim() === "shape" ? "shape" : "root";
+            target = normalizeBuilderTarget(localStorage.getItem(CPB_RETURN_TARGET_KEY) || "root");
             if (!cardId) return;
             localStorage.removeItem(CPB_RETURN_CARD_KEY);
             localStorage.removeItem(CPB_RETURN_TARGET_KEY);
@@ -5982,7 +7308,13 @@ class CompositionBuilderApp {
         this.setCardBuilderState(card, target, state);
         this.focusedCardId = card.id;
         this.selectedCardIds = new Set([card.id]);
-        this.showToast(target === "shape" ? "已返回并加载 Shape Builder" : "已从 PointsBuilder 返回并加载 Builder", "success");
+        let msg = "已从 PointsBuilder 返回并加载 Builder";
+        if (target === "shape") msg = "已返回并加载 Shape Builder";
+        if (target === "shape_child") msg = "已返回并加载子点 Builder";
+        if (/^shape_level:\d+$/.test(target)) {
+            msg = `已返回并加载嵌套层 ${Math.max(2, int(target.split(":")[1]) + 2)} Builder`;
+        }
+        this.showToast(msg, "success");
     }
 
     seedBuilderSandbox(card, target = "root") {
@@ -6002,17 +7334,38 @@ class CompositionBuilderApp {
 
     resolveCardBuilderState(card, target = "root") {
         if (!card) return createDefaultBuilderState();
-        return target === "shape"
-            ? normalizeBuilderState(card.shapeBuilderState)
-            : normalizeBuilderState(card.builderState);
+        const normalizedTarget = normalizeBuilderTarget(target);
+        if (/^shape_level:\d+$/.test(normalizedTarget)) {
+            const levelIdx = int(normalizedTarget.split(":")[1]);
+            const level = this.getNestedShapeLevel(card, levelIdx, true);
+            return normalizeBuilderState(level?.builderState);
+        }
+        if (normalizedTarget === "shape") return normalizeBuilderState(card.shapeBuilderState);
+        if (normalizedTarget === "shape_child") return normalizeBuilderState(card.shapeChildBuilderState);
+        return normalizeBuilderState(card.builderState);
     }
 
     setCardBuilderState(card, target = "root", state = null) {
         if (!card) return;
         const next = normalizeBuilderState(state);
-        if (target === "shape") {
+        const normalizedTarget = normalizeBuilderTarget(target);
+        if (/^shape_level:\d+$/.test(normalizedTarget)) {
+            const levelIdx = int(normalizedTarget.split(":")[1]);
+            const level = this.getNestedShapeLevel(card, levelIdx, true);
+            if (!level) return;
+            level.bindMode = "builder";
+            level.builderState = next;
+            this.setNestedShapeLevel(card, levelIdx, level);
+            return;
+        }
+        if (normalizedTarget === "shape") {
             card.shapeBindMode = "builder";
             card.shapeBuilderState = next;
+            return;
+        }
+        if (normalizedTarget === "shape_child") {
+            card.shapeChildBindMode = "builder";
+            card.shapeChildBuilderState = next;
             return;
         }
         card.bindMode = "builder";
@@ -6054,16 +7407,26 @@ class CompositionBuilderApp {
             if (!card) return normalizeScaleHelperConfig({ type: "bezier" }, { type: "bezier" });
             return adaptLegacyX(normalizeScaleHelperConfig(card.shapeChildScale, { type: "bezier" }));
         }
+        if (scope === "shape_level") {
+            const card = this.getCardById(cardId);
+            const levelIdx = Math.max(1, int(this.bezierToolTarget?.levelIdx || 1));
+            if (!card) return normalizeScaleHelperConfig({ type: "bezier" }, { type: "bezier" });
+            const level = this.getNestedShapeLevel(card, levelIdx, true);
+            return adaptLegacyX(normalizeScaleHelperConfig(level?.scale, { type: "bezier" }));
+        }
         return adaptLegacyX(normalizeScaleHelperConfig(this.state.projectScale, { type: "bezier" }));
     }
 
-    openBezierTool(scope = "project", cardId = "") {
+    openBezierTool(scope = "project", cardId = "", levelIdx = 0) {
         const normScope = scope === "card"
             ? "card"
-            : (scope === "shape_child" ? "shape_child" : "project");
+            : (scope === "shape_child"
+                ? "shape_child"
+                : (scope === "shape_level" ? "shape_level" : "project"));
         this.bezierToolTarget = {
             scope: normScope,
-            cardId: String(cardId || "")
+            cardId: String(cardId || ""),
+            levelIdx: Math.max(0, int(levelIdx || 0))
         };
         const cfg = this.getBezierToolScaleConfig(this.bezierToolTarget.scope, this.bezierToolTarget.cardId);
         if (this.dom.bezierFrame) {
@@ -6162,7 +7525,31 @@ class CompositionBuilderApp {
             card.shapeChildScale.c2y = c2y;
             card.shapeChildScale.c2z = c2z;
             this.afterValueMutate({ rerenderCards: true, rebuildPreview: true });
-            this.showToast("已应用到子点缩放助手", "success");
+            this.showToast("已应用到缩放助手-嵌套1", "success");
+            return true;
+        }
+        if (target.scope === "shape_level") {
+            const card = this.getCardById(target.cardId);
+            const levelIdx = Math.max(1, int(target.levelIdx || 1));
+            const level = this.getNestedShapeLevel(card, levelIdx, true);
+            if (!card || !level) {
+                this.showToast("卡片不存在", "error");
+                return false;
+            }
+            level.scale = normalizeScaleHelperConfig(level.scale, { type: "bezier" });
+            level.scale.type = "bezier";
+            level.scale.min = minValue;
+            level.scale.max = maxValue;
+            level.scale.tick = tick;
+            level.scale.c1x = c1x;
+            level.scale.c1y = c1y;
+            level.scale.c1z = c1z;
+            level.scale.c2x = c2x;
+            level.scale.c2y = c2y;
+            level.scale.c2z = c2z;
+            this.setNestedShapeLevel(card, levelIdx, level);
+            this.afterValueMutate({ rerenderCards: true, rebuildPreview: true });
+            this.showToast(`已应用到缩放助手-嵌套${levelIdx + 1}`, "success");
             return true;
         }
         this.state.projectScale = normalizeScaleHelperConfig(this.state.projectScale, { type: "bezier" });
@@ -6218,6 +7605,10 @@ class CompositionBuilderApp {
     importBuilderJson(cardId, target = "root") {
         const card = this.getCardById(cardId || this.focusedCardId);
         if (!card) return;
+        const normalizedTarget = normalizeBuilderTarget(target);
+        const targetLabel = /^shape_level:\d+$/.test(normalizedTarget)
+            ? `嵌套层 ${Math.max(2, int(normalizedTarget.split(":")[1]) + 2)} Builder`
+            : (normalizedTarget === "shape" ? "Shape Builder" : (normalizedTarget === "shape_child" ? "子点 Builder" : "Builder"));
         const input = document.createElement("input");
         input.type = "file";
         input.accept = "application/json";
@@ -6228,11 +7619,11 @@ class CompositionBuilderApp {
                 const text = await file.text();
                 const obj = JSON.parse(text);
                 this.pushHistory();
-                this.setCardBuilderState(card, target, obj?.state || obj);
+                this.setCardBuilderState(card, normalizedTarget, obj?.state || obj);
                 this.afterStructureMutate({ rerenderProject: false, rerenderCards: true, rebuildPreview: true });
-                this.showToast(target === "shape" ? "Shape Builder JSON 导入成功" : "Builder JSON 导入成功", "success");
+                this.showToast(`${targetLabel} JSON 导入成功`, "success");
             } catch (e) {
-                this.showToast(`${target === "shape" ? "Shape Builder" : "Builder"} JSON 导入失败: ${e?.message || e}`, "error");
+                this.showToast(`${targetLabel} JSON 导入失败: ${e?.message || e}`, "error");
             }
         };
         input.click();
@@ -6241,8 +7632,16 @@ class CompositionBuilderApp {
     async exportBuilderJson(cardId, target = "root") {
         const card = this.getCardById(cardId || this.focusedCardId);
         if (!card) return;
-        const state = this.resolveCardBuilderState(card, target);
-        const suffix = target === "shape" ? "shape_builder" : "builder";
+        const normalizedTarget = normalizeBuilderTarget(target);
+        const state = this.resolveCardBuilderState(card, normalizedTarget);
+        const suffix = /^shape_level:\d+$/.test(normalizedTarget)
+            ? `shape_level_${Math.max(1, int(normalizedTarget.split(":")[1]))}_builder`
+            : (normalizedTarget === "shape"
+                ? "shape_builder"
+                : (normalizedTarget === "shape_child" ? "shape_child_builder" : "builder"));
+        const targetLabel = /^shape_level:\d+$/.test(normalizedTarget)
+            ? `嵌套层 ${Math.max(2, int(normalizedTarget.split(":")[1]) + 2)} Builder`
+            : (normalizedTarget === "shape" ? "Shape Builder" : (normalizedTarget === "shape_child" ? "子点 Builder" : "Builder"));
         const name = sanitizeFileBase(card.name || suffix) || suffix;
         const result = await this.saveTextWithPicker({
             filename: `${name}.${suffix}.pointsbuilder.json`,
@@ -6251,9 +7650,9 @@ class CompositionBuilderApp {
             description: "PointsBuilder JSON",
             extensions: [".json"]
         });
-        if (result.ok) this.showToast(target === "shape" ? "Shape Builder JSON 已导出" : "Builder JSON 已导出", "success");
+        if (result.ok) this.showToast(`${targetLabel} JSON 已导出`, "success");
         else if (result.canceled) this.showToast("已取消导出", "info");
-        else this.showToast(`${target === "shape" ? "Shape Builder" : "Builder"} JSON 导出失败: ${result.error?.message || result.error || "未知错误"}`, "error");
+        else this.showToast(`${targetLabel} JSON 导出失败: ${result.error?.message || result.error || "未知错误"}`, "error");
     }
 
     showToast(message, type = "info") {
@@ -6461,7 +7860,7 @@ class CompositionBuilderApp {
     }
 
     emitCardPut(card, className, sequencedRoot, cardIndex = 0) {
-        if (card.bindMode === "point") return this.emitCardPutPoint(card, className, sequencedRoot, cardIndex);
+        if (card.bindMode === "point") return this.emitCardPutPoint(card, className, sequencedRoot);
         return this.emitCardPutAll(card, className, sequencedRoot);
     }
 
@@ -6478,14 +7877,13 @@ class CompositionBuilderApp {
         ].join("\n");
     }
 
-    emitCardPutPoint(card, className, sequencedRoot, cardIndex = 0) {
-        const dataVarName = `data${Math.max(0, int(cardIndex))}`;
+    emitCardPutPoint(card, className, sequencedRoot) {
         const dataExpr = this.emitCompositionDataExpr(card, className, sequencedRoot, "            ");
         const rel = relExpr(card.point?.x, card.point?.y, card.point?.z);
         return [
-            `        val ${dataVarName} =`,
+            "        result[",
             dataExpr,
-            `        result[${dataVarName}] = ${rel}`
+            `        ] = ${rel}`
         ].join("\n");
     }
 
@@ -6515,7 +7913,7 @@ class CompositionBuilderApp {
         else lines.push(`${indentBase}CompositionData()`);
         lines.push(`${indentBase}    .setDisplayerSupplier {`);
         if (card.dataType === "single") {
-            lines.push(`${indentBase}        ParticleDisplayer.withSingle(${sanitizeKotlinIdentifier(card.singleEffectClass || "ControlableEnchantmentEffect", "ControlableEnchantmentEffect")}(it))`);
+            lines.push(`${indentBase}        ParticleDisplayer.withSingle(${sanitizeKotlinIdentifier(card.singleEffectClass || DEFAULT_EFFECT_CLASS, DEFAULT_EFFECT_CLASS)}(it))`);
         } else if (card.dataType === "particle_shape") {
             lines.push(indentText(this.buildShapeDisplayerExpr(card, className, "particle_shape"), `${indentBase}        `));
         } else {
@@ -6620,40 +8018,64 @@ class CompositionBuilderApp {
     }
 
     buildShapeChildDisplayerExpr(card, className) {
-        const childType = ["single", "particle_shape", "sequenced_shape"].includes(String(card.shapeChildType || ""))
-            ? String(card.shapeChildType)
-            : "single";
-        if (childType === "single") {
-            const fx = sanitizeKotlinIdentifier(card.shapeChildEffectClass || card.singleEffectClass || "ControlableEnchantmentEffect", "ControlableEnchantmentEffect");
-            return `ParticleDisplayer.withSingle(${fx}(it))`;
-        }
-        const childCls = childType === "sequenced_shape" ? "SequencedParticleShapeComposition" : "ParticleShapeComposition";
-        const axisExpr = rewriteClassQualifier(String(card.shapeChildAxisExpr || card.shapeChildAxisPreset || "RelativeLocation.yAxis()"), className);
-        const scale = normalizeScaleHelperConfig(card.shapeChildScale, { type: "none" });
-        const pseudo = {
-            id: card.id,
-            shapeDisplayActions: card.shapeChildDisplayActions || [],
-            shapeScale: scale,
-            growthAnimates: card.shapeChildGrowthAnimates || []
+        const chain = this.getShapeChildChain(card);
+        const buildLevel = (levelIdx = 0) => {
+            const level = chain[levelIdx] ? normalizeShapeNestedLevel(chain[levelIdx], levelIdx) : normalizeShapeNestedLevel({});
+            if (level.type === "single") {
+                const fx = sanitizeKotlinIdentifier(level.effectClass || card.singleEffectClass || DEFAULT_EFFECT_CLASS, DEFAULT_EFFECT_CLASS);
+                return `ParticleDisplayer.withSingle(${fx}(it))`;
+            }
+            const cls = level.type === "sequenced_shape" ? "SequencedParticleShapeComposition" : "ParticleShapeComposition";
+            const applyFn = level.type === "sequenced_shape" ? "applyPointRel" : "applyPoint";
+            const axisExpr = rewriteClassQualifier(String(level.axisExpr || level.axisPreset || "RelativeLocation.yAxis()"), className);
+            const scale = normalizeScaleHelperConfig(level.scale, { type: "none" });
+            const bindMode = level.bindMode === "builder" ? "builder" : "point";
+            const pointExpr = relExpr(level.point?.x, level.point?.y, level.point?.z);
+            const builderExpr = this.emitBuilderExprFromState(level.builderState);
+            const nextLevel = chain[levelIdx + 1] ? normalizeShapeNestedLevel(chain[levelIdx + 1], levelIdx + 1) : normalizeShapeNestedLevel({});
+            const nextDisplayerExpr = buildLevel(levelIdx + 1);
+            const pseudo = {
+                id: card.id,
+                shapeDisplayActions: level.displayActions || [],
+                shapeScale: scale,
+                growthAnimates: level.growthAnimates || []
+            };
+            const lines = [];
+            lines.push("ParticleDisplayer.withComposition(");
+            lines.push(`    ${cls}(it).apply {`);
+            if (axisExpr) lines.push(`        axis = ${axisExpr}`);
+            if (scale.type === "bezier") {
+                lines.push(
+                    `        loadScaleHelperBezierValue(${formatNumberCompact(scale.min)}, ${formatNumberCompact(scale.max)}, ${Math.max(1, int(scale.tick))}, ` +
+                    `RelativeLocation(${formatNumberCompact(scale.c1x)}, ${formatNumberCompact(scale.c1y)}, ${formatNumberCompact(scale.c1z)}), ` +
+                    `RelativeLocation(${formatNumberCompact(scale.c2x)}, ${formatNumberCompact(scale.c2y)}, ${formatNumberCompact(scale.c2z)}))`
+                );
+            } else if (scale.type === "linear") {
+                lines.push(`        loadScaleValue(${formatNumberCompact(scale.min)}, ${formatNumberCompact(scale.max)}, ${Math.max(1, int(scale.tick))})`);
+            }
+            if (bindMode === "builder") {
+                lines.push("        applyBuilder(");
+                lines.push(indentText(builderExpr, "            "));
+                lines.push("        ) {");
+            } else {
+                lines.push(`        ${applyFn}(${pointExpr}) {`);
+            }
+            lines.push("            CompositionData()");
+            lines.push("                .setDisplayerSupplier {");
+            lines.push(indentText(nextDisplayerExpr, "                    "));
+            lines.push("                }");
+            if (nextLevel.type === "single") {
+                const singleChain = this.buildSingleDataChain(card, className, "                ");
+                if (singleChain) lines.push(singleChain);
+            }
+            lines.push("        }");
+            const actions = this.applyCardCompositionActions(pseudo, className, "        ", level.type === "sequenced_shape");
+            if (String(actions || "").trim()) lines.push(actions);
+            lines.push("    }");
+            lines.push(")");
+            return lines.join("\n");
         };
-        const lines = [];
-        lines.push("ParticleDisplayer.withComposition(");
-        lines.push(`    ${childCls}(it).apply {`);
-        if (axisExpr) lines.push(`        axis = ${axisExpr}`);
-        if (scale.type === "bezier") {
-            lines.push(
-                `        loadScaleHelperBezierValue(${formatNumberCompact(scale.min)}, ${formatNumberCompact(scale.max)}, ${Math.max(1, int(scale.tick))}, ` +
-                `RelativeLocation(${formatNumberCompact(scale.c1x)}, ${formatNumberCompact(scale.c1y)}, ${formatNumberCompact(scale.c1z)}), ` +
-                `RelativeLocation(${formatNumberCompact(scale.c2x)}, ${formatNumberCompact(scale.c2y)}, ${formatNumberCompact(scale.c2z)}))`
-            );
-        } else if (scale.type === "linear") {
-            lines.push(`        loadScaleValue(${formatNumberCompact(scale.min)}, ${formatNumberCompact(scale.max)}, ${Math.max(1, int(scale.tick))})`);
-        }
-        const actions = this.applyCardCompositionActions(pseudo, className, "        ", childType === "sequenced_shape");
-        if (String(actions || "").trim()) lines.push(actions);
-        lines.push("    }");
-        lines.push(")");
-        return lines.join("\n");
+        return buildLevel(0);
     }
 
     applyCardCompositionActions(card, className, innerIndent = "        ", supportsAnimate = false) {
@@ -6787,7 +8209,11 @@ function hashString(s) {
 
 function rewriteClassQualifier(expr, className) {
     const cls = sanitizeKotlinClassName(className || "TestComposition");
-    return String(expr || "").replaceAll("this@TestComposition", `this@${cls}`);
+    return String(expr || "").replace(/this@[A-Za-z_][A-Za-z0-9_]*/g, `this@${cls}`);
+}
+
+function transpileKotlinThisQualifierToJs(source) {
+    return String(source || "").replace(/this@[A-Za-z_][A-Za-z0-9_]*\./g, "thisAt.");
 }
 
 function defaultLiteralForKotlinType(typeName) {

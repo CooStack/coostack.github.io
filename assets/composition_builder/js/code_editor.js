@@ -49,9 +49,9 @@ function defaultTokenRange(text, caret) {
     const src = String(text || "");
     const at = Math.max(0, Math.min(Number(caret) || 0, src.length));
     let start = at;
-    while (start > 0 && /[A-Za-z0-9_.$]/.test(src[start - 1])) start -= 1;
+    while (start > 0 && /[A-Za-z0-9_.$@]/.test(src[start - 1])) start -= 1;
     let end = at;
-    while (end < src.length && /[A-Za-z0-9_.$]/.test(src[end])) end += 1;
+    while (end < src.length && /[A-Za-z0-9_.$@]/.test(src[end])) end += 1;
     return { start, end, token: src.slice(start, at) };
 }
 
@@ -418,6 +418,9 @@ export class InlineCodeEditor {
         this.textarea.setRangeText(insertText, start, end, "end");
         if (Number.isFinite(localCursorOffset)) {
             const caret = Math.max(start, Math.min(start + Number(localCursorOffset), start + insertText.length));
+            this.textarea.setSelectionRange(caret, caret);
+        } else {
+            const caret = start + insertText.length;
             this.textarea.setSelectionRange(caret, caret);
         }
         this.emitProgrammaticInputChange();

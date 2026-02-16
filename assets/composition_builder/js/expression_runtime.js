@@ -10,6 +10,7 @@ export function createExpressionRuntime(options = {}) {
     const vectorTypes = new Set(["Vec3", "RelativeLocation", "Vector3f"]);
     const numericTypes = new Set(["Int", "Long", "Float", "Double"]);
     const numericExprFnCache = new Map();
+    const RESOLVE_STACK_LIMIT = 128;
 
     let staticCacheDirty = true;
     let staticCacheBuilding = false;
@@ -139,21 +140,29 @@ export function createExpressionRuntime(options = {}) {
             buildingNoVecBase = noVec;
 
             const resolvedVec = new Map();
+            const IN_PROGRESS = Symbol("vec_in_progress");
             const resolveVectorVar = (name, visiting = new Set()) => {
                 if (!name) return null;
-                if (resolvedVec.has(name)) return resolvedVec.get(name);
+                if (resolvedVec.has(name)) {
+                    const cached = resolvedVec.get(name);
+                    if (cached === IN_PROGRESS) return U.v(0, 0, 0);
+                    return cached;
+                }
                 const hit = vectorVarMap.get(name);
                 if (!hit) return null;
-                if (visiting.has(name)) return U.v(0, 0, 0);
+                if (visiting.has(name) || visiting.size > RESOLVE_STACK_LIMIT) return U.v(0, 0, 0);
                 const next = new Set(visiting);
                 next.add(name);
+                resolvedVec.set(name, IN_PROGRESS);
                 const vec = parseVecLikeValue(hit.value || "", {
                     includeVectors: false,
                     visiting: next,
-                    skipEnsure: true
+                    skipEnsure: true,
+                    depth: next.size
                 });
-                resolvedVec.set(name, vec);
-                return vec;
+                const outVec = vec || U.v(0, 0, 0);
+                resolvedVec.set(name, outVec);
+                return outVec;
             };
 
             const withVec = Object.assign({}, noVec);
@@ -231,6 +240,8 @@ export function createExpressionRuntime(options = {}) {
         if (!s) return U.v(0, 0, 0);
         if (s === "Vec3.ZERO") return U.v(0, 0, 0);
         if (s === "RelativeLocation.yAxis()") return U.v(0, 1, 0);
+        const depth = Number.isFinite(Number(opts.depth)) ? Number(opts.depth) : 0;
+        if (depth > RESOLVE_STACK_LIMIT) return U.v(0, 0, 0);
 
         const elapsedTick = isFiniteNumber(opts.elapsedTick) ? Number(opts.elapsedTick) : 0;
         const ageTick = isFiniteNumber(opts.ageTick) ? Number(opts.ageTick) : 0;
@@ -240,7 +251,14 @@ export function createExpressionRuntime(options = {}) {
 
         if (s.endsWith(".asRelative()")) {
             const varName = s.slice(0, -".asRelative()".length).trim();
-            return parseVecLikeValue(varName, { elapsedTick, ageTick, pointIndex, includeVectors, visiting });
+            return parseVecLikeValue(varName, {
+                elapsedTick,
+                ageTick,
+                pointIndex,
+                includeVectors,
+                visiting,
+                depth: depth + 1
+            });
         }
 
         const idMatch = s.match(/^[A-Za-z_$][A-Za-z0-9_$]*$/);
@@ -257,7 +275,8 @@ export function createExpressionRuntime(options = {}) {
                     pointIndex,
                     includeVectors,
                     visiting: nextVisiting,
-                    skipEnsure: true
+                    skipEnsure: true,
+                    depth: depth + 1
                 });
             }
         }
