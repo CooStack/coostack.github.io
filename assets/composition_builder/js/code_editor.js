@@ -81,7 +81,7 @@ function toCompletionObjects(items) {
                 insertText: String(it.insertText || label),
                 detail: String(it.detail || ""),
                 priority: Number.isFinite(Number(it.priority)) ? Number(it.priority) : 100,
-                cursorOffset: Number.isFinite(Number(it.cursorOffset)) ? Number(it.cursorOffset) : null
+                cursorOffset: (typeof it.cursorOffset === "number" && Number.isFinite(it.cursorOffset)) ? it.cursorOffset : null
             };
         })
         .filter(Boolean);
@@ -252,7 +252,17 @@ export class InlineCodeEditor {
                     this.closeSuggest();
                     return;
                 }
-                if (ev.code === "Enter" || ev.code === "Tab") {
+                if (ev.code === "Enter") {
+                    ev.preventDefault();
+                    if (ev.shiftKey) {
+                        this.closeSuggest();
+                        this.insertNewLineWithIndent();
+                    } else {
+                        this.commitActiveSuggest();
+                    }
+                    return;
+                }
+                if (ev.code === "Tab") {
                     ev.preventDefault();
                     this.commitActiveSuggest();
                     return;
@@ -409,21 +419,35 @@ export class InlineCodeEditor {
         if (markerIdx >= 0) {
             insertText = rawInsertText.replace(marker, "");
             localCursorOffset = markerIdx;
-        } else if (Number.isFinite(Number(item?.cursorOffset))) {
-            localCursorOffset = Number(item.cursorOffset);
+        } else if (typeof item?.cursorOffset === "number" && Number.isFinite(item.cursorOffset)) {
+            localCursorOffset = item.cursorOffset;
         }
         if (!insertText) return;
-        const { start, end } = this.suggestRange;
+        const snapRange = this.suggestRange || { start: 0, end: 0, token: "" };
+        const current = this.currentTokenRange();
+        const caretNow = Math.max(0, Number(this.textarea.selectionStart) || 0);
+        let start = Math.max(0, Number(snapRange.start) || 0);
+        let end = Math.max(start, Number(snapRange.end) || start);
+        if (caretNow >= current.start && caretNow <= current.end) {
+            start = current.start;
+            end = current.end;
+        }
+
+        // 纯变量/标识符补全统一把光标放在补全文本末尾。
+        const isIdentifierLike = /^[A-Za-z_$][A-Za-z0-9_.$@]*$/.test(insertText);
+        if (isIdentifierLike && !Number.isFinite(localCursorOffset)) {
+            localCursorOffset = insertText.length;
+        }
+
         this.snapshotBeforeEdit();
         this.textarea.setRangeText(insertText, start, end, "end");
+        let finalCaret = start + insertText.length;
         if (Number.isFinite(localCursorOffset)) {
             const caret = Math.max(start, Math.min(start + Number(localCursorOffset), start + insertText.length));
-            this.textarea.setSelectionRange(caret, caret);
-        } else {
-            const caret = start + insertText.length;
-            this.textarea.setSelectionRange(caret, caret);
+            finalCaret = caret;
         }
-        this.emitProgrammaticInputChange();
+        this.forceCaret(finalCaret);
+        this.emitProgrammaticInputChange(finalCaret);
         this.closeSuggest();
         this.textarea.focus();
     }
@@ -501,9 +525,19 @@ export class InlineCodeEditor {
         }
     }
 
-    emitProgrammaticInputChange() {
+    emitProgrammaticInputChange(caret = null) {
         this.textarea.dispatchEvent(new Event("input", { bubbles: true }));
         this.textarea.dispatchEvent(new Event("change", { bubbles: true }));
+        if (typeof caret === "number" && Number.isFinite(caret)) this.forceCaret(caret);
+    }
+
+    forceCaret(caret) {
+        const pos = Math.max(0, Math.min(Number(caret) || 0, String(this.textarea.value || "").length));
+        try {
+            this.textarea.focus();
+            this.textarea.setSelectionRange(pos, pos);
+        } catch {
+        }
     }
 
     writeClipboardText(text) {

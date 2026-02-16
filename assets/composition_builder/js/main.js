@@ -3,7 +3,7 @@ import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { createKindDefs } from "../../points_builder/js/kinds.js";
 import { createBuilderTools } from "../../points_builder/js/builder.js";
 import { createExpressionRuntime } from "./expression_runtime.js";
-import { InlineCodeEditor, mergeCompletionGroups } from "./code_editor.js";
+import { InlineCodeEditor, mergeCompletionGroups } from "./code_editor.js?v=20260217_7";
 import {
     isVectorLiteralType,
     normalizeVectorCtor,
@@ -678,6 +678,7 @@ function normalizeStateShape(state) {
 
     next.projectName = String(next.projectName || "NewComposition");
     next.compositionType = next.compositionType === "sequenced" ? "sequenced" : "particle";
+    next.previewPlayTicks = Math.max(1, int(next.previewPlayTicks || 70));
     next.disabledInterval = Math.max(0, int(next.disabledInterval || 0));
     next.compositionAxisPreset = String(next.compositionAxisPreset || "RelativeLocation.yAxis()");
     next.compositionAxisExpr = String(next.compositionAxisExpr || next.compositionAxisPreset || "RelativeLocation.yAxis()");
@@ -744,6 +745,7 @@ function createDefaultState() {
     return normalizeStateShape({
         projectName: "NewComposition",
         compositionType: "particle",
+        previewPlayTicks: 70,
         disabledInterval: 0,
         compositionAxisPreset: "RelativeLocation.yAxis()",
         compositionAxisExpr: "RelativeLocation.yAxis()",
@@ -1729,8 +1731,10 @@ class CompositionBuilderApp {
         const t = e.target;
         if (!t) return;
         if (t.dataset.pf) {
-            this.applyProjectFieldInput(t.dataset.pf, t);
-            this.afterValueMutate({ rebuildPreview: false });
+            const pf = String(t.dataset.pf || "");
+            this.applyProjectFieldInput(pf, t);
+            const rebuildPreview = pf === "disabledInterval" || pf === "previewPlayTicks" || pf === "compositionType";
+            this.afterValueMutate({ rebuildPreview });
             return;
         }
         if (t.dataset.projectScaleField) {
@@ -1845,6 +1849,10 @@ class CompositionBuilderApp {
         }
         if (field === "disabledInterval") {
             this.state.disabledInterval = Math.max(0, int(target.value || 0));
+            return;
+        }
+        if (field === "previewPlayTicks") {
+            this.state.previewPlayTicks = Math.max(1, int(target.value || 70));
         }
     }
 
@@ -3744,6 +3752,10 @@ class CompositionBuilderApp {
                         <span>消散延迟 (tick)</span>
                         <input class="input" type="number" min="0" step="1" data-pf="disabledInterval" value="${esc(String(s.disabledInterval))}"/>
                     </label>
+                    <label class="field">
+                        <span>播放时间 (tick, 不含消散)</span>
+                        <input class="input" type="number" min="1" step="1" data-pf="previewPlayTicks" value="${esc(String(s.previewPlayTicks || 70))}"/>
+                    </label>
                 </div>
                 <div class="subgroup">
                     <div class="subgroup-title">生成前 Axis</div>
@@ -5501,8 +5513,8 @@ class CompositionBuilderApp {
 
     getPreviewCycleConfig() {
         let appear = 16;
-        const live = 70;
-        let fade = 16;
+        const play = Math.max(1, int(this.state.previewPlayTicks || 70));
+        const fade = Math.max(0, int(this.state.disabledInterval || 0));
         const maxOwner = Math.max(1, ...this.previewOwnerPointCount.map((x) => Math.max(1, int(x || 1))));
         const maxCards = Math.max(1, this.state.cards.length);
         let hasExprGrowth = false;
@@ -5560,16 +5572,18 @@ class CompositionBuilderApp {
         }
         if (hasExprGrowth) {
             appear = Math.max(appear, maxGrowthTarget);
-            fade = Math.max(fade, appear);
         }
-        return { appear, live, fade, total: appear + live + fade };
+        appear = clamp(int(Math.max(1, appear)), 1, play);
+        const live = Math.max(0, play - appear);
+        const total = Math.max(1, play + fade);
+        return { appear, live, fade, play, total };
     }
 
     evaluateGrowthVisibleLimit(ownerCardId, ownerCount, ageTick, globalCycleAge, elapsedTick, globalRuntimeActions = [], cardRuntimeActions = [], cycleCfg = null) {
         const cycle = cycleCfg || this.getPreviewCycleConfig();
         const sequencedRoot = this.state.compositionType === "sequenced";
         let growthAge = num(ageTick);
-        const fadeStart = cycle.appear + cycle.live;
+        const fadeStart = cycle.play;
         if (growthAge >= fadeStart) {
             growthAge = Math.max(0, cycle.appear - (growthAge - fadeStart));
         } else if (growthAge > cycle.appear) {
@@ -5739,7 +5753,7 @@ class CompositionBuilderApp {
         if (cfg.type === "none") return 1;
         const cycle = cycleCfg || this.getPreviewCycleConfig();
         const age = num(ageTick);
-        const fadeStart = cycle.appear + cycle.live;
+        const fadeStart = cycle.play;
         const inFade = age >= fadeStart;
         const fadeAge = Math.max(0, age - fadeStart);
         const tickMax = Math.max(1, int(cfg.tick || 1));
@@ -6722,7 +6736,7 @@ class CompositionBuilderApp {
 
     jumpPreviewToPreFade() {
         const cycle = this.previewCycleCache || (this.previewCycleCache = this.getPreviewCycleConfig());
-        const nearFade = Math.max(0, num(cycle.appear + cycle.live - 0.001));
+        const nearFade = Math.max(0, num((cycle.play || (cycle.appear + cycle.live)) - 0.001));
         this.previewAnimStart = performance.now() - nearFade * 50;
         this.previewPerfLastTs = 0;
         this.previewRuntimeGlobals = null;
@@ -6875,7 +6889,13 @@ class CompositionBuilderApp {
         if (!input) return;
         const item = s.filtered[int(index)];
         if (!item) return;
-        const range = s.range || { start: input.selectionStart || 0, end: input.selectionStart || 0 };
+        const cursor = int(input.selectionStart ?? 0);
+        const live = this.getExprTokenAtCursor(input) || { token: "", start: cursor, end: cursor };
+        const stale = s.range || { start: cursor, end: cursor };
+        let range = { start: stale.start, end: stale.end };
+        if (cursor >= int(live.start) && cursor <= int(live.end)) {
+            range = { start: int(live.start), end: int(live.end) };
+        }
         const text = String(input.value || "");
         const marker = "$0";
         const rawInsert = String(item);
@@ -6884,7 +6904,11 @@ class CompositionBuilderApp {
         const next = text.slice(0, range.start) + insert + text.slice(range.end);
         const caret = markerIdx >= 0 ? (range.start + markerIdx) : (range.start + insert.length);
         input.value = next;
-        input.setSelectionRange?.(caret, caret);
+        try {
+            input.focus?.();
+            input.setSelectionRange?.(caret, caret);
+        } catch {
+        }
         input.dispatchEvent(new Event("input", { bubbles: true }));
         this.closeExprSuggest();
     }
