@@ -538,6 +538,18 @@ body[data-theme^="light"] select.input option {
     align-items: center;
 }
 
+.kv-row.grid-pinit {
+    grid-template-columns: minmax(170px, .9fr) minmax(0, 1.7fr) auto;
+    align-items: center;
+}
+
+.pinit-value {
+    display: grid;
+    grid-template-columns: minmax(170px, .95fr) minmax(0, 1.35fr);
+    gap: 8px;
+    align-items: center;
+}
+
 .kv-row.grid-const > :nth-child(1) {
     grid-column: 1;
 }
@@ -700,6 +712,11 @@ body[data-theme^="light"] select.input option {
     display: flex;
     flex-direction: column;
     gap: 8px;
+}
+
+.subgroup.subgroup-tight {
+    padding: 6px;
+    gap: 6px;
 }
 
 .subgroup-head {
@@ -1420,6 +1437,12 @@ body[data-theme^="light"] select.input option {
     .kv-row.grid-const {
         grid-template-columns: minmax(0, 1.1fr) 116px minmax(0, 1fr);
     }
+    .kv-row.grid-pinit {
+        grid-template-columns: minmax(140px, .85fr) minmax(0, 1.5fr) auto;
+    }
+    .pinit-value {
+        grid-template-columns: minmax(130px, .9fr) minmax(0, 1.2fr);
+    }
     .grid5 {
         grid-template-columns: 130px repeat(3, minmax(0, 1fr)) auto;
     }
@@ -1445,6 +1468,12 @@ body[data-theme^="light"] select.input option {
     .grid5,
     .vector-inputs {
         grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+    .kv-row.grid-pinit {
+        grid-template-columns: 1fr;
+    }
+    .pinit-value {
+        grid-template-columns: 1fr;
     }
 }
 
@@ -1486,8 +1515,12 @@ body[data-theme^="light"] select.input option {
     }
     .kv-row.grid-var,
     .kv-row.grid-const,
+    .kv-row.grid-pinit,
     .kv-row.grid-animate,
     .kv-row.grid-action {
+        grid-template-columns: 1fr;
+    }
+    .pinit-value {
         grid-template-columns: 1fr;
     }
 }

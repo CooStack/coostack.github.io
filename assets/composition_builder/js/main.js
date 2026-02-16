@@ -97,6 +97,18 @@ const CONTROLLER_VAR_TYPES = [
     "String"
 ];
 
+const PARTICLE_INIT_TARGET_OPTIONS = [
+    "color",
+    "size",
+    "currentAge",
+    "age",
+    "alpha",
+    "textureSheet",
+    "particleColor",
+    "particleSize",
+    "particleAlpha"
+];
+
 const CONTROLLER_ACTION_TYPES = [
     { id: "tick_js", title: "tick action (JS)" }
 ];
@@ -114,6 +126,7 @@ const CARD_SECTION_KEYS = [
     "single_particle_init",
     "single_controller_init",
     "shape_base",
+    "shape_child_params",
     "shape_axis",
     "shape_display",
     "shape_scale",
@@ -203,7 +216,7 @@ function sanitizeKotlinIdentifier(name, fallback = "value") {
 }
 
 function sanitizeKotlinClassName(name) {
-    const id = sanitizeKotlinIdentifier(name, "TestComposition");
+    const id = sanitizeKotlinIdentifier(name, "NewComposition");
     return /^[A-Z]/.test(id) ? id : id.charAt(0).toUpperCase() + id.slice(1);
 }
 
@@ -496,7 +509,16 @@ function normalizeCard(card, index = 0) {
     x.singleEffectClass = String(x.singleEffectClass || "ControlableEnchantmentEffect");
     x.particleInit = Array.isArray(x.particleInit) ? x.particleInit : [];
     x.controllerVars = Array.isArray(x.controllerVars) ? x.controllerVars : [];
-    x.particleInit = x.particleInit.map((it) => ({ id: it.id || uid(), target: String(it.target || "color"), expr: String(it.expr || "") }));
+    x.particleInit = x.particleInit.map((it) => {
+        const preset = String(it?.exprPreset || "");
+        const expr = String(it?.expr || preset || "");
+        return {
+            id: it?.id || uid(),
+            target: String(it?.target || "color"),
+            expr,
+            exprPreset: preset
+        };
+    });
     x.controllerVars = x.controllerVars.map((it) => ({ id: it.id || uid(), name: String(it.name || "tick"), type: String(it.type || "Boolean"), expr: String(it.expr || "true") }));
     x.controllerActions = Array.isArray(x.controllerActions) ? x.controllerActions.map((it) => normalizeControllerAction(it)) : [];
     const legacyControllerScript = String(x.controllerTickScript || "").trim();
@@ -558,11 +580,8 @@ function createDefaultCard(index = 0) {
         builderState: createDefaultBuilderState(),
         dataType: "single",
         singleEffectClass: "ControlableEnchantmentEffect",
-        particleInit: [
-            { target: "color", expr: "this@TestComposition.color" },
-            { target: "size", expr: "this@TestComposition.size" }
-        ],
-        controllerVars: [{ name: "tick", type: "Boolean", expr: "true" }],
+        particleInit: [],
+        controllerVars: [],
         controllerActions: [],
         controllerInitScript: "",
         controllerTickScript: "",
@@ -617,7 +636,7 @@ function normalizeStateShape(state) {
     if (!Array.isArray(next.displayActions)) next.displayActions = [];
     if (!Array.isArray(next.cards)) next.cards = [];
 
-    next.projectName = String(next.projectName || "TestComposition");
+    next.projectName = String(next.projectName || "NewComposition");
     next.compositionType = next.compositionType === "sequenced" ? "sequenced" : "particle";
     next.disabledInterval = Math.max(0, int(next.disabledInterval || 0));
     next.compositionAxisPreset = String(next.compositionAxisPreset || "RelativeLocation.yAxis()");
@@ -683,7 +702,7 @@ function normalizeStateShape(state) {
 
 function createDefaultState() {
     return normalizeStateShape({
-        projectName: "TestComposition",
+        projectName: "NewComposition",
         compositionType: "particle",
         disabledInterval: 0,
         compositionAxisPreset: "RelativeLocation.yAxis()",
@@ -705,15 +724,8 @@ function createDefaultState() {
             c2z: 0.0,
             reversedOnDisable: false
         },
-        globalVars: [
-            { name: "color", type: "Vector3f", value: "Vector3f(0f,1f,1f)", codec: true, mutable: true },
-            { name: "size", type: "Float", value: "1f", codec: true, mutable: true },
-            { name: "radius", type: "Double", value: "2.0", codec: true, mutable: true },
-            { name: "countPow", type: "Int", value: "4", codec: true, mutable: true }
-        ],
-        globalConsts: [
-            { name: "options", type: "Int", value: "4" }
-        ],
+        globalVars: [],
+        globalConsts: [],
         compositionAnimates: [],
         displayActions: [],
         cards: [createDefaultCard(0)],
@@ -1448,8 +1460,36 @@ class CompositionBuilderApp {
         }
     }
 
+    captureUserPreferences(stateLike = null) {
+        const source = stateLike || this.state || {};
+        return {
+            settings: deepClone(source.settings || {}),
+            hotkeys: deepClone(source.hotkeys || {})
+        };
+    }
+
+    applyUserPreferences(stateLike, prefLike = null) {
+        const next = normalizeStateShape(stateLike || {});
+        const pref = prefLike || this.captureUserPreferences();
+        if (pref?.settings && typeof pref.settings === "object") {
+            next.settings = deepClone(pref.settings);
+        }
+        if (pref?.hotkeys && typeof pref.hotkeys === "object") {
+            next.hotkeys = deepClone(pref.hotkeys);
+        }
+        return normalizeStateShape(next);
+    }
+
+    extractProjectState(stateLike = null) {
+        const normalized = normalizeStateShape(deepClone(stateLike || this.state || {}));
+        const out = deepClone(normalized);
+        delete out.settings;
+        delete out.hotkeys;
+        return out;
+    }
+
     computeStateSignature(stateLike = null) {
-        const target = stateLike || this.state;
+        const target = this.extractProjectState(stateLike || this.state);
         try {
             return JSON.stringify(target || {});
         } catch {
@@ -1525,7 +1565,23 @@ class CompositionBuilderApp {
         }
 
         this.pushHistory();
-        this.state = createDefaultState();
+        const prefs = this.captureUserPreferences(this.state);
+        this.state = this.applyUserPreferences(createDefaultState(), prefs);
+        this.state.projectName = "NewComposition";
+        this.state.globalVars = [];
+        this.state.globalConsts = [];
+        if (!Array.isArray(this.state.cards) || !this.state.cards.length) {
+            this.state.cards = [createDefaultCard(0)];
+        }
+        const firstCard = this.state.cards[0];
+        if (firstCard) {
+            firstCard.particleInit = [];
+            firstCard.controllerVars = [];
+            firstCard.controllerActions = [];
+            firstCard.controllerInitScript = "";
+            firstCard.controllerTickScript = "";
+        }
+        this.state = normalizeStateShape(this.state);
         if (this.exprRuntime?.invalidateCache) this.exprRuntime.invalidateCache();
         this.undoStack = [];
         this.redoStack = [];
@@ -1630,6 +1686,7 @@ class CompositionBuilderApp {
             const item = this.state.globalVars[int(t.dataset.varVecIdx)];
             if (!item) return;
             this.updateGlobalVarVectorValue(item, t.dataset.varVecAxis, t.value);
+            this.syncGlobalVarInlineInputs(t.dataset.varVecIdx, item);
             this.afterValueMutate({ rebuildPreview: true, rerenderProject: false });
             return;
         }
@@ -1637,7 +1694,8 @@ class CompositionBuilderApp {
             const item = this.state.globalVars[int(t.dataset.varColorIdx)];
             if (!item) return;
             this.updateGlobalVarColorValue(item, t.value);
-            this.afterValueMutate({ rebuildPreview: false, rerenderProject: false });
+            this.syncGlobalVarInlineInputs(t.dataset.varColorIdx, item);
+            this.afterValueMutate({ rebuildPreview: true, rerenderProject: false });
             return;
         }
         if (t.dataset.varIdx !== undefined) {
@@ -1649,7 +1707,7 @@ class CompositionBuilderApp {
             }
             const field = String(t.dataset.varField || "");
             const rebuildPreview = ["name", "type", "value"].includes(field);
-            this.afterValueMutate({ rebuildPreview });
+            this.afterValueMutate({ rebuildPreview, rerenderCards: field === "name" || field === "type" });
             return;
         }
         if (t.dataset.constIdx !== undefined) {
@@ -1658,7 +1716,7 @@ class CompositionBuilderApp {
             this.applyObjectField(item, t.dataset.constField, t);
             const field = String(t.dataset.constField || "");
             const rebuildPreview = ["name", "type", "value"].includes(field);
-            this.afterValueMutate({ rebuildPreview });
+            this.afterValueMutate({ rebuildPreview, rerenderCards: field === "name" || field === "type" });
             return;
         }
         if (t.dataset.compAnimateIdx !== undefined) {
@@ -1784,7 +1842,7 @@ class CompositionBuilderApp {
             target.value = restore;
             target.dataset.prevSymbolName = restore;
             this.showToast(`名称“${normalized}”已存在，已拒绝重复命名`, "error");
-            this.afterValueMutate({ rebuildPreview: true, rerenderProject: false });
+            this.afterValueMutate({ rebuildPreview: true, rerenderProject: false, rerenderCards: true });
             return true;
         }
 
@@ -1793,7 +1851,7 @@ class CompositionBuilderApp {
             target.value = normalized;
             target.dataset.prevSymbolName = normalized;
             this.showToast("名称已按 Kotlin 标识符规则规范化", "info");
-            this.afterValueMutate({ rebuildPreview: true, rerenderProject: false });
+            this.afterValueMutate({ rebuildPreview: true, rerenderProject: false, rerenderCards: true });
             return true;
         }
 
@@ -2366,7 +2424,25 @@ class CompositionBuilderApp {
         if (t.dataset.pinitIdx !== undefined) {
             const item = card.particleInit[int(t.dataset.pinitIdx)];
             if (!item) return;
-            this.applyObjectField(item, t.dataset.pinitField, t);
+            const field = String(t.dataset.pinitField || "");
+            if (field === "target") {
+                item.target = String(t.value || "color");
+                this.afterValueMutate({ rebuildPreview: true });
+                return;
+            }
+            if (field === "exprPreset") {
+                item.exprPreset = String(t.value || "");
+                if (item.exprPreset) item.expr = item.exprPreset;
+                this.afterValueMutate({ rebuildPreview: true });
+                return;
+            }
+            if (field === "expr") {
+                item.expr = String(t.value || "");
+                item.exprPreset = this.resolveParticleInitPresetExpr(item.expr);
+                this.afterValueMutate({ rebuildPreview: true });
+                return;
+            }
+            this.applyObjectField(item, field, t);
             this.afterValueMutate({ rebuildPreview: true });
             return;
         }
@@ -2717,7 +2793,7 @@ class CompositionBuilderApp {
     addParticleInit(cardId) {
         const card = this.getCardById(cardId);
         if (!card) return;
-        card.particleInit.push({ id: uid(), target: "size", expr: "this@TestComposition.size" });
+        card.particleInit.push({ id: uid(), target: "color", expr: "", exprPreset: "" });
     }
 
     removeParticleInit(cardId, idx) {
@@ -2844,7 +2920,7 @@ class CompositionBuilderApp {
         try {
             localStorage.setItem(CPB_COMP_CONTEXT_KEY, JSON.stringify({
                 ts: Date.now(),
-                projectName: String(this.state.projectName || "TestComposition"),
+                projectName: String(this.state.projectName || "NewComposition"),
                 globalVars: (this.state.globalVars || []).map((it) => ({
                     name: String(it?.name || ""),
                     type: String(it?.type || ""),
@@ -2891,15 +2967,16 @@ class CompositionBuilderApp {
 
     async exportProject(opts = {}) {
         const filename = `${sanitizeFileBase(this.state.projectName || "composition_builder") || "composition_builder"}.composition.json`;
+        const projectState = this.extractProjectState(this.state);
         const result = await this.saveTextWithPicker({
             filename,
-            text: JSON.stringify(this.state, null, 2),
+            text: JSON.stringify(projectState, null, 2),
             mime: "application/json",
             description: "Composition Builder 项目",
             extensions: [".json"]
         });
         if (result.ok) {
-            this.writeExportedSignature(this.computeStateSignature(this.state));
+            this.writeExportedSignature(this.computeStateSignature(projectState));
             if (!opts.silent) this.showToast("项目已导出", "success");
         } else if (result.canceled) {
             if (!opts.silent) this.showToast("已取消导出", "info");
@@ -2916,9 +2993,12 @@ class CompositionBuilderApp {
             const text = await file.text();
             const parsed = JSON.parse(text);
             this.pushHistory();
-            this.state = normalizeStateShape(parsed?.state || parsed);
+            const prefs = this.captureUserPreferences(this.state);
+            const projectRaw = parsed?.state || parsed;
+            const projectState = this.extractProjectState(projectRaw);
+            this.state = this.applyUserPreferences(projectState, prefs);
             if (this.exprRuntime?.invalidateCache) this.exprRuntime.invalidateCache();
-            this.writeExportedSignature(this.computeStateSignature(this.state));
+            this.writeExportedSignature(this.computeStateSignature(projectState));
             this.applySettingsToDom();
             this.ensureSelectionValid();
             this.renderProjectSection();
@@ -3017,6 +3097,30 @@ class CompositionBuilderApp {
         item.value = formatVectorLiteral("Vector3f", c.x, c.y, c.z);
     }
 
+    syncGlobalVarInlineInputs(varIdx, item) {
+        const idx = int(varIdx);
+        if (idx < 0 || !item || !this.dom?.projectSection) return;
+        const root = this.dom.projectSection;
+        const valueInput = root.querySelector(`input[data-var-idx="${idx}"][data-var-field="value"]`);
+        if (valueInput && document.activeElement !== valueInput) {
+            valueInput.value = String(item.value || "");
+        }
+        if (!isVectorLiteralType(item.type)) return;
+        const parsed = this.exprRuntime.parseVecLikeValue(item.value || "");
+        for (const axis of ["x", "y", "z"]) {
+            const axisInput = root.querySelector(`input[data-var-vec-idx="${idx}"][data-var-vec-axis="${axis}"]`);
+            if (axisInput && document.activeElement !== axisInput) {
+                axisInput.value = formatNumberCompact(parsed[axis]);
+            }
+        }
+        if (String(item.type || "").trim() === "Vector3f") {
+            const colorInput = root.querySelector(`input[data-var-color-idx="${idx}"]`);
+            if (colorInput && document.activeElement !== colorInput) {
+                colorInput.value = vectorToHex01(parsed.x, parsed.y, parsed.z);
+            }
+        }
+    }
+
     renderGlobalVarRow(v, i) {
         const typeOptions = GLOBAL_VAR_TYPES
             .map((t) => `<option value="${esc(t)}" ${v.type === t ? "selected" : ""}>${esc(t)}</option>`)
@@ -3100,7 +3204,7 @@ class CompositionBuilderApp {
                 <div class="grid2">
                     <label class="field">
                         <span>项目名字</span>
-                        <input class="input" data-pf="projectName" value="${esc(s.projectName)}" placeholder="TestComposition"/>
+                        <input class="input" data-pf="projectName" value="${esc(s.projectName)}" placeholder="NewComposition"/>
                     </label>
                     <label class="field">
                         <span>类型</span>
@@ -3643,6 +3747,87 @@ class CompositionBuilderApp {
         return uniq.map((expr) => `<option value="${esc(expr)}" ${expr === selected ? "selected" : ""}>${esc(expr)}</option>`).join("");
     }
 
+    getParticleInitTargetOptionsHtml(selectedTarget = "") {
+        const selected = String(selectedTarget || "").trim() || "color";
+        const rows = [];
+        if (!PARTICLE_INIT_TARGET_OPTIONS.includes(selected)) {
+            rows.push({ value: selected, label: `${selected} (自定义)` });
+        }
+        for (const target of PARTICLE_INIT_TARGET_OPTIONS) {
+            rows.push({ value: target, label: target });
+        }
+        return rows.map((row) => `<option value="${esc(row.value)}" ${row.value === selected ? "selected" : ""}>${esc(row.label)}</option>`).join("");
+    }
+
+    getParticleInitValuePresetOptionsHtml(selectedExpr = "") {
+        const selected = String(selectedExpr || "").trim();
+        const rows = [{ value: "", label: "选择全局变量/常量" }];
+        for (const g of (this.state.globalVars || [])) {
+            const name = String(g?.name || "").trim();
+            if (!name) continue;
+            rows.push({
+                value: `this@TestComposition.${name}`,
+                label: `${name}（全局变量）`
+            });
+        }
+        for (const c of (this.state.globalConsts || [])) {
+            const name = String(c?.name || "").trim();
+            if (!name) continue;
+            rows.push({ value: name, label: `${name}（全局常量）` });
+        }
+        const uniq = [];
+        const used = new Set();
+        for (const it of rows) {
+            const key = String(it.value || "");
+            if (used.has(key)) continue;
+            used.add(key);
+            uniq.push(it);
+        }
+        if (selected && !used.has(selected)) {
+            uniq.unshift({ value: selected, label: `${selected}（当前值）` });
+        }
+        return uniq.map((it) => {
+            const val = String(it.value || "");
+            const active = selected ? (val === selected) : (!val);
+            return `<option value="${esc(val)}" ${active ? "selected" : ""}>${esc(it.label)}</option>`;
+        }).join("");
+    }
+
+    resolveParticleInitPresetExpr(exprRaw = "") {
+        const expr = String(exprRaw || "").trim();
+        if (!expr) return "";
+        for (const g of (this.state.globalVars || [])) {
+            const name = String(g?.name || "").trim();
+            if (!name) continue;
+            if (expr === `this@TestComposition.${name}`) return expr;
+        }
+        for (const c of (this.state.globalConsts || [])) {
+            const name = String(c?.name || "").trim();
+            if (!name) continue;
+            if (expr === name) return expr;
+        }
+        return "";
+    }
+
+    renderParticleInitRows(card) {
+        const list = Array.isArray(card?.particleInit) ? card.particleInit : [];
+        return list.map((it, pIdx) => {
+            const targetOptions = this.getParticleInitTargetOptionsHtml(it.target);
+            const presetSelected = String(it.exprPreset || "").trim() || this.resolveParticleInitPresetExpr(it.expr || "");
+            const valuePresetOptions = this.getParticleInitValuePresetOptionsHtml(presetSelected);
+            return `
+                <div class="kv-row grid-pinit">
+                    <select class="input" data-card-id="${card.id}" data-pinit-idx="${pIdx}" data-pinit-field="target">${targetOptions}</select>
+                    <div class="pinit-value">
+                        <select class="input expr-input" data-card-id="${card.id}" data-pinit-idx="${pIdx}" data-pinit-field="exprPreset">${valuePresetOptions}</select>
+                        <input class="input expr-input mono" data-card-id="${card.id}" data-pinit-idx="${pIdx}" data-pinit-field="expr" value="${esc(it.expr || "")}" placeholder="值 / 表达式"/>
+                    </div>
+                    <button class="btn small" data-act="remove-pinit" data-card-id="${card.id}" data-idx="${pIdx}">删除</button>
+                </div>
+            `;
+        }).join("");
+    }
+
     renderCards() {
         this.ensureSelectionValid();
         this.dom.cardsRoot.innerHTML = this.state.cards.map((card, idx) => this.renderCardHtml(card, idx)).join("");
@@ -3659,6 +3844,7 @@ class CompositionBuilderApp {
         if (text === "Single: Particle Init") return "single_particle_init";
         if (text === "Single: Controller Init") return "single_controller_init";
         if (text === "Shape 点设置") return "shape_base";
+        if (text === "子点类型参数") return "shape_child_params";
         if (text === "形状 Axis") return "shape_axis";
         if (text === "形状 Display 行为") return "shape_display";
         if (text.includes("缩放助手")) return "shape_scale";
@@ -3811,14 +3997,7 @@ class CompositionBuilderApp {
                                     <button class="btn small primary" data-act="add-pinit" data-card-id="${card.id}">添加 init</button>
                                 </div>
                                 <div class="kv-list">
-                                    ${card.particleInit.map((it, pIdx) => `
-                                        <div class="kv-row grid-const">
-                                            <input class="input" data-card-id="${card.id}" data-pinit-idx="${pIdx}" data-pinit-field="target" value="${esc(it.target)}" placeholder="target"/>
-                                            <input class="input" data-card-id="${card.id}" data-pinit-idx="${pIdx}" data-pinit-field="expr" value="${esc(it.expr)}" placeholder="expr"/>
-                                            <div></div>
-                                            <button class="btn small" data-act="remove-pinit" data-card-id="${card.id}" data-idx="${pIdx}">删除</button>
-                                        </div>
-                                    `).join("")}
+                                    ${this.renderParticleInitRows(card)}
                                 </div>
                             </div>
 
@@ -3878,24 +4057,6 @@ class CompositionBuilderApp {
                                         </div>
                                     </div>
                                 `}
-                                ${shapeBindMode === "builder" ? `
-                                    <div class="grid2">
-                                        <label class="field">
-                                            <span>子点类型</span>
-                                            <select class="input" data-card-id="${card.id}" data-card-shape-child-field="shapeChildType">
-                                                <option value="single" ${card.shapeChildType === "single" ? "selected" : ""}>single</option>
-                                                <option value="particle_shape" ${card.shapeChildType === "particle_shape" ? "selected" : ""}>ParticleShapeComposition</option>
-                                                <option value="sequenced_shape" ${card.shapeChildType === "sequenced_shape" ? "selected" : ""}>SequencedParticleShapeComposition</option>
-                                            </select>
-                                        </label>
-                                        ${card.shapeChildType === "single"
-                                            ? `<label class="field">
-                                                <span>子点 Effect</span>
-                                                <select class="input" data-card-id="${card.id}" data-card-shape-child-field="shapeChildEffectClass">${this.getEffectOptionsHtml(card.shapeChildEffectClass || card.singleEffectClass)}</select>
-                                            </label>`
-                                            : `<div class="mini-note">非 single 子点将使用对应 ShapeComposition 默认构造</div>`}
-                                    </div>
-                                ` : ""}
                             </div>
 
                             <div class="subgroup" data-section-key="shape_axis">
@@ -3919,28 +4080,6 @@ class CompositionBuilderApp {
                                     <input class="input" type="number" step="${this.state.settings.paramStep}" data-card-id="${card.id}" data-card-shape-axis-field="axisManualZ" value="${esc(formatNumberCompact(card.shapeAxisManualZ))}" placeholder="z"/>
                                     <button class="btn small primary" data-act="apply-shape-axis-manual" data-card-id="${card.id}">套用手动输入</button>
                                 </div>
-                                ${shapeBindMode === "builder" && card.shapeChildType !== "single" ? `
-                                    <div class="mini-note">子点 Axis</div>
-                                    <div class="grid2">
-                                        <label class="field">
-                                            <span>child axis 预设</span>
-                                            <select class="input expr-input" data-card-id="${card.id}" data-card-shape-child-axis-field="axisPreset">${this.getRelativeTargetPresetOptionsHtml(card.shapeChildAxisPreset || card.shapeChildAxisExpr)}</select>
-                                        </label>
-                                        <label class="field">
-                                            <span>child axis 输入</span>
-                                            <input class="input expr-input" data-card-id="${card.id}" data-card-shape-child-axis-field="axisExpr" value="${esc(card.shapeChildAxisExpr || "")}" placeholder="axis 表达式"/>
-                                        </label>
-                                    </div>
-                                    <div class="grid5 vector-inputs">
-                                        <select class="input vector-ctor" data-card-id="${card.id}" data-card-shape-child-axis-field="axisManualCtor">
-                                            ${["Vec3", "RelativeLocation", "Vector3f"].map((it) => `<option value="${it}" ${card.shapeChildAxisManualCtor === it ? "selected" : ""}>${it}</option>`).join("")}
-                                        </select>
-                                        <input class="input" type="number" step="${this.state.settings.paramStep}" data-card-id="${card.id}" data-card-shape-child-axis-field="axisManualX" value="${esc(formatNumberCompact(card.shapeChildAxisManualX))}" placeholder="x"/>
-                                        <input class="input" type="number" step="${this.state.settings.paramStep}" data-card-id="${card.id}" data-card-shape-child-axis-field="axisManualY" value="${esc(formatNumberCompact(card.shapeChildAxisManualY))}" placeholder="y"/>
-                                        <input class="input" type="number" step="${this.state.settings.paramStep}" data-card-id="${card.id}" data-card-shape-child-axis-field="axisManualZ" value="${esc(formatNumberCompact(card.shapeChildAxisManualZ))}" placeholder="z"/>
-                                        <button class="btn small primary" data-act="apply-shape-child-axis-manual" data-card-id="${card.id}">套用手动输入</button>
-                                    </div>
-                                ` : ""}
                             </div>
 
                             <div class="subgroup" data-section-key="shape_display">
@@ -3951,15 +4090,8 @@ class CompositionBuilderApp {
                                 <div class="kv-list">
                                     ${(card.shapeDisplayActions || []).map((a, aIdx) => this.renderShapeDisplayActionRow(card.id, a, aIdx)).join("")}
                                 </div>
-                                ${shapeBindMode === "builder" && card.shapeChildType !== "single" ? `
-                                    <div class="list-tools">
-                                        <button class="btn small primary" data-act="add-shape-child-display-action" data-card-id="${card.id}">添加子点 display action</button>
-                                    </div>
-                                    <div class="kv-list">
-                                        ${(card.shapeChildDisplayActions || []).map((a, aIdx) => this.renderShapeChildDisplayActionRow(card.id, a, aIdx)).join("")}
-                                    </div>
-                                ` : ""}
                             </div>
+                            ${this.renderShapeChildParamsSection(card, shapeBindMode)}
 
                             ${this.renderScaleHelperEditor({
                                 scope: "card",
@@ -3967,24 +4099,130 @@ class CompositionBuilderApp {
                                 scale: card.shapeScale,
                                 sectionKey: "shape_scale"
                             })}
-                            ${shapeBindMode === "builder" && card.shapeChildType !== "single" ? this.renderScaleHelperEditor({
-                                scope: "shape_child",
-                                cardId: card.id,
-                                scale: card.shapeChildScale,
-                                sectionKey: "shape_scale",
-                                title: "子点缩放助手（可选）"
-                            }) : ""}
                         `}
 
                         ${card.dataType === "sequenced_shape"
                             ? this.renderCardAnimates(card.id, "growthAnimates", card.growthAnimates, "生长动画", "add-growth-animate", "remove-growth-animate", { sectionKey: "growth" })
                             : ""}
-                        ${shapeBindMode === "builder" && card.shapeChildType === "sequenced_shape"
-                            ? this.renderCardAnimates(card.id, "shapeChildGrowthAnimates", card.shapeChildGrowthAnimates, "子点生长动画", "add-shape-child-growth-animate", "remove-shape-child-growth-animate", { sectionKey: "growth" })
-                            : ""}
                     </div>
                 `}
             </section>
+        `;
+    }
+
+    renderShapeChildParamsSection(card, shapeBindMode = "point") {
+        if (!card || shapeBindMode !== "builder") return "";
+        const childType = ["single", "particle_shape", "sequenced_shape"].includes(String(card.shapeChildType || ""))
+            ? String(card.shapeChildType)
+            : "single";
+        const typeSelector = `
+            <div class="grid2">
+                <label class="field">
+                    <span>子点类型</span>
+                    <select class="input" data-card-id="${card.id}" data-card-shape-child-field="shapeChildType">
+                        <option value="single" ${childType === "single" ? "selected" : ""}>single</option>
+                        <option value="particle_shape" ${childType === "particle_shape" ? "selected" : ""}>ParticleShapeComposition</option>
+                        <option value="sequenced_shape" ${childType === "sequenced_shape" ? "selected" : ""}>SequencedParticleShapeComposition</option>
+                    </select>
+                </label>
+                ${childType === "single"
+                    ? `<label class="field">
+                        <span>子点 Effect</span>
+                        <select class="input" data-card-id="${card.id}" data-card-shape-child-field="shapeChildEffectClass">${this.getEffectOptionsHtml(card.shapeChildEffectClass || card.singleEffectClass)}</select>
+                    </label>`
+                    : `<div class="mini-note">非 single 子点将使用对应 ShapeComposition 默认构造</div>`}
+            </div>
+        `;
+
+        if (childType === "single") {
+            return `
+                <div class="subgroup subgroup-tight" data-section-key="shape_child_params">
+                    <div class="subgroup-title">子点类型参数</div>
+                    ${typeSelector}
+                    <div class="mini-note">Single: Particle Init</div>
+                    <div class="list-tools">
+                        <button class="btn small primary" data-act="add-pinit" data-card-id="${card.id}">添加 init</button>
+                    </div>
+                    <div class="kv-list">
+                        ${this.renderParticleInitRows(card)}
+                    </div>
+                    <div class="mini-note">Single: Controller Init</div>
+                    <div class="list-tools">
+                        <button class="btn small primary" data-act="add-cvar" data-card-id="${card.id}">添加局部变量</button>
+                        <button class="btn small primary" data-act="add-caction" data-card-id="${card.id}">添加 tick action</button>
+                    </div>
+                    <div class="kv-list">
+                        ${card.controllerVars.map((it, cIdx) => `
+                            <div class="kv-row grid-var">
+                                <input class="input" data-card-id="${card.id}" data-cvar-idx="${cIdx}" data-cvar-field="name" value="${esc(it.name)}" placeholder="name"/>
+                                <select class="input" data-card-id="${card.id}" data-cvar-idx="${cIdx}" data-cvar-field="type">
+                                    ${CONTROLLER_VAR_TYPES.map((tp) => `<option value="${esc(tp)}" ${it.type === tp ? "selected" : ""}>${esc(tp)}</option>`).join("")}
+                                </select>
+                                <input class="input" data-card-id="${card.id}" data-cvar-idx="${cIdx}" data-cvar-field="expr" value="${esc(it.expr)}" placeholder="初值"/>
+                                <div></div><div></div>
+                                <button class="btn small" data-act="remove-cvar" data-card-id="${card.id}" data-idx="${cIdx}">删除</button>
+                            </div>
+                        `).join("")}
+                    </div>
+                    <div class="kv-list">
+                        ${(card.controllerActions || []).map((a, aIdx) => this.renderControllerActionRow(card.id, a, aIdx)).join("")}
+                    </div>
+                </div>
+            `;
+        }
+
+        const growthBlock = childType === "sequenced_shape"
+            ? this.renderCardAnimates(
+                card.id,
+                "shapeChildGrowthAnimates",
+                card.shapeChildGrowthAnimates,
+                "子点生长动画",
+                "add-shape-child-growth-animate",
+                "remove-shape-child-growth-animate",
+                { embedOnly: true }
+            )
+            : "";
+
+        return `
+            <div class="subgroup subgroup-tight" data-section-key="shape_child_params">
+                <div class="subgroup-title">子点类型参数</div>
+                ${typeSelector}
+                <div class="mini-note">子点 Axis</div>
+                <div class="grid2">
+                    <label class="field">
+                        <span>child axis 预设</span>
+                        <select class="input expr-input" data-card-id="${card.id}" data-card-shape-child-axis-field="axisPreset">${this.getRelativeTargetPresetOptionsHtml(card.shapeChildAxisPreset || card.shapeChildAxisExpr)}</select>
+                    </label>
+                    <label class="field">
+                        <span>child axis 输入</span>
+                        <input class="input expr-input" data-card-id="${card.id}" data-card-shape-child-axis-field="axisExpr" value="${esc(card.shapeChildAxisExpr || "")}" placeholder="axis 表达式"/>
+                    </label>
+                </div>
+                <div class="grid5 vector-inputs">
+                    <select class="input vector-ctor" data-card-id="${card.id}" data-card-shape-child-axis-field="axisManualCtor">
+                        ${["Vec3", "RelativeLocation", "Vector3f"].map((it) => `<option value="${it}" ${card.shapeChildAxisManualCtor === it ? "selected" : ""}>${it}</option>`).join("")}
+                    </select>
+                    <input class="input" type="number" step="${this.state.settings.paramStep}" data-card-id="${card.id}" data-card-shape-child-axis-field="axisManualX" value="${esc(formatNumberCompact(card.shapeChildAxisManualX))}" placeholder="x"/>
+                    <input class="input" type="number" step="${this.state.settings.paramStep}" data-card-id="${card.id}" data-card-shape-child-axis-field="axisManualY" value="${esc(formatNumberCompact(card.shapeChildAxisManualY))}" placeholder="y"/>
+                    <input class="input" type="number" step="${this.state.settings.paramStep}" data-card-id="${card.id}" data-card-shape-child-axis-field="axisManualZ" value="${esc(formatNumberCompact(card.shapeChildAxisManualZ))}" placeholder="z"/>
+                    <button class="btn small primary" data-act="apply-shape-child-axis-manual" data-card-id="${card.id}">套用手动输入</button>
+                </div>
+                <div class="mini-note">子点 Display 行为</div>
+                <div class="list-tools">
+                    <button class="btn small primary" data-act="add-shape-child-display-action" data-card-id="${card.id}">添加子点 display action</button>
+                </div>
+                <div class="kv-list">
+                    ${(card.shapeChildDisplayActions || []).map((a, aIdx) => this.renderShapeChildDisplayActionRow(card.id, a, aIdx)).join("")}
+                </div>
+                <div class="mini-note">子点缩放助手（可选）</div>
+                ${this.renderScaleHelperEditor({
+                    scope: "shape_child",
+                    cardId: card.id,
+                    scale: card.shapeChildScale,
+                    embedOnly: true
+                })}
+                ${growthBlock}
+            </div>
         `;
     }
 
@@ -4006,6 +4244,7 @@ class CompositionBuilderApp {
 
     renderCardAnimates(cardId, key, list, label, addAct, removeAct, opts = {}) {
         const sectionKeyAttr = opts.sectionKey ? ` data-section-key="${esc(String(opts.sectionKey))}"` : "";
+        const embedOnly = !!opts.embedOnly;
         const rows = (list || []).map((a, idx) => `
             <div class="kv-row grid-animate">
                 <input class="input" type="number" min="1" step="1" data-card-id="${cardId}" data-card-animate-type="${key}" data-card-animate-idx="${idx}" data-card-animate-field="count" value="${esc(String(a.count))}"/>
@@ -4013,11 +4252,20 @@ class CompositionBuilderApp {
                 <button class="btn small" data-act="${removeAct}" data-card-id="${cardId}" data-idx="${idx}">删除</button>
             </div>
         `).join("");
+        const body = `
+            <div class="list-tools"><button class="btn small primary" data-act="${addAct}" data-card-id="${cardId}">添加</button></div>
+            <div class="kv-list">${rows}</div>
+        `;
+        if (embedOnly) {
+            return `
+                <div class="mini-note">${esc(label)}</div>
+                ${body}
+            `;
+        }
         return `
             <div class="subgroup"${sectionKeyAttr}>
                 <div class="subgroup-title">${esc(label)}</div>
-                <div class="list-tools"><button class="btn small primary" data-act="${addAct}" data-card-id="${cardId}">添加</button></div>
-                <div class="kv-list">${rows}</div>
+                ${body}
             </div>
         `;
     }
@@ -6063,8 +6311,8 @@ class CompositionBuilderApp {
 
     async downloadCode() {
         if (!this.currentKotlin) this.generateCodeAndRender(true);
-        const cls = sanitizeKotlinClassName(this.state.projectName || "TestComposition");
-        const filename = `${sanitizeFileBase(cls) || "TestComposition"}.kt`;
+        const cls = sanitizeKotlinClassName(this.state.projectName || "NewComposition");
+        const filename = `${sanitizeFileBase(cls) || "NewComposition"}.kt`;
         const result = await this.saveTextWithPicker({
             filename,
             text: this.currentKotlin || "",
@@ -6078,7 +6326,7 @@ class CompositionBuilderApp {
     }
 
     generateKotlin() {
-        const className = sanitizeKotlinClassName(this.state.projectName || "TestComposition");
+        const className = sanitizeKotlinClassName(this.state.projectName || "NewComposition");
         const sequencedRoot = this.state.compositionType === "sequenced";
         const baseClass = sequencedRoot ? "AutoSequencedParticleComposition" : "AutoParticleComposition";
         const imports = [

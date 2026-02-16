@@ -12,7 +12,9 @@ export function createExpressionRuntime(options = {}) {
     const numericExprFnCache = new Map();
 
     let staticCacheDirty = true;
+    let staticCacheBuilding = false;
     let vectorVarMap = new Map();
+    let buildingNoVecBase = null;
 
     const isFiniteNumber = (v) => Number.isFinite(Number(v));
     const toNum = (v, fb = 0) => {
@@ -93,6 +95,8 @@ export function createExpressionRuntime(options = {}) {
 
     function ensureStaticCache() {
         if (!staticCacheDirty) return;
+        if (staticCacheBuilding) return;
+        staticCacheBuilding = true;
         const state = readState();
         const noVec = {
             PI: Math.PI,
@@ -102,66 +106,78 @@ export function createExpressionRuntime(options = {}) {
         };
         const vecMap = new Map();
 
-        for (const g of state.globalVars) {
-            const name = toIdentifier(g?.name);
-            if (!name) continue;
-            const t = String(g?.type || "").trim();
-            if (numericTypes.has(t)) {
-                noVec[name] = evaluateNumberLiteral(g?.value || "0");
-                continue;
+        try {
+            for (const g of state.globalVars) {
+                const name = toIdentifier(g?.name);
+                if (!name) continue;
+                const t = String(g?.type || "").trim();
+                if (numericTypes.has(t)) {
+                    noVec[name] = evaluateNumberLiteral(g?.value || "0");
+                    continue;
+                }
+                if (t === "Boolean") {
+                    noVec[name] = /^true$/i.test(String(g?.value || ""));
+                    continue;
+                }
+                if (vectorTypes.has(t)) {
+                    vecMap.set(name, {
+                        type: t,
+                        value: String(g?.value || "")
+                    });
+                    continue;
+                }
+                noVec[name] = g?.value;
             }
-            if (t === "Boolean") {
-                noVec[name] = /^true$/i.test(String(g?.value || ""));
-                continue;
+
+            for (const c of state.globalConsts) {
+                const name = toIdentifier(c?.name);
+                if (!name) continue;
+                noVec[name] = evaluateNumberLiteral(c?.value || "0");
             }
-            if (vectorTypes.has(t)) {
-                vecMap.set(name, {
-                    type: t,
-                    value: String(g?.value || "")
+
+            vectorVarMap = vecMap;
+            buildingNoVecBase = noVec;
+
+            const resolvedVec = new Map();
+            const resolveVectorVar = (name, visiting = new Set()) => {
+                if (!name) return null;
+                if (resolvedVec.has(name)) return resolvedVec.get(name);
+                const hit = vectorVarMap.get(name);
+                if (!hit) return null;
+                if (visiting.has(name)) return U.v(0, 0, 0);
+                const next = new Set(visiting);
+                next.add(name);
+                const vec = parseVecLikeValue(hit.value || "", {
+                    includeVectors: false,
+                    visiting: next,
+                    skipEnsure: true
                 });
-                continue;
+                resolvedVec.set(name, vec);
+                return vec;
+            };
+
+            const withVec = Object.assign({}, noVec);
+            for (const [name, info] of vectorVarMap.entries()) {
+                const vec = resolveVectorVar(name, new Set());
+                if (!vec) continue;
+                withVec[name] = makeVectorProxy(vec, info.type);
             }
-            noVec[name] = g?.value;
+
+            baseVarsNoVector = Object.freeze(noVec);
+            baseVarsWithVector = Object.freeze(withVec);
+            staticCacheDirty = false;
+        } finally {
+            buildingNoVecBase = null;
+            staticCacheBuilding = false;
         }
-
-        for (const c of state.globalConsts) {
-            const name = toIdentifier(c?.name);
-            if (!name) continue;
-            noVec[name] = evaluateNumberLiteral(c?.value || "0");
-        }
-
-        vectorVarMap = vecMap;
-
-        const resolvedVec = new Map();
-        const resolveVectorVar = (name, visiting = new Set()) => {
-            if (!name) return null;
-            if (resolvedVec.has(name)) return resolvedVec.get(name);
-            const hit = vectorVarMap.get(name);
-            if (!hit) return null;
-            if (visiting.has(name)) return U.v(0, 0, 0);
-            const next = new Set(visiting);
-            next.add(name);
-            const vec = parseVecLikeValue(hit.value || "", { includeVectors: false, visiting: next });
-            resolvedVec.set(name, vec);
-            return vec;
-        };
-
-        const withVec = Object.assign({}, noVec);
-        for (const [name, info] of vectorVarMap.entries()) {
-            const vec = resolveVectorVar(name, new Set());
-            if (!vec) continue;
-            withVec[name] = makeVectorProxy(vec, info.type);
-        }
-
-        baseVarsNoVector = Object.freeze(noVec);
-        baseVarsWithVector = Object.freeze(withVec);
-        staticCacheDirty = false;
     }
 
     function getExpressionVars(elapsedTick = 0, ageTick = 0, pointIndex = 0, opts = {}) {
-        ensureStaticCache();
+        if (!staticCacheBuilding) ensureStaticCache();
         const includeVectors = opts.includeVectors === true;
-        const base = includeVectors ? baseVarsWithVector : baseVarsNoVector;
+        const base = staticCacheBuilding && buildingNoVecBase
+            ? buildingNoVecBase
+            : (includeVectors ? baseVarsWithVector : baseVarsNoVector);
         const vars = Object.create(base);
         vars.age = Number.isFinite(Number(ageTick)) ? Number(ageTick) : 0;
         vars.tick = Number.isFinite(Number(elapsedTick)) ? Number(elapsedTick) : 0;
@@ -205,12 +221,12 @@ export function createExpressionRuntime(options = {}) {
     }
 
     function findVectorVarByName(name) {
-        ensureStaticCache();
+        if (!staticCacheBuilding) ensureStaticCache();
         return vectorVarMap.get(name) || null;
     }
 
     function parseVecLikeValue(rawExpr, opts = {}) {
-        ensureStaticCache();
+        if (!opts.skipEnsure && !staticCacheBuilding) ensureStaticCache();
         const s = String(rawExpr || "").trim();
         if (!s) return U.v(0, 0, 0);
         if (s === "Vec3.ZERO") return U.v(0, 0, 0);
@@ -240,7 +256,8 @@ export function createExpressionRuntime(options = {}) {
                     ageTick,
                     pointIndex,
                     includeVectors,
-                    visiting: nextVisiting
+                    visiting: nextVisiting,
+                    skipEnsure: true
                 });
             }
         }
