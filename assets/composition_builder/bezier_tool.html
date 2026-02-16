@@ -1,0 +1,623 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+    <meta charset="utf-8"/>
+    <meta name="viewport" content="width=device-width, initial-scale=1"/>
+    <title>Bezier Scale 工具</title>
+    <style>
+        :root {
+            --bg: #0f1724;
+            --panel: #162135;
+            --line: rgba(255, 255, 255, 0.16);
+            --line2: rgba(255, 255, 255, 0.28);
+            --text: #e6eefc;
+            --muted: #9db1d1;
+            --accent: #67a4ff;
+            --danger: #ff6b6b;
+            --ok: #53d3ab;
+            --font: ui-sans-serif, system-ui, -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", Arial;
+            --mono: "JetBrains Mono", ui-monospace, Consolas, monospace;
+        }
+
+        * {
+            box-sizing: border-box;
+        }
+
+        html, body {
+            width: 100%;
+            height: 100%;
+            margin: 0;
+            overflow: hidden;
+            background: radial-gradient(900px 520px at 20% 10%, rgba(103, 164, 255, 0.14), transparent 55%), var(--bg);
+            color: var(--text);
+            font-family: var(--font);
+        }
+
+        .app {
+            width: 100%;
+            height: 100%;
+            display: grid;
+            grid-template-rows: auto 1fr auto;
+            gap: 10px;
+            padding: 10px;
+        }
+
+        .row {
+            display: flex;
+            gap: 8px;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+
+        .panel {
+            border: 1px solid var(--line);
+            border-radius: 12px;
+            background: color-mix(in srgb, var(--panel) 88%, transparent);
+            box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05);
+            padding: 8px;
+        }
+
+        .title {
+            font-size: 12px;
+            color: var(--muted);
+            margin-right: 4px;
+        }
+
+        .chip {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            min-height: 24px;
+            padding: 0 10px;
+            border-radius: 999px;
+            border: 1px solid var(--line2);
+            background: rgba(0, 0, 0, 0.2);
+            font-size: 12px;
+            color: var(--muted);
+            font-family: var(--mono);
+        }
+
+        label {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 12px;
+            color: var(--muted);
+        }
+
+        input[type="number"] {
+            width: 92px;
+            height: 30px;
+            border-radius: 9px;
+            border: 1px solid var(--line2);
+            background: rgba(0, 0, 0, 0.24);
+            color: var(--text);
+            outline: none;
+            padding: 0 8px;
+            font-family: var(--mono);
+            font-size: 12px;
+        }
+
+        input[type="number"]:focus {
+            border-color: color-mix(in srgb, var(--accent) 70%, transparent);
+            box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 26%, transparent);
+        }
+
+        button {
+            appearance: none;
+            border: 1px solid var(--line2);
+            background: rgba(255, 255, 255, 0.04);
+            color: var(--text);
+            height: 30px;
+            border-radius: 9px;
+            padding: 0 10px;
+            cursor: pointer;
+            font-size: 12px;
+        }
+
+        button:hover {
+            background: rgba(255, 255, 255, 0.08);
+        }
+
+        button.primary {
+            border-color: color-mix(in srgb, var(--accent) 72%, transparent);
+            background: color-mix(in srgb, var(--accent) 24%, transparent);
+        }
+
+        .canvas-wrap {
+            position: relative;
+            min-height: 0;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+        }
+
+        #chart {
+            width: 100%;
+            height: 100%;
+            display: block;
+            border-radius: 12px;
+            border: 1px solid var(--line);
+            background: linear-gradient(180deg, rgba(255, 255, 255, 0.02), rgba(0, 0, 0, 0.2));
+            touch-action: none;
+            cursor: crosshair;
+        }
+
+        .footer {
+            font-size: 12px;
+            color: var(--muted);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+
+        .warn {
+            color: var(--danger);
+        }
+
+        .ok {
+            color: var(--ok);
+        }
+    </style>
+</head>
+<body>
+<div class="app">
+    <div class="panel">
+        <div class="row">
+            <span class="title">缩放范围</span>
+            <label>start <input id="inpMin" type="number" step="0.01"/></label>
+            <label>end <input id="inpMax" type="number" step="0.01"/></label>
+            <label>maxTick <input id="inpTick" type="number" min="1" step="1"/></label>
+            <button id="btnResetLinear" type="button">重置线性</button>
+            <span id="lblXRange" class="chip">X: 0..18</span>
+        </div>
+    </div>
+
+    <div class="canvas-wrap">
+        <canvas id="chart"></canvas>
+    </div>
+
+    <div class="panel">
+        <div class="row">
+            <span class="title">曲柄控制点</span>
+            <label>C1.x <input id="inpC1x" type="number" step="0.01"/></label>
+            <label>C1.y <input id="inpC1y" type="number" step="0.01"/></label>
+            <label>C1.z <input id="inpC1z" type="number" step="0.01"/></label>
+            <label>C2.x <input id="inpC2x" type="number" step="0.01"/></label>
+            <label>C2.y <input id="inpC2y" type="number" step="0.01"/></label>
+            <label>C2.z <input id="inpC2z" type="number" step="0.01"/></label>
+            <label><input id="chkSnapSEY" type="checkbox" checked/> S/E Y 吸附</label>
+        </div>
+        <div class="footer">
+            <span>拖拽图中的 <span class="ok">C1/C2</span> 可快速调曲线；勾选吸附后会贴合 S/E 横线，按住 Shift 可临时关闭。</span>
+            <span id="status" class="chip">就绪</span>
+        </div>
+    </div>
+</div>
+
+<script>
+    (() => {
+        const q = new URLSearchParams(location.search);
+        const num = (v, fb = 0) => {
+            const n = Number(v);
+            return Number.isFinite(n) ? n : fb;
+        };
+        const int = (v, fb = 0) => Math.trunc(num(v, fb));
+        const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+
+        const state = {
+            min: num(q.get("min"), 0.01),
+            max: num(q.get("max"), 4.0),
+            tick: Math.max(1, int(q.get("tick"), 18)),
+            c1x: num(q.get("c1x"), 0.17106),
+            c1y: num(q.get("c1y"), 0.49026),
+            c1z: num(q.get("c1z"), 0.0),
+            c2x: num(q.get("c2x"), -0.771523),
+            c2y: num(q.get("c2y"), -0.116883),
+            c2z: num(q.get("c2z"), 0.0),
+            snapSEY: q.get("snapSEY") !== "0"
+        };
+
+        const el = {
+            chart: document.getElementById("chart"),
+            status: document.getElementById("status"),
+            lblXRange: document.getElementById("lblXRange"),
+            inpMin: document.getElementById("inpMin"),
+            inpMax: document.getElementById("inpMax"),
+            inpTick: document.getElementById("inpTick"),
+            inpC1x: document.getElementById("inpC1x"),
+            inpC1y: document.getElementById("inpC1y"),
+            inpC1z: document.getElementById("inpC1z"),
+            inpC2x: document.getElementById("inpC2x"),
+            inpC2y: document.getElementById("inpC2y"),
+            inpC2z: document.getElementById("inpC2z"),
+            btnResetLinear: document.getElementById("btnResetLinear"),
+            chkSnapSEY: document.getElementById("chkSnapSEY")
+        };
+
+        const ctx = el.chart.getContext("2d", { alpha: true });
+        const pad = { l: 44, r: 16, t: 16, b: 34 };
+        let dragTarget = "";
+        let rafId = 0;
+
+        const cubic = (a, b, c, d, t) => {
+            const inv = 1 - t;
+            return inv * inv * inv * a + 3 * inv * inv * t * b + 3 * inv * t * t * c + t * t * t * d;
+        };
+
+        const updateStatus = (text) => {
+            el.status.textContent = text || "就绪";
+        };
+
+        const safeTick = () => Math.max(1, int(state.tick || 1));
+
+        const normalizeState = () => {
+            state.tick = safeTick();
+            state.c1x = clamp(num(state.c1x), 0, state.tick);
+            state.c2x = clamp(num(state.c2x), 0, state.tick);
+            state.min = num(state.min);
+            state.max = num(state.max);
+            state.c1y = num(state.c1y);
+            state.c2y = num(state.c2y);
+            state.c1z = num(state.c1z);
+            state.c2z = num(state.c2z);
+            state.snapSEY = state.snapSEY !== false;
+        };
+
+        const toFixedCompact = (v, digits = 6) => {
+            const n = num(v);
+            if (Math.abs(n) < 1e-9) return "0";
+            return n.toFixed(digits).replace(/0+$/g, "").replace(/\.$/, "");
+        };
+
+        const syncInputs = () => {
+            el.inpMin.value = toFixedCompact(state.min);
+            el.inpMax.value = toFixedCompact(state.max);
+            el.inpTick.value = String(safeTick());
+            el.inpC1x.value = toFixedCompact(state.c1x);
+            el.inpC1y.value = toFixedCompact(state.c1y);
+            el.inpC1z.value = toFixedCompact(state.c1z);
+            el.inpC2x.value = toFixedCompact(state.c2x);
+            el.inpC2y.value = toFixedCompact(state.c2y);
+            el.inpC2z.value = toFixedCompact(state.c2z);
+            if (el.chkSnapSEY) el.chkSnapSEY.checked = !!state.snapSEY;
+            el.lblXRange.textContent = `X: 0..${safeTick()}`;
+        };
+
+        const getBounds = () => {
+            const w = Math.max(320, el.chart.clientWidth || 320);
+            const h = Math.max(240, el.chart.clientHeight || 240);
+            return { w, h, iw: w - pad.l - pad.r, ih: h - pad.t - pad.b };
+        };
+
+        const getYRange = () => {
+            const vals = [state.min, state.max, state.c1y, state.c2y];
+            let lo = Math.min(...vals);
+            let hi = Math.max(...vals);
+            if (!Number.isFinite(lo) || !Number.isFinite(hi)) {
+                lo = -1;
+                hi = 1;
+            }
+            if (Math.abs(hi - lo) < 1e-6) {
+                hi = lo + 1;
+            }
+            const padY = (hi - lo) * 0.14;
+            return { lo: lo - padY, hi: hi + padY };
+        };
+
+        const xToPx = (x, b) => pad.l + clamp(x, 0, safeTick()) / safeTick() * b.iw;
+        const pxToX = (px, b) => clamp((px - pad.l) / Math.max(1, b.iw), 0, 1) * safeTick();
+        const yToPx = (y, b, yr) => pad.t + (1 - (y - yr.lo) / (yr.hi - yr.lo)) * b.ih;
+        const pxToY = (py, b, yr) => yr.lo + (1 - (py - pad.t) / Math.max(1, b.ih)) * (yr.hi - yr.lo);
+
+        const evalBezierAtTick = (xTick) => {
+            const tick = safeTick();
+            const x = clamp(num(xTick), 0, tick);
+            const p0x = 0;
+            const p0y = state.min;
+            const p1x = clamp(state.c1x, 0, tick);
+            const p1y = state.c1y;
+            const p2x = clamp(state.c2x, 0, tick);
+            const p2y = state.c2y;
+            const p3x = tick;
+            const p3y = state.max;
+
+            if (x <= 0) return p0y;
+            if (x >= tick) return p3y;
+
+            let lo = 0;
+            let hi = 1;
+            let mid = 0.5;
+            for (let i = 0; i < 26; i++) {
+                mid = (lo + hi) * 0.5;
+                const bx = cubic(p0x, p1x, p2x, p3x, mid);
+                if (bx < x) lo = mid;
+                else hi = mid;
+            }
+            return cubic(p0y, p1y, p2y, p3y, mid);
+        };
+
+        const scheduleRender = () => {
+            cancelAnimationFrame(rafId);
+            rafId = requestAnimationFrame(render);
+        };
+
+        const render = () => {
+            normalizeState();
+            syncInputs();
+
+            const b = getBounds();
+            if (el.chart.width !== b.w || el.chart.height !== b.h) {
+                el.chart.width = b.w;
+                el.chart.height = b.h;
+            }
+            const yr = getYRange();
+
+            ctx.clearRect(0, 0, b.w, b.h);
+
+            // grid
+            ctx.save();
+            ctx.strokeStyle = "rgba(255,255,255,0.09)";
+            ctx.lineWidth = 1;
+            const gx = Math.max(4, Math.min(10, safeTick()));
+            for (let i = 0; i <= gx; i++) {
+                const x = pad.l + i / gx * b.iw;
+                ctx.beginPath();
+                ctx.moveTo(x, pad.t);
+                ctx.lineTo(x, pad.t + b.ih);
+                ctx.stroke();
+            }
+            for (let i = 0; i <= 6; i++) {
+                const y = pad.t + i / 6 * b.ih;
+                ctx.beginPath();
+                ctx.moveTo(pad.l, y);
+                ctx.lineTo(pad.l + b.iw, y);
+                ctx.stroke();
+            }
+            ctx.restore();
+
+            // axis labels
+            ctx.save();
+            ctx.fillStyle = "rgba(223,234,252,0.84)";
+            ctx.font = "12px ui-monospace,Consolas,monospace";
+            ctx.fillText("0", pad.l - 6, pad.t + b.ih + 20);
+            ctx.fillText(String(safeTick()), pad.l + b.iw - 18, pad.t + b.ih + 20);
+            ctx.fillText(toFixedCompact(yr.hi), 8, pad.t + 4);
+            ctx.fillText(toFixedCompact(yr.lo), 8, pad.t + b.ih);
+            ctx.restore();
+
+            // helper lines
+            const p0 = { x: 0, y: state.min };
+            const p1 = { x: state.c1x, y: state.c1y };
+            const p2 = { x: state.c2x, y: state.c2y };
+            const p3 = { x: safeTick(), y: state.max };
+
+            ctx.save();
+            ctx.strokeStyle = "rgba(103,164,255,0.45)";
+            ctx.lineWidth = 1.2;
+            ctx.beginPath();
+            ctx.moveTo(xToPx(p0.x, b), yToPx(p0.y, b, yr));
+            ctx.lineTo(xToPx(p1.x, b), yToPx(p1.y, b, yr));
+            ctx.lineTo(xToPx(p2.x, b), yToPx(p2.y, b, yr));
+            ctx.lineTo(xToPx(p3.x, b), yToPx(p3.y, b, yr));
+            ctx.stroke();
+            ctx.restore();
+
+            // linear baseline
+            ctx.save();
+            ctx.strokeStyle = "rgba(255,255,255,0.25)";
+            ctx.setLineDash([6, 6]);
+            ctx.beginPath();
+            ctx.moveTo(xToPx(0, b), yToPx(state.min, b, yr));
+            ctx.lineTo(xToPx(safeTick(), b), yToPx(state.max, b, yr));
+            ctx.stroke();
+            ctx.setLineDash([]);
+            ctx.restore();
+
+            // S / E horizontal snap lines
+            ctx.save();
+            ctx.strokeStyle = "rgba(83,211,171,0.22)";
+            ctx.setLineDash([4, 6]);
+            ctx.beginPath();
+            ctx.moveTo(pad.l, yToPx(state.min, b, yr));
+            ctx.lineTo(pad.l + b.iw, yToPx(state.min, b, yr));
+            ctx.moveTo(pad.l, yToPx(state.max, b, yr));
+            ctx.lineTo(pad.l + b.iw, yToPx(state.max, b, yr));
+            ctx.stroke();
+            ctx.setLineDash([]);
+            ctx.restore();
+
+            // bezier curve
+            ctx.save();
+            ctx.strokeStyle = "rgba(103,164,255,0.95)";
+            ctx.lineWidth = 2.2;
+            ctx.beginPath();
+            const samples = Math.max(80, safeTick() * 6);
+            for (let i = 0; i <= samples; i++) {
+                const xTick = i / samples * safeTick();
+                const yValue = evalBezierAtTick(xTick);
+                const x = xToPx(xTick, b);
+                const y = yToPx(yValue, b, yr);
+                if (i === 0) ctx.moveTo(x, y);
+                else ctx.lineTo(x, y);
+            }
+            ctx.stroke();
+            ctx.restore();
+
+            const drawPoint = (x, y, fill, label) => {
+                const px = xToPx(x, b);
+                const py = yToPx(y, b, yr);
+                ctx.save();
+                ctx.fillStyle = fill;
+                ctx.beginPath();
+                ctx.arc(px, py, 6, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.strokeStyle = "rgba(15,23,36,0.9)";
+                ctx.lineWidth = 1.4;
+                ctx.stroke();
+                ctx.fillStyle = "rgba(230,238,252,0.92)";
+                ctx.font = "11px ui-monospace,Consolas,monospace";
+                ctx.fillText(label, px + 8, py - 8);
+                ctx.restore();
+            };
+
+            drawPoint(p0.x, p0.y, "rgba(83,211,171,0.95)", "S");
+            drawPoint(p3.x, p3.y, "rgba(83,211,171,0.95)", "E");
+            drawPoint(p1.x, p1.y, "rgba(255,176,85,0.95)", "C1");
+            drawPoint(p2.x, p2.y, "rgba(255,176,85,0.95)", "C2");
+        };
+
+        const getMousePos = (ev) => {
+            const rect = el.chart.getBoundingClientRect();
+            return {
+                x: ev.clientX - rect.left,
+                y: ev.clientY - rect.top
+            };
+        };
+
+        const pickHandle = (mx, my) => {
+            const b = getBounds();
+            const yr = getYRange();
+            const hitR = 10;
+            const d = (x, y) => {
+                const dx = x - mx;
+                const dy = y - my;
+                return Math.sqrt(dx * dx + dy * dy);
+            };
+            const c1 = { x: xToPx(state.c1x, b), y: yToPx(state.c1y, b, yr), id: "c1" };
+            const c2 = { x: xToPx(state.c2x, b), y: yToPx(state.c2y, b, yr), id: "c2" };
+            const a = d(c1.x, c1.y);
+            const b2 = d(c2.x, c2.y);
+            if (a <= hitR && a <= b2) return c1.id;
+            if (b2 <= hitR) return c2.id;
+            return "";
+        };
+
+        const onPointerDown = (ev) => {
+            ev.preventDefault();
+            const p = getMousePos(ev);
+            dragTarget = pickHandle(p.x, p.y);
+            if (dragTarget) {
+                el.chart.setPointerCapture?.(ev.pointerId);
+                updateStatus(`拖拽 ${dragTarget.toUpperCase()}`);
+            }
+        };
+
+        const onPointerMove = (ev) => {
+            if (!dragTarget) return;
+            const p = getMousePos(ev);
+            const b = getBounds();
+            const yr = getYRange();
+            const nextX = clamp(pxToX(p.x, b), 0, safeTick());
+            let nextY = pxToY(p.y, b, yr);
+            const snapEnabled = !!state.snapSEY && !ev.shiftKey;
+            if (snapEnabled) {
+                const snapPx = 10;
+                const py = p.y;
+                const minPy = yToPx(state.min, b, yr);
+                const maxPy = yToPx(state.max, b, yr);
+                if (Math.abs(py - minPy) <= snapPx) nextY = state.min;
+                else if (Math.abs(py - maxPy) <= snapPx) nextY = state.max;
+            }
+            if (dragTarget === "c1") {
+                state.c1x = nextX;
+                state.c1y = nextY;
+            } else if (dragTarget === "c2") {
+                state.c2x = nextX;
+                state.c2y = nextY;
+            }
+            scheduleRender();
+        };
+
+        const onPointerUp = (ev) => {
+            if (!dragTarget) return;
+            dragTarget = "";
+            el.chart.releasePointerCapture?.(ev.pointerId);
+            updateStatus("已更新曲线");
+            scheduleRender();
+        };
+
+        const bindInput = (node, key, forceInt = false) => {
+            node.addEventListener("input", () => {
+                state[key] = forceInt ? Math.max(1, int(node.value || 1)) : num(node.value);
+                normalizeState();
+                scheduleRender();
+            });
+        };
+
+        bindInput(el.inpMin, "min");
+        bindInput(el.inpMax, "max");
+        bindInput(el.inpTick, "tick", true);
+        bindInput(el.inpC1x, "c1x");
+        bindInput(el.inpC1y, "c1y");
+        bindInput(el.inpC1z, "c1z");
+        bindInput(el.inpC2x, "c2x");
+        bindInput(el.inpC2y, "c2y");
+        bindInput(el.inpC2z, "c2z");
+        el.chkSnapSEY?.addEventListener("change", () => {
+            state.snapSEY = !!el.chkSnapSEY.checked;
+            scheduleRender();
+        });
+
+        el.btnResetLinear.addEventListener("click", () => {
+            const tick = safeTick();
+            state.c1x = tick / 3;
+            state.c2x = tick * 2 / 3;
+            state.c1y = state.min + (state.max - state.min) / 3;
+            state.c2y = state.min + (state.max - state.min) * 2 / 3;
+            scheduleRender();
+            updateStatus("已重置为线性");
+        });
+
+        el.chart.addEventListener("pointerdown", onPointerDown);
+        el.chart.addEventListener("pointermove", onPointerMove);
+        el.chart.addEventListener("pointerup", onPointerUp);
+        el.chart.addEventListener("pointercancel", onPointerUp);
+        window.addEventListener("resize", scheduleRender);
+
+        window.getBezierConfig = () => {
+            normalizeState();
+            return {
+                min: num(state.min),
+                max: num(state.max),
+                tick: Math.max(1, int(state.tick || 1)),
+                c1x: num(state.c1x),
+                c1y: num(state.c1y),
+                c1z: num(state.c1z),
+                c2x: num(state.c2x),
+                c2y: num(state.c2y),
+                c2z: num(state.c2z)
+            };
+        };
+
+        window.setBezierConfig = (cfg) => {
+            if (!cfg || typeof cfg !== "object") return;
+            state.min = num(cfg.min, state.min);
+            state.max = num(cfg.max, state.max);
+            state.tick = Math.max(1, int(cfg.tick, state.tick));
+            state.c1x = num(cfg.c1x, state.c1x);
+            state.c1y = num(cfg.c1y, state.c1y);
+            state.c1z = num(cfg.c1z, state.c1z);
+            state.c2x = num(cfg.c2x, state.c2x);
+            state.c2y = num(cfg.c2y, state.c2y);
+            state.c2z = num(cfg.c2z, state.c2z);
+            scheduleRender();
+        };
+
+        window.addEventListener("message", (ev) => {
+            const data = ev?.data;
+            if (!data || typeof data !== "object") return;
+            if (data.type === "cb-bezier-init") {
+                window.setBezierConfig(data.payload || {});
+            }
+        });
+
+        normalizeState();
+        syncInputs();
+        render();
+    })();
+</script>
+</body>
+</html>

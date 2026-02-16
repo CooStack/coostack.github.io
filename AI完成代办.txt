@@ -1,7 +1,0 @@
-shader_builder.html 相关
-
-
-
-generator 相关
-1. command判定方式要假如生命周期判定 ( age > ? age < ? age <= ?  age in ? .. ?)
-2. 初速度给定要支持表达式 比如 根据相对发射器坐标为位置

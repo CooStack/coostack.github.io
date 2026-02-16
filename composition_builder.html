@@ -1,0 +1,231 @@
+﻿<!doctype html>
+<html lang="zh-CN">
+<head>
+    <meta charset="utf-8"/>
+    <meta name="viewport" content="width=device-width,initial-scale=1"/>
+    <title>Composition 构建器</title>
+    <link rel="stylesheet" href="./assets/composition_builder/css/style.css"/>
+</head>
+<body data-theme="dark-1">
+<div id="app">
+    <header class="topbar">
+        <div class="topbar-left">
+            <a class="btn" href="./index.html">返回</a>
+            <div class="brand">
+                <div class="brand-title">Composition 构建器</div>
+                <div class="brand-sub">卡片编辑 / Three.js 预览 / Kotlin 代码生成</div>
+            </div>
+        </div>
+        <div class="topbar-right">
+            <div class="page-switch">
+                <button id="btnPageEditor" class="btn small primary">编辑</button>
+                <button id="btnPageCode" class="btn small">代码</button>
+            </div>
+            <span class="sep"></span>
+            <button id="btnNewProject" class="btn">新建项目</button>
+            <button id="btnAddCard" class="btn primary">添加卡片</button>
+            <button id="btnUndo" class="btn">撤销</button>
+            <button id="btnRedo" class="btn">重做</button>
+            <button id="btnSettings" class="btn">设置</button>
+            <button id="btnHotkeys" class="btn">快捷键</button>
+            <button id="btnImportProject" class="btn">导入</button>
+            <button id="btnExportProject" class="btn">导出</button>
+            <input id="fileProject" type="file" accept="application/json" hidden/>
+            <button id="btnGenerateCode" class="btn">生成代码</button>
+            <button id="btnCopyCode" class="btn">复制代码</button>
+        </div>
+    </header>
+
+    <main id="pageEditor" class="page page-editor">
+        <aside class="panel left">
+            <div class="panel-title">项目与卡片</div>
+            <div class="left-tabbar">
+                <button id="btnLeftTabProject" class="btn small primary">项目</button>
+                <button id="btnLeftTabCards" class="btn small">卡片</button>
+            </div>
+            <div id="leftPageProject" class="left-page">
+                <div id="projectSection" class="project-section"></div>
+            </div>
+            <div id="leftPageCards" class="left-page hidden">
+                <div class="panel-title card-title-row">
+                    <span>卡片</span>
+                    <button id="btnAddCard2" class="btn small primary">添加</button>
+                </div>
+                <div id="cardsRoot" class="cards"></div>
+            </div>
+        </aside>
+        <div id="editorResizer" class="editor-resizer" aria-hidden="true"></div>
+        <section class="panel right">
+            <div class="panel-title preview-title-row">
+                <span>预览</span>
+                <div class="preview-actions">
+                    <button id="btnPausePreview" class="btn small">暂停</button>
+                    <button id="btnReplayPreview" class="btn small">重播</button>
+                    <button id="btnJumpPreviewEnd" class="btn small">跳到消散前</button>
+                    <button id="btnResetCamera" class="btn small">重置镜头</button>
+                    <button id="btnFullscreen" class="btn small">全屏</button>
+                </div>
+            </div>
+            <div class="viewer-hud">
+                <div class="hud-left">
+                    <div id="statusPoints" class="badge">点数: 0</div>
+                    <div id="statusSelection" class="badge">选中: 无</div>
+                </div>
+                <div class="hud-right">
+                    <div class="badge">中键旋转 / 右键平移 / 滚轮缩放</div>
+                    <div class="badge">左键框选</div>
+                </div>
+            </div>
+            <div id="viewerWrap" class="viewer-wrap">
+                <div id="threeHost" class="three-host"></div>
+                <div id="selectBox" class="select-box hidden"></div>
+            </div>
+        </section>
+    </main>
+
+    <section id="pageCode" class="page page-code hidden">
+        <div class="panel code-panel">
+            <div class="panel-title code-title-row">
+                <span>Kotlin 输出</span>
+                <div class="preview-actions">
+                    <button id="btnGenerateCode2" class="btn small primary">重新生成</button>
+                    <button id="btnCopyCode2" class="btn small">复制</button>
+                    <button id="btnDownloadCode" class="btn small">下载 .kt</button>
+                </div>
+            </div>
+            <pre id="kotlinOut" class="code code-highlight" aria-readonly="true"></pre>
+        </div>
+    </section>
+
+    <div id="settingsMask" class="modal-mask hidden"></div>
+    <div id="settingsModal" class="modal hidden" role="dialog" aria-modal="true">
+        <div class="modal-head">
+            <div class="modal-title">设置</div>
+            <button id="btnCloseSettings" class="btn icon">X</button>
+        </div>
+        <div class="modal-body">
+            <div class="settings-layout">
+                <div class="settings-panel">
+                    <div class="settings-panel-title">数值</div>
+                    <div class="settings-form">
+                        <div class="settings-row">
+                            <div class="settings-label">参数步长</div>
+                            <input id="inpParamStep" class="input" type="number" min="0.000001" step="0.01" value="0.1"/>
+                        </div>
+                        <div class="settings-row">
+                            <div class="settings-label">点大小</div>
+                            <input id="inpPointSize" class="input" type="number" min="0.001" step="0.01" value="0.07"/>
+                        </div>
+                    </div>
+                </div>
+                <div class="settings-panel">
+                    <div class="settings-panel-title">显示</div>
+                    <div class="settings-form">
+                        <div class="settings-row">
+                            <div class="settings-label">主题</div>
+                            <select id="themeSelect" class="input">
+                                <option value="dark-1">夜岚</option>
+                                <option value="dark-2">深潮</option>
+                                <option value="dark-3">焰砂</option>
+                                <option value="light-1">雾蓝</option>
+                                <option value="light-2">杏露</option>
+                                <option value="light-3">薄荷</option>
+                            </select>
+                        </div>
+                        <label class="chk settings-toggle">
+                            <input id="chkAxes" type="checkbox" checked/>
+                            <span>显示坐标轴</span>
+                        </label>
+                        <label class="chk settings-toggle">
+                            <input id="chkGrid" type="checkbox" checked/>
+                            <span>显示网格</span>
+                        </label>
+                        <label class="chk settings-toggle">
+                            <input id="chkRealtimeCode2" type="checkbox" checked/>
+                            <span>实时生成代码</span>
+                        </label>
+                    </div>
+                </div>
+                <div class="settings-panel settings-panel-wide">
+                    <div class="settings-panel-title">快捷键</div>
+                    <div class="settings-actions">
+                        <button id="btnOpenHotkeys" class="btn primary">打开快捷键设置</button>
+                        <button id="btnExportSettings" class="btn">导出设置</button>
+                        <button id="btnImportSettings" class="btn">导入设置</button>
+                        <input id="fileSettings" type="file" accept="application/json" hidden/>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div id="hkMask" class="modal-mask hidden"></div>
+    <div id="hkModal" class="modal hidden" role="dialog" aria-modal="true">
+        <div class="modal-head">
+            <div class="modal-title">快捷键设置</div>
+            <input id="hkSearch" class="input" placeholder="搜索快捷键"/>
+            <button id="btnCloseHotkeys" class="btn icon">X</button>
+        </div>
+        <div class="modal-body">
+            <div id="hkHint" class="hint-line">点击“设置”后按下按键（Esc 取消，Backspace 清空）。</div>
+            <div id="hkList" class="hk-list"></div>
+        </div>
+        <div class="modal-foot">
+            <button id="btnHotkeysReset" class="btn">恢复默认</button>
+            <span class="flex-spacer"></span>
+            <button id="btnCloseHotkeys2" class="btn primary">关闭</button>
+        </div>
+    </div>
+
+    <div id="builderMask" class="modal-mask hidden"></div>
+    <div id="builderModal" class="modal modal-xl hidden" role="dialog" aria-modal="true">
+        <div class="modal-head">
+            <div class="modal-title">Builder 编辑器</div>
+            <div class="modal-head-actions">
+                <button id="btnReloadBuilderFrame" class="btn small">重载</button>
+                <button id="btnPullBuilderState" class="btn small primary">拉取并返回</button>
+                <button id="btnCloseBuilderModal" class="btn icon">X</button>
+            </div>
+        </div>
+        <div class="modal-body no-pad">
+            <iframe id="builderFrame" class="builder-frame" title="PointsBuilder 编辑器"></iframe>
+        </div>
+        <div class="modal-foot">
+            <div class="hint-line">使用独立存储前缀，与 pointsbuilder 数据隔离。</div>
+            <span class="flex-spacer"></span>
+            <button id="btnCloseBuilderModal2" class="btn">取消</button>
+            <button id="btnPullBuilderState2" class="btn primary">拉取并返回</button>
+        </div>
+    </div>
+
+    <div id="bezierMask" class="modal-mask hidden"></div>
+    <div id="bezierModal" class="modal modal-bezier hidden" role="dialog" aria-modal="true">
+        <div class="modal-head">
+            <div class="modal-title">Bezier 工具</div>
+            <button id="btnCloseBezierModal" class="btn icon">X</button>
+        </div>
+        <div class="modal-body no-pad">
+            <iframe id="bezierFrame" class="bezier-frame" title="Bezier 工具"></iframe>
+        </div>
+        <div class="modal-foot">
+            <div class="hint-line">点击“应用到当前缩放”将读取工具输出并写回当前 scale helper。</div>
+            <span class="flex-spacer"></span>
+            <button id="btnCloseBezierModal2" class="btn">取消</button>
+            <button id="btnApplyBezierModal" class="btn primary">应用到当前缩放</button>
+        </div>
+    </div>
+</div>
+
+<script src="./assets/points_builder/js/utils.js"></script>
+<script src="./assets/blog/js/codehighlight.js"></script>
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.182.0/build/three.module.min.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.182.0/examples/jsm/"
+  }
+}
+</script>
+<script type="module" src="./assets/composition_builder/js/main.js"></script>
+</body>
+</html>

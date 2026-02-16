@@ -1,0 +1,333 @@
+﻿<!doctype html>
+<html lang="zh-CN">
+<head>
+    <meta charset="utf-8"/>
+    <meta name="viewport" content="width=device-width,initial-scale=1"/>
+    <title>CompositionBuilder - PointsBuilder 编辑器</title>
+    <link rel="stylesheet" href="./assets/points_builder/css/style.css"/>
+    <style>
+        body.composition-no-kotlin .panel.right,
+        body.composition-no-kotlin .resizer-right,
+        body.composition-no-kotlin #btnToggleKotlin,
+        body.composition-no-kotlin .kotlin-title,
+        body.composition-no-kotlin .kotlin-tools {
+            display: none !important;
+        }
+
+        body.composition-no-kotlin .viewer {
+            margin-right: 0 !important;
+        }
+    </style>
+</head>
+<body data-theme="dark-1" class="composition-no-kotlin">
+<div id="app">
+    <header class="topbar">
+        <div class="topbar-left">
+            <a id="btnBackComposition" class="btn" href="javascript:void(0)">返回 CompositionBuilder</a>
+            <div class="brand">
+                <div class="brand-title">PointsBuilder 可视化构建器</div>
+                <div class="brand-sub">卡片编辑 / Three.js 预览 / 独立存储前缀</div>
+            </div>
+        </div>
+
+        <div class="topbar-right">
+            <button id="btnAddCard" class="btn primary">添加元素</button>
+            <button id="btnQuickOffset" class="btn">添加全局偏移</button>
+            <button id="btnPickLine" class="btn">绘制直线</button>
+            <button id="btnPickTriangle" class="btn">绘制三角形</button>
+            <button id="btnPickPoint" class="btn">点拾取</button>
+            <button id="btnHotkeys" class="btn">设置</button>
+            <button id="btnFullscreen" class="btn">预览全屏</button>
+            <button id="btnResetCamera" class="btn">重置镜头</button>
+
+            <span class="sep"></span>
+
+            <button id="btnSaveJson" class="btn">导出 JSON</button>
+            <button id="btnLoadJson" class="btn">导入 JSON</button>
+            <input id="fileJson" type="file" accept="application/json" hidden/>
+            <input id="fileBuilderJson" type="file" accept="application/json" hidden/>
+            <button id="btnReset" class="btn danger">重置</button>
+            <div class="proj-name">
+                <span>项目名</span>
+                <input id="inpProjectName" class="input proj-input" placeholder="未命名"/>
+            </div>
+        </div>
+    </header>
+
+    <main class="layout">
+        <aside class="panel left">
+            <div class="panel-title">构建列</div>
+            <div id="cardsRoot" class="cards"></div>
+            <div class="panel-footnote">
+                拖拽 ≡ 排序；长按左键可框选多卡片；子元素可放入父卡片。
+            </div>
+        </aside>
+
+        <div class="resizer resizer-left" data-resizer="left" aria-hidden="true"></div>
+
+        <section class="viewer">
+            <div class="viewer-hud">
+                <div class="hud-left">
+                    <div id="statusLinePick" class="badge hidden"></div>
+                    <div id="statusPoints" class="badge">点数：</div>
+                </div>
+                <div class="hud-right">
+                    <label class="chk">
+                        <input id="chkSnapGrid" type="checkbox" checked/>
+                        吸附网格
+                    </label>
+                    <label class="chk">
+                        <input id="chkSnapParticle" type="checkbox" checked>
+                        吸附粒子
+                    </label>
+                    <label class="chk">
+                        <span style="opacity:.7;">吸附平面</span>
+                        <select id="selSnapPlane" class="input plane-select">
+                            <option value="XZ">XZ</option>
+                            <option value="XY">XY</option>
+                            <option value="ZY">ZY</option>
+                        </select>
+                    </label>
+                    <label class="chk">
+                        <span style="opacity:.7;">镜像平面</span>
+                        <select id="selMirrorPlane" class="input plane-select">
+                            <option value="XZ">XZ</option>
+                            <option value="XY">XY</option>
+                            <option value="ZY">ZY</option>
+                        </select>
+                    </label>
+                </div>
+            </div>
+            <div id="threeHost" class="three-host"></div>
+        </section>
+
+        <div class="resizer resizer-right" data-resizer="right" aria-hidden="true"></div>
+
+        <aside class="panel right">
+            <div class="panel-title kotlin-title">
+                <span>Kotlin 代码</span>
+            </div>
+            <div class="panel-tools kotlin-tools">
+                <span class="kotlin-tools-label">结尾</span>
+                <select id="selKotlinEnd" class="input kotlin-end">
+                    <option value="builder">构建器结尾</option>
+                    <option value="list">列表结尾</option>
+                    <option value="clone">克隆列表结尾</option>
+                </select>
+            </div>
+            <pre id="kotlinOut" class="code code-highlight" aria-readonly="true"></pre>
+
+            <div class="panel-actions">
+                <button id="btnCopyKotlin2" class="btn">复制</button>
+                <button id="btnExportKotlin2" class="btn primary">重新生成</button>
+            </div>
+
+            <div class="panel-footnote">
+                角度可切换为“度/弧度”，导出会按 Kotlin 接口要求转换（多数为 <code>x*PI</code>）。
+            </div>
+        </aside>
+
+        <button id="btnToggleKotlin" class="kotlin-toggle" title="隐藏 Kotlin">></button>
+    </main>
+
+    <div id="modalMask" class="modal-mask hidden"></div>
+    <div id="modal" class="modal hidden" role="dialog" aria-modal="true">
+        <div class="modal-head">
+            <div class="modal-title">添加元素</div>
+            <input id="cardSearch" class="input" placeholder="搜索元素：addCircle / rotateTo / Fourier ..."/>
+            <button id="btnCloseModal" class="btn icon">✕</button>
+        </div>
+        <div class="modal-body">
+            <div id="cardPicker" class="picker"></div>
+        </div>
+        <div class="modal-foot">
+            <button id="btnCancelModal" class="btn">取消</button>
+        </div>
+    </div>
+
+    <!-- 设置 -->
+    <div id="settingsMask" class="modal-mask hidden"></div>
+    <div id="settingsModal" class="modal hidden" role="dialog" aria-modal="true">
+        <div class="modal-head">
+            <div class="modal-title">设置</div>
+            <button id="btnCloseSettings" class="btn icon">✕</button>
+        </div>
+        <div class="modal-body">
+            <div class="settings-layout">
+                <div class="settings-panel">
+                    <div class="settings-panel-title">数值</div>
+                    <div class="settings-form">
+                        <div class="settings-row">
+                            <div class="settings-label">参数步长</div>
+                            <input id="inpParamStep" class="input" type="number" value="0.1" step="0.01"
+                                   min="0.000001"/>
+                        </div>
+                        <div class="settings-row">
+                            <div class="settings-label">网格步长</div>
+                            <input id="inpSnapStep" class="input" type="number" value="1" step="0.1" min="0.000001"
+                                   title="吸附网格开启时生效"/>
+                        </div>
+                        <div class="settings-row">
+                            <div class="settings-label">粒子吸附范围</div>
+                            <input id="inpSnapParticleRange" class="input" type="number" value="0.35" step="0.01"
+                                   min="0.000001"
+                                   title="与粒子距离小于该值时吸附"/>
+                        </div>
+                        <div class="settings-row">
+                            <div class="settings-label">粒子大小</div>
+                            <input id="inpPointSize" class="input" type="number" value="0.07" step="0.01" min="0.001"
+                                   max="5"/>
+                        </div>
+                        <div class="settings-row">
+                            <div class="settings-label">偏移预览上限</div>
+                            <input id="inpOffsetPreviewLimit" class="input" type="number" value="-1" step="1" min="-1"
+                                   title="0 禁用预览，-1 不限制"/>
+                        </div>
+                    </div>
+                </div>
+                <div class="settings-panel">
+                    <div class="settings-panel-title">显示</div>
+                    <div class="settings-form">
+                        <div class="settings-row">
+                            <div class="settings-label">主题</div>
+                            <select id="themeSelect" class="input theme-select" title="Alt+[ / Alt+] 切换">
+                                <option value="dark-1">夜岚</option>
+                                <option value="dark-2">深潮</option>
+                                <option value="dark-3">焰砂</option>
+                                <option value="light-1">雾蓝</option>
+                                <option value="light-2">杏露</option>
+                                <option value="light-3">薄荷</option>
+                            </select>
+                        </div>
+                        <div class="settings-toggles">
+                            <label class="chk settings-toggle">
+                                <input id="chkAxes" type="checkbox" checked/>
+                                <span>显示坐标轴</span>
+                            </label>
+                            <label class="chk settings-toggle">
+                                <input id="chkGrid" type="checkbox" checked/>
+                                <span>显示网格</span>
+                            </label>
+                            <label class="chk settings-toggle">
+                                <input id="chkRealtimeKotlin" type="checkbox"/>
+                                <span>实时更新 Kotlin</span>
+                            </label>
+                            <label class="chk settings-toggle">
+                                <input id="chkPointPickPreview" type="checkbox" checked/>
+                                <span>点拾取效果预览</span>
+                            </label>
+                        </div>
+                    </div>
+                </div>
+                <div class="settings-panel settings-panel-wide">
+                    <div class="settings-panel-title">快捷键</div>
+                    <div class="settings-actions">
+                        <button id="btnOpenHotkeys" class="btn primary">打开快捷键设置</button>
+                        <div class="settings-note">点击配置快捷键。</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="modal-foot" style="display:flex; gap:8px; align-items:center;">
+            <button id="btnHotkeysExport" class="btn">导出设置</button>
+            <button id="btnHotkeysImport" class="btn">导入设置</button>
+            <input id="fileHotkeys" type="file" accept="application/json" hidden/>
+            <span style="flex:1 1 auto;"></span>
+        </div>
+    </div>
+
+    <!-- 快捷键设置（二级菜单） -->
+    <div id="hkMask" class="modal-mask hidden"></div>
+    <div id="hkModal" class="modal hidden" role="dialog" aria-modal="true">
+        <div class="modal-head">
+            <div class="modal-title">快捷键设置</div>
+            <input id="hkSearch" class="input" placeholder="搜索快捷键：撤销 / 添加元素 / addCircle ..."/>
+            <button id="btnCloseHotkeys" class="btn icon">✕</button>
+        </div>
+        <div class="modal-body">
+            <div id="hkHint" style="margin:0 0 10px; opacity:.8; font-size:12px;">点击“设置”后按下你想要的按键（Esc
+                取消，Backspace 清空）。
+            </div>
+            <div id="hkList" class="hk-list"></div>
+        </div>
+        <div class="modal-foot" style="display:flex; gap:8px; align-items:center;">
+            <button id="btnHotkeysReset" class="btn">恢复默认</button>
+            <span style="flex:1 1 auto;"></span>
+            <button id="btnCloseHotkeys2" class="btn primary">关闭</button>
+        </div>
+    </div>
+
+</div>
+
+<script>
+    window.__PB_STORAGE_PREFIX = "cpb_";
+    (() => {
+        const prefix = String(window.__PB_STORAGE_PREFIX || "");
+        const mapKey = (key) => {
+            const raw = String(key ?? "");
+            return raw.startsWith("pb_") ? `${prefix}${raw}` : raw;
+        };
+
+        const proto = Storage.prototype;
+        if (!proto.__cpbPatched) {
+            const rawGet = proto.getItem;
+            const rawSet = proto.setItem;
+            const rawRemove = proto.removeItem;
+            proto.getItem = function (key) {
+                return rawGet.call(this, mapKey(key));
+            };
+            proto.setItem = function (key, value) {
+                return rawSet.call(this, mapKey(key), value);
+            };
+            proto.removeItem = function (key) {
+                return rawRemove.call(this, mapKey(key));
+            };
+            Object.defineProperty(proto, "__cpbPatched", { value: true, configurable: false, enumerable: false });
+        }
+
+        window.addEventListener("DOMContentLoaded", () => {
+            document.querySelector(".layout")?.classList.add("kotlin-hidden");
+            const realtimeKotlin = document.getElementById("chkRealtimeKotlin");
+            const realtimeLabel = realtimeKotlin?.closest("label");
+            if (realtimeLabel) realtimeLabel.style.display = "none";
+            if (realtimeKotlin) {
+                realtimeKotlin.checked = false;
+                realtimeKotlin.disabled = true;
+            }
+            const back = document.getElementById("btnBackComposition");
+            if (!back) return;
+            const params = new URLSearchParams(window.location.search);
+            const returnPage = params.get("return") || "composition_builder.html";
+            const cardId = params.get("card") || "";
+            const target = params.get("target") === "shape" ? "shape" : "root";
+            back.addEventListener("click", (ev) => {
+                ev.preventDefault();
+                if (window.parent && window.parent !== window) {
+                    window.parent.postMessage({ type: "cpb-builder-return" }, "*");
+                } else {
+                    try {
+                        if (cardId) localStorage.setItem("cpb_return_card_v1", cardId);
+                        localStorage.setItem("cpb_return_target_v1", target);
+                    } catch {
+                    }
+                    window.location.href = `./${returnPage}`;
+                }
+            });
+        });
+    })();
+</script>
+
+<script type="importmap">
+    {
+      "imports": {
+        "three": "https://cdn.jsdelivr.net/npm/three@0.182.0/build/three.module.min.js",
+        "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.182.0/examples/jsm/"
+      }
+    }
+</script>
+<script src="./assets/points_builder/js/utils.js"></script>
+<script src="./assets/blog/js/codehighlight.js"></script>
+<script type="module" src="./assets/points_builder/js/main.js"></script>
+</body>
+</html>
+

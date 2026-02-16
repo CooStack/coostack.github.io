@@ -159,8 +159,6 @@ export function createKindDefs(ctx) {
                     // 使用传入的 toX, toY, toZ 作为目标向量
                     to = U.v(toX, toY, toZ);  // 将目标向量传入
                 }
-
-                console.log(to, toX, toY, toZ);
                 const axis = U.norm(ctx.axis);  // 当前轴向
                 const toN = U.norm(to);         // 目标向量的单位向量
 

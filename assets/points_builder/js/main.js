@@ -448,9 +448,131 @@ function initPointsBuilderMain() {
         });
     };
 
+    const PB_COMP_CONTEXT_KEY = "pb_comp_context_v1";
+    const compositionNumericContext = {
+        enabled: false,
+        map: {},
+        suggestions: [],
+        cache: new Map(),
+        version: 0
+    };
+
+    function stripNumericSuffix(raw) {
+        return String(raw || "").replace(/(\d+(?:\.\d+)?(?:[eE][+\-]?\d+)?)[fFdDlL]\b/g, "$1");
+    }
+
+    function isNumericLiteral(raw) {
+        return /^[-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][+\-]?\d+)?$/.test(String(raw || "").trim());
+    }
+
+    function isIdentifier(raw) {
+        return /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(String(raw || "").trim());
+    }
+
+    function evaluateExpressionWithMap(rawExpr, vars = {}) {
+        const expr = stripNumericSuffix(String(rawExpr || "").trim());
+        if (!expr) return 0;
+        if (isNumericLiteral(expr)) {
+            const n = Number(expr);
+            return Number.isFinite(n) ? n : 0;
+        }
+        const keys = Object.keys(vars || {}).filter((k) => isIdentifier(k));
+        const values = keys.map((k) => Number(vars[k]) || 0);
+        try {
+            const fn = new Function(...keys, "PI", "Math", `return (${expr});`);
+            const out = fn(...values, Math.PI, Math);
+            return Number.isFinite(Number(out)) ? Number(out) : 0;
+        } catch {
+            return 0;
+        }
+    }
+
+    function resolveCompositionNumericMap(payload) {
+        const numericTypes = new Set(["Int", "Long", "Float", "Double"]);
+        const map = { PI: Math.PI };
+        const entries = [];
+        const baseMap = (payload && typeof payload.numericMap === "object") ? payload.numericMap : {};
+        for (const key of Object.keys(baseMap || {})) {
+            if (!isIdentifier(key)) continue;
+            const n = Number(baseMap[key]);
+            if (Number.isFinite(n)) map[key] = n;
+        }
+        const globalVars = Array.isArray(payload?.globalVars) ? payload.globalVars : [];
+        for (const item of globalVars) {
+            const name = String(item?.name || "").trim();
+            const type = String(item?.type || "").trim();
+            if (!name || !isIdentifier(name) || !numericTypes.has(type)) continue;
+            entries.push({ name, expr: String(item?.value || "0") });
+        }
+        const globalConsts = Array.isArray(payload?.globalConsts) ? payload.globalConsts : [];
+        for (const item of globalConsts) {
+            const name = String(item?.name || "").trim();
+            if (!name || !isIdentifier(name)) continue;
+            entries.push({ name, expr: String(item?.value || "0") });
+        }
+        for (let pass = 0; pass < 8; pass++) {
+            let changed = false;
+            for (const entry of entries) {
+                const n = evaluateExpressionWithMap(entry.expr, map);
+                if (!Number.isFinite(n)) continue;
+                if (map[entry.name] !== n) {
+                    map[entry.name] = n;
+                    changed = true;
+                }
+            }
+            if (!changed) break;
+        }
+        return map;
+    }
+
+    function loadCompositionNumericContext() {
+        let payload = null;
+        try {
+            const raw = localStorage.getItem(PB_COMP_CONTEXT_KEY);
+            if (raw) payload = JSON.parse(raw);
+        } catch {
+            payload = null;
+        }
+        const map = resolveCompositionNumericMap(payload || {});
+        const names = Object.keys(map)
+            .filter((k) => k !== "PI")
+            .sort((a, b) => a.localeCompare(b));
+        compositionNumericContext.enabled = names.length > 0;
+        compositionNumericContext.map = map;
+        compositionNumericContext.suggestions = names;
+        compositionNumericContext.cache.clear();
+        compositionNumericContext.version += 1;
+    }
+
+    function hasCompositionNumericContext() {
+        return compositionNumericContext.enabled;
+    }
+
+    function getCompositionNumericSuggestions() {
+        return Array.isArray(compositionNumericContext.suggestions)
+            ? compositionNumericContext.suggestions.slice()
+            : [];
+    }
+
     function num(v) {
-        const x = Number(v);
-        return Number.isFinite(x) ? x : 0;
+        if (typeof v === "number") return Number.isFinite(v) ? v : 0;
+        const raw = String(v ?? "").trim();
+        if (!raw) return 0;
+        const expr = stripNumericSuffix(raw);
+        if (isNumericLiteral(expr)) {
+            const n = Number(expr);
+            return Number.isFinite(n) ? n : 0;
+        }
+        if (!hasCompositionNumericContext()) {
+            const x = Number(expr);
+            return Number.isFinite(x) ? x : 0;
+        }
+        const key = `${compositionNumericContext.version}|${expr}`;
+        if (compositionNumericContext.cache.has(key)) return compositionNumericContext.cache.get(key);
+        const value = evaluateExpressionWithMap(expr, compositionNumericContext.map);
+        if (compositionNumericContext.cache.size > 4096) compositionNumericContext.cache.clear();
+        compositionNumericContext.cache.set(key, value);
+        return value;
     }
 
     function int(v) {
@@ -460,6 +582,13 @@ function initPointsBuilderMain() {
     function relExpr(x, y, z) {
         return `RelativeLocation(${U.fmt(num(x))}, ${U.fmt(num(y))}, ${U.fmt(num(z))})`;
     }
+
+    loadCompositionNumericContext();
+    window.addEventListener("storage", (e) => {
+        const key = String(e?.key || "");
+        if (!key || !key.endsWith(PB_COMP_CONTEXT_KEY)) return;
+        loadCompositionNumericContext();
+    });
 
     function clamp(v, min, max) {
         let lo = Number(min);
@@ -1273,7 +1402,10 @@ function initPointsBuilderMain() {
         armHistoryOnFocus,
         historyCapture,
         setActiveVecTarget: (target) => { activeVecTarget = target; },
-        getParamStep: () => paramStep
+        getParamStep: () => paramStep,
+        enableExprNumbers: () => hasCompositionNumericContext(),
+        getExprSuggestions: () => getCompositionNumericSuggestions(),
+        parseExprNumber: (raw) => num(raw)
     });
 
     // 用户要求：左侧卡片允许“全部删除”（不再强制至少保留 axis）。

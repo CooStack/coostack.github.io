@@ -932,6 +932,56 @@ body {
     grid-template-columns: 92px 1fr;
 }
 
+.pb-num-suggest {
+    position: fixed;
+    z-index: 100300;
+    border: 1px solid var(--line2);
+    border-radius: 10px;
+    background: color-mix(in srgb, var(--panel) 94%, transparent);
+    box-shadow: var(--shadow2);
+    overflow: auto;
+    max-height: 236px;
+}
+
+.pb-num-suggest.hidden {
+    display: none;
+}
+
+.pb-num-suggest-head {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    padding: 6px 9px;
+    border-bottom: 1px solid var(--line);
+    color: var(--accent);
+    font-size: 11px;
+    font-weight: 700;
+    background: color-mix(in srgb, var(--panel2) 96%, transparent);
+    font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+.pb-num-suggest-item {
+    width: 100%;
+    border: 0;
+    border-bottom: 1px solid var(--line);
+    background: transparent;
+    color: var(--text);
+    padding: 7px 9px;
+    text-align: left;
+    cursor: pointer;
+    font-size: 12px;
+    font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+.pb-num-suggest-item:last-child {
+    border-bottom: 0;
+}
+
+.pb-num-suggest-item:hover,
+.pb-num-suggest-item.active {
+    background: color-mix(in srgb, var(--accent) 18%, transparent);
+}
+
 .panel-footnote {
     padding: 10px 12px;
     font-size: 12px;

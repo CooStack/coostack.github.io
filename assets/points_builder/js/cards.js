@@ -1,5 +1,14 @@
-﻿export function createCardInputs(ctx) {
-    const { num, armHistoryOnFocus, historyCapture, setActiveVecTarget, getParamStep } = ctx || {};
+export function createCardInputs(ctx) {
+    const {
+        num,
+        armHistoryOnFocus,
+        historyCapture,
+        setActiveVecTarget,
+        getParamStep,
+        enableExprNumbers,
+        getExprSuggestions,
+        parseExprNumber
+    } = ctx || {};
 
     function countDecimalsFromString(value) {
         const text = String(value ?? "").trim().toLowerCase();
@@ -348,21 +357,213 @@
         return r;
     }
 
+    function exprModeEnabled() {
+        if (typeof enableExprNumbers === "function") return !!enableExprNumbers();
+        return !!enableExprNumbers;
+    }
+
+    let exprSuggestEl = null;
+    let exprSuggestInput = null;
+    let exprSuggestItems = [];
+    let exprSuggestActive = 0;
+    let exprSuggestRange = { start: 0, end: 0, token: "" };
+    let exprSuggestBound = false;
+
+    function ensureExprSuggestEl() {
+        if (exprSuggestEl && exprSuggestEl.isConnected) return exprSuggestEl;
+        const el = document.createElement("div");
+        el.className = "pb-num-suggest hidden";
+        el.addEventListener("mousedown", (ev) => ev.preventDefault());
+        el.addEventListener("click", (ev) => {
+            const btn = ev.target instanceof HTMLElement ? ev.target.closest("button[data-idx]") : null;
+            if (!btn) return;
+            const idx = Number(btn.dataset.idx);
+            if (!Number.isFinite(idx)) return;
+            acceptExprSuggestion(idx);
+        });
+        document.body.appendChild(el);
+        exprSuggestEl = el;
+        if (!exprSuggestBound) {
+            exprSuggestBound = true;
+            document.addEventListener("pointerdown", (ev) => {
+                if (!exprSuggestEl || exprSuggestEl.classList.contains("hidden")) return;
+                const target = ev.target;
+                if (target instanceof HTMLElement && (target.closest(".pb-num-suggest") || target === exprSuggestInput)) return;
+                closeExprSuggestion();
+            }, true);
+            window.addEventListener("resize", () => closeExprSuggestion());
+            window.addEventListener("scroll", () => closeExprSuggestion(), true);
+        }
+        return el;
+    }
+
+    function closeExprSuggestion() {
+        if (!exprSuggestEl) return;
+        exprSuggestEl.classList.add("hidden");
+        exprSuggestEl.innerHTML = "";
+        exprSuggestItems = [];
+        exprSuggestInput = null;
+        exprSuggestRange = { start: 0, end: 0, token: "" };
+        exprSuggestActive = 0;
+    }
+
+    function escapeHtml(raw) {
+        return String(raw ?? "")
+            .replaceAll("&", "&amp;")
+            .replaceAll("<", "&lt;")
+            .replaceAll(">", "&gt;")
+            .replaceAll("\"", "&quot;");
+    }
+
+    function getExprTokenAtCursor(input) {
+        const value = String(input?.value || "");
+        const pos = Math.max(0, Number(input?.selectionStart) || 0);
+        const left = value.slice(0, pos);
+        const m = left.match(/[A-Za-z_$][A-Za-z0-9_$]*$/);
+        if (!m) return { token: "", start: pos, end: pos };
+        const token = String(m[0] || "");
+        return { token, start: pos - token.length, end: pos };
+    }
+
+    function getExprSuggestList() {
+        const raw = (typeof getExprSuggestions === "function") ? getExprSuggestions() : [];
+        const uniq = Array.from(new Set((Array.isArray(raw) ? raw : []).map((it) => String(it || "").trim()).filter(Boolean)));
+        return uniq.slice(0, 300);
+    }
+
+    function renderExprSuggestionPanel() {
+        const el = ensureExprSuggestEl();
+        if (!exprSuggestInput || !exprSuggestItems.length) {
+            closeExprSuggestion();
+            return;
+        }
+        const token = String(exprSuggestRange.token || "");
+        const head = token ? "<div class=\"pb-num-suggest-head\">" + escapeHtml(token) + "</div>" : "";
+        const html = exprSuggestItems.map((text, idx) => {
+            const active = idx === exprSuggestActive ? " active" : "";
+            return "<button type=\"button\" class=\"pb-num-suggest-item" + active + "\" data-idx=\"" + idx + "\">" + escapeHtml(text) + "</button>";
+        }).join("");
+        el.innerHTML = head + html;
+        el.classList.remove("hidden");
+
+        const rect = exprSuggestInput.getBoundingClientRect();
+        const vw = window.innerWidth || 1280;
+        const vh = window.innerHeight || 720;
+        const width = Math.min(380, Math.max(220, rect.width));
+        let left = rect.left;
+        let top = rect.bottom + 6;
+        const panelHeight = 236;
+        if (left + width > vw - 8) left = Math.max(8, vw - width - 8);
+        if (top + panelHeight > vh - 8) top = Math.max(8, rect.top - panelHeight - 8);
+        el.style.left = String(Math.round(left)) + "px";
+        el.style.top = String(Math.round(top)) + "px";
+        el.style.width = String(Math.round(width)) + "px";
+    }
+
+    function openExprSuggestion(input, force = false) {
+        if (!exprModeEnabled()) return;
+        if (!(input instanceof HTMLInputElement)) return;
+        const info = getExprTokenAtCursor(input);
+        const token = String(info.token || "");
+        if (!force && !token) {
+            closeExprSuggestion();
+            return;
+        }
+        const source = getExprSuggestList();
+        let list = source;
+        if (token) {
+            const lower = token.toLowerCase();
+            list = source.filter((it) => String(it || "").toLowerCase().includes(lower));
+        }
+        list = list.slice(0, 16);
+        if (!list.length) {
+            closeExprSuggestion();
+            return;
+        }
+        exprSuggestInput = input;
+        exprSuggestItems = list;
+        exprSuggestRange = info;
+        exprSuggestActive = 0;
+        renderExprSuggestionPanel();
+    }
+
+    function moveExprSuggestion(delta) {
+        if (!exprSuggestItems.length) return;
+        const n = exprSuggestItems.length;
+        exprSuggestActive = (exprSuggestActive + delta + n) % n;
+        renderExprSuggestionPanel();
+    }
+
+    function acceptExprSuggestion(index = 0) {
+        if (!(exprSuggestInput instanceof HTMLInputElement)) return;
+        const idx = Math.max(0, Math.min(Number(index) || 0, exprSuggestItems.length - 1));
+        const item = String(exprSuggestItems[idx] || "");
+        if (!item) return;
+        const start = Math.max(0, Number(exprSuggestRange.start) || 0);
+        const end = Math.max(start, Number(exprSuggestRange.end) || start);
+        const textValue = String(exprSuggestInput.value || "");
+        const next = textValue.slice(0, start) + item + textValue.slice(end);
+        const caret = start + item.length;
+        exprSuggestInput.value = next;
+        exprSuggestInput.setSelectionRange(caret, caret);
+        exprSuggestInput.dispatchEvent(new Event("input", { bubbles: true }));
+        closeExprSuggestion();
+    }
+
     function inputNum(value, onInput) {
         const i = document.createElement("input");
         i.className = "input";
-        i.type = "number";
+        const exprMode = exprModeEnabled();
+        i.type = exprMode ? "text" : "number";
+        if (exprMode) i.inputMode = "decimal";
         const step = (typeof getParamStep === "function") ? getParamStep() : null;
-        i.step = Number.isFinite(step) ? String(step) : "any";
+        if (!exprMode) i.step = Number.isFinite(step) ? String(step) : "any";
         i.value = String(value ?? 0);
+        if (exprMode) {
+            i.placeholder = i.placeholder || "支持变量/表达式";
+            i.autocomplete = "off";
+            i.spellcheck = false;
+        }
         armHistoryOnFocus && armHistoryOnFocus(i, "edit");
         i.addEventListener("keydown", (e) => {
+            if (exprMode) {
+                const suggestOpen = !!exprSuggestEl
+                    && !exprSuggestEl.classList.contains("hidden")
+                    && exprSuggestInput === i;
+                if ((e.ctrlKey || e.metaKey) && e.code === "Space") {
+                    e.preventDefault();
+                    openExprSuggestion(i, true);
+                    return;
+                }
+                if (suggestOpen && e.key === "ArrowDown") {
+                    e.preventDefault();
+                    moveExprSuggestion(1);
+                    return;
+                }
+                if (suggestOpen && e.key === "ArrowUp") {
+                    e.preventDefault();
+                    moveExprSuggestion(-1);
+                    return;
+                }
+                if (suggestOpen && (e.key === "Enter" || e.key === "Tab")) {
+                    e.preventDefault();
+                    acceptExprSuggestion(exprSuggestActive);
+                    return;
+                }
+                if (suggestOpen && e.key === "Escape") {
+                    e.preventDefault();
+                    closeExprSuggestion();
+                    return;
+                }
+            }
             if (e.key !== "ArrowUp" && e.key !== "ArrowDown") return;
             const liveStep = (typeof getParamStep === "function") ? getParamStep() : null;
             if (!Number.isFinite(liveStep) || liveStep <= 0) return;
             e.preventDefault();
             const curStr = i.value;
-            const cur = parseFloat(curStr);
+            const cur = exprMode
+                ? (typeof parseExprNumber === "function" ? parseExprNumber(curStr) : (num ? num(curStr) : Number(curStr)))
+                : parseFloat(curStr);
             const base = Number.isFinite(cur) ? cur : 0;
             const next = base + (e.key === "ArrowUp" ? liveStep : -liveStep);
             const precision = Math.max(countDecimalsFromString(curStr), countDecimalsFromString(liveStep));
@@ -370,11 +571,24 @@
             i.value = String(fixed);
             i.dispatchEvent(new Event("input", { bubbles: true }));
         });
-        i.addEventListener("input", () => onInput(num ? num(i.value) : Number(i.value)));
+        i.addEventListener("input", () => {
+            if (exprMode) {
+                onInput(String(i.value ?? ""));
+                openExprSuggestion(i, false);
+                return;
+            }
+            onInput(num ? num(i.value) : Number(i.value));
+        });
+        if (exprMode) {
+            i.addEventListener("focus", () => openExprSuggestion(i, false));
+            i.addEventListener("blur", () => setTimeout(() => {
+                if (exprSuggestInput === i) closeExprSuggestion();
+            }, 120));
+        }
         return i;
     }
 
-    function select(options, value, onChange) {
+function select(options, value, onChange) {
         const s = document.createElement("select");
         s.className = "input";
         armHistoryOnFocus && armHistoryOnFocus(s, "edit");
