@@ -188,9 +188,23 @@ export function createExpressionRuntime(options = {}) {
             ? buildingNoVecBase
             : (includeVectors ? baseVarsWithVector : baseVarsNoVector);
         const vars = Object.create(base);
-        vars.age = Number.isFinite(Number(ageTick)) ? Number(ageTick) : 0;
-        vars.tick = Number.isFinite(Number(elapsedTick)) ? Number(elapsedTick) : 0;
-        vars.index = Number.isFinite(Number(pointIndex)) ? Number(pointIndex) : 0;
+        const defineLocal = (name, value) => {
+            try {
+                Object.defineProperty(vars, name, {
+                    configurable: true,
+                    enumerable: true,
+                    writable: true,
+                    value
+                });
+            } catch {
+                vars[name] = value;
+            }
+        };
+        const tickValue = Number.isFinite(Number(elapsedTick)) ? Number(elapsedTick) : 0;
+        defineLocal("age", Number.isFinite(Number(ageTick)) ? Number(ageTick) : 0);
+        defineLocal("tick", tickValue);
+        defineLocal("tickCount", tickValue);
+        defineLocal("index", Number.isFinite(Number(pointIndex)) ? Number(pointIndex) : 0);
         return vars;
     }
 

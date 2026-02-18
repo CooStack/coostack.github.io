@@ -1,4 +1,4 @@
-﻿import * as THREE from "three";
+import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { createKindDefs } from "../../points_builder/js/kinds.js";
 import { createBuilderTools } from "../../points_builder/js/builder.js";
@@ -112,7 +112,7 @@ const CONTROLLER_ACTION_TYPES = [
 ];
 
 const DISPLAY_ACTION_TYPES = [
-    { id: "rotateTo", title: "rotateTo(dir)" },
+    { id: "rotateToPoint", title: "rotateToPoint(dir)" },
     { id: "rotateAsAxis", title: "rotateAsAxis(angle)" },
     { id: "rotateToWithAngle", title: "rotateToWithAngle(to, angle)" },
     { id: "expression", title: "表达式" }
@@ -202,7 +202,46 @@ function esc(s) {
 }
 
 function relExpr(x, y, z) {
-    return `RelativeLocation(${U.fmt(num(x))}, ${U.fmt(num(y))}, ${U.fmt(num(z))})`;
+    return `RelativeLocation(${formatKotlinDoubleLiteral(num(x))}, ${formatKotlinDoubleLiteral(num(y))}, ${formatKotlinDoubleLiteral(num(z))})`;
+}
+
+function isPlainNumericLiteralText(raw) {
+    return /^-?(?:\d+\.?\d*|\.\d+)(?:[fFdDlL])?$/.test(String(raw || "").trim());
+}
+
+function normalizeKotlinDoubleLiteralText(raw) {
+    let core = String(raw || "").trim();
+    if (!core) return "0.0";
+    core = core.replace(/[fFdDlL]$/g, "");
+    if (!core) return "0.0";
+    if (!core.includes(".") && !/[eE]/.test(core)) return `${core}.0`;
+    if (core.endsWith(".")) return `${core}0`;
+    return core;
+}
+
+function normalizeKotlinFloatLiteralText(raw) {
+    const core = normalizeKotlinDoubleLiteralText(raw);
+    return `${core}F`;
+}
+
+function formatKotlinDoubleLiteral(v) {
+    const raw = formatNumberCompact(num(v));
+    return normalizeKotlinDoubleLiteralText(raw);
+}
+
+function srgbToLinear01(v) {
+    const c = clamp(num(v), 0, 1);
+    if (c <= 0.04045) return c / 12.92;
+    return Math.pow((c + 0.055) / 1.055, 2.4);
+}
+
+function srgbRgbToLinearArray(rgb) {
+    const src = Array.isArray(rgb) ? rgb : [1, 1, 1];
+    return [
+        srgbToLinear01(src[0]),
+        srgbToLinear01(src[1]),
+        srgbToLinear01(src[2])
+    ];
 }
 
 function sanitizeKotlinIdentifier(name, fallback = "value") {
@@ -310,12 +349,17 @@ const JS_LINT_KEYWORDS = new Set([
 const JS_LINT_GLOBALS = new Set([
     "Math", "Random", "Number", "String", "Boolean", "Object", "Array", "Date", "JSON", "console",
     "parseInt", "parseFloat", "isNaN", "isFinite", "Infinity", "NaN",
-    "PI", "age", "tick", "index",
-    "rotateTo", "rotateAsAxis", "rotateToWithAngle", "addSingle", "addMultiple", "addPreTickAction",
+    "PI", "age", "tick", "tickCount", "index",
+    "rotateToPoint", "rotateAsAxis", "rotateToWithAngle", "addSingle", "addMultiple", "addPreTickAction",
     "setReversedScaleOnCompositionStatus", "particle",
-    "thisAt",
+    "thisAt", "status",
     "color", "size", "alpha", "particleColor", "particleSize", "particleAlpha", "currentAge", "textureSheet",
     "RelativeLocation", "Vec3", "Vector3f"
+]);
+
+const CONTROLLER_SCOPE_RESERVED = new Set([
+    "color", "particleColor", "size", "particleSize", "alpha", "particleAlpha",
+    "currentAge", "textureSheet", "status", "tickCount", "particle", "thisAt"
 ]);
 
 function stripJsForLint(raw) {
@@ -447,6 +491,7 @@ function normalizeControllerAction(raw) {
 function normalizeDisplayAction(a) {
     const x = Object.assign({}, a || {});
     x.id = x.id || uid();
+    if (x.type === "rotateTo") x.type = "rotateToPoint";
     x.type = DISPLAY_ACTION_TYPES.some((it) => it.id === x.type) ? x.type : "rotateToWithAngle";
     x.toUsePreset = x.toUsePreset === true;
     x.toPreset = String(x.toPreset || "RelativeLocation.yAxis()");
@@ -936,7 +981,7 @@ function builderFmt(v) {
     const expr = extractExprText(v);
     if (expr) return expr;
     const n = Number(v);
-    return U.fmt(Number.isFinite(n) ? n : 0);
+    return formatKotlinDoubleLiteral(Number.isFinite(n) ? n : 0);
 }
 
 function builderRelExpr(x, y, z) {
@@ -1019,6 +1064,9 @@ class CompositionBuilderApp {
         this.previewExprFnCache = new Map();
         this.previewCondFnCache = new Map();
         this.previewNumericFnCache = new Map();
+        this.previewControllerFnCache = new Map();
+        this.controllerScopeProto = null;
+        this.controllerParticleProto = null;
         this.previewRuntimeGlobals = null;
         this.previewRuntimeAppliedTick = -1;
         this.lastExportedStateSig = this.readExportedSignature();
@@ -1040,6 +1088,8 @@ class CompositionBuilderApp {
             active: 0
         };
         this.codeEditors = new Map();
+        this.codeApplyTimer = null;
+        this.pendingCodeApplyOpts = null;
 
         this.exprRuntime = createExpressionRuntime({
             U,
@@ -1172,11 +1222,13 @@ class CompositionBuilderApp {
         d.projectSection.addEventListener("click", (e) => this.onProjectClick(e));
         d.projectSection.addEventListener("input", (e) => this.onProjectInput(e));
         d.projectSection.addEventListener("change", (e) => this.onProjectChange(e));
+        d.projectSection.addEventListener("focusout", (e) => this.onCodeEditorFocusOut(e), true);
 
         d.cardsRoot.addEventListener("click", (e) => this.onCardClick(e));
         d.cardsRoot.addEventListener("input", (e) => this.onCardInput(e));
         d.cardsRoot.addEventListener("change", (e) => this.onCardChange(e));
         d.cardsRoot.addEventListener("focusin", (e) => this.onCardFocusIn(e), true);
+        d.cardsRoot.addEventListener("focusout", (e) => this.onCodeEditorFocusOut(e), true);
 
         d.btnResetCamera.addEventListener("click", () => this.resetCamera());
         d.btnFullscreen.addEventListener("click", () => this.toggleFullscreen());
@@ -1328,7 +1380,7 @@ class CompositionBuilderApp {
                 "vec4 diffuseColor = vec4( diffuse, opacity * clamp(vAlpha, 0.0, 1.0) );"
             );
         };
-        this.pointsMat.customProgramCacheKey = () => "cb_points_size_alpha_v2";
+        this.pointsMat.customProgramCacheKey = () => "cb_points_size_alpha_v4";
         this.pointsMesh = new THREE.Points(this.pointsGeom, this.pointsMat);
         this.pointsMesh.frustumCulled = false;
         this.scene.add(this.pointsMesh);
@@ -1796,6 +1848,7 @@ class CompositionBuilderApp {
             const item = this.state.displayActions[int(t.dataset.displayIdx)];
             if (!item) return;
             this.applyDisplayActionField(item, t.dataset.displayField, t);
+            if (this.queueCodeEditorRefresh(t, { rebuildPreview: true })) return;
             if (["type", "angleMode", "toPreset"].includes(t.dataset.displayField)) {
                 this.afterStructureMutate({ rerenderProject: true, rerenderCards: false, rebuildPreview: true });
             } else {
@@ -1811,6 +1864,7 @@ class CompositionBuilderApp {
         }
         const t = e.target;
         if (!t) return;
+        if (this.flushCodeEditorRefresh(t)) return;
         if (this.commitGlobalSymbolNameOnBlur(t)) return;
         if (t.dataset.projectScaleField) {
             // Fallback for environments where <select> only emits "change".
@@ -1920,7 +1974,7 @@ class CompositionBuilderApp {
             item.name = normalized;
             target.value = normalized;
             target.dataset.prevSymbolName = normalized;
-            this.showToast("名称已按 Kotlin 标识符规则规范化", "info");
+            this.showToast("变量名已自动改为 Kotlin 合法标识符", "info");
             this.afterValueMutate({ rebuildPreview: true, rerenderProject: false, rerenderCards: true });
             return true;
         }
@@ -2839,6 +2893,7 @@ class CompositionBuilderApp {
             if (!item) return;
             this.applyDisplayActionField(item, t.dataset.shapeLevelDisplayField, t);
             this.setNestedShapeLevel(card, levelIdx, level);
+            if (this.queueCodeEditorRefresh(t, { rebuildPreview: true })) return;
             if (["type", "angleMode", "toPreset"].includes(t.dataset.shapeLevelDisplayField)) {
                 this.afterStructureMutate({ rerenderCards: true, rebuildPreview: true, rerenderProject: false });
             } else {
@@ -2864,6 +2919,7 @@ class CompositionBuilderApp {
             const item = card.shapeChildDisplayActions[int(t.dataset.cardShapeChildDisplayIdx)];
             if (!item) return;
             this.applyDisplayActionField(item, t.dataset.cardShapeChildDisplayField, t);
+            if (this.queueCodeEditorRefresh(t, { rebuildPreview: true })) return;
             if (["type", "angleMode", "toPreset"].includes(t.dataset.cardShapeChildDisplayField)) {
                 this.afterStructureMutate({ rerenderCards: true, rebuildPreview: true, rerenderProject: false });
             } else {
@@ -2882,6 +2938,7 @@ class CompositionBuilderApp {
             const item = card.shapeDisplayActions[int(t.dataset.cardShapeDisplayIdx)];
             if (!item) return;
             this.applyDisplayActionField(item, t.dataset.cardShapeDisplayField, t);
+            if (this.queueCodeEditorRefresh(t, { rebuildPreview: true })) return;
             if (["type", "angleMode", "toPreset"].includes(t.dataset.cardShapeDisplayField)) {
                 this.afterStructureMutate({ rerenderCards: true, rebuildPreview: true, rerenderProject: false });
             } else {
@@ -2954,6 +3011,7 @@ class CompositionBuilderApp {
             const item = card.controllerActions[int(t.dataset.cactIdx)];
             if (!item) return;
             this.applyObjectField(item, t.dataset.cactField, t);
+            if (this.queueCodeEditorRefresh(t, { rebuildPreview: true, rerenderCards: t.dataset.cactField === "type" })) return;
             this.afterValueMutate({ rebuildPreview: true, rerenderCards: t.dataset.cactField === "type" });
             return;
         }
@@ -2988,6 +3046,7 @@ class CompositionBuilderApp {
         }
         const t = e?.target;
         if (!t || !t.matches) return;
+        if (this.flushCodeEditorRefresh(t)) return;
         if (!t.matches("select,input[type='checkbox']")) return;
         // Fallback: some card controls (especially <select>) only emit "change".
         this.onCardInput(e);
@@ -3437,6 +3496,73 @@ class CompositionBuilderApp {
         this.scheduleSave();
     }
 
+    mergeMutateOptions(base = null, next = {}) {
+        const out = Object.assign({}, base || {});
+        for (const [k, v] of Object.entries(next || {})) {
+            if (typeof v === "boolean") out[k] = (out[k] === true) || v;
+            else out[k] = v;
+        }
+        return out;
+    }
+
+    isCodeEditorSourceFieldTarget(target) {
+        if (!(target instanceof HTMLTextAreaElement)) return false;
+        if (!target.dataset.codeEditor) return false;
+        if (target.dataset.displayField === "expression") return true;
+        if (target.dataset.cardShapeDisplayField === "expression") return true;
+        if (target.dataset.cardShapeChildDisplayField === "expression") return true;
+        if (target.dataset.shapeLevelDisplayField === "expression") return true;
+        if (target.dataset.cactField === "script") return true;
+        return false;
+    }
+
+    queueCodeEditorRefresh(target, opts = {}) {
+        if (!this.isCodeEditorSourceFieldTarget(target)) return false;
+        const valid = this.validateCodeEditorSource(target, target.value || "");
+        this.pendingCodeApplyOpts = this.mergeMutateOptions(this.pendingCodeApplyOpts, Object.assign({ rebuildPreview: true }, opts || {}));
+        clearTimeout(this.codeApplyTimer);
+        this.codeApplyTimer = null;
+        if (!valid.valid) {
+            this.scheduleSave();
+            return true;
+        }
+        const ref = target;
+        this.codeApplyTimer = setTimeout(() => {
+            this.codeApplyTimer = null;
+            const latest = this.validateCodeEditorSource(ref, ref.value || "");
+            if (!latest.valid) return;
+            const applyOpts = this.pendingCodeApplyOpts || { rebuildPreview: true };
+            this.pendingCodeApplyOpts = null;
+            this.afterValueMutate(applyOpts);
+        }, 560);
+        this.scheduleSave();
+        return true;
+    }
+
+    flushCodeEditorRefresh(target) {
+        if (!this.isCodeEditorSourceFieldTarget(target)) return false;
+        const hasPending = !!this.pendingCodeApplyOpts || !!this.codeApplyTimer;
+        if (!hasPending) return false;
+        clearTimeout(this.codeApplyTimer);
+        this.codeApplyTimer = null;
+        const valid = this.validateCodeEditorSource(target, target.value || "");
+        if (!valid.valid) {
+            this.pendingCodeApplyOpts = null;
+            this.scheduleSave();
+            return true;
+        }
+        const applyOpts = this.pendingCodeApplyOpts || { rebuildPreview: true };
+        this.pendingCodeApplyOpts = null;
+        this.afterValueMutate(applyOpts);
+        return true;
+    }
+
+    onCodeEditorFocusOut(e) {
+        const target = e?.target;
+        if (!(target instanceof HTMLTextAreaElement)) return;
+        this.flushCodeEditorRefresh(target);
+    }
+
     scheduleSave() {
         clearTimeout(this.saveTimer);
         this.saveTimer = setTimeout(() => this.saveStateNow(), 220);
@@ -3837,7 +3963,7 @@ class CompositionBuilderApp {
         });
 
         let body = "";
-        if (a.type === "rotateTo") {
+        if (a.type === "rotateToPoint") {
             body = `
                 <div class="grid2">
                     <label class="field">
@@ -3886,7 +4012,7 @@ class CompositionBuilderApp {
             `;
         } else {
             body = `
-                <textarea class="input script-area expr-input" data-code-editor="js" data-code-title="display 表达式" data-display-idx="${idx}" data-display-field="expression" placeholder="可调用 rotateTo(...) / rotateAsAxis(...) / rotateToWithAngle(...)">${esc(a.expression || "")}</textarea>
+                <textarea class="input script-area expr-input" data-code-editor="js" data-code-title="display expression" data-display-idx="${idx}" data-display-field="expression" placeholder="Supports rotateToPoint(...) / rotateAsAxis(...) / rotateToWithAngle(...)">${esc(a.expression || "")}</textarea>
                 <div class="mini-note">表达式支持代码提示（Ctrl+Space），可使用 addSingle()/addMultiple(n)</div>
             `;
         }
@@ -3917,7 +4043,7 @@ class CompositionBuilderApp {
         });
 
         let body = "";
-        if (a.type === "rotateTo") {
+        if (a.type === "rotateToPoint") {
             body = `
                 <div class="grid2">
                     <label class="field">
@@ -3966,7 +4092,7 @@ class CompositionBuilderApp {
             `;
         } else {
             body = `
-                <textarea class="input script-area expr-input" data-code-editor="js" data-code-title="shape display 表达式" data-card-id="${esc(cardId)}" data-card-shape-display-idx="${idx}" data-card-shape-display-field="expression" placeholder="可调用 rotateTo(...) / rotateAsAxis(...) / rotateToWithAngle(...)">${esc(a.expression || "")}</textarea>
+                <textarea class="input script-area expr-input" data-code-editor="js" data-code-title="shape display expression" data-card-id="${esc(cardId)}" data-card-shape-display-idx="${idx}" data-card-shape-display-field="expression" placeholder="Supports rotateToPoint(...) / rotateAsAxis(...) / rotateToWithAngle(...)">${esc(a.expression || "")}</textarea>
                 <div class="mini-note">表达式支持代码提示（Ctrl+Space），可使用 addSingle()/addMultiple(n)</div>
             `;
         }
@@ -3999,7 +4125,7 @@ class CompositionBuilderApp {
             .replaceAll("data-card-shape-display-field", "data-card-shape-child-display-field");
 
         let body = "";
-        if (a.type === "rotateTo") {
+        if (a.type === "rotateToPoint") {
             body = `
                 <div class="grid2">
                     <label class="field">
@@ -4048,7 +4174,7 @@ class CompositionBuilderApp {
             `;
         } else {
             body = `
-                <textarea class="input script-area expr-input" data-code-editor="js" data-code-title="子点 shape display 表达式" data-card-id="${esc(cardId)}" data-card-shape-child-display-idx="${idx}" data-card-shape-child-display-field="expression" placeholder="可调用 rotateTo(...) / rotateAsAxis(...) / rotateToWithAngle(...)">${esc(a.expression || "")}</textarea>
+                <textarea class="input script-area expr-input" data-code-editor="js" data-code-title="child shape display expression" data-card-id="${esc(cardId)}" data-card-shape-child-display-idx="${idx}" data-card-shape-child-display-field="expression" placeholder="Supports rotateToPoint(...) / rotateAsAxis(...) / rotateToWithAngle(...)">${esc(a.expression || "")}</textarea>
                 <div class="mini-note">表达式支持代码提示（Ctrl+Space），可使用 addSingle()/addMultiple(n)</div>
             `;
         }
@@ -4147,7 +4273,7 @@ class CompositionBuilderApp {
                             `).join("")}
                         </div>
                         <div class="kv-list">
-                            ${(card.controllerActions || []).map((a, aIdx) => this.renderControllerActionRow(card.id, a, aIdx)).join("")}
+                            ${(card.controllerActions || []).map((a, aIdx) => this.renderControllerActionRow(card.id, a, aIdx, { shapeLevelIdx: levelIdx })).join("")}
                         </div>
                     ` : `
                         <div class="mini-note">子点来源</div>
@@ -4950,7 +5076,7 @@ class CompositionBuilderApp {
                         `).join("")}
                     </div>
                     <div class="kv-list">
-                        ${(card.controllerActions || []).map((a, aIdx) => this.renderControllerActionRow(card.id, a, aIdx)).join("")}
+                        ${(card.controllerActions || []).map((a, aIdx) => this.renderControllerActionRow(card.id, a, aIdx, { shapeLevelIdx: 0 })).join("")}
                     </div>
                 </div>
             `;
@@ -5062,18 +5188,21 @@ class CompositionBuilderApp {
         `;
     }
 
-    renderControllerActionRow(cardId, action, idx) {
+    renderControllerActionRow(cardId, action, idx, opts = {}) {
         const item = normalizeControllerAction(action);
         const typeOptions = CONTROLLER_ACTION_TYPES
             .map((it) => `<option value="${esc(it.id)}" ${item.type === it.id ? "selected" : ""}>${esc(it.title)}</option>`)
             .join("");
+        const hasShapeLevel = Number.isFinite(Number(opts?.shapeLevelIdx));
+        const shapeLevelIdx = hasShapeLevel ? Math.max(0, int(opts.shapeLevelIdx)) : 0;
+        const shapeLevelAttr = hasShapeLevel ? ` data-shape-level-idx="${shapeLevelIdx}"` : "";
         return `
             <div class="kv-row display-row">
                 <div class="grid2">
-                    <select class="input" data-card-id="${esc(cardId)}" data-cact-idx="${idx}" data-cact-field="type">${typeOptions}</select>
+                    <select class="input" data-card-id="${esc(cardId)}"${shapeLevelAttr} data-cact-idx="${idx}" data-cact-field="type">${typeOptions}</select>
                     <div class="preview-actions"><button class="btn small" data-act="remove-caction" data-card-id="${esc(cardId)}" data-idx="${idx}">删除</button></div>
                 </div>
-                <textarea class="input script-area expr-input" data-code-editor="js" data-code-title="tick action (JS)" data-card-id="${esc(cardId)}" data-cact-idx="${idx}" data-cact-field="script" placeholder="if (...) { ... }&#10;addSingle() / addMultiple(2)">${esc(item.script || "")}</textarea>
+                <textarea class="input script-area expr-input" data-code-editor="js" data-code-title="tick action (JS)" data-card-id="${esc(cardId)}"${shapeLevelAttr} data-cact-idx="${idx}" data-cact-field="script" placeholder="if (...) { ... }&#10;addSingle() / addMultiple(2)">${esc(item.script || "")}</textarea>
             </div>
         `;
     }
@@ -5117,6 +5246,7 @@ class CompositionBuilderApp {
         this.previewExprPrefixCache.clear();
         this.previewCondFnCache.clear();
         this.previewNumericFnCache.clear();
+        this.previewControllerFnCache.clear();
         this.previewRuntimeGlobals = null;
         this.previewRuntimeAppliedTick = -1;
         const points = [];
@@ -5246,7 +5376,7 @@ class CompositionBuilderApp {
         this.previewSizeFactors = new Array(count).fill(1);
         this.previewAlphaFactors = new Array(count).fill(1);
         const visualCache = new Map();
-        const colorFactorCache = new Map();
+        const linearColorCache = new Map();
         for (let i = 0; i < count; i++) {
             const p = points[i];
             positions[i * 3 + 0] = p.x;
@@ -5258,15 +5388,14 @@ class CompositionBuilderApp {
                 visual = this.resolveCardPreviewVisual(owner);
                 visualCache.set(owner, visual);
             }
-            const rgb = visual.color;
-            let k = colorFactorCache.get(owner);
-            if (k === undefined) {
-                k = this.getCardColorFactor(owner);
-                colorFactorCache.set(owner, k);
+            let rgb = linearColorCache.get(owner);
+            if (!rgb) {
+                rgb = srgbRgbToLinearArray(visual.color);
+                linearColorCache.set(owner, rgb);
             }
-            colors[i * 3 + 0] = rgb[0] * k;
-            colors[i * 3 + 1] = rgb[1] * k;
-            colors[i * 3 + 2] = rgb[2] * k;
+            colors[i * 3 + 0] = rgb[0];
+            colors[i * 3 + 1] = rgb[1];
+            colors[i * 3 + 2] = rgb[2];
             sizes[i] = Math.max(0.05, num(visual.size));
             alphas[i] = clamp(num(visual.alpha), 0, 1);
             this.previewSizeFactors[i] = Math.max(0.05, num(visual.size));
@@ -5321,10 +5450,12 @@ class CompositionBuilderApp {
             this.applyExpressionGlobalsOnce(runtimeActions, t, t, frameRuntimeGlobals, globalAxis);
         }
         if (tickStep > this.previewRuntimeAppliedTick) this.previewRuntimeAppliedTick = tickStep;
+        this.syncPreviewStatusWithCycle(frameRuntimeGlobals, cycleCfg, globalCycleAge, elapsedTick);
         const ownerCache = new Map();
         const anchorCache = new Map();
         const localCache = new Map();
-        const colorFactorCache = new Map();
+        const ownerVisualCache = new Map();
+        const ownerVisualAgeDependentCache = new Map();
 
         let visible = 0;
         for (let i = 0; i < this.previewBasePoints.length; i++) {
@@ -5346,7 +5477,8 @@ class CompositionBuilderApp {
             }
             let cached = byBirth.get(birthKey);
             if (!cached) {
-                const age = ((elapsedTick - birthOffset) % cycleTotal + cycleTotal) % cycleTotal;
+                const ageBase = ((elapsedTick - birthOffset) % cycleTotal + cycleTotal) % cycleTotal;
+                let age = this.resolvePreviewAgeWithStatus(ageBase, elapsedTick, cycleCfg, frameRuntimeGlobals);
                 const card = this.getCardById(owner);
                 let shapeRuntimeLevels = [];
                 if (card) {
@@ -5357,20 +5489,32 @@ class CompositionBuilderApp {
                         }
                     }
                 }
-                const visual = this.resolveCardPreviewVisual(owner, {
-                    runtimeVars: frameRuntimeGlobals,
-                    elapsedTick,
-                    ageTick: age,
-                    pointIndex: 0
-                });
+                let ageDependent = ownerVisualAgeDependentCache.get(owner);
+                if (ageDependent === undefined) {
+                    ageDependent = this.isCardVisualAgeDependent(card);
+                    ownerVisualAgeDependentCache.set(owner, ageDependent);
+                }
+                let visual = ageDependent ? null : ownerVisualCache.get(owner);
+                if (!visual) {
+                    visual = this.resolveCardPreviewVisual(owner, {
+                        runtimeVars: frameRuntimeGlobals,
+                        elapsedTick,
+                        ageTick: age,
+                        pointIndex: 0
+                    });
+                    if (!ageDependent) ownerVisualCache.set(owner, visual);
+                }
+                this.syncPreviewStatusWithCycle(frameRuntimeGlobals, cycleCfg, globalCycleAge, elapsedTick);
+                age = this.resolvePreviewAgeWithStatus(ageBase, elapsedTick, cycleCfg, frameRuntimeGlobals);
+                const globalCycleAgeNow = this.resolvePreviewAgeWithStatus(globalCycleAge, elapsedTick, cycleCfg, frameRuntimeGlobals);
                 const visibleLimit = this.evaluateGrowthVisibleLimit(
                     owner,
                     ownerCount,
                     age,
-                    globalCycleAge,
+                    globalCycleAgeNow,
                     elapsedTick,
                     runtimeActions,
-                    shapeRuntimeLevels[0]?.actions || [],
+                    shapeRuntimeLevels,
                     cycleCfg
                 );
                 cached = {
@@ -5437,6 +5581,8 @@ class CompositionBuilderApp {
                         : [localRef];
                     const runtimeLevels = Array.isArray(cached.shapeRuntimeLevels) ? cached.shapeRuntimeLevels : [];
                     let localSum = U.v(0, 0, 0);
+                    const transformedLevelRels = [];
+                    const transformedLevelOrders = [];
                     for (let lvIdx = 0; lvIdx < levelBaseList.length; lvIdx++) {
                         const lvBase = levelBaseList[lvIdx] || U.v(0, 0, 0);
                         const lvPointRef = int(levelRefList[lvIdx] ?? localRef);
@@ -5446,6 +5592,13 @@ class CompositionBuilderApp {
                             const cardScale = this.resolveScaleFactor(lvRuntime.scale, cached.age, cycleCfg);
                             lvPoint = this.applyScaleFactorToPoint(lvPoint, cardScale);
                             if (lvRuntime.actions && lvRuntime.actions.length) {
+                                const shapeScope = {
+                                    rel: anchorBase,
+                                    order: int(localIndex),
+                                    // shapeRelN ????????????????????????????????????
+                                    shapeRels: transformedLevelRels,
+                                    shapeOrders: transformedLevelOrders
+                                };
                                 lvPoint = this.applyRuntimeActionsToPoint(
                                     lvPoint,
                                     lvRuntime.actions,
@@ -5456,11 +5609,14 @@ class CompositionBuilderApp {
                                     {
                                         skipExpression: skipExprPerPoint,
                                         runtimeVars: frameRuntimeGlobals,
-                                        persistExpressionVars: false
+                                        persistExpressionVars: false,
+                                        shapeScope
                                     }
                                 );
                             }
                         }
+                        transformedLevelRels[lvIdx] = lvPoint;
+                        transformedLevelOrders[lvIdx] = lvPointRef;
                         localSum.x += num(lvPoint.x);
                         localSum.y += num(lvPoint.y);
                         localSum.z += num(lvPoint.z);
@@ -5486,16 +5642,15 @@ class CompositionBuilderApp {
                 pRef.z = pz;
             }
 
-            const rgb = cached.visual.color;
-            let ownerColorFactor = colorFactorCache.get(owner);
-            if (ownerColorFactor === undefined) {
-                ownerColorFactor = this.getCardColorFactor(owner);
-                colorFactorCache.set(owner, ownerColorFactor);
+            let rgb = cached.visual.__linearColor;
+            if (!rgb) {
+                rgb = srgbRgbToLinearArray(cached.visual.color);
+                cached.visual.__linearColor = rgb;
             }
-            const k = ownerColorFactor * (isVisible ? 1 : 0);
-            colors[i * 3 + 0] = rgb[0] * k;
-            colors[i * 3 + 1] = rgb[1] * k;
-            colors[i * 3 + 2] = rgb[2] * k;
+            const visibleFactor = isVisible ? 1 : 0;
+            colors[i * 3 + 0] = rgb[0] * visibleFactor;
+            colors[i * 3 + 1] = rgb[1] * visibleFactor;
+            colors[i * 3 + 2] = rgb[2] * visibleFactor;
             sizes[i] = Math.max(0.05, num(cached.visual.size)) * (isVisible ? 1 : 0.01);
             alphas[i] = clamp(num(cached.visual.alpha), 0, 1) * (isVisible ? 1 : 0);
         }
@@ -5579,16 +5734,10 @@ class CompositionBuilderApp {
         return { appear, live, fade, play, total };
     }
 
-    evaluateGrowthVisibleLimit(ownerCardId, ownerCount, ageTick, globalCycleAge, elapsedTick, globalRuntimeActions = [], cardRuntimeActions = [], cycleCfg = null) {
+    evaluateGrowthVisibleLimit(ownerCardId, ownerCount, ageTick, globalCycleAge, elapsedTick, globalRuntimeActions = [], shapeRuntimeLevels = [], cycleCfg = null) {
         const cycle = cycleCfg || this.getPreviewCycleConfig();
         const sequencedRoot = this.state.compositionType === "sequenced";
         let growthAge = num(ageTick);
-        const fadeStart = cycle.play;
-        if (growthAge >= fadeStart) {
-            growthAge = Math.max(0, cycle.appear - (growthAge - fadeStart));
-        } else if (growthAge > cycle.appear) {
-            growthAge = cycle.appear;
-        }
 
         const totalCards = Math.max(1, this.state.cards.length);
         const cardIndexRaw = this.getCardIndexById(ownerCardId);
@@ -5601,11 +5750,15 @@ class CompositionBuilderApp {
             rootVisibleCards = Math.min(rootVisibleCards, n);
             hasRootGrowthSource = true;
         }
-        const rootExprCount = this.computeExpressionVisibleCount(globalRuntimeActions, totalCards, growthAge);
-        if (Number.isFinite(rootExprCount)) {
-            rootVisibleCards = Math.min(rootVisibleCards, rootExprCount);
-            hasRootGrowthSource = true;
-        }
+            const rootExprCount = this.computeExpressionVisibleCount(globalRuntimeActions, totalCards, growthAge, {
+                scopeLevel: -1,
+                allowOrder: this.state.compositionType === "sequenced",
+                sequencedDepths: []
+            });
+            if (Number.isFinite(rootExprCount)) {
+                rootVisibleCards = Math.min(rootVisibleCards, rootExprCount);
+                hasRootGrowthSource = true;
+            }
         if (sequencedRoot && !hasRootGrowthSource) return 0;
         if (Number.isFinite(rootVisibleCards)) {
             const cardLimit = clamp(int(rootVisibleCards), 0, totalCards);
@@ -5616,43 +5769,71 @@ class CompositionBuilderApp {
         if (!card) return ownerCount;
         let visibleLimit = Math.max(1, ownerCount);
         let hasLocalGrowthSource = false;
+        const runtimeLevels = Array.isArray(shapeRuntimeLevels) ? shapeRuntimeLevels : [];
+        const sequencedLevels = runtimeLevels.filter((lv) => !!lv?.sequenced);
 
-        if (card.dataType === "sequenced_shape") {
-            if (card.growthAnimates?.length) {
-                const n = this.computeAnimateVisibleCount(card.growthAnimates, growthAge, elapsedTick, 0);
-                visibleLimit = Math.min(visibleLimit, n);
+        if (sequencedLevels.length) {
+            for (const lv of sequencedLevels) {
+                let levelLimit = Math.max(1, ownerCount);
+                let hasLevelGrowthSource = false;
+                if (Array.isArray(lv.growthAnimates) && lv.growthAnimates.length) {
+                    const n = this.computeAnimateVisibleCount(lv.growthAnimates, growthAge, elapsedTick, 0);
+                    levelLimit = Math.min(levelLimit, n);
+                    hasLevelGrowthSource = true;
+                }
+                const exprCount = this.computeExpressionVisibleCount(lv.actions, ownerCount, growthAge, {
+                    scopeLevel: int(lv.scopeLevel || 0),
+                    allowOrder: this.state.compositionType === "sequenced",
+                    sequencedDepths: Array.isArray(lv.ancestorSequencedDepths) ? lv.ancestorSequencedDepths : []
+                });
+                if (Number.isFinite(exprCount)) {
+                    levelLimit = Math.min(levelLimit, exprCount);
+                    hasLevelGrowthSource = true;
+                }
+                // Sequenced 形状未配置任何生长来源时，初始可见数量应为 0。
+                if (!hasLevelGrowthSource) return 0;
+                visibleLimit = Math.min(visibleLimit, levelLimit);
                 hasLocalGrowthSource = true;
             }
-            const cardExprCount = this.computeExpressionVisibleCount(cardRuntimeActions, ownerCount, growthAge);
-            if (Number.isFinite(cardExprCount)) {
-                visibleLimit = Math.min(visibleLimit, cardExprCount);
-                hasLocalGrowthSource = true;
-            }
-            // 子卡片是 SequencedParticleShapeComposition 且没有任何生长来源时，默认全不显示
-            if (!hasLocalGrowthSource) return 0;
         } else if (card.dataType === "single" && Array.isArray(card.controllerActions) && card.controllerActions.length) {
             const controllerExprActions = card.controllerActions
                 .map((it) => normalizeControllerAction(it))
                 .map((it) => ({ type: "expression", expression: String(it.script || ""), fn: null }));
-            const n = this.computeExpressionVisibleCount(controllerExprActions, ownerCount, growthAge);
+            const n = this.computeExpressionVisibleCount(controllerExprActions, ownerCount, growthAge, {
+                scopeLevel: -1,
+                allowOrder: false,
+                sequencedDepths: []
+            });
             if (Number.isFinite(n)) {
                 visibleLimit = Math.min(visibleLimit, n);
                 hasLocalGrowthSource = true;
             }
         } else {
-            const cardExprCount = this.computeExpressionVisibleCount(cardRuntimeActions, ownerCount, growthAge);
+            const cardExprCount = this.computeExpressionVisibleCount(runtimeLevels[0]?.actions || [], ownerCount, growthAge, {
+                scopeLevel: int(runtimeLevels[0]?.scopeLevel || 0),
+                allowOrder: this.state.compositionType === "sequenced",
+                sequencedDepths: Array.isArray(runtimeLevels[0]?.ancestorSequencedDepths) ? runtimeLevels[0].ancestorSequencedDepths : []
+            });
             if (Number.isFinite(cardExprCount)) {
                 visibleLimit = Math.min(visibleLimit, cardExprCount);
                 hasLocalGrowthSource = true;
             }
+            if (card.dataType === "sequenced_shape" && !hasLocalGrowthSource) return 0;
         }
 
         if (!Number.isFinite(visibleLimit)) return Math.max(1, ownerCount);
         return clamp(int(visibleLimit), 0, Math.max(1, ownerCount));
     }
 
-    computeExpressionVisibleCount(actionsOrScript, ownerCount, ageTick) {
+    computeExpressionVisibleCount(actionsOrScript, ownerCount, ageTick, opts = {}) {
         const steps = Math.max(0, Math.floor(num(ageTick)));
+        const scopeLevel = Math.max(-1, int(opts.scopeLevel ?? -1));
+        const allowOrder = opts.allowOrder === true;
+        const sequencedDepths = new Set(
+            Array.isArray(opts.sequencedDepths)
+                ? opts.sequencedDepths.map((it) => int(it))
+                : []
+        );
         const expressionActions = [];
         let sourceSignature = "";
         if (typeof actionsOrScript === "string") {
@@ -5677,7 +5858,8 @@ class CompositionBuilderApp {
         const hasGrowthApi = expressionActions.some((act) => growthApiRe.test(String(act.expression || "")));
         if (!hasGrowthApi) return Number.POSITIVE_INFINITY;
         const safeOwnerCount = Math.max(1, int(ownerCount || 1));
-        const prefixKey = `${safeOwnerCount}|${sourceSignature}`;
+        const scopeSig = `${scopeLevel}|${allowOrder ? 1 : 0}|${Array.from(sequencedDepths).sort((a, b) => a - b).join(",")}`;
+        const prefixKey = `${safeOwnerCount}|${scopeSig}|${sourceSignature}`;
         let prefix = this.previewExprPrefixCache.get(prefixKey);
         if (!prefix) {
             const prepared = [];
@@ -5693,13 +5875,13 @@ class CompositionBuilderApp {
                         fn = new Function(
                             "vars",
                             "point",
-                            "rotateTo",
+                            "rotateToPoint",
                             "rotateAsAxis",
                             "rotateToWithAngle",
                             "addSingle",
                             "addMultiple",
                             "thisAt",
-                            `with(vars){ ${src} }; return point;`
+                            `with(vars){ ${src}\n }; return point;`
                         );
                     } catch {
                         fn = null;
@@ -5727,6 +5909,12 @@ class CompositionBuilderApp {
                 if (thisAt && typeof thisAt === "object") {
                     for (const [k, v] of Object.entries(thisAt)) vars[k] = v;
                 }
+                vars.rel = U.v(0, 0, 0);
+                if (allowOrder) vars.order = 0;
+                for (let d = 0; d < scopeLevel; d++) {
+                    vars[`shapeRel${d}`] = U.v(0, 0, 0);
+                    if (sequencedDepths.has(d)) vars[`shapeOrder${d}`] = 0;
+                }
                 vars.thisAt = thisAt;
                 const noop = () => {};
                 const addSingle = () => {
@@ -5735,6 +5923,7 @@ class CompositionBuilderApp {
                 const addMultiple = (n) => {
                     visible += Math.max(1, int(n || 1));
                 };
+                vars.rotateToPoint = noop;
                 try {
                     fn(vars, U.v(0, 0, 0), noop, noop, noop, addSingle, addMultiple, thisAt);
                 } catch {
@@ -5899,15 +6088,46 @@ class CompositionBuilderApp {
         return tuples.map((it) => U.v(num(it?.sum?.x), num(it?.sum?.y), num(it?.sum?.z)));
     }
 
+    getShapeCompositionTypeAtDepth(card, depth = 0) {
+        if (!card) return "single";
+        const d = Math.max(0, int(depth));
+        if (d === 0) return String(card.dataType || "single");
+        if (d === 1) return String(card.shapeChildType || "single");
+        const lv = this.getNestedShapeLevel(card, d - 1, false);
+        return String(lv?.type || "single");
+    }
+
+    getShapeScopeInfoByRuntimeLevel(card, runtimeLevel = 0) {
+        const level = Math.max(0, int(runtimeLevel));
+        const maxShapeDepth = Math.max(-1, level - 1);
+        const sequencedDepths = [];
+        for (let d = 0; d <= maxShapeDepth; d++) {
+            if (this.getShapeCompositionTypeAtDepth(card, d) === "sequenced_shape") {
+                sequencedDepths.push(d);
+            }
+        }
+        return {
+            allowRel: true,
+            allowOrder: this.state.compositionType === "sequenced",
+            maxShapeDepth,
+            sequencedDepths
+        };
+    }
+
     getShapeRuntimeLevelsForPreview(card, elapsedTick, skipExpression = false) {
         if (!card || card.dataType === "single") return [];
         const levels = [];
+        const rootScope = this.getShapeScopeInfoByRuntimeLevel(card, 0);
         const rootActions = this.buildPreviewRuntimeActions(elapsedTick, card.shapeDisplayActions || [], {
             skipExpression,
             scope: "shape_display",
             cardId: card.id
         });
         levels.push({
+            scopeLevel: 0,
+            ancestorSequencedDepths: rootScope.sequencedDepths,
+            sequenced: card.dataType === "sequenced_shape",
+            growthAnimates: card.dataType === "sequenced_shape" ? (card.growthAnimates || []) : [],
             axis: this.resolveRelativeDirection(card.shapeAxisExpr || card.shapeAxisPreset || "RelativeLocation.yAxis()"),
             scale: normalizeScaleHelperConfig(card.shapeScale, { type: "none" }),
             actions: rootActions,
@@ -5917,12 +6137,17 @@ class CompositionBuilderApp {
         for (let i = 0; i < chain.length; i++) {
             const lv = normalizeShapeNestedLevel(chain[i], i);
             if (lv.type === "single") break;
+            const scope = this.getShapeScopeInfoByRuntimeLevel(card, i + 1);
             const actions = this.buildPreviewRuntimeActions(elapsedTick, lv.displayActions || [], {
                 skipExpression,
                 scope: "shape_level_display",
                 cardId: card.id
             });
             levels.push({
+                scopeLevel: i + 1,
+                ancestorSequencedDepths: scope.sequencedDepths,
+                sequenced: lv.type === "sequenced_shape",
+                growthAnimates: lv.type === "sequenced_shape" ? (lv.growthAnimates || []) : [],
                 axis: this.resolveRelativeDirection(lv.axisExpr || lv.axisPreset || "RelativeLocation.yAxis()"),
                 scale: normalizeScaleHelperConfig(lv.scale, { type: "none" }),
                 actions,
@@ -5950,62 +6175,189 @@ class CompositionBuilderApp {
         return out;
     }
 
+    ensureControllerRuntimeProtos() {
+        if (this.controllerScopeProto && this.controllerParticleProto) return;
+        this.controllerScopeProto = {
+            get color() { return this._ctx.color; },
+            set color(v) { this._ctx.setColor(v); },
+            get particleColor() { return this._ctx.particleColor; },
+            set particleColor(v) { this._ctx.setColor(v); },
+            get size() { return this._ctx.size; },
+            set size(v) { this._ctx.setSize(v); },
+            get particleSize() { return this._ctx.particleSize; },
+            set particleSize(v) { this._ctx.setSize(v); },
+            get alpha() { return this._ctx.alpha; },
+            set alpha(v) { this._ctx.setAlpha(v); },
+            get particleAlpha() { return this._ctx.particleAlpha; },
+            set particleAlpha(v) { this._ctx.setAlpha(v); },
+            get currentAge() { return this._ctx.currentAge; },
+            set currentAge(v) { this._ctx.currentAge = int(v); },
+            get textureSheet() { return this._ctx.textureSheet; },
+            set textureSheet(v) { this._ctx.textureSheet = int(v); },
+            get status() { return this._ctx.status; },
+            set status(v) {
+                const next = (v && typeof v === "object") ? v : { displayStatus: 1 };
+                this._ctx.status = next;
+                this._ctx.thisAt.status = next;
+            },
+            get tickCount() { return this._ctx.tickCount; },
+            set tickCount(v) { this._ctx.tickCount = num(v); }
+        };
+        this.controllerParticleProto = {
+            get particleColor() { return this._ctx.particleColor; },
+            set particleColor(v) { this._ctx.setColor(v); },
+            get particleSize() { return this._ctx.particleSize; },
+            set particleSize(v) { this._ctx.setSize(v); },
+            get particleAlpha() { return this._ctx.particleAlpha; },
+            set particleAlpha(v) { this._ctx.setAlpha(v); },
+            get currentAge() { return this._ctx.currentAge; },
+            set currentAge(v) { this._ctx.currentAge = int(v); },
+            get textureSheet() { return this._ctx.textureSheet; },
+            set textureSheet(v) { this._ctx.textureSheet = int(v); }
+        };
+    }
+
     applyControllerScriptVisual(visual, scriptRaw, opts = {}) {
-        if (!visual || !scriptRaw) return;
+        const srcRaw = String(scriptRaw || "").trim();
+        if (!visual || !srcRaw) return;
         const runtimeVars = (opts.runtimeVars && typeof opts.runtimeVars === "object") ? opts.runtimeVars : null;
         const runtimeCtx = Object.assign({}, runtimeVars || {});
-        const particleColor = U.v(
-            clamp(num(visual.color?.[0]), 0, 1),
-            clamp(num(visual.color?.[1]), 0, 1),
-            clamp(num(visual.color?.[2]), 0, 1)
-        );
-        runtimeCtx.color = particleColor;
-        runtimeCtx.particleColor = particleColor;
-        runtimeCtx.size = num(visual.size);
-        runtimeCtx.particleSize = num(visual.size);
-        runtimeCtx.alpha = num(visual.alpha);
-        runtimeCtx.particleAlpha = num(visual.alpha);
-        runtimeCtx.currentAge = num(runtimeCtx.currentAge || 0);
-        runtimeCtx.textureSheet = num(runtimeCtx.textureSheet || 0);
+        const thisAtVars = (runtimeVars && typeof runtimeVars === "object") ? runtimeVars : runtimeCtx;
+        const statusRef = (thisAtVars.status && typeof thisAtVars.status === "object")
+            ? thisAtVars.status
+            : {};
+        statusRef.displayStatus = int(statusRef.displayStatus || 1) === 2 ? 2 : 1;
+        thisAtVars.status = statusRef;
+        runtimeCtx.status = statusRef;
+
         const elapsedTick = num(opts.elapsedTick);
         const ageTick = num(opts.ageTick);
         const pointIndex = int(opts.pointIndex || 0);
-        const readVec = (expr) => this.parseVecLikeValueWithRuntime(expr, runtimeCtx, { elapsedTick, ageTick, pointIndex });
-        const readNum = (expr) => this.evaluateNumericExpressionWithRuntime(expr, runtimeCtx, { elapsedTick, ageTick, pointIndex });
+        const readVec = (expr) => this.parseVecLikeValueWithRuntime(expr, runtimeCtx, {
+            elapsedTick,
+            ageTick,
+            pointIndex,
+            thisAtVars
+        });
+        const toVec = (value, fallback = U.v(0, 0, 0)) => {
+            if (value && Number.isFinite(value.x) && Number.isFinite(value.y) && Number.isFinite(value.z)) {
+                return U.v(num(value.x), num(value.y), num(value.z));
+            }
+            if (typeof value === "string") {
+                return readVec(value);
+            }
+            return fallback;
+        };
+        const setColor = (value) => {
+            const vec = toVec(value, U.v(0, 0, 0));
+            runtimeCtx.color = vec;
+            runtimeCtx.particleColor = vec;
+        };
+        const setSize = (value) => {
+            const v = Math.max(0.05, num(value));
+            runtimeCtx.size = v;
+            runtimeCtx.particleSize = v;
+        };
+        const setAlpha = (value) => {
+            const v = clamp(num(value), 0, 1);
+            runtimeCtx.alpha = v;
+            runtimeCtx.particleAlpha = v;
+        };
 
-        const colorExpr = String(this.extractLastAssignedExprInScript(scriptRaw, [
-            "color",
-            "this.color",
-            "particleColor",
-            "this.particleColor",
-            "particle.particleColor"
-        ]) || "").trim();
-        if (colorExpr) {
-            const vec = readVec(colorExpr);
-            visual.color = [clamp(num(vec.x), 0, 1), clamp(num(vec.y), 0, 1), clamp(num(vec.z), 0, 1)];
+        setColor(U.v(
+            clamp(num(visual.color?.[0]), 0, 1),
+            clamp(num(visual.color?.[1]), 0, 1),
+            clamp(num(visual.color?.[2]), 0, 1)
+        ));
+        setSize(visual.size);
+        setAlpha(visual.alpha);
+        runtimeCtx.currentAge = num(runtimeCtx.currentAge || 0);
+        runtimeCtx.textureSheet = num(runtimeCtx.textureSheet || 0);
+        runtimeCtx.tickCount = num(elapsedTick);
+        runtimeCtx.setColor = setColor;
+        runtimeCtx.setSize = setSize;
+        runtimeCtx.setAlpha = setAlpha;
+        runtimeCtx.thisAt = thisAtVars;
+
+        this.ensureControllerRuntimeProtos();
+        const baseVars = this.getExpressionVars(elapsedTick, ageTick, pointIndex, { includeVectors: true });
+        const vars = Object.create(this.controllerScopeProto);
+        vars._ctx = runtimeCtx;
+        const baseProto = Object.getPrototypeOf(baseVars) || {};
+        for (const [k, v] of Object.entries(baseProto)) {
+            if (CONTROLLER_SCOPE_RESERVED.has(k)) continue;
+            vars[k] = v;
+        }
+        for (const [k, v] of Object.entries(baseVars)) {
+            if (CONTROLLER_SCOPE_RESERVED.has(k)) continue;
+            vars[k] = v;
+        }
+        vars.age = num(baseVars.age);
+        vars.tick = num(baseVars.tick);
+        vars.tickCount = num(elapsedTick);
+        vars.index = int(baseVars.index);
+        vars.thisAt = thisAtVars;
+        for (const [k, v] of Object.entries(runtimeCtx)) {
+            if (CONTROLLER_SCOPE_RESERVED.has(k)) continue;
+            vars[k] = v;
         }
 
-        const sizeExpr = String(this.extractLastAssignedExprInScript(scriptRaw, [
-            "size",
-            "this.size",
-            "particleSize",
-            "this.particleSize",
-            "particle.particleSize"
-        ]) || "").trim();
-        if (sizeExpr) {
-            visual.size = Math.max(0.05, num(readNum(sizeExpr)));
+        const particle = Object.create(this.controllerParticleProto);
+        particle._ctx = runtimeCtx;
+        vars.particle = particle;
+
+        const src = transpileKotlinThisQualifierToJs(srcRaw);
+        let fn = this.previewControllerFnCache.get(src);
+        if (fn === undefined) {
+            try {
+                fn = new Function(
+                    "vars",
+                    "point",
+                    "particle",
+                    "rotateToPoint",
+                    "rotateAsAxis",
+                    "rotateToWithAngle",
+                    "addSingle",
+                    "addMultiple",
+                    "addPreTickAction",
+                    "thisAt",
+                    `with(vars){ try { ${src}\n } catch(_e) {} }; return vars;`
+                );
+            } catch {
+                fn = null;
+            }
+            if (this.previewControllerFnCache.size > 1024) this.previewControllerFnCache.clear();
+            this.previewControllerFnCache.set(src, fn);
+        }
+        if (typeof fn === "function") {
+            const noop = () => {};
+            try {
+                fn(vars, U.v(0, 0, 0), particle, noop, noop, noop, noop, noop, noop, thisAtVars);
+            } catch {
+            }
         }
 
-        const alphaExpr = String(this.extractLastAssignedExprInScript(scriptRaw, [
-            "alpha",
-            "this.alpha",
-            "particleAlpha",
-            "this.particleAlpha",
-            "particle.particleAlpha"
-        ]) || "").trim();
-        if (alphaExpr) {
-            visual.alpha = clamp(num(readNum(alphaExpr)), 0, 1);
+        setColor(runtimeCtx.color);
+        setSize(runtimeCtx.size);
+        setAlpha(runtimeCtx.alpha);
+        const statusOut = (runtimeCtx.status && typeof runtimeCtx.status === "object") ? runtimeCtx.status : statusRef;
+        const hasManualStatusAssign = /(^|[;\n])\s*(?:thisAt\.)?status\.displayStatus\s*=(?!=)/.test(src);
+        if (hasManualStatusAssign) statusOut.__manualDisplayStatus = true;
+        else if (Object.prototype.hasOwnProperty.call(statusOut, "__manualDisplayStatus")) delete statusOut.__manualDisplayStatus;
+        statusOut.displayStatus = int(statusOut.displayStatus || 1) === 2 ? 2 : 1;
+        if (statusOut.displayStatus !== 2 && Object.prototype.hasOwnProperty.call(statusOut, "__dissolveStartTick")) {
+            delete statusOut.__dissolveStartTick;
         }
+        runtimeCtx.status = statusOut;
+        thisAtVars.status = statusOut;
+
+        visual.color = [
+            clamp(num(runtimeCtx.color?.x), 0, 1),
+            clamp(num(runtimeCtx.color?.y), 0, 1),
+            clamp(num(runtimeCtx.color?.z), 0, 1)
+        ];
+        visual.size = Math.max(0.05, num(runtimeCtx.size));
+        visual.alpha = clamp(num(runtimeCtx.alpha), 0, 1);
     }
 
     resolveCardPreviewVisual(cardId, opts = {}) {
@@ -6046,6 +6398,28 @@ class CompositionBuilderApp {
         return visual;
     }
 
+    isScriptAgeDependent(scriptRaw = "") {
+        const src = stripJsForLint(transpileKotlinThisQualifierToJs(scriptRaw));
+        return /\bage\b/.test(src);
+    }
+
+    isCardVisualAgeDependent(card) {
+        if (!card) return false;
+        for (const it of (card.particleInit || [])) {
+            const target = String(it?.target || "").trim().toLowerCase();
+            if (target !== "color" && target !== "particlecolor" && target !== "particle.particlecolor"
+                && target !== "size" && target !== "particlesize" && target !== "particle.particlesize"
+                && target !== "alpha" && target !== "particlealpha" && target !== "particle.particlealpha") {
+                continue;
+            }
+            if (this.isScriptAgeDependent(String(it?.expr || ""))) return true;
+        }
+        for (const action of (card.controllerActions || [])) {
+            if (this.isScriptAgeDependent(String(action?.script || ""))) return true;
+        }
+        return false;
+    }
+
     computeAnimateVisibleCount(list, ageTick, tick, index) {
         const arr = Array.isArray(list) ? list.map((it) => normalizeAnimate(it)) : [];
         if (!arr.length) return Number.POSITIVE_INFINITY;
@@ -6064,7 +6438,7 @@ class CompositionBuilderApp {
         let fn = this.previewCondFnCache.get(expr);
         if (fn === undefined) {
             try {
-                fn = new Function("vars", `with(vars){ return !!(${expr}); }`);
+                fn = new Function("vars", `with(vars){ return !!(${expr}\n); }`);
             } catch {
                 fn = null;
             }
@@ -6087,7 +6461,7 @@ class CompositionBuilderApp {
         const source = Array.isArray(rawActions) ? rawActions : (this.state.displayActions || []);
         for (const action of source) {
             const a = normalizeDisplayAction(action);
-            if (a.type === "rotateTo") {
+            if (a.type === "rotateToPoint") {
                 out.push({ type: a.type, to: this.resolveRelativeDirection(a.toExpr || a.toPreset) });
                 continue;
             }
@@ -6117,13 +6491,13 @@ class CompositionBuilderApp {
                             fn = new Function(
                                 "vars",
                                 "point",
-                                "rotateTo",
+                                "rotateToPoint",
                                 "rotateAsAxis",
                                 "rotateToWithAngle",
                                 "addSingle",
                                 "addMultiple",
                                 "thisAt",
-                                `with(vars){ try { ${src} } catch(_e) {} }; return point;`
+                                `with(vars){ try { ${src}\n } catch(_e) {} }; return point;`
                             );
                         } catch {
                             fn = null;
@@ -6146,13 +6520,15 @@ class CompositionBuilderApp {
         const skipExpression = !!opts.skipExpression;
         const runtimeVars = (opts.runtimeVars && typeof opts.runtimeVars === "object") ? opts.runtimeVars : null;
         const persistExpressionVars = !!opts.persistExpressionVars;
+        const shapeScope = (opts.shapeScope && typeof opts.shapeScope === "object") ? opts.shapeScope : null;
         if (skipExpression && list.every((a) => a?.type === "expression")) return point;
         let p = U.clone(point);
         let axis = this.parseJsVec(startAxis || this.resolveCompositionAxisDirection());
         for (const a of list) {
-            if (a.type === "rotateTo") {
-                p = this.rotatePointToDirection(p, a.to, axis);
-                axis = a.to;
+            if (a.type === "rotateToPoint") {
+                const dir = this.parseJsVec(a.to);
+                p = this.rotatePointToDirection(p, dir, axis);
+                axis = U.clone(dir);
                 continue;
             }
             if (a.type === "rotateAsAxis") {
@@ -6160,16 +6536,18 @@ class CompositionBuilderApp {
                 continue;
             }
             if (a.type === "rotateToWithAngle") {
-                p = this.rotatePointToDirection(p, a.to, axis);
-                p = U.rotateAroundAxis(p, a.to, a.angle);
-                axis = a.to;
+                const dir = this.parseJsVec(a.to);
+                p = this.rotatePointToDirection(p, dir, axis);
+                p = U.rotateAroundAxis(p, dir, a.angle);
+                axis = U.clone(dir);
                 continue;
             }
             if (a.type === "expression") {
                 if (skipExpression) continue;
                 const res = this.applyExpressionActionToPoint(a, p, elapsedTick, ageTick, pointIndex, axis, {
                     runtimeVars,
-                    persistExpressionVars
+                    persistExpressionVars,
+                    shapeScope
                 });
                 p = res.point;
                 axis = res.axis;
@@ -6236,7 +6614,62 @@ class CompositionBuilderApp {
                 assign(name, this.evaluateNumericExpression(expr, { elapsedTick, ageTick, pointIndex, includeVectors: false }));
             }
         }
+        const rawStatus = (out.status && typeof out.status === "object") ? out.status : {};
+        rawStatus.displayStatus = int(rawStatus.displayStatus || 1) === 2 ? 2 : 1;
+        if (rawStatus.displayStatus !== 2 && Object.prototype.hasOwnProperty.call(rawStatus, "__dissolveStartTick")) {
+            delete rawStatus.__dissolveStartTick;
+        }
+        out.status = rawStatus;
         return out;
+    }
+
+    ensurePreviewRuntimeStatus(runtimeVars, elapsedTick = 0) {
+        if (!runtimeVars || typeof runtimeVars !== "object") {
+            return { displayStatus: 1 };
+        }
+        const rawStatus = (runtimeVars.status && typeof runtimeVars.status === "object")
+            ? runtimeVars.status
+            : {};
+        rawStatus.displayStatus = int(rawStatus.displayStatus || 1) === 2 ? 2 : 1;
+        if (rawStatus.displayStatus === 2) {
+            if (!Number.isFinite(Number(rawStatus.__dissolveStartTick))) {
+                rawStatus.__dissolveStartTick = num(elapsedTick);
+            }
+        } else if (Object.prototype.hasOwnProperty.call(rawStatus, "__dissolveStartTick")) {
+            delete rawStatus.__dissolveStartTick;
+        }
+        runtimeVars.status = rawStatus;
+        return rawStatus;
+    }
+
+    syncPreviewStatusWithCycle(runtimeVars, cycleCfg, cycleAge = 0, elapsedTick = 0) {
+        const status = this.ensurePreviewRuntimeStatus(runtimeVars, elapsedTick);
+        const cycle = cycleCfg || this.getPreviewCycleConfig();
+        const autoStatus = num(cycleAge) >= num(cycle.play || 0) ? 2 : 1;
+        if (!status.__manualDisplayStatus) {
+            status.displayStatus = autoStatus;
+        }
+        status.displayStatus = int(status.displayStatus || 1) === 2 ? 2 : 1;
+        if (status.displayStatus === 2) {
+            if (!Number.isFinite(Number(status.__dissolveStartTick))) {
+                status.__dissolveStartTick = num(elapsedTick);
+            }
+        } else if (Object.prototype.hasOwnProperty.call(status, "__dissolveStartTick")) {
+            delete status.__dissolveStartTick;
+        }
+        runtimeVars.status = status;
+        return status;
+    }
+
+    resolvePreviewAgeWithStatus(baseAge, elapsedTick, cycleCfg, runtimeVars) {
+        const cycle = cycleCfg || this.getPreviewCycleConfig();
+        const status = this.ensurePreviewRuntimeStatus(runtimeVars, elapsedTick);
+        if (int(status.displayStatus || 1) !== 2) return num(baseAge);
+        const startTick = Number.isFinite(Number(status.__dissolveStartTick))
+            ? num(status.__dissolveStartTick)
+            : num(elapsedTick);
+        const dissolveAge = Math.max(0, num(elapsedTick) - startTick);
+        return cycle.play + dissolveAge;
     }
 
     evaluateNumericExpressionWithRuntime(exprRaw, runtimeVars = null, opts = {}) {
@@ -6246,18 +6679,19 @@ class CompositionBuilderApp {
         const elapsedTick = num(opts.elapsedTick);
         const ageTick = num(opts.ageTick);
         const pointIndex = int(opts.pointIndex || 0);
-        const thisAt = (runtimeVars && typeof runtimeVars === "object") ? runtimeVars : {};
+        const localVars = (runtimeVars && typeof runtimeVars === "object") ? runtimeVars : {};
+        const thisAt = (opts.thisAtVars && typeof opts.thisAtVars === "object") ? opts.thisAtVars : localVars;
         const baseVars = this.getExpressionVars(elapsedTick, ageTick, pointIndex, { includeVectors: true });
         const baseProto = Object.getPrototypeOf(baseVars) || {};
         const vars = Object.assign({}, baseProto, baseVars);
-        if (thisAt && typeof thisAt === "object") {
-            for (const [k, v] of Object.entries(thisAt)) vars[k] = v;
+        if (localVars && typeof localVars === "object") {
+            for (const [k, v] of Object.entries(localVars)) vars[k] = v;
         }
         vars.thisAt = thisAt;
         let fn = this.previewNumericFnCache.get(src);
         if (fn === undefined) {
             try {
-                fn = new Function("vars", "thisAt", `with(vars){ return (${src}); }`);
+                fn = new Function("vars", "thisAt", `with(vars){ return (${src}\n); }`);
             } catch {
                 fn = null;
             }
@@ -6285,17 +6719,21 @@ class CompositionBuilderApp {
         const elapsedTick = num(opts.elapsedTick);
         const ageTick = num(opts.ageTick);
         const pointIndex = int(opts.pointIndex || 0);
+        const localVars = (runtimeVars && typeof runtimeVars === "object") ? runtimeVars : null;
+        const thisAtVars = (opts.thisAtVars && typeof opts.thisAtVars === "object")
+            ? opts.thisAtVars
+            : localVars;
         if (/^[A-Za-z_$][A-Za-z0-9_$]*$/.test(src)) {
-            if (runtimeVars && typeof runtimeVars === "object" && runtimeVars[src]) {
-                const v = runtimeVars[src];
+            if (localVars && localVars[src]) {
+                const v = localVars[src];
                 if (v && Number.isFinite(v.x) && Number.isFinite(v.y) && Number.isFinite(v.z)) {
                     return U.v(v.x, v.y, v.z);
                 }
             }
         }
         const thisAtMatch = src.match(/^thisAt\.([A-Za-z_$][A-Za-z0-9_$]*)$/);
-        if (thisAtMatch && runtimeVars && typeof runtimeVars === "object") {
-            const v = runtimeVars[thisAtMatch[1]];
+        if (thisAtMatch && thisAtVars) {
+            const v = thisAtVars[thisAtMatch[1]];
             if (v && Number.isFinite(v.x) && Number.isFinite(v.y) && Number.isFinite(v.z)) {
                 return U.v(v.x, v.y, v.z);
             }
@@ -6303,9 +6741,9 @@ class CompositionBuilderApp {
         const m = src.match(/(?:Vec3|RelativeLocation|Vector3f)\s*\(\s*([^,]+)\s*,\s*([^,]+)\s*,\s*([^)]+)\s*\)/i);
         if (m) {
             return U.v(
-                this.evaluateNumericExpressionWithRuntime(m[1], runtimeVars, { elapsedTick, ageTick, pointIndex }),
-                this.evaluateNumericExpressionWithRuntime(m[2], runtimeVars, { elapsedTick, ageTick, pointIndex }),
-                this.evaluateNumericExpressionWithRuntime(m[3], runtimeVars, { elapsedTick, ageTick, pointIndex })
+                this.evaluateNumericExpressionWithRuntime(m[1], localVars, { elapsedTick, ageTick, pointIndex, thisAtVars }),
+                this.evaluateNumericExpressionWithRuntime(m[2], localVars, { elapsedTick, ageTick, pointIndex, thisAtVars }),
+                this.evaluateNumericExpressionWithRuntime(m[3], localVars, { elapsedTick, ageTick, pointIndex, thisAtVars })
             );
         }
         return this.parseVecLikeValue(srcRaw);
@@ -6348,10 +6786,10 @@ class CompositionBuilderApp {
         const api = {
             point: U.clone(point),
             axis: U.clone(startAxis),
-            rotateTo: (to) => {
+            rotateToPoint: (to) => {
                 const dir = this.parseJsVec(to);
                 api.point = this.rotatePointToDirection(api.point, dir, api.axis);
-                api.axis = dir;
+                api.axis = U.clone(dir);
             },
             rotateAsAxis: (angle) => {
                 const accum = Math.max(0, num(elapsedTick));
@@ -6364,7 +6802,7 @@ class CompositionBuilderApp {
                 api.point = this.rotatePointToDirection(api.point, dir, api.axis);
                 const rot = (((num(angle) * accum) % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2);
                 api.point = U.rotateAroundAxis(api.point, dir, rot);
-                api.axis = dir;
+                api.axis = U.clone(dir);
             },
             // 预览中 addSingle/addMultiple 不改变几何，仅保证表达式兼容
             addSingle: () => {},
@@ -6376,13 +6814,39 @@ class CompositionBuilderApp {
         if (runtimeVars && typeof runtimeVars === "object") {
             for (const [k, v] of Object.entries(runtimeVars)) vars[k] = v;
         }
+        const shapeScope = (opts.shapeScope && typeof opts.shapeScope === "object") ? opts.shapeScope : null;
+        const relPoint = (shapeScope && shapeScope.rel && typeof shapeScope.rel === "object"
+            && Number.isFinite(Number(shapeScope.rel.x))
+            && Number.isFinite(Number(shapeScope.rel.y))
+            && Number.isFinite(Number(shapeScope.rel.z)))
+            ? shapeScope.rel
+            : U.v(num(point?.x), num(point?.y), num(point?.z));
+        const orderValue = (shapeScope && Number.isFinite(Number(shapeScope.order)))
+            ? int(shapeScope.order)
+            : int(pointIndex || 0);
+        vars.rel = relPoint;
+        vars.order = orderValue;
+        if (shapeScope) {
+            const rels = Array.isArray(shapeScope.shapeRels) ? shapeScope.shapeRels : [];
+            const orders = Array.isArray(shapeScope.shapeOrders) ? shapeScope.shapeOrders : [];
+            for (let i = 0; i < rels.length; i++) {
+                const rv = rels[i];
+                if (rv && Number.isFinite(rv.x) && Number.isFinite(rv.y) && Number.isFinite(rv.z)) {
+                    vars[`shapeRel${i}`] = rv;
+                }
+                if (Number.isFinite(Number(orders[i]))) {
+                    vars[`shapeOrder${i}`] = int(orders[i]);
+                }
+            }
+        }
+        vars.rotateToPoint = api.rotateToPoint;
         vars.thisAt = thisAt;
         try {
             if (typeof action?.fn === "function") {
                 action.fn(
                     vars,
                     api.point,
-                    api.rotateTo,
+                    api.rotateToPoint,
                     api.rotateAsAxis,
                     api.rotateToWithAngle,
                     api.addSingle,
@@ -6393,18 +6857,18 @@ class CompositionBuilderApp {
                 const fn = new Function(
                     "vars",
                     "point",
-                    "rotateTo",
+                    "rotateToPoint",
                     "rotateAsAxis",
                     "rotateToWithAngle",
                     "addSingle",
                     "addMultiple",
                     "thisAt",
-                    `with(vars){ try { ${src} } catch(_e) {} }; return point;`
+                    `with(vars){ try { ${src}\n } catch(_e) {} }; return point;`
                 );
                 fn(
                     vars,
                     api.point,
-                    api.rotateTo,
+                    api.rotateToPoint,
                     api.rotateAsAxis,
                     api.rotateToWithAngle,
                     api.addSingle,
@@ -6482,14 +6946,14 @@ class CompositionBuilderApp {
         if (this.cardColorCache.has(key)) return this.cardColorCache.get(key);
         const h = ((hashString(key) % 360) + 360) % 360 / 360;
         const c = new THREE.Color().setHSL(h, 0.76, 0.56);
+        if (typeof c.convertLinearToSRGB === "function") c.convertLinearToSRGB();
         const out = [c.r, c.g, c.b];
         this.cardColorCache.set(key, out);
         return out;
     }
 
-    getCardColorFactor(cardId) {
-        if (!this.selectedCardIds.size) return 1;
-        return this.selectedCardIds.has(cardId) ? 1 : 0.23;
+    getCardColorFactor(_cardId) {
+        return 1;
     }
 
     onPreviewPointerDown(e) {
@@ -6730,6 +7194,7 @@ class CompositionBuilderApp {
         this.previewExprPrefixCache.clear();
         this.previewCondFnCache.clear();
         this.previewNumericFnCache.clear();
+        this.previewControllerFnCache.clear();
         this.previewRuntimeGlobals = null;
         this.previewRuntimeAppliedTick = -1;
     }
@@ -6938,8 +7403,11 @@ class CompositionBuilderApp {
         const base = [
             "age",
             "tick",
+            "tickCount",
             "PI",
-            "rotateTo($0)",
+            "status.displayStatus",
+            `this@${projectClass}.status.displayStatus`,
+            "rotateToPoint($0)",
             "rotateAsAxis($0)",
             "rotateToWithAngle($0, 0.05)",
             "addSingle()",
@@ -6968,9 +7436,61 @@ class CompositionBuilderApp {
         return Array.from(new Set(base));
     }
 
+    getCodeEditorScopeInfo(textarea) {
+        const none = { allowRel: false, allowOrder: false, maxShapeDepth: -1, sequencedDepths: [] };
+        if (!(textarea instanceof HTMLTextAreaElement)) return none;
+        const cardId = String(textarea.dataset.cardId || "");
+        if (!cardId) return none;
+        const card = this.getCardById(cardId);
+        if (!card) return none;
+        if (textarea.dataset.cactField === "script") {
+            const levelFromRow = textarea.closest?.("[data-shape-level]")?.dataset?.shapeLevel;
+            const rawLevel = textarea.dataset.shapeLevelIdx ?? levelFromRow;
+            if (rawLevel !== undefined) {
+                const levelIdx = Math.max(0, int(rawLevel));
+                return this.getShapeScopeInfoByRuntimeLevel(card, levelIdx + 1);
+            }
+            return none;
+        }
+        // Scope detection should rely on stable index markers instead of field-value checks,
+        // so preview/code-editor wrappers won't accidentally drop shapeRel* availability.
+        if (
+            textarea.dataset.shapeLevelIdx !== undefined
+            || textarea.dataset.shapeLevelDisplayIdx !== undefined
+            || textarea.dataset.shapeLevelDisplayField === "expression"
+        ) {
+            const levelFromRow = textarea.closest?.("[data-shape-level]")?.dataset?.shapeLevel;
+            const idx = Math.max(1, int(textarea.dataset.shapeLevelIdx ?? levelFromRow ?? 1));
+            return this.getShapeScopeInfoByRuntimeLevel(card, idx + 1);
+        }
+        if (textarea.dataset.cardShapeChildDisplayIdx !== undefined || textarea.dataset.cardShapeChildDisplayField === "expression") {
+            return this.getShapeScopeInfoByRuntimeLevel(card, 1);
+        }
+        if (textarea.dataset.cardShapeDisplayIdx !== undefined || textarea.dataset.cardShapeDisplayField === "expression") {
+            return this.getShapeScopeInfoByRuntimeLevel(card, 0);
+        }
+        return none;
+    }
+
     getJsValidationAllowedIdentifiers(opts = {}) {
         const allowed = new Set();
         for (const key of JS_LINT_GLOBALS) allowed.add(key);
+        const scope = (opts.scope && typeof opts.scope === "object") ? opts.scope : null;
+        if (scope?.allowRel) allowed.add("rel");
+        if (scope?.allowOrder) allowed.add("order");
+        const scopeMaxShapeDepth = scope ? Number(scope.maxShapeDepth) : Number.NaN;
+        const maxShapeDepth = Number.isFinite(scopeMaxShapeDepth)
+            ? Math.max(-1, int(scopeMaxShapeDepth))
+            : -1;
+        const seqDepth = new Set(
+            Array.isArray(scope?.sequencedDepths)
+                ? scope.sequencedDepths.map((it) => int(it))
+                : []
+        );
+        for (let i = 0; i <= maxShapeDepth; i++) {
+            allowed.add(`shapeRel${i}`);
+            if (seqDepth.has(i)) allowed.add(`shapeOrder${i}`);
+        }
         for (const g of (this.state.globalVars || [])) {
             const name = String(g?.name || "").trim();
             if (/^[A-Za-z_$][A-Za-z0-9_$]*$/.test(name)) allowed.add(name);
@@ -7001,14 +7521,14 @@ class CompositionBuilderApp {
                 "vars",
                 "point",
                 "particle",
-                "rotateTo",
+                "rotateToPoint",
                 "rotateAsAxis",
                 "rotateToWithAngle",
                 "addSingle",
                 "addMultiple",
                 "addPreTickAction",
                 "thisAt",
-                `with(vars){ ${src} }; return point;`
+                `with(vars){ ${src}\n }; return point;`
             );
         } catch (e) {
             return { valid: false, message: `语法错误: ${String(e?.message || e || "invalid script")}` };
@@ -7032,7 +7552,8 @@ class CompositionBuilderApp {
             return { valid: true, message: "" };
         }
         const cardId = String(textarea.dataset.cardId || "");
-        const result = this.validateJsExpressionSource(source, { cardId });
+        const scope = this.getCodeEditorScopeInfo(textarea);
+        const result = this.validateJsExpressionSource(source, { cardId, scope });
         if (result.valid) return result;
         return {
             valid: false,
@@ -7076,6 +7597,7 @@ class CompositionBuilderApp {
     getCodeEditorCompletions(textarea) {
         const isControllerScript = String(textarea?.dataset?.cactField || "") === "script";
         const projectClass = sanitizeKotlinClassName(this.state.projectName || "NewComposition");
+        const scopeInfo = this.getCodeEditorScopeInfo(textarea);
         const base = isControllerScript
             ? [
                 { label: "if (...) { ... }", insertText: "if ($0) {\\n    \\n}", detail: "条件分支", priority: 220 },
@@ -7089,6 +7611,9 @@ class CompositionBuilderApp {
                 { label: "particle.particleColor = Vector3f()", insertText: "particle.particleColor = Vector3f($0)", detail: "粒子颜色", priority: 250 },
                 { label: "particle.particleSize = 0.2", insertText: "particle.particleSize = $0", detail: "粒子尺寸", priority: 250 },
                 { label: "particle.particleAlpha = 1.0", insertText: "particle.particleAlpha = $0", detail: "粒子透明度", priority: 250 },
+                { label: "status.displayStatus = 2", insertText: "status.displayStatus = $0", detail: "Composition lifecycle", priority: 258 },
+                { label: `this@${projectClass}.status.displayStatus`, insertText: `this@${projectClass}.status.displayStatus`, detail: "Composition lifecycle", priority: 257 },
+                { label: "tickCount", detail: "??? tick??? tick??", priority: 250 },
                 { label: "RelativeLocation(x, y, z)", insertText: "RelativeLocation($0)", detail: "向量构造", priority: 220 },
                 { label: "Vec3(x, y, z)", insertText: "Vec3($0)", detail: "向量构造", priority: 220 },
                 { label: "Vector3f(x, y, z)", insertText: "Vector3f($0)", detail: "向量构造", priority: 220 },
@@ -7101,7 +7626,7 @@ class CompositionBuilderApp {
             ]
             : [
                 { label: "if (...) { ... }", insertText: "if ($0) {\\n    \\n}", detail: "条件分支", priority: 140 },
-                { label: "rotateTo(to)", insertText: "rotateTo($0)", detail: "Display API", priority: 260 },
+                { label: "rotateToPoint(to)", insertText: "rotateToPoint($0)", detail: "Display API", priority: 260 },
                 { label: "rotateAsAxis(angle)", insertText: "rotateAsAxis($0)", detail: "Display API", priority: 260 },
                 { label: "rotateToWithAngle(to, angle)", insertText: "rotateToWithAngle($0, 0.05)", detail: "Display API", priority: 260 },
                 { label: "addSingle()", insertText: "addSingle()", detail: "生长 API", priority: 260 },
@@ -7117,7 +7642,10 @@ class CompositionBuilderApp {
                 { label: "particle.particleSize", detail: "粒子属性", priority: 240 },
                 { label: "age", detail: "当前 age", priority: 250 },
                 { label: "tick", detail: "当前 tick", priority: 250 },
+                { label: "tickCount", detail: "当前 tick（同 tick）", priority: 250 },
                 { label: "index", detail: "点索引", priority: 250 },
+                { label: "status.displayStatus", detail: "当前 Composition 状态", priority: 252 },
+                { label: `this@${projectClass}.status.displayStatus`, insertText: `this@${projectClass}.status.displayStatus`, detail: "Composition state (qualified)", priority: 251 },
                 { label: "PI", detail: "数学常量", priority: 230 },
                 { label: "Math.sin(x)", insertText: "Math.sin($0)", detail: "数学函数", priority: 180 },
                 { label: "Math.cos(x)", insertText: "Math.cos($0)", detail: "数学函数", priority: 180 },
@@ -7125,6 +7653,33 @@ class CompositionBuilderApp {
                 { label: "Math.min(a, b)", insertText: "Math.min($0, )", cursorOffset: 11, detail: "数学函数", priority: 180 },
                 { label: "Math.max(a, b)", insertText: "Math.max($0, )", cursorOffset: 11, detail: "数学函数", priority: 180 }
             ];
+        const scopeMaxDepthRaw = Number(scopeInfo.maxShapeDepth);
+        const hasScopedShapeVars = scopeInfo.allowRel
+            || scopeInfo.allowOrder
+            || (Number.isFinite(scopeMaxDepthRaw) && int(scopeMaxDepthRaw) >= 0);
+        if (hasScopedShapeVars) {
+            if (scopeInfo.allowRel) {
+                base.push({ label: "rel", detail: "当前层的父级 rel", priority: 248 });
+            }
+            if (scopeInfo.allowOrder) {
+                base.push({ label: "order", detail: "当前层的父级 order（Sequenced）", priority: 248 });
+            }
+            const scopeMaxDepth = scopeMaxDepthRaw;
+            const maxDepth = Number.isFinite(scopeMaxDepth)
+                ? Math.max(-1, int(scopeMaxDepth))
+                : -1;
+            const seqDepth = new Set(
+                Array.isArray(scopeInfo.sequencedDepths)
+                    ? scopeInfo.sequencedDepths.map((it) => int(it))
+                    : []
+            );
+            for (let d = 0; d <= maxDepth; d++) {
+                base.push({ label: `shapeRel${d}`, detail: `shape 层 ${d} 的父级 rel`, priority: 246 - Math.min(d, 8) });
+                if (seqDepth.has(d)) {
+                    base.push({ label: `shapeOrder${d}`, detail: `shape 层 ${d} 的父级 order（Sequenced）`, priority: 245 - Math.min(d, 8) });
+                }
+            }
+        }
 
         const vars = [];
         for (const g of this.state.globalVars) {
@@ -7753,8 +8308,8 @@ class CompositionBuilderApp {
         const sequencedRoot = this.state.compositionType === "sequenced";
         const baseClass = sequencedRoot ? "AutoSequencedParticleComposition" : "AutoParticleComposition";
         const imports = [
-            "import cn.coostack.cooparticlesapi.annotations.codec.CodecField",
-            "import cn.coostack.cooparticlesapi.annotations.composition.CooAutoRegister",
+            "import cn.coostack.cooparticlesapi.annotations.CodecField",
+            "import cn.coostack.cooparticlesapi.annotations.CooAutoRegister",
             "import cn.coostack.cooparticlesapi.network.particle.composition.*",
             "import cn.coostack.cooparticlesapi.particles.ParticleDisplayer",
             "import cn.coostack.cooparticlesapi.particles.impl.*",
@@ -7800,7 +8355,13 @@ class CompositionBuilderApp {
             const name = uniqueName(v.name, "value");
             const type = String(v.type || "Double").trim() || "Double";
             const rawValue = String(v.value || "").trim();
-            const value = rewriteClassQualifier(rawValue || defaultLiteralForKotlinType(type), className);
+            let value = rewriteClassQualifier(rawValue || defaultLiteralForKotlinType(type), className);
+            if (/^float$/i.test(type)) {
+                if (isPlainNumericLiteralText(value)) value = normalizeKotlinFloatLiteralText(value);
+                else if (!/\.toFloat\(\)\s*$/.test(value)) value = `(${value}).toFloat()`;
+            } else if (/^double$/i.test(type) && isPlainNumericLiteralText(value)) {
+                value = normalizeKotlinDoubleLiteralText(value);
+            }
             if (v.codec) lines.push("    @CodecField");
             lines.push(`    ${v.mutable ? "var" : "val"} ${name}: ${type} = ${value}`);
             lines.push("");
@@ -7809,7 +8370,13 @@ class CompositionBuilderApp {
             const name = uniqueName(c.name, "constant");
             const type = String(c.type || "Int").trim() || "Int";
             const rawValue = String(c.value || "").trim();
-            const value = rewriteClassQualifier(rawValue || defaultLiteralForKotlinType(type), className);
+            let value = rewriteClassQualifier(rawValue || defaultLiteralForKotlinType(type), className);
+            if (/^float$/i.test(type)) {
+                if (isPlainNumericLiteralText(value)) value = normalizeKotlinFloatLiteralText(value);
+                else if (!/\.toFloat\(\)\s*$/.test(value)) value = `(${value}).toFloat()`;
+            } else if (/^double$/i.test(type) && isPlainNumericLiteralText(value)) {
+                value = normalizeKotlinDoubleLiteralText(value);
+            }
             lines.push(`    val ${name}: ${type} = ${value}`);
             lines.push("");
         }
@@ -7818,12 +8385,12 @@ class CompositionBuilderApp {
         if (projectScale.type !== "none") {
             if (projectScale.type === "bezier") {
                 lines.push(
-                    `    private val scaleHelper = CompositionBezierScaleHelper(${formatNumberCompact(projectScale.min)}, ${formatNumberCompact(projectScale.max)}, ${Math.max(1, int(projectScale.tick))}, ` +
-                    `RelativeLocation(${formatNumberCompact(projectScale.c1x)}, ${formatNumberCompact(projectScale.c1y)}, ${formatNumberCompact(projectScale.c1z)}), ` +
-                    `RelativeLocation(${formatNumberCompact(projectScale.c2x)}, ${formatNumberCompact(projectScale.c2y)}, ${formatNumberCompact(projectScale.c2z)}))`
+                    `    private val scaleHelper = CompositionBezierScaleHelper(${formatKotlinDoubleLiteral(projectScale.min)}, ${formatKotlinDoubleLiteral(projectScale.max)}, ${Math.max(1, int(projectScale.tick))}, ` +
+                    `RelativeLocation(${formatKotlinDoubleLiteral(projectScale.c1x)}, ${formatKotlinDoubleLiteral(projectScale.c1y)}, ${formatKotlinDoubleLiteral(projectScale.c1z)}), ` +
+                    `RelativeLocation(${formatKotlinDoubleLiteral(projectScale.c2x)}, ${formatKotlinDoubleLiteral(projectScale.c2y)}, ${formatKotlinDoubleLiteral(projectScale.c2z)}))`
                 );
             } else {
-                lines.push(`    private val scaleHelper = CompositionScaleHelper(${formatNumberCompact(projectScale.min)}, ${formatNumberCompact(projectScale.max)}, ${Math.max(1, int(projectScale.tick))})`);
+                lines.push(`    private val scaleHelper = CompositionScaleHelper(${formatKotlinDoubleLiteral(projectScale.min)}, ${formatKotlinDoubleLiteral(projectScale.max)}, ${Math.max(1, int(projectScale.tick))})`);
             }
             lines.push("");
         }
@@ -7902,12 +8469,15 @@ class CompositionBuilderApp {
     }
 
     emitCardPutPoint(card, className, sequencedRoot) {
-        const dataExpr = this.emitCompositionDataExpr(card, className, sequencedRoot, "            ");
         const rel = relExpr(card.point?.x, card.point?.y, card.point?.z);
+        const dataExpr = this.emitCompositionDataExpr(card, className, sequencedRoot, "                ");
         return [
-            "        result[",
+            "        run {",
+            `            val rel = ${rel}`,
+            "            result[",
             dataExpr,
-            `        ] = ${rel}`
+            "            ] = rel",
+            "        }"
         ].join("\n");
     }
 
@@ -7933,21 +8503,29 @@ class CompositionBuilderApp {
 
     emitCompositionDataExpr(card, className, sequencedRoot, indentBase = "                ") {
         const lines = [];
-        if (sequencedRoot) lines.push(`${indentBase}CompositionData().apply { order = orderCounter++ }`);
-        else lines.push(`${indentBase}CompositionData()`);
-        lines.push(`${indentBase}    .setDisplayerSupplier {`);
-        if (card.dataType === "single") {
-            lines.push(`${indentBase}        ParticleDisplayer.withSingle(${sanitizeKotlinIdentifier(card.singleEffectClass || DEFAULT_EFFECT_CLASS, DEFAULT_EFFECT_CLASS)}(it))`);
-        } else if (card.dataType === "particle_shape") {
-            lines.push(indentText(this.buildShapeDisplayerExpr(card, className, "particle_shape"), `${indentBase}        `));
+        let headIndent = indentBase;
+        if (sequencedRoot) {
+            lines.push(`${indentBase}run {`);
+            lines.push(`${indentBase}    val order = orderCounter++`);
+            headIndent = `${indentBase}    `;
+            lines.push(`${headIndent}CompositionData().apply { order = order }`);
         } else {
-            lines.push(indentText(this.buildShapeDisplayerExpr(card, className, "sequenced_shape"), `${indentBase}        `));
+            lines.push(`${headIndent}CompositionData()`);
         }
-        lines.push(`${indentBase}    }`);
+        lines.push(`${headIndent}    .setDisplayerSupplier {`);
+        if (card.dataType === "single") {
+            lines.push(`${headIndent}        ParticleDisplayer.withSingle(${sanitizeKotlinIdentifier(card.singleEffectClass || DEFAULT_EFFECT_CLASS, DEFAULT_EFFECT_CLASS)}(it))`);
+        } else if (card.dataType === "particle_shape") {
+            lines.push(indentText(this.buildShapeDisplayerExpr(card, className, "particle_shape"), `${headIndent}        `));
+        } else {
+            lines.push(indentText(this.buildShapeDisplayerExpr(card, className, "sequenced_shape"), `${headIndent}        `));
+        }
+        lines.push(`${headIndent}    }`);
 
         if (card.dataType === "single") {
-            lines.push(this.buildSingleDataChain(card, className, `${indentBase}    `));
+            lines.push(this.buildSingleDataChain(card, className, `${headIndent}    `));
         }
+        if (sequencedRoot) lines.push(`${indentBase}}`);
         return lines.join("\n");
     }
 
@@ -7957,7 +8535,8 @@ class CompositionBuilderApp {
             lines.push(`${indentBase}.addParticleInstanceInit {`);
             for (const it of card.particleInit) {
                 const target = sanitizeKotlinIdentifier(it.target || "size", "size");
-                const expr = rewriteClassQualifier(String(it.expr || "").trim(), className);
+                let expr = rewriteClassQualifier(String(it.expr || "").trim(), className);
+                expr = normalizeParticleFloatAssignmentExpr(target, expr);
                 if (!expr) continue;
                 lines.push(`${indentBase}    ${target} = ${expr}`);
             }
@@ -7972,14 +8551,16 @@ class CompositionBuilderApp {
                 const vName = sanitizeKotlinIdentifier(v.name || "v", "v");
                 const vType = sanitizeKotlinIdentifier(v.type || "Boolean", "Boolean");
                 let expr = rewriteClassQualifier(String(v.expr || "").trim(), className);
+                expr = rewriteControllerStatusQualifier(expr, className);
                 if (!expr) expr = defaultLiteralForKotlinType(vType);
                 lines.push(`${indentBase}    var ${vName}: ${vType} = ${expr}`);
             }
             for (const action of actions) {
                 const script = rewriteClassQualifier(String(action.script || "").trim(), className);
-                if (!script) continue;
+                const patched = rewriteControllerStatusQualifier(script, className);
+                if (!patched) continue;
                 lines.push(`${indentBase}    addPreTickAction {`);
-                lines.push(translateJsBlockToKotlin(script, `${indentBase}        `));
+                lines.push(translateJsBlockToKotlin(patched, `${indentBase}        `));
                 lines.push(`${indentBase}    }`);
             }
             lines.push(`${indentBase}}`);
@@ -7987,34 +8568,59 @@ class CompositionBuilderApp {
         return lines.join("\n");
     }
 
+    createShapeDataLambdaContext(depth = 0, sequenced = false, parentCtx = null) {
+        const d = Math.max(0, int(depth));
+        return {
+            depth: d,
+            relName: `shapeRel${d}`,
+            orderName: sequenced ? `shapeOrder${d}` : "",
+            parent: parentCtx && typeof parentCtx === "object" ? parentCtx : null
+        };
+    }
+
+    formatShapeDataLambdaParams(ctx) {
+        if (!ctx) return "shapeRel0";
+        if (ctx.orderName) return `${ctx.relName}, ${ctx.orderName}`;
+        return ctx.relName;
+    }
+
+    emitShapeCompositionDataBase(ctx, indent = "            ") {
+        if (ctx?.orderName) return `${indent}CompositionData().apply { order = ${ctx.orderName} }`;
+        return `${indent}CompositionData()`;
+    }
+
     buildShapeDisplayerExpr(card, className, type = "particle_shape") {
-        const cls = type === "sequenced_shape" ? "SequencedParticleShapeComposition" : "ParticleShapeComposition";
-        const applyFn = type === "sequenced_shape" ? "applyPointRel" : "applyPoint";
+        const isSequenced = type === "sequenced_shape";
+        const cls = isSequenced ? "SequencedParticleShapeComposition" : "ParticleShapeComposition";
+        const applyFn = "applyPoint";
         const childType = ["single", "particle_shape", "sequenced_shape"].includes(String(card.shapeChildType || "")) ? String(card.shapeChildType) : "single";
         const axisExpr = rewriteClassQualifier(String(card.shapeAxisExpr || card.shapeAxisPreset || "RelativeLocation.yAxis()"), className);
         const scale = normalizeScaleHelperConfig(card.shapeScale, { type: "none" });
         const shapeBindMode = card.shapeBindMode === "builder" ? "builder" : "point";
         const shapePointExpr = relExpr(card.shapePoint?.x, card.shapePoint?.y, card.shapePoint?.z);
         const shapeBuilderExpr = this.emitBuilderExprFromState(card.shapeBuilderState);
-        const childDisplayerExpr = this.buildShapeChildDisplayerExpr(card, className);
+        const rootCtx = this.createShapeDataLambdaContext(0, isSequenced, null);
+        const rootScopeInfo = this.getShapeScopeInfoByRuntimeLevel(card, 0);
+        const childDisplayerExpr = this.buildShapeChildDisplayerExpr(card, className, rootCtx);
+        const dataLambdaHead = this.formatShapeDataLambdaParams(rootCtx);
         const lines = [];
         lines.push("ParticleDisplayer.withComposition(");
         lines.push(`    ${cls}(it).apply {`);
         if (axisExpr) lines.push(`        axis = ${axisExpr}`);
         if (scale.type === "bezier") {
             lines.push(
-                `        loadScaleHelperBezierValue(${formatNumberCompact(scale.min)}, ${formatNumberCompact(scale.max)}, ${Math.max(1, int(scale.tick))}, ` +
-                `RelativeLocation(${formatNumberCompact(scale.c1x)}, ${formatNumberCompact(scale.c1y)}, ${formatNumberCompact(scale.c1z)}), ` +
-                `RelativeLocation(${formatNumberCompact(scale.c2x)}, ${formatNumberCompact(scale.c2y)}, ${formatNumberCompact(scale.c2z)}))`
+                `        loadScaleHelperBezierValue(${formatKotlinDoubleLiteral(scale.min)}, ${formatKotlinDoubleLiteral(scale.max)}, ${Math.max(1, int(scale.tick))}, ` +
+                `RelativeLocation(${formatKotlinDoubleLiteral(scale.c1x)}, ${formatKotlinDoubleLiteral(scale.c1y)}, ${formatKotlinDoubleLiteral(scale.c1z)}), ` +
+                `RelativeLocation(${formatKotlinDoubleLiteral(scale.c2x)}, ${formatKotlinDoubleLiteral(scale.c2y)}, ${formatKotlinDoubleLiteral(scale.c2z)}))`
             );
         } else if (scale.type === "linear") {
-            lines.push(`        loadScaleValue(${formatNumberCompact(scale.min)}, ${formatNumberCompact(scale.max)}, ${Math.max(1, int(scale.tick))})`);
+            lines.push(`        loadScaleValue(${formatKotlinDoubleLiteral(scale.min)}, ${formatKotlinDoubleLiteral(scale.max)}, ${Math.max(1, int(scale.tick))})`);
         }
         if (shapeBindMode === "builder") {
             lines.push("        applyBuilder(");
             lines.push(indentText(shapeBuilderExpr, "            "));
-            lines.push("        ) {");
-            lines.push("            CompositionData()");
+            lines.push(`        ) { ${dataLambdaHead} ->`);
+            lines.push(this.emitShapeCompositionDataBase(rootCtx, "            "));
             lines.push("                .setDisplayerSupplier {");
             lines.push(indentText(childDisplayerExpr, "                    "));
             lines.push("                }");
@@ -8024,8 +8630,8 @@ class CompositionBuilderApp {
             }
             lines.push("        }");
         } else {
-            lines.push(`        ${applyFn}(${shapePointExpr}) {`);
-            lines.push("            CompositionData()");
+            lines.push(`        ${applyFn}(${shapePointExpr}) { ${dataLambdaHead} ->`);
+            lines.push(this.emitShapeCompositionDataBase(rootCtx, "            "));
             lines.push("                .setDisplayerSupplier {");
             lines.push(indentText(childDisplayerExpr, "                    "));
             lines.push("                }");
@@ -8035,29 +8641,35 @@ class CompositionBuilderApp {
             }
             lines.push("        }");
         }
-        lines.push(this.applyCardCompositionActions(card, className, "        ", type === "sequenced_shape"));
+        lines.push(this.applyCardCompositionActions(card, className, "        ", type === "sequenced_shape", rootScopeInfo));
         lines.push("    }");
         lines.push(")");
         return lines.join("\n");
     }
 
-    buildShapeChildDisplayerExpr(card, className) {
+    buildShapeChildDisplayerExpr(card, className, parentCtx = null) {
         const chain = this.getShapeChildChain(card);
-        const buildLevel = (levelIdx = 0) => {
+        const baseDepth = parentCtx && Number.isFinite(Number(parentCtx.depth)) ? int(parentCtx.depth) + 1 : 0;
+        const buildLevel = (levelIdx = 0, outerCtx = parentCtx) => {
             const level = chain[levelIdx] ? normalizeShapeNestedLevel(chain[levelIdx], levelIdx) : normalizeShapeNestedLevel({});
             if (level.type === "single") {
                 const fx = sanitizeKotlinIdentifier(level.effectClass || card.singleEffectClass || DEFAULT_EFFECT_CLASS, DEFAULT_EFFECT_CLASS);
                 return `ParticleDisplayer.withSingle(${fx}(it))`;
             }
-            const cls = level.type === "sequenced_shape" ? "SequencedParticleShapeComposition" : "ParticleShapeComposition";
-            const applyFn = level.type === "sequenced_shape" ? "applyPointRel" : "applyPoint";
+            const isSequenced = level.type === "sequenced_shape";
+            const cls = isSequenced ? "SequencedParticleShapeComposition" : "ParticleShapeComposition";
+            const applyFn = "applyPoint";
             const axisExpr = rewriteClassQualifier(String(level.axisExpr || level.axisPreset || "RelativeLocation.yAxis()"), className);
             const scale = normalizeScaleHelperConfig(level.scale, { type: "none" });
             const bindMode = level.bindMode === "builder" ? "builder" : "point";
             const pointExpr = relExpr(level.point?.x, level.point?.y, level.point?.z);
             const builderExpr = this.emitBuilderExprFromState(level.builderState);
+            const depth = baseDepth + Math.max(0, int(levelIdx));
+            const ctx = this.createShapeDataLambdaContext(depth, isSequenced, outerCtx);
+            const dataLambdaHead = this.formatShapeDataLambdaParams(ctx);
             const nextLevel = chain[levelIdx + 1] ? normalizeShapeNestedLevel(chain[levelIdx + 1], levelIdx + 1) : normalizeShapeNestedLevel({});
-            const nextDisplayerExpr = buildLevel(levelIdx + 1);
+            const nextDisplayerExpr = buildLevel(levelIdx + 1, ctx);
+            const scopeInfo = this.getShapeScopeInfoByRuntimeLevel(card, levelIdx + 1);
             const pseudo = {
                 id: card.id,
                 shapeDisplayActions: level.displayActions || [],
@@ -8070,21 +8682,21 @@ class CompositionBuilderApp {
             if (axisExpr) lines.push(`        axis = ${axisExpr}`);
             if (scale.type === "bezier") {
                 lines.push(
-                    `        loadScaleHelperBezierValue(${formatNumberCompact(scale.min)}, ${formatNumberCompact(scale.max)}, ${Math.max(1, int(scale.tick))}, ` +
-                    `RelativeLocation(${formatNumberCompact(scale.c1x)}, ${formatNumberCompact(scale.c1y)}, ${formatNumberCompact(scale.c1z)}), ` +
-                    `RelativeLocation(${formatNumberCompact(scale.c2x)}, ${formatNumberCompact(scale.c2y)}, ${formatNumberCompact(scale.c2z)}))`
+                    `        loadScaleHelperBezierValue(${formatKotlinDoubleLiteral(scale.min)}, ${formatKotlinDoubleLiteral(scale.max)}, ${Math.max(1, int(scale.tick))}, ` +
+                    `RelativeLocation(${formatKotlinDoubleLiteral(scale.c1x)}, ${formatKotlinDoubleLiteral(scale.c1y)}, ${formatKotlinDoubleLiteral(scale.c1z)}), ` +
+                    `RelativeLocation(${formatKotlinDoubleLiteral(scale.c2x)}, ${formatKotlinDoubleLiteral(scale.c2y)}, ${formatKotlinDoubleLiteral(scale.c2z)}))`
                 );
             } else if (scale.type === "linear") {
-                lines.push(`        loadScaleValue(${formatNumberCompact(scale.min)}, ${formatNumberCompact(scale.max)}, ${Math.max(1, int(scale.tick))})`);
+                lines.push(`        loadScaleValue(${formatKotlinDoubleLiteral(scale.min)}, ${formatKotlinDoubleLiteral(scale.max)}, ${Math.max(1, int(scale.tick))})`);
             }
             if (bindMode === "builder") {
                 lines.push("        applyBuilder(");
                 lines.push(indentText(builderExpr, "            "));
-                lines.push("        ) {");
+                lines.push(`        ) { ${dataLambdaHead} ->`);
             } else {
-                lines.push(`        ${applyFn}(${pointExpr}) {`);
+                lines.push(`        ${applyFn}(${pointExpr}) { ${dataLambdaHead} ->`);
             }
-            lines.push("            CompositionData()");
+            lines.push(this.emitShapeCompositionDataBase(ctx, "            "));
             lines.push("                .setDisplayerSupplier {");
             lines.push(indentText(nextDisplayerExpr, "                    "));
             lines.push("                }");
@@ -8093,16 +8705,16 @@ class CompositionBuilderApp {
                 if (singleChain) lines.push(singleChain);
             }
             lines.push("        }");
-            const actions = this.applyCardCompositionActions(pseudo, className, "        ", level.type === "sequenced_shape");
+            const actions = this.applyCardCompositionActions(pseudo, className, "        ", level.type === "sequenced_shape", scopeInfo);
             if (String(actions || "").trim()) lines.push(actions);
             lines.push("    }");
             lines.push(")");
             return lines.join("\n");
         };
-        return buildLevel(0);
+        return buildLevel(0, parentCtx);
     }
 
-    applyCardCompositionActions(card, className, innerIndent = "        ", supportsAnimate = false) {
+    applyCardCompositionActions(card, className, innerIndent = "        ", supportsAnimate = false, scopeInfo = null) {
         const lines = [];
         const displayActions = Array.isArray(card.shapeDisplayActions) && card.shapeDisplayActions.length
             ? card.shapeDisplayActions.map((a) => normalizeDisplayAction(a))
@@ -8116,15 +8728,15 @@ class CompositionBuilderApp {
                 ? rewriteClassQualifier(String(act.angleExpr || "0.0"), className)
                 : U.angleToKotlinRadExpr(num(act.angleValue), normalizeAngleUnit(act.angleUnit));
             lines.push(`${innerIndent}applyDisplayAction {`);
-            if (act.type === "rotateTo") {
-                lines.push(`${innerIndent}    rotateTo(${toExpr})`);
+            if (act.type === "rotateToPoint") {
+                lines.push(`${innerIndent}    rotateToPoint(${toExpr})`);
             } else if (act.type === "rotateAsAxis") {
                 lines.push(`${innerIndent}    rotateAsAxis(${angleExpr})`);
             } else if (act.type === "rotateToWithAngle") {
                 lines.push(`${innerIndent}    rotateToWithAngle(${toExpr}, ${angleExpr})`);
             } else if (act.type === "expression") {
                 const rawExpr = String(act.expression || "").trim();
-                const check = this.validateJsExpressionSource(rawExpr, { cardId: card.id });
+                const check = this.validateJsExpressionSource(rawExpr, { cardId: card.id, scope: scopeInfo || undefined });
                 const expr = rewriteClassQualifier(rawExpr, className);
                 if (expr && check.valid) {
                     lines.push(`${innerIndent}    addPreTickAction {`);
@@ -8175,8 +8787,8 @@ class CompositionBuilderApp {
             const angleExpr = act.angleMode === "expr"
                 ? rewriteClassQualifier(String(act.angleExpr || "0.0"), className)
                 : U.angleToKotlinRadExpr(num(act.angleValue), normalizeAngleUnit(act.angleUnit));
-            if (act.type === "rotateTo") {
-                lines.push(`            rotateTo(${toExpr})`);
+            if (act.type === "rotateToPoint") {
+                lines.push(`            rotateToPoint(${toExpr})`);
             } else if (act.type === "rotateAsAxis") {
                 lines.push(`            rotateAsAxis(${angleExpr})`);
             } else if (act.type === "rotateToWithAngle") {
@@ -8236,6 +8848,11 @@ function rewriteClassQualifier(expr, className) {
     return String(expr || "").replace(/this@[A-Za-z_][A-Za-z0-9_]*/g, `this@${cls}`);
 }
 
+function rewriteControllerStatusQualifier(expr, className) {
+    const cls = sanitizeKotlinClassName(className || "TestComposition");
+    return String(expr || "").replace(/(^|[^A-Za-z0-9_@.])status\./g, `$1this@${cls}.status.`);
+}
+
 function transpileKotlinThisQualifierToJs(source) {
     return String(source || "").replace(/this@[A-Za-z_][A-Za-z0-9_]*\./g, "thisAt.");
 }
@@ -8244,18 +8861,95 @@ function defaultLiteralForKotlinType(typeName) {
     const t = String(typeName || "").trim().toLowerCase();
     if (t === "string") return "\"\"";
     if (t === "boolean") return "false";
-    if (t === "float") return "0f";
+    if (t === "float") return "0F";
     if (t === "double") return "0.0";
     if (t === "long") return "0L";
     if (t === "int" || t === "short" || t === "byte") return "0";
     if (t === "vec3") return "Vec3.ZERO";
-    if (t === "vector3f") return "Vector3f(0f,0f,0f)";
+    if (t === "vector3f") return "Vector3f(0F,0F,0F)";
     if (t === "relativelocation") return "RelativeLocation(0.0, 0.0, 0.0)";
     return "0";
 }
 
+function isParticleFloatTargetName(rawTarget) {
+    const t = String(rawTarget || "").trim().toLowerCase();
+    return t === "size"
+        || t === "particlesize"
+        || t === "particle.particlesize"
+        || t === "alpha"
+        || t === "particlealpha"
+        || t === "particle.particlealpha";
+}
+
+function normalizeParticleFloatAssignmentExpr(targetName, exprRaw) {
+    const expr = String(exprRaw || "").trim();
+    if (!expr) return expr;
+    if (!isParticleFloatTargetName(targetName)) return expr;
+    if (isPlainNumericLiteralText(expr)) return normalizeKotlinFloatLiteralText(expr);
+    if (/\.toFloat\(\)\s*$/.test(expr)) return expr;
+    return `(${expr}).toFloat()`;
+}
+
 function appendFloatSuffixInLine(line) {
-    return String(line || "").replace(/(^|[^\w.])(-?\d+\.\d+)(?![fFdD\w])/g, (m, pfx, numStr) => `${pfx}${numStr}f`);
+    return String(line || "").replace(/(^|[^\w.])(-?\d+\.\d+)(?![fFdD\w])/g, (m, pfx, numStr) => `${pfx}${numStr}F`);
+}
+
+function normalizeVectorCtorNumericLiteral(rawArg, mode = "double") {
+    const raw = String(rawArg || "").trim();
+    if (!/^-?(?:\d+\.?\d*|\.\d+)(?:[fFdDlL])?$/.test(raw)) return raw;
+    let core = raw;
+    if (/[fFdDlL]$/.test(core)) core = core.slice(0, -1);
+    if (!core) return raw;
+    if (mode === "float") {
+        if (!core.includes(".")) return `${core}F`;
+        if (core.endsWith(".")) core = `${core}0`;
+        return `${core}F`;
+    }
+    if (!core.includes(".")) return `${core}.0`;
+    if (core.endsWith(".")) return `${core}0`;
+    return core;
+}
+
+function rewriteVectorCtorNumericLiteralsInLine(line) {
+    const src = String(line || "");
+    const rewrite = (ctor, a, b, c) => {
+        const mode = ctor === "Vector3f" ? "float" : "double";
+        const x = normalizeVectorCtorNumericLiteral(a, mode);
+        const y = normalizeVectorCtorNumericLiteral(b, mode);
+        const z = normalizeVectorCtorNumericLiteral(c, mode);
+        return `${ctor}(${x},${y},${z})`;
+    };
+    let out = src.replace(
+        /\bVector3f\s*\(\s*([^,]+)\s*,\s*([^,]+)\s*,\s*([^)]+)\s*\)/g,
+        (m, a, b, c) => rewrite("Vector3f", a, b, c)
+    );
+    out = out.replace(
+        /\bVec3\s*\(\s*([^,]+)\s*,\s*([^,]+)\s*,\s*([^)]+)\s*\)/g,
+        (m, a, b, c) => rewrite("Vec3", a, b, c)
+    );
+    out = out.replace(
+        /\bRelativeLocation\s*\(\s*([^,]+)\s*,\s*([^,]+)\s*,\s*([^)]+)\s*\)/g,
+        (m, a, b, c) => rewrite("RelativeLocation", a, b, c)
+    );
+    return out;
+}
+
+function rewriteParticleFloatAssignmentInLine(line) {
+    const src = String(line || "");
+    const m = src.match(/^(\s*(?:this\.)?(?:particle\.)?(?:particleAlpha|particleSize|alpha|size)\s*=\s*)(.+)$/);
+    if (!m) return src;
+    const lhs = m[1];
+    let rhs = String(m[2] || "").trim();
+    let tail = "";
+    const commentIdx = rhs.indexOf("//");
+    if (commentIdx >= 0) {
+        tail = rhs.slice(commentIdx);
+        rhs = rhs.slice(0, commentIdx).trim();
+    }
+    if (!rhs) return src;
+    if (isPlainNumericLiteralText(rhs)) rhs = normalizeKotlinFloatLiteralText(rhs);
+    else if (!/\.toFloat\(\)\s*$/.test(rhs)) rhs = `(${rhs}).toFloat()`;
+    return `${lhs}${rhs}${tail ? ` ${tail}` : ""}`;
 }
 
 function translateJsBlockToKotlin(script, indent = "    ") {
@@ -8278,6 +8972,8 @@ function translateJsBlockToKotlin(script, indent = "    ") {
             line = `${left}if (${cond.trim()}) ${yes.trim()} else ${no.trim()}`;
         }
         line = appendFloatSuffixInLine(line);
+        line = rewriteVectorCtorNumericLiteralsInLine(line);
+        line = rewriteParticleFloatAssignmentInLine(line);
         out.push(`${indent}${line}`);
     }
     return out.join("\n");

@@ -1,4 +1,4 @@
-﻿function escHtml(s) {
+function escHtml(s) {
     return String(s ?? "")
         .replaceAll("&", "&amp;")
         .replaceAll("<", "&lt;")
@@ -14,7 +14,7 @@ const JS_KEYWORDS = new Set([
 
 const JS_BUILTINS = new Set([
     "Math", "PI", "Random", "Number", "String", "Boolean", "Object", "Array",
-    "rotateTo", "rotateAsAxis", "rotateToWithAngle", "addSingle", "addMultiple", "addPreTickAction"
+    "rotateToPoint", "rotateAsAxis", "rotateToWithAngle", "addSingle", "addMultiple", "addPreTickAction"
 ]);
 
 const TOKEN_RE = /\/\*[\s\S]*?\*\/|\/\/[^\n]*|"(?:\\.|[^"])*"|'(?:\\.|[^'])*'|\b\d+(?:\.\d+)?(?:[eE][+\-]?\d+)?\b|\b[A-Za-z_][A-Za-z0-9_]*\b/g;
@@ -433,7 +433,7 @@ export class InlineCodeEditor {
             end = current.end;
         }
 
-        // 纯变量/标识符补全统一把光标放在补全文本末尾。
+        // Identifier insertion: keep caret at end by default for identifier-like completions.
         const isIdentifierLike = /^[A-Za-z_$][A-Za-z0-9_.$@]*$/.test(insertText);
         if (isIdentifierLike && !Number.isFinite(localCursorOffset)) {
             localCursorOffset = insertText.length;
