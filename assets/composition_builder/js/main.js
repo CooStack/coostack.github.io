@@ -17,6 +17,11 @@ import {
     normalizeScaleHelperConfig,
     SCALE_HELPER_TYPES
 } from "./scale_helper_utils.js";
+import { installPreviewRuntimeMethods } from "./preview_runtime_mixin.js";
+import { installKotlinCodegenMethods } from "./kotlin_codegen_mixin.js";
+import { installCodeOutputMethods } from "./code_output_mixin.js";
+import { installExpressionEditorMethods } from "./expression_editor_mixin.js";
+import { installTargetPresetMethods } from "./target_preset_mixin.js";
 
 const U = globalThis.Utils;
 if (!U) throw new Error("Utils 未加载：请先加载 points_builder/utils.js");
@@ -116,6 +121,19 @@ const DISPLAY_ACTION_TYPES = [
     { id: "rotateAsAxis", title: "rotateAsAxis(angle)" },
     { id: "rotateToWithAngle", title: "rotateToWithAngle(to, angle)" },
     { id: "expression", title: "表达式" }
+];
+
+const ANGLE_OFFSET_EASE_OPTIONS = [
+    { id: "linear", title: "Eases.linear" },
+    { id: "outCubic", title: "Eases.outCubic" },
+    { id: "inOutSine", title: "Eases.inOutSine" },
+    { id: "outExpo", title: "Eases.outExpo" },
+    { id: "inCubic", title: "Eases.inCubic" },
+    { id: "inOutCubic", title: "Eases.inOutCubic" },
+    { id: "outQuad", title: "Eases.outQuad" },
+    { id: "outBack", title: "Eases.outBack" },
+    { id: "outElastic", title: "Eases.outElastic" },
+    { id: "outBounce", title: "Eases.outBounce" }
 ];
 
 const CARD_SECTION_KEYS = [
@@ -312,6 +330,30 @@ function normalizeAngleUnit(unit) {
     return unit === "rad" ? "rad" : "deg";
 }
 
+function normalizeAngleOffsetEaseName(raw) {
+    const name = String(raw || "").trim();
+    if (!name) return "outCubic";
+    return ANGLE_OFFSET_EASE_OPTIONS.some((it) => it.id === name) ? name : "outCubic";
+}
+
+function normalizeAngleOffsetFieldName(rawField) {
+    const key = String(rawField || "").trim();
+    if (!key) return "";
+    const map = {
+        enabled: "angleOffsetEnabled",
+        count: "angleOffsetCount",
+        glowTick: "angleOffsetGlowTick",
+        ease: "angleOffsetEase",
+        reverseOnDisable: "angleOffsetReverseOnDisable",
+        angleMode: "angleOffsetAngleMode",
+        angleValue: "angleOffsetAngleValue",
+        angleUnit: "angleOffsetAngleUnit",
+        angleExpr: "angleOffsetAngleExpr",
+        anglePreset: "angleOffsetAnglePreset"
+    };
+    return map[key] || key;
+}
+
 function formatAngleValue(v) {
     const n = Number(v);
     if (!Number.isFinite(n)) return "0";
@@ -337,6 +379,29 @@ function parseVectorLiteralNumbers(rawExpr, fallback = { x: 0, y: 1, z: 0 }) {
         y: read(m[2], base.y),
         z: read(m[3], base.z)
     };
+}
+
+function ensureStatusHelperMethods(rawStatus) {
+    let status = (rawStatus && typeof rawStatus === "object") ? rawStatus : {};
+    if (!Object.isExtensible(status)) status = Object.assign({}, status);
+    const assign = (key, value) => {
+        try {
+            status[key] = value;
+        } catch {
+        }
+    };
+    assign("displayStatus", int(status.displayStatus || 1) === 2 ? 2 : 1);
+    assign("isDisable", () => int(status.displayStatus || 1) === 2);
+    assign("disable", () => {
+        status.displayStatus = 2;
+        status.__manualDisplayStatus = true;
+    });
+    assign("isEnable", () => int(status.displayStatus || 1) !== 2);
+    assign("enable", () => {
+        status.displayStatus = 1;
+        status.__manualDisplayStatus = true;
+    });
+    return status;
 }
 
 const JS_LINT_KEYWORDS = new Set([
@@ -556,6 +621,16 @@ function normalizeShapeNestedLevel(raw, index = 0) {
     x.axisManualY = Number.isFinite(Number(x.axisManualY)) ? num(x.axisManualY) : 1;
     x.axisManualZ = Number.isFinite(Number(x.axisManualZ)) ? num(x.axisManualZ) : 0;
     x.displayActions = Array.isArray(x.displayActions) ? x.displayActions.map((a) => normalizeDisplayAction(a)) : [];
+    x.angleOffsetEnabled = x.angleOffsetEnabled === true;
+    x.angleOffsetCount = Math.max(1, int(x.angleOffsetCount || 1));
+    x.angleOffsetGlowTick = Math.max(1, int(x.angleOffsetGlowTick || 20));
+    x.angleOffsetEase = normalizeAngleOffsetEaseName(x.angleOffsetEase || "outCubic");
+    x.angleOffsetReverseOnDisable = x.angleOffsetReverseOnDisable === true;
+    x.angleOffsetAngleMode = x.angleOffsetAngleMode === "expr" ? "expr" : "numeric";
+    x.angleOffsetAngleValue = Number.isFinite(Number(x.angleOffsetAngleValue)) ? num(x.angleOffsetAngleValue) : 360;
+    x.angleOffsetAngleUnit = normalizeAngleUnit(x.angleOffsetAngleUnit || "deg");
+    x.angleOffsetAngleExpr = String(x.angleOffsetAngleExpr || "PI * 2");
+    x.angleOffsetAnglePreset = String(x.angleOffsetAnglePreset || x.angleOffsetAngleExpr || "PI * 2");
     x.scale = normalizeScaleHelperConfig(x.scale, { type: "none" });
     x.growthAnimates = Array.isArray(x.growthAnimates) ? x.growthAnimates.map((it) => normalizeAnimate(it)) : [];
     x.name = String(x.name || `嵌套层 ${index + 2}`);
@@ -610,6 +685,16 @@ function normalizeCard(card, index = 0) {
     x.rotateAngleUnit = normalizeAngleUnit(x.rotateAngleUnit || "rad");
     x.rotateAngleExpr = String(x.rotateAngleExpr || "speed / 180 * PI");
     x.rotateAnglePreset = String(x.rotateAnglePreset || x.rotateAngleExpr || "speed / 180 * PI");
+    x.angleOffsetEnabled = x.angleOffsetEnabled === true;
+    x.angleOffsetCount = Math.max(1, int(x.angleOffsetCount || 1));
+    x.angleOffsetGlowTick = Math.max(1, int(x.angleOffsetGlowTick || 20));
+    x.angleOffsetEase = normalizeAngleOffsetEaseName(x.angleOffsetEase || "outCubic");
+    x.angleOffsetReverseOnDisable = x.angleOffsetReverseOnDisable === true;
+    x.angleOffsetAngleMode = x.angleOffsetAngleMode === "expr" ? "expr" : "numeric";
+    x.angleOffsetAngleValue = Number.isFinite(Number(x.angleOffsetAngleValue)) ? num(x.angleOffsetAngleValue) : 360;
+    x.angleOffsetAngleUnit = normalizeAngleUnit(x.angleOffsetAngleUnit || "deg");
+    x.angleOffsetAngleExpr = String(x.angleOffsetAngleExpr || "PI * 2");
+    x.angleOffsetAnglePreset = String(x.angleOffsetAnglePreset || x.angleOffsetAngleExpr || "PI * 2");
     x.growthAnimates = Array.isArray(x.growthAnimates) ? x.growthAnimates.map((it) => normalizeAnimate(it)) : [];
     x.sequencedAnimates = Array.isArray(x.sequencedAnimates) ? x.sequencedAnimates.map((it) => normalizeAnimate(it)) : [];
     x.shapeAxisPreset = String(x.shapeAxisPreset || "RelativeLocation.yAxis()");
@@ -644,6 +729,16 @@ function normalizeCard(card, index = 0) {
     x.shapeChildAxisManualY = Number.isFinite(Number(x.shapeChildAxisManualY)) ? num(x.shapeChildAxisManualY) : 1;
     x.shapeChildAxisManualZ = Number.isFinite(Number(x.shapeChildAxisManualZ)) ? num(x.shapeChildAxisManualZ) : 0;
     x.shapeChildDisplayActions = Array.isArray(x.shapeChildDisplayActions) ? x.shapeChildDisplayActions.map((a) => normalizeDisplayAction(a)) : [];
+    x.shapeChildAngleOffsetEnabled = x.shapeChildAngleOffsetEnabled === true;
+    x.shapeChildAngleOffsetCount = Math.max(1, int(x.shapeChildAngleOffsetCount || 1));
+    x.shapeChildAngleOffsetGlowTick = Math.max(1, int(x.shapeChildAngleOffsetGlowTick || 20));
+    x.shapeChildAngleOffsetEase = normalizeAngleOffsetEaseName(x.shapeChildAngleOffsetEase || "outCubic");
+    x.shapeChildAngleOffsetReverseOnDisable = x.shapeChildAngleOffsetReverseOnDisable === true;
+    x.shapeChildAngleOffsetAngleMode = x.shapeChildAngleOffsetAngleMode === "expr" ? "expr" : "numeric";
+    x.shapeChildAngleOffsetAngleValue = Number.isFinite(Number(x.shapeChildAngleOffsetAngleValue)) ? num(x.shapeChildAngleOffsetAngleValue) : 360;
+    x.shapeChildAngleOffsetAngleUnit = normalizeAngleUnit(x.shapeChildAngleOffsetAngleUnit || "deg");
+    x.shapeChildAngleOffsetAngleExpr = String(x.shapeChildAngleOffsetAngleExpr || "PI * 2");
+    x.shapeChildAngleOffsetAnglePreset = String(x.shapeChildAngleOffsetAnglePreset || x.shapeChildAngleOffsetAngleExpr || "PI * 2");
     x.shapeChildScale = normalizeScaleHelperConfig(x.shapeChildScale, { type: "none" });
     x.shapeChildGrowthAnimates = Array.isArray(x.shapeChildGrowthAnimates) ? x.shapeChildGrowthAnimates.map((it) => normalizeAnimate(it)) : [];
     x.shapeChildLevels = Array.isArray(x.shapeChildLevels)
@@ -674,6 +769,16 @@ function createDefaultCard(index = 0) {
         rotateAngleUnit: "rad",
         rotateAnglePreset: "speed / 180 * PI",
         rotateAngleExpr: "speed / 180 * PI",
+        angleOffsetEnabled: false,
+        angleOffsetCount: 1,
+        angleOffsetGlowTick: 20,
+        angleOffsetEase: "outCubic",
+        angleOffsetReverseOnDisable: false,
+        angleOffsetAngleMode: "numeric",
+        angleOffsetAngleValue: 360,
+        angleOffsetAngleUnit: "deg",
+        angleOffsetAnglePreset: "PI * 2",
+        angleOffsetAngleExpr: "PI * 2",
         growthAnimates: [],
         sequencedAnimates: [],
         shapeAxisPreset: "RelativeLocation.yAxis()",
@@ -700,6 +805,16 @@ function createDefaultCard(index = 0) {
         shapeChildAxisManualY: 1,
         shapeChildAxisManualZ: 0,
         shapeChildDisplayActions: [],
+        shapeChildAngleOffsetEnabled: false,
+        shapeChildAngleOffsetCount: 1,
+        shapeChildAngleOffsetGlowTick: 20,
+        shapeChildAngleOffsetEase: "outCubic",
+        shapeChildAngleOffsetReverseOnDisable: false,
+        shapeChildAngleOffsetAngleMode: "numeric",
+        shapeChildAngleOffsetAngleValue: 360,
+        shapeChildAngleOffsetAngleUnit: "deg",
+        shapeChildAngleOffsetAnglePreset: "PI * 2",
+        shapeChildAngleOffsetAngleExpr: "PI * 2",
         shapeChildScale: { type: "none" },
         shapeChildGrowthAnimates: [],
         shapeChildLevels: [],
@@ -1048,6 +1163,9 @@ class CompositionBuilderApp {
         this.previewLevelBases = [];
         this.previewLevelRefs = [];
         this.previewUseLocalOps = [];
+        this.previewRootOffsetIndex = [];
+        this.previewRootVirtualIndex = [];
+        this.previewRootVirtualTotal = 0;
         this.previewVisibleMask = [];
         this.previewSizeFactors = [];
         this.previewAlphaFactors = [];
@@ -2215,6 +2333,16 @@ class CompositionBuilderApp {
             axisManualY: card.shapeChildAxisManualY,
             axisManualZ: card.shapeChildAxisManualZ,
             displayActions: card.shapeChildDisplayActions,
+            angleOffsetEnabled: card.shapeChildAngleOffsetEnabled,
+            angleOffsetCount: card.shapeChildAngleOffsetCount,
+            angleOffsetGlowTick: card.shapeChildAngleOffsetGlowTick,
+            angleOffsetEase: card.shapeChildAngleOffsetEase,
+            angleOffsetReverseOnDisable: card.shapeChildAngleOffsetReverseOnDisable,
+            angleOffsetAngleMode: card.shapeChildAngleOffsetAngleMode,
+            angleOffsetAngleValue: card.shapeChildAngleOffsetAngleValue,
+            angleOffsetAngleUnit: card.shapeChildAngleOffsetAngleUnit,
+            angleOffsetAngleExpr: card.shapeChildAngleOffsetAngleExpr,
+            angleOffsetAnglePreset: card.shapeChildAngleOffsetAnglePreset,
             scale: card.shapeChildScale,
             growthAnimates: card.shapeChildGrowthAnimates
         }, 0);
@@ -2236,6 +2364,16 @@ class CompositionBuilderApp {
         card.shapeChildAxisManualY = num(level.axisManualY);
         card.shapeChildAxisManualZ = num(level.axisManualZ);
         card.shapeChildDisplayActions = (level.displayActions || []).map((a) => normalizeDisplayAction(a));
+        card.shapeChildAngleOffsetEnabled = level.angleOffsetEnabled === true;
+        card.shapeChildAngleOffsetCount = Math.max(1, int(level.angleOffsetCount || 1));
+        card.shapeChildAngleOffsetGlowTick = Math.max(1, int(level.angleOffsetGlowTick || 20));
+        card.shapeChildAngleOffsetEase = normalizeAngleOffsetEaseName(level.angleOffsetEase || "outCubic");
+        card.shapeChildAngleOffsetReverseOnDisable = level.angleOffsetReverseOnDisable === true;
+        card.shapeChildAngleOffsetAngleMode = level.angleOffsetAngleMode === "expr" ? "expr" : "numeric";
+        card.shapeChildAngleOffsetAngleValue = Number.isFinite(Number(level.angleOffsetAngleValue)) ? num(level.angleOffsetAngleValue) : 360;
+        card.shapeChildAngleOffsetAngleUnit = normalizeAngleUnit(level.angleOffsetAngleUnit || "deg");
+        card.shapeChildAngleOffsetAngleExpr = String(level.angleOffsetAngleExpr || "PI * 2");
+        card.shapeChildAngleOffsetAnglePreset = String(level.angleOffsetAnglePreset || card.shapeChildAngleOffsetAngleExpr || "PI * 2");
         card.shapeChildScale = normalizeScaleHelperConfig(level.scale, { type: "none" });
         card.shapeChildGrowthAnimates = (level.growthAnimates || []).map((a) => normalizeAnimate(a));
     }
@@ -2727,6 +2865,17 @@ class CompositionBuilderApp {
         if (!card) return;
 
         if (t.dataset.cardField) {
+            const cardField = String(t.dataset.cardField || "");
+            if (cardField.startsWith("angleOffset")) {
+                this.applyAngleOffsetField(card, cardField, t);
+                const rerender = this.isAngleOffsetStructureField(cardField);
+                if (rerender) {
+                    this.afterStructureMutate({ rerenderCards: true, rebuildPreview: true, rerenderProject: false });
+                } else {
+                    this.afterValueMutate({ rebuildPreview: true });
+                }
+                return;
+            }
             this.applyObjectField(card, t.dataset.cardField, t);
             if (t.dataset.cardField === "rotateToPreset") {
                 card.rotateToExpr = card.rotateToPreset || card.rotateToExpr;
@@ -2875,6 +3024,21 @@ class CompositionBuilderApp {
             return;
         }
 
+        if (t.dataset.shapeLevelAngleField) {
+            const levelIdx = int(t.dataset.shapeLevelIdx);
+            const level = this.getNestedShapeLevel(card, levelIdx, true);
+            if (!level) return;
+            const field = normalizeAngleOffsetFieldName(t.dataset.shapeLevelAngleField);
+            this.applyAngleOffsetField(level, field, t);
+            this.setNestedShapeLevel(card, levelIdx, level);
+            if (this.isAngleOffsetStructureField(field)) {
+                this.afterStructureMutate({ rerenderCards: true, rebuildPreview: true, rerenderProject: false });
+            } else {
+                this.afterValueMutate({ rebuildPreview: true });
+            }
+            return;
+        }
+
         if (t.dataset.shapeLevelScaleField) {
             const levelIdx = int(t.dataset.shapeLevelIdx);
             const level = this.getNestedShapeLevel(card, levelIdx, true);
@@ -2906,6 +3070,19 @@ class CompositionBuilderApp {
             this.applyCardShapeChildAxisField(card, t.dataset.cardShapeChildAxisField, t);
             const rerender = ["axisPreset", "axisManualCtor"].includes(t.dataset.cardShapeChildAxisField);
             this.afterValueMutate({ rerenderCards: rerender, rebuildPreview: true });
+            return;
+        }
+
+        if (t.dataset.cardShapeChildAngleField) {
+            const rootLevel = this.getRootShapeChildLevel(card);
+            const field = normalizeAngleOffsetFieldName(t.dataset.cardShapeChildAngleField);
+            this.applyAngleOffsetField(rootLevel, field, t);
+            this.setRootShapeChildLevel(card, rootLevel);
+            if (this.isAngleOffsetStructureField(field)) {
+                this.afterStructureMutate({ rerenderCards: true, rebuildPreview: true, rerenderProject: false });
+            } else {
+                this.afterValueMutate({ rebuildPreview: true });
+            }
             return;
         }
 
@@ -3077,6 +3254,51 @@ class CompositionBuilderApp {
             return;
         }
         obj[field] = String(target.value ?? "");
+    }
+
+    applyAngleOffsetField(targetObj, rawField, target) {
+        if (!targetObj) return;
+        const field = normalizeAngleOffsetFieldName(rawField);
+        if (!field) return;
+        if (field === "angleOffsetEnabled" || field === "angleOffsetReverseOnDisable") {
+            targetObj[field] = !!target.checked;
+            return;
+        }
+        if (field === "angleOffsetCount" || field === "angleOffsetGlowTick") {
+            targetObj[field] = Math.max(1, int(target.value || 1));
+            return;
+        }
+        if (field === "angleOffsetEase") {
+            targetObj[field] = normalizeAngleOffsetEaseName(target.value || "outCubic");
+            return;
+        }
+        if (field === "angleOffsetAngleMode") {
+            targetObj[field] = target.value === "expr" ? "expr" : "numeric";
+            return;
+        }
+        if (field === "angleOffsetAngleValue") {
+            targetObj[field] = num(target.value);
+            return;
+        }
+        if (field === "angleOffsetAngleUnit") {
+            targetObj[field] = normalizeAngleUnit(target.value);
+            return;
+        }
+        if (field === "angleOffsetAngleExpr") {
+            targetObj[field] = String(target.value || "");
+            return;
+        }
+        if (field === "angleOffsetAnglePreset") {
+            targetObj[field] = String(target.value || "");
+            targetObj.angleOffsetAngleExpr = targetObj[field];
+        }
+    }
+
+    isAngleOffsetStructureField(rawField) {
+        const field = normalizeAngleOffsetFieldName(rawField);
+        return field === "angleOffsetEnabled"
+            || field === "angleOffsetAngleMode"
+            || field === "angleOffsetAnglePreset";
     }
 
     applyAnimateField(item, field, target) {
@@ -4334,6 +4556,13 @@ class CompositionBuilderApp {
                         <div class="kv-list">
                             ${(level.displayActions || []).map((a, aIdx) => this.renderShapeLevelDisplayActionRow(card.id, levelIdx, a, aIdx)).join("")}
                         </div>
+                        ${this.renderAngleOffsetControl({
+                            scope: "shape_level",
+                            cardId: card.id,
+                            levelIdx,
+                            value: level,
+                            title: `相对角度偏移-嵌套${levelIdx + 1}（可选）`
+                        })}
                         <div class="mini-note">缩放助手-嵌套${levelIdx + 1}（可选）</div>
                         ${this.renderScaleHelperEditor({
                             scope: "shape_level",
@@ -4469,6 +4698,109 @@ class CompositionBuilderApp {
                 <div class="subgroup-title">${esc(title)}</div>
                 ${body}
             </div>
+        `;
+    }
+
+    renderAngleOffsetControl(opts = {}) {
+        const scope = opts.scope === "card"
+            ? "card"
+            : (opts.scope === "shape_level" ? "shape_level" : "shape_child");
+        const cardId = String(opts.cardId || "");
+        const levelIdx = Math.max(0, int(opts.levelIdx));
+        const value = opts.value && typeof opts.value === "object" ? opts.value : {};
+        const title = String(opts.title || "相对角度偏移（可选）");
+        const enabled = value.angleOffsetEnabled === true;
+        const count = Math.max(1, int(value.angleOffsetCount || 1));
+        const glowTick = Math.max(1, int(value.angleOffsetGlowTick || 20));
+        const easeName = normalizeAngleOffsetEaseName(value.angleOffsetEase || "outCubic");
+        const reverseOnDisable = value.angleOffsetReverseOnDisable === true;
+        const angleMode = value.angleOffsetAngleMode === "expr" ? "expr" : "numeric";
+        const angleValue = Number.isFinite(Number(value.angleOffsetAngleValue)) ? num(value.angleOffsetAngleValue) : 360;
+        const angleUnit = normalizeAngleUnit(value.angleOffsetAngleUnit || "deg");
+        const angleExpr = String(value.angleOffsetAngleExpr || value.angleOffsetAnglePreset || "PI * 2");
+
+        const fieldAttr = scope === "card"
+            ? "data-card-field"
+            : (scope === "shape_level" ? "data-shape-level-angle-field" : "data-card-shape-child-angle-field");
+        const baseAttr = scope === "shape_level"
+            ? `data-card-id="${esc(cardId)}" data-shape-level-idx="${levelIdx}"`
+            : `data-card-id="${esc(cardId)}"`;
+        const fieldName = (short, full) => (scope === "card" ? full : short);
+        const bindAttr = (short, full) => `${baseAttr} ${fieldAttr}="${fieldName(short, full)}"`;
+
+        const easeOptions = ANGLE_OFFSET_EASE_OPTIONS
+            .map((it) => `<option value="${esc(it.id)}" ${it.id === easeName ? "selected" : ""}>${esc(it.title)}</option>`)
+            .join("");
+
+        const angleInput = angleMode === "expr"
+            ? `
+                <div class="grid2">
+                    <label class="field">
+                        <span>总角度预设</span>
+                        <select class="input expr-input" ${bindAttr("anglePreset", "angleOffsetAnglePreset")}>${this.getAngleExprPresetOptionsHtml(angleExpr)}</select>
+                    </label>
+                    <label class="field">
+                        <span>总角度表达式</span>
+                        <input class="input expr-input" ${bindAttr("angleExpr", "angleOffsetAngleExpr")} value="${esc(angleExpr)}" placeholder="PI * 2"/>
+                    </label>
+                </div>
+            `
+            : `
+                <div class="grid2">
+                    <label class="field">
+                        <span>总角度</span>
+                        <input class="input" type="number" step="${this.state.settings.paramStep}" ${bindAttr("angleValue", "angleOffsetAngleValue")} value="${esc(formatAngleValue(angleValue))}"/>
+                    </label>
+                    <label class="field">
+                        <span>单位</span>
+                        <select class="input" ${bindAttr("angleUnit", "angleOffsetAngleUnit")}>
+                            <option value="deg" ${angleUnit === "deg" ? "selected" : ""}>度</option>
+                            <option value="rad" ${angleUnit === "rad" ? "selected" : ""}>弧度</option>
+                        </select>
+                    </label>
+                </div>
+            `;
+
+        return `
+            <div class="mini-note">${esc(title)}</div>
+            <div class="grid3">
+                <div class="field">
+                    <span>启用</span>
+                    <label class="chk">
+                        <input type="checkbox" ${bindAttr("enabled", "angleOffsetEnabled")} ${enabled ? "checked" : ""}/>
+                        <span>开启相对角度偏移</span>
+                    </label>
+                </div>
+                <label class="field">
+                    <span>偏移个数</span>
+                    <input class="input" type="number" min="1" step="1" ${bindAttr("count", "angleOffsetCount")} value="${esc(String(count))}"/>
+                </label>
+                <label class="field">
+                    <span>glowingTick</span>
+                    <input class="input" type="number" min="1" step="1" ${bindAttr("glowTick", "angleOffsetGlowTick")} value="${esc(String(glowTick))}"/>
+                </label>
+            </div>
+            <div class="grid3">
+                <label class="field">
+                    <span>缓动</span>
+                    <select class="input" ${bindAttr("ease", "angleOffsetEase")}>${easeOptions}</select>
+                </label>
+                <div class="field">
+                    <span>消散时反向收回</span>
+                    <label class="chk">
+                        <input type="checkbox" ${bindAttr("reverseOnDisable", "angleOffsetReverseOnDisable")} ${reverseOnDisable ? "checked" : ""}/>
+                        <span>启用</span>
+                    </label>
+                </div>
+                <label class="field">
+                    <span>总角度模式</span>
+                    <select class="input" ${bindAttr("angleMode", "angleOffsetAngleMode")}>
+                        <option value="numeric" ${angleMode === "numeric" ? "selected" : ""}>角度输入</option>
+                        <option value="expr" ${angleMode === "expr" ? "selected" : ""}>表达式</option>
+                    </select>
+                </label>
+            </div>
+            ${angleInput}
         `;
     }
 
@@ -4962,6 +5294,11 @@ class CompositionBuilderApp {
                                 <div class="kv-list">
                                     ${(card.shapeDisplayActions || []).map((a, aIdx) => this.renderShapeDisplayActionRow(card.id, a, aIdx)).join("")}
                                 </div>
+                                ${this.renderAngleOffsetControl({
+                                    scope: "card",
+                                    cardId: card.id,
+                                    value: card
+                                })}
                             </div>
                             ${this.renderShapeChildParamsSection(card, shapeBindMode)}
 
@@ -5171,6 +5508,12 @@ class CompositionBuilderApp {
                         <div class="kv-list">
                             ${(card.shapeChildDisplayActions || []).map((a, aIdx) => this.renderShapeChildDisplayActionRow(card.id, a, aIdx)).join("")}
                         </div>
+                        ${this.renderAngleOffsetControl({
+                            scope: "shape_child",
+                            cardId: card.id,
+                            value: this.getRootShapeChildLevel(card),
+                            title: "相对角度偏移-嵌套1（可选）"
+                        })}
                         <div class="mini-note">缩放助手-嵌套1（可选）</div>
                         ${this.renderScaleHelperEditor({
                             scope: "shape_child",
@@ -7613,7 +7956,7 @@ class CompositionBuilderApp {
                 { label: "particle.particleAlpha = 1.0", insertText: "particle.particleAlpha = $0", detail: "粒子透明度", priority: 250 },
                 { label: "status.displayStatus = 2", insertText: "status.displayStatus = $0", detail: "Composition lifecycle", priority: 258 },
                 { label: `this@${projectClass}.status.displayStatus`, insertText: `this@${projectClass}.status.displayStatus`, detail: "Composition lifecycle", priority: 257 },
-                { label: "tickCount", detail: "??? tick??? tick??", priority: 250 },
+                { label: "tickCount", detail: "预览 tick（不是粒子 tick）", priority: 250 },
                 { label: "RelativeLocation(x, y, z)", insertText: "RelativeLocation($0)", detail: "向量构造", priority: 220 },
                 { label: "Vec3(x, y, z)", insertText: "Vec3($0)", detail: "向量构造", priority: 220 },
                 { label: "Vector3f(x, y, z)", insertText: "Vector3f($0)", detail: "向量构造", priority: 220 },
@@ -8978,6 +9321,88 @@ function translateJsBlockToKotlin(script, indent = "    ") {
     }
     return out.join("\n");
 }
+
+function emitBuilderKotlinFromState(builderState) {
+    const old = builderEvalState;
+    try {
+        builderEvalState = normalizeBuilderState(builderState);
+        return emitPointsBuilderKotlin();
+    } catch (e) {
+        console.warn("emit builder kotlin failed:", e);
+        return "PointsBuilder()";
+    } finally {
+        builderEvalState = old;
+    }
+}
+
+installCodeOutputMethods(CompositionBuilderApp, {
+    sanitizeKotlinClassName,
+    sanitizeFileBase,
+    relExpr,
+    emitBuilderKotlinFromState
+});
+
+installExpressionEditorMethods(CompositionBuilderApp, {
+    int,
+    esc,
+    sanitizeKotlinClassName,
+    transpileKotlinThisQualifierToJs,
+    findFirstUnknownJsIdentifier,
+    JS_LINT_GLOBALS,
+    InlineCodeEditor,
+    mergeCompletionGroups
+});
+
+installTargetPresetMethods(CompositionBuilderApp, {
+    esc,
+    sanitizeKotlinClassName,
+    PARTICLE_INIT_TARGET_OPTIONS
+});
+
+installKotlinCodegenMethods(CompositionBuilderApp, {
+    U,
+    num,
+    int,
+    normalizeAnimate,
+    normalizeDisplayAction,
+    normalizeScaleHelperConfig,
+    normalizeShapeNestedLevel,
+    sanitizeKotlinClassName,
+    sanitizeKotlinIdentifier,
+    defaultLiteralForKotlinType,
+    rewriteClassQualifier,
+    normalizeKotlinFloatLiteralText,
+    isPlainNumericLiteralText,
+    normalizeKotlinDoubleLiteralText,
+    formatKotlinDoubleLiteral,
+    relExpr,
+    indentText,
+    normalizeAngleOffsetEaseName,
+    normalizeAngleUnit,
+    translateJsBlockToKotlin,
+    normalizeParticleFloatAssignmentExpr,
+    DEFAULT_EFFECT_CLASS
+});
+
+installPreviewRuntimeMethods(CompositionBuilderApp, {
+    U,
+    num,
+    int,
+    clamp,
+    normalizeAnimate,
+    normalizeControllerAction,
+    normalizeDisplayAction,
+    normalizeScaleHelperConfig,
+    normalizeShapeNestedLevel,
+    ensureStatusHelperMethods,
+    stripJsForLint,
+    transpileKotlinThisQualifierToJs,
+    rotatePointsToPointUpright,
+    srgbRgbToLinearArray,
+    CONTROLLER_SCOPE_RESERVED,
+    normalizeAngleUnit,
+    normalizeAngleOffsetEaseName
+});
 
 const app = new CompositionBuilderApp();
 app.init();
