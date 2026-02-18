@@ -17,6 +17,13 @@ import {
     normalizeScaleHelperConfig,
     SCALE_HELPER_TYPES
 } from "./scale_helper_utils.js";
+import {
+    ANGLE_OFFSET_EASE_OPTIONS,
+    normalizeAngleUnit,
+    normalizeAngleOffsetEaseName,
+    normalizeAngleOffsetFieldName,
+    formatAngleValue
+} from "./angle_offset_utils.js";
 import { installPreviewRuntimeMethods } from "./preview_runtime_mixin.js";
 import { installKotlinCodegenMethods } from "./kotlin_codegen_mixin.js";
 import { installCodeOutputMethods } from "./code_output_mixin.js";
@@ -121,19 +128,6 @@ const DISPLAY_ACTION_TYPES = [
     { id: "rotateAsAxis", title: "rotateAsAxis(angle)" },
     { id: "rotateToWithAngle", title: "rotateToWithAngle(to, angle)" },
     { id: "expression", title: "表达式" }
-];
-
-const ANGLE_OFFSET_EASE_OPTIONS = [
-    { id: "linear", title: "Eases.linear" },
-    { id: "outCubic", title: "Eases.outCubic" },
-    { id: "inOutSine", title: "Eases.inOutSine" },
-    { id: "outExpo", title: "Eases.outExpo" },
-    { id: "inCubic", title: "Eases.inCubic" },
-    { id: "inOutCubic", title: "Eases.inOutCubic" },
-    { id: "outQuad", title: "Eases.outQuad" },
-    { id: "outBack", title: "Eases.outBack" },
-    { id: "outElastic", title: "Eases.outElastic" },
-    { id: "outBounce", title: "Eases.outBounce" }
 ];
 
 const CARD_SECTION_KEYS = [
@@ -324,41 +318,6 @@ function hotkeyToHuman(hk) {
 
 function hotkeyMatchEvent(e, hk) {
     return eventToHotkey(e) === normalizeHotkey(hk);
-}
-
-function normalizeAngleUnit(unit) {
-    return unit === "rad" ? "rad" : "deg";
-}
-
-function normalizeAngleOffsetEaseName(raw) {
-    const name = String(raw || "").trim();
-    if (!name) return "outCubic";
-    return ANGLE_OFFSET_EASE_OPTIONS.some((it) => it.id === name) ? name : "outCubic";
-}
-
-function normalizeAngleOffsetFieldName(rawField) {
-    const key = String(rawField || "").trim();
-    if (!key) return "";
-    const map = {
-        enabled: "angleOffsetEnabled",
-        count: "angleOffsetCount",
-        glowTick: "angleOffsetGlowTick",
-        ease: "angleOffsetEase",
-        reverseOnDisable: "angleOffsetReverseOnDisable",
-        angleMode: "angleOffsetAngleMode",
-        angleValue: "angleOffsetAngleValue",
-        angleUnit: "angleOffsetAngleUnit",
-        angleExpr: "angleOffsetAngleExpr",
-        anglePreset: "angleOffsetAnglePreset"
-    };
-    return map[key] || key;
-}
-
-function formatAngleValue(v) {
-    const n = Number(v);
-    if (!Number.isFinite(n)) return "0";
-    if (Math.abs(n) < 1e-9) return "0";
-    return n.toFixed(6).replace(/0+$/g, "").replace(/\.$/, "");
 }
 
 function parseVectorLiteralNumbers(rawExpr, fallback = { x: 0, y: 1, z: 0 }) {
@@ -3872,6 +3831,8 @@ class CompositionBuilderApp {
     async importProjectFromFile() {
         const file = this.dom.fileProject.files?.[0];
         if (!file) return;
+        const prevState = deepClone(this.state);
+        const prevExportSig = String(this.lastExportedStateSig || "");
         try {
             const text = await file.text();
             const parsed = JSON.parse(text);
@@ -3887,10 +3848,33 @@ class CompositionBuilderApp {
             this.renderProjectSection();
             this.renderCards();
             this.rebuildPreview();
-            this.generateCodeAndRender(true);
+            let codegenError = null;
+            try {
+                this.generateCodeAndRender(true);
+            } catch (e) {
+                codegenError = e;
+                console.error("generateCodeAndRender after import failed:", e);
+            }
             this.scheduleSave();
-            this.showToast("项目导入成功", "success");
+            if (codegenError) {
+                this.showToast(`项目已导入，但代码生成失败: ${codegenError?.message || codegenError}`, "error");
+            } else {
+                this.showToast("项目导入成功", "success");
+            }
         } catch (e) {
+            this.state = normalizeStateShape(deepClone(prevState));
+            this.writeExportedSignature(prevExportSig);
+            if (this.exprRuntime?.invalidateCache) this.exprRuntime.invalidateCache();
+            this.applySettingsToDom();
+            this.ensureSelectionValid();
+            this.renderProjectSection();
+            this.renderCards();
+            this.rebuildPreview();
+            try {
+                this.generateCodeAndRender(true);
+            } catch (rollbackErr) {
+                console.error("restore state after import failure failed:", rollbackErr);
+            }
             this.showToast(`导入失败: ${e?.message || e}`, "error");
         } finally {
             this.dom.fileProject.value = "";
@@ -6292,7 +6276,9 @@ class CompositionBuilderApp {
         const growTick = Math.min(tickMax, Math.max(0, age));
         let curveTick = growTick;
         if (cfg.reversedOnDisable && inFade) {
-            curveTick = Math.max(0, tickMax - Math.min(tickMax, fadeAge));
+            const fadeSpan = Math.max(0, num(cycle.fade || 0));
+            const fadeProgress = fadeSpan > 1e-6 ? clamp(fadeAge / fadeSpan, 0, 1) : 1;
+            curveTick = tickMax * (1 - fadeProgress);
         }
         return this.evalScaleCurve(cfg, curveTick, tickMax);
     }
@@ -9364,6 +9350,7 @@ installKotlinCodegenMethods(CompositionBuilderApp, {
     num,
     int,
     normalizeAnimate,
+    normalizeControllerAction,
     normalizeDisplayAction,
     normalizeScaleHelperConfig,
     normalizeShapeNestedLevel,
@@ -9371,6 +9358,7 @@ installKotlinCodegenMethods(CompositionBuilderApp, {
     sanitizeKotlinIdentifier,
     defaultLiteralForKotlinType,
     rewriteClassQualifier,
+    rewriteControllerStatusQualifier,
     normalizeKotlinFloatLiteralText,
     isPlainNumericLiteralText,
     normalizeKotlinDoubleLiteralText,

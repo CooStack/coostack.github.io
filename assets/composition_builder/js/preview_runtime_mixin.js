@@ -48,6 +48,7 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
         const localRefs = [];
         const levelBases = [];
         const levelRefs = [];
+        const levelOffsetRefs = [];
         const useLocalOpsList = [];
         const rootOffsetIndexList = [];
         const rootVirtualIndexList = [];
@@ -82,6 +83,7 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
                 localRefs.push(0);
                 levelBases.push([]);
                 levelRefs.push([]);
+                levelOffsetRefs.push([]);
                 useLocalOpsList.push(false);
                 rootOffsetIndexList.push(0);
                 rootVirtualIndexList.push(rootStart);
@@ -114,6 +116,7 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
                         localRefs.push(li + repeatIndex * localList.length);
                         levelBases.push(tupleLevels.map((it) => U.v(num(it?.vec?.x), num(it?.vec?.y), num(it?.vec?.z))));
                         levelRefs.push(tupleLevels.map((it) => int(it?.ref || 0)));
+                        levelOffsetRefs.push(tupleLevels.map((it) => int(it?.offsetIndex ?? 0)));
                         useLocalOpsList.push(true);
                         rootOffsetIndexList.push(repeatIndex);
                         rootVirtualIndexList.push(rootStart + repeatIndex);
@@ -156,6 +159,7 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
         this.previewLocalRef = localRefs;
         this.previewLevelBases = levelBases;
         this.previewLevelRefs = levelRefs;
+        this.previewLevelOffsetRefs = levelOffsetRefs;
         this.previewUseLocalOps = useLocalOpsList;
         this.previewRootOffsetIndex = rootOffsetIndexList;
         this.previewRootVirtualIndex = rootVirtualIndexList;
@@ -471,6 +475,9 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
                     const levelRefList = Array.isArray(this.previewLevelRefs[i]) && this.previewLevelRefs[i].length
                         ? this.previewLevelRefs[i]
                         : [localRef];
+                    const levelOffsetRefList = Array.isArray(this.previewLevelOffsetRefs?.[i]) && this.previewLevelOffsetRefs[i].length
+                        ? this.previewLevelOffsetRefs[i]
+                        : [];
                     const runtimeLevels = Array.isArray(cached.shapeRuntimeLevels) ? cached.shapeRuntimeLevels : [];
                     let localSum = U.v(0, 0, 0);
                     const transformedLevelRels = [];
@@ -478,6 +485,9 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
                     for (let lvIdx = 0; lvIdx < levelBaseList.length; lvIdx++) {
                         const lvBase = levelBaseList[lvIdx] || U.v(0, 0, 0);
                         const lvPointRef = int(levelRefList[lvIdx] ?? localRef);
+                        const lvOffsetRef = lvIdx === 0
+                            ? rootOffsetIndex
+                            : int(levelOffsetRefList[lvIdx] ?? lvPointRef);
                         const lvRuntime = runtimeLevels[lvIdx] || null;
                         let lvPoint = U.clone(lvBase);
                         if (lvRuntime) {
@@ -489,10 +499,11 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
                                 : cached.age;
                             const cardScale = this.resolveScaleFactor(lvRuntime.scale, lvScaleAge, cycleCfg);
                             lvPoint = this.applyScaleFactorToPoint(lvPoint, cardScale);
-                            if (lvIdx === 0 && lvRuntime.angleOffset) {
+                            if (lvRuntime.angleOffset) {
+                                const levelOffsetIndex = lvOffsetRef;
                                 const offsetAngle = this.resolvePreviewAngleOffsetRotation(
                                     lvRuntime.angleOffset,
-                                    rootOffsetIndex,
+                                    levelOffsetIndex,
                                     lvActionElapsed,
                                     lvActionAge,
                                     lvPointRef,
@@ -973,7 +984,9 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
         const growTick = Math.min(tickMax, Math.max(0, age));
         let curveTick = growTick;
         if (cfg.reversedOnDisable && inFade) {
-            curveTick = Math.max(0, tickMax - Math.min(tickMax, fadeAge));
+            const fadeSpan = Math.max(0, num(cycle.fade || 0));
+            const fadeProgress = fadeSpan > 1e-6 ? clamp(fadeAge / fadeSpan, 0, 1) : 1;
+            curveTick = tickMax * (1 - fadeProgress);
         }
         return this.evalScaleCurve(cfg, curveTick, tickMax);
     }
@@ -1075,7 +1088,7 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
             const vec = U.v(num(p?.x), num(p?.y), num(p?.z));
             return {
                 sum: U.clone(vec),
-                levels: [{ vec, ref: idx }]
+                levels: [{ vec, ref: idx, offsetIndex: 0 }]
             };
         });
         if (!tuples.length) return [];
@@ -1086,19 +1099,27 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
             if (String(level.type || "single") === "single") break;
             const src = this.resolveShapeSourcePoints(level.bindMode, level.point, level.builderState);
             if (!src.length) return [];
+            const levelOffsetCfg = this.resolvePreviewAngleOffsetConfig(level);
+            const levelRepeatCount = levelOffsetCfg ? Math.max(1, int(levelOffsetCfg.count || 1)) : 1;
             const next = [];
             for (const tuple of tuples) {
                 const baseLevels = Array.isArray(tuple?.levels) ? tuple.levels : [];
                 const sumBase = tuple?.sum || U.v(0, 0, 0);
-                for (let si = 0; si < src.length; si++) {
-                    const sp = src[si];
-                    const sv = U.v(num(sp?.x), num(sp?.y), num(sp?.z));
-                    const levels = baseLevels.map((lv) => ({ vec: U.v(num(lv?.vec?.x), num(lv?.vec?.y), num(lv?.vec?.z)), ref: int(lv?.ref || 0) }));
-                    levels.push({ vec: U.clone(sv), ref: si });
-                    next.push({
-                        sum: U.v(num(sumBase?.x) + sv.x, num(sumBase?.y) + sv.y, num(sumBase?.z) + sv.z),
-                        levels
-                    });
+                for (let repeatIndex = 0; repeatIndex < levelRepeatCount; repeatIndex++) {
+                    for (let si = 0; si < src.length; si++) {
+                        const sp = src[si];
+                        const sv = U.v(num(sp?.x), num(sp?.y), num(sp?.z));
+                        const levels = baseLevels.map((lv) => ({
+                            vec: U.v(num(lv?.vec?.x), num(lv?.vec?.y), num(lv?.vec?.z)),
+                            ref: int(lv?.ref || 0),
+                            offsetIndex: int(lv?.offsetIndex ?? 0)
+                        }));
+                        levels.push({ vec: U.clone(sv), ref: si, offsetIndex: repeatIndex });
+                        next.push({
+                            sum: U.v(num(sumBase?.x) + sv.x, num(sumBase?.y) + sv.y, num(sumBase?.z) + sv.z),
+                            levels
+                        });
+                    }
                 }
             }
             tuples = next;

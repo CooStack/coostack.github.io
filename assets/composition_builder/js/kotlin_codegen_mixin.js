@@ -4,6 +4,7 @@ export function installKotlinCodegenMethods(CompositionBuilderApp, deps = {}) {
         num,
         int,
         normalizeAnimate,
+        normalizeControllerAction,
         normalizeDisplayAction,
         normalizeScaleHelperConfig,
         normalizeShapeNestedLevel,
@@ -11,6 +12,7 @@ export function installKotlinCodegenMethods(CompositionBuilderApp, deps = {}) {
         sanitizeKotlinIdentifier,
         defaultLiteralForKotlinType,
         rewriteClassQualifier,
+        rewriteControllerStatusQualifier,
         normalizeKotlinFloatLiteralText,
         isPlainNumericLiteralText,
         normalizeKotlinDoubleLiteralText,
@@ -298,33 +300,42 @@ export function installKotlinCodegenMethods(CompositionBuilderApp, deps = {}) {
 
     buildSingleDataChain(card, className, indentBase = "                    ") {
         const lines = [];
+        const normalizeParticleExpr = typeof normalizeParticleFloatAssignmentExpr === "function"
+            ? normalizeParticleFloatAssignmentExpr
+            : ((targetName, exprRaw) => String(exprRaw || "").trim());
+        const rewriteStatus = typeof rewriteControllerStatusQualifier === "function"
+            ? rewriteControllerStatusQualifier
+            : ((exprRaw) => String(exprRaw || ""));
         if (Array.isArray(card.particleInit) && card.particleInit.length) {
             lines.push(`${indentBase}.addParticleInstanceInit {`);
             for (const it of card.particleInit) {
                 const target = sanitizeKotlinIdentifier(it.target || "size", "size");
                 let expr = rewriteClassQualifier(String(it.expr || "").trim(), className);
-                expr = normalizeParticleFloatAssignmentExpr(target, expr);
+                expr = normalizeParticleExpr(target, expr);
                 if (!expr) continue;
                 lines.push(`${indentBase}    ${target} = ${expr}`);
             }
             lines.push(`${indentBase}}`);
         }
 
+        const normalizeController = typeof normalizeControllerAction === "function"
+            ? normalizeControllerAction
+            : ((raw) => Object.assign({ type: "tick_js", script: "" }, raw || {}));
         const hasTick = Array.isArray(card.controllerVars) && card.controllerVars.length;
-        const actions = Array.isArray(card.controllerActions) ? card.controllerActions.map((it) => normalizeControllerAction(it)) : [];
+        const actions = Array.isArray(card.controllerActions) ? card.controllerActions.map((it) => normalizeController(it)) : [];
         if (hasTick || actions.length) {
             lines.push(`${indentBase}.addParticleControlerInstanceInit {`);
             for (const v of (card.controllerVars || [])) {
                 const vName = sanitizeKotlinIdentifier(v.name || "v", "v");
                 const vType = sanitizeKotlinIdentifier(v.type || "Boolean", "Boolean");
                 let expr = rewriteClassQualifier(String(v.expr || "").trim(), className);
-                expr = rewriteControllerStatusQualifier(expr, className);
+                expr = rewriteStatus(expr, className);
                 if (!expr) expr = defaultLiteralForKotlinType(vType);
                 lines.push(`${indentBase}    var ${vName}: ${vType} = ${expr}`);
             }
             for (const action of actions) {
                 const script = rewriteClassQualifier(String(action.script || "").trim(), className);
-                const patched = rewriteControllerStatusQualifier(script, className);
+                const patched = rewriteStatus(script, className);
                 if (!patched) continue;
                 lines.push(`${indentBase}    addPreTickAction {`);
                 lines.push(translateJsBlockToKotlin(patched, `${indentBase}        `));

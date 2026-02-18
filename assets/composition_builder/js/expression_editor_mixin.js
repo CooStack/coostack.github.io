@@ -461,9 +461,9 @@ export function installExpressionEditorMethods(CompositionBuilderApp, deps = {})
                 { label: "particle.particleSize", detail: "粒子属性", priority: 240 },
                 { label: "age", detail: "当前 age", priority: 250 },
                 { label: "tick", detail: "当前 tick", priority: 250 },
-                { label: "tickCount", detail: "当前 tick（同 tick", priority: 250 },
-                { label: "index", detail: "点索", priority: 250 },
-                { label: "status.displayStatus", detail: "当前 Composition 状", priority: 252 },
+                { label: "tickCount", detail: "当前 tick（同 tick）", priority: 250 },
+                { label: "index", detail: "点索引", priority: 250 },
+                { label: "status.displayStatus", detail: "当前 Composition 状态", priority: 252 },
                 { label: "status.isDisable()", insertText: "status.isDisable()", detail: "Composition state", priority: 252 },
                 { label: "status.disable()", insertText: "status.disable()", detail: "Composition state", priority: 252 },
                 { label: "status.isEnable()", insertText: "status.isEnable()", detail: "Composition state", priority: 252 },
@@ -489,7 +489,7 @@ export function installExpressionEditorMethods(CompositionBuilderApp, deps = {})
                 base.push({ label: "rel", detail: "当前层的父级 rel", priority: 248 });
             }
             if (scopeInfo.allowOrder) {
-                base.push({ label: "order", detail: "当前层的父级 order（Sequenced", priority: 248 });
+                base.push({ label: "order", detail: "当前层的父级 order（Sequenced）", priority: 248 });
             }
             const scopeMaxDepth = scopeMaxDepthRaw;
             const maxDepth = Number.isFinite(scopeMaxDepth)
@@ -501,7 +501,7 @@ export function installExpressionEditorMethods(CompositionBuilderApp, deps = {})
                     : []
             );
             for (let d = 0; d <= maxDepth; d++) {
-                base.push({ label: `shapeRel${d}`, detail: `shape ${d} 的父rel`, priority: 246 - Math.min(d, 8) });
+                base.push({ label: `shapeRel${d}`, detail: `shape ${d} 的父级 rel`, priority: 246 - Math.min(d, 8) });
                 if (seqDepth.has(d)) {
                     base.push({ label: `shapeOrder${d}`, detail: `shape ${d} 的父order（Sequenced）`, priority: 245 - Math.min(d, 8) });
                 }
@@ -539,7 +539,7 @@ export function installExpressionEditorMethods(CompositionBuilderApp, deps = {})
                 for (const it of (card.controllerVars || [])) {
                     const name = String(it.name || "").trim();
                     if (!name) continue;
-                    cardVars.push({ label: name, detail: "控制器局部变", priority: 245 });
+                    cardVars.push({ label: name, detail: "控制器局部变量", priority: 245 });
                 }
             }
         }

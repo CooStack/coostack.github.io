@@ -329,6 +329,7 @@ body {
 .project-section {
     padding: 10px 12px;
     overflow: auto;
+    scrollbar-gutter: stable;
     overscroll-behavior: contain;
     flex: 1 1 auto;
     min-height: 0;
@@ -464,6 +465,8 @@ body[data-theme^="light"] select.input option {
 .mini-note {
     font-size: 11px;
     color: var(--muted2);
+    line-height: 1.35;
+    overflow-wrap: anywhere;
 }
 
 .kv-list {
@@ -590,6 +593,7 @@ body[data-theme^="light"] select.input option {
     min-height: 0;
     overflow: auto;
     overflow-x: hidden;
+    scrollbar-gutter: stable;
     overscroll-behavior: contain;
     padding: 10px;
     display: flex;
@@ -968,6 +972,7 @@ body[data-theme^="light"] select.input option {
     max-width: min(460px, calc(100% - 16px));
     max-height: min(260px, calc(100% - 16px));
     overflow: auto;
+    scrollbar-gutter: stable;
     z-index: 40;
 }
 
@@ -996,7 +1001,8 @@ body[data-theme^="light"] select.input option {
     border-bottom: 1px solid var(--line);
     background: transparent;
     color: var(--text);
-    padding: 7px 9px;
+    padding: 7px 12px 7px 9px;
+    box-sizing: border-box;
     display: flex;
     align-items: center;
     justify-content: space-between;
@@ -1015,6 +1021,9 @@ body[data-theme^="light"] select.input option {
 .editor-suggest-item small {
     color: var(--muted);
     font-size: 11px;
+    flex: 0 0 auto;
+    white-space: nowrap;
+    padding-right: 2px;
 }
 
 .editor-suggest-label {
