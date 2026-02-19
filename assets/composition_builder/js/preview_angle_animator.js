@@ -89,6 +89,8 @@ export function computeAngleAnimatorAngle(options = {}) {
     const ageTick = Number.isFinite(ageTickRaw) ? Math.max(0, ageTickRaw) : 0;
     const elapsedTickRaw = Number(options.elapsedTick);
     const elapsedTick = Number.isFinite(elapsedTickRaw) ? Math.max(0, elapsedTickRaw) : ageTick;
+    const statusElapsedTickRaw = Number(options.statusElapsedTick);
+    const statusElapsedTick = Number.isFinite(statusElapsedTickRaw) ? Math.max(0, statusElapsedTickRaw) : elapsedTick;
 
     const status = (options.status && typeof options.status === "object") ? options.status : null;
     const reverseOnDisable = options.reverseOnDisable === true;
@@ -96,7 +98,7 @@ export function computeAngleAnimatorAngle(options = {}) {
     const dissolveStart = status ? Number(status.__dissolveStartTick) : NaN;
 
     if (reverseOnDisable && isDisable && Number.isFinite(dissolveStart)) {
-        const fadeTick = Math.max(0, elapsedTick - dissolveStart);
+        const fadeTick = Math.max(0, statusElapsedTick - dissolveStart);
         const t = clamp01(fadeTick / glowTick);
         return target * ease(1 - t);
     }

@@ -825,7 +825,8 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
                                     lvActionElapsed,
                                     lvActionAge,
                                     lvPointRef,
-                                    frameRuntimeGlobals
+                                    frameRuntimeGlobals,
+                                    elapsedTick
                                 );
                                 if (Math.abs(offsetAngle) > 1e-9) {
                                     lvPoint = U.rotateAroundAxis(lvPoint, lvRuntime.axis || globalAxis, offsetAngle);
@@ -1597,19 +1598,21 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
         return U.angleToRad(num(cfg.angleValue), normalizeAngleUnit(cfg.angleUnit));
     }
 
-    resolvePreviewAngleOffsetRotation(cfg, repeatIndex, elapsedTick, ageTick, pointIndex, runtimeVars) {
+    resolvePreviewAngleOffsetRotation(cfg, repeatIndex, elapsedTick, ageTick, pointIndex, runtimeVars, statusElapsedTick = elapsedTick) {
         if (!cfg) return 0;
         const count = Math.max(1, int(cfg.count || 1));
         if (count <= 1) return 0;
         const index = clamp(int(repeatIndex || 0), 0, count - 1);
         const totalAngle = this.resolvePreviewAngleOffsetTotalAngle(cfg, elapsedTick, ageTick, pointIndex, runtimeVars);
         const targetAngle = totalAngle * index / count;
+        const statusTick = Number.isFinite(Number(statusElapsedTick)) ? num(statusElapsedTick) : num(elapsedTick);
         return computeAngleAnimatorAngle({
             targetAngle,
             glowTick: Math.max(1, int(cfg.glowTick || 20)),
             easeName: normalizeAngleOffsetEaseName(cfg.easeName || "outCubic"),
             ageTick,
             elapsedTick,
+            statusElapsedTick: statusTick,
             reverseOnDisable: cfg.reverseOnDisable === true,
             status: runtimeVars?.status || null
         });

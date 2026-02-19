@@ -24,7 +24,7 @@ import {
     normalizeAngleOffsetFieldName,
     formatAngleValue
 } from "./angle_offset_utils.js";
-import { installPreviewRuntimeMethods } from "./preview_runtime_mixin.js?v=20260220_8";
+import { installPreviewRuntimeMethods } from "./preview_runtime_mixin.js?v=20260220_9";
 import { installKotlinCodegenMethods } from "./kotlin_codegen_mixin.js";
 import { installCodeOutputMethods } from "./code_output_mixin.js";
 import { installExpressionEditorMethods } from "./expression_editor_mixin.js?v=20260220_1";
