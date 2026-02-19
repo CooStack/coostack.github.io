@@ -1154,6 +1154,8 @@ class CompositionBuilderApp {
         this.hotkeyCaptureActionId = null;
         this.builderModalCardId = null;
         this.bezierToolTarget = { scope: "project", cardId: "" };
+        this.confirmResolver = null;
+        this.confirmKeydownHandler = null;
 
         this.exprSuggest = {
             el: null,
@@ -1270,7 +1272,14 @@ class CompositionBuilderApp {
             bezierFrame: document.getElementById("bezierFrame"),
             btnCloseBezierModal: document.getElementById("btnCloseBezierModal"),
             btnCloseBezierModal2: document.getElementById("btnCloseBezierModal2"),
-            btnApplyBezierModal: document.getElementById("btnApplyBezierModal")
+            btnApplyBezierModal: document.getElementById("btnApplyBezierModal"),
+            confirmMask: document.getElementById("confirmMask"),
+            confirmModal: document.getElementById("confirmModal"),
+            confirmTitle: document.getElementById("confirmTitle"),
+            confirmMessage: document.getElementById("confirmMessage"),
+            btnCloseConfirmModal: document.getElementById("btnCloseConfirmModal"),
+            btnCancelConfirmModal: document.getElementById("btnCancelConfirmModal"),
+            btnOkConfirmModal: document.getElementById("btnOkConfirmModal")
         };
     }
     bindEvents() {
@@ -1365,6 +1374,10 @@ class CompositionBuilderApp {
         d.btnCloseBezierModal?.addEventListener("click", () => this.closeBezierTool());
         d.btnCloseBezierModal2?.addEventListener("click", () => this.closeBezierTool());
         d.btnApplyBezierModal?.addEventListener("click", () => this.applyBezierToolAndClose());
+        d.confirmMask?.addEventListener("click", () => this.resolveThemeConfirm(false));
+        d.btnCloseConfirmModal?.addEventListener("click", () => this.resolveThemeConfirm(false));
+        d.btnCancelConfirmModal?.addEventListener("click", () => this.resolveThemeConfirm(false));
+        d.btnOkConfirmModal?.addEventListener("click", () => this.resolveThemeConfirm(true));
 
         document.addEventListener("focusin", (e) => this.onExprFocusIn(e), true);
         document.addEventListener("input", (e) => this.onExprInput(e), true);
@@ -1569,6 +1582,70 @@ class CompositionBuilderApp {
         this.dom.hkMask.classList.add("hidden");
     }
 
+    askThemeConfirm(opts = {}) {
+        const title = String(opts.title || "请确认").trim() || "请确认";
+        const message = String(opts.message || "确认执行该操作？").trim() || "确认执行该操作？";
+        const okText = String(opts.okText || "确定").trim() || "确定";
+        const cancelText = String(opts.cancelText || "取消").trim() || "取消";
+        const danger = opts.danger === true;
+
+        const d = this.dom || {};
+        if (!d.confirmMask || !d.confirmModal || !d.confirmTitle || !d.confirmMessage || !d.btnOkConfirmModal || !d.btnCancelConfirmModal) {
+            return Promise.resolve(confirm(message));
+        }
+
+        if (this.confirmResolver) this.resolveThemeConfirm(false);
+
+        d.confirmTitle.textContent = title;
+        d.confirmMessage.textContent = message;
+        d.btnOkConfirmModal.textContent = okText;
+        d.btnCancelConfirmModal.textContent = cancelText;
+        d.btnOkConfirmModal.classList.toggle("danger", danger);
+
+        d.confirmModal.classList.remove("hidden");
+        d.confirmMask.classList.remove("hidden");
+
+        if (this.confirmKeydownHandler) {
+            document.removeEventListener("keydown", this.confirmKeydownHandler, true);
+            this.confirmKeydownHandler = null;
+        }
+        this.confirmKeydownHandler = (e) => {
+            if (e.key === "Escape") {
+                e.preventDefault();
+                this.resolveThemeConfirm(false);
+                return;
+            }
+            if (e.key === "Enter") {
+                e.preventDefault();
+                this.resolveThemeConfirm(true);
+            }
+        };
+        document.addEventListener("keydown", this.confirmKeydownHandler, true);
+
+        requestAnimationFrame(() => {
+            try {
+                d.btnOkConfirmModal.focus();
+            } catch {
+            }
+        });
+
+        return new Promise((resolve) => {
+            this.confirmResolver = resolve;
+        });
+    }
+
+    resolveThemeConfirm(accepted) {
+        const resolve = this.confirmResolver;
+        this.confirmResolver = null;
+        if (this.confirmKeydownHandler) {
+            document.removeEventListener("keydown", this.confirmKeydownHandler, true);
+            this.confirmKeydownHandler = null;
+        }
+        this.dom?.confirmModal?.classList.add("hidden");
+        this.dom?.confirmMask?.classList.add("hidden");
+        if (typeof resolve === "function") resolve(!!accepted);
+    }
+
     renderHotkeysList() {
         const q = String(this.dom.hkSearch.value || "").trim().toLowerCase();
         const section = document.createElement("div");
@@ -1743,16 +1820,27 @@ class CompositionBuilderApp {
     async handleNewProjectClick() {
         const dirty = this.isProjectDirtyForExport();
         if (dirty) {
-            const saveFirst = confirm("当前项目尚未导出为 JSON，是否先导出？");
+            const saveFirst = await this.askThemeConfirm({
+                title: "新建合成项目",
+                message: "当前合成项目有未导出的修改，是否先导出项目文件？",
+                okText: "先导出",
+                cancelText: "不导出"
+            });
             if (saveFirst) {
                 const result = await this.exportProject({ silent: true });
                 if (!result?.ok) {
-                    if (result?.canceled) this.showToast("已取消新建项目", "info");
-                    else this.showToast("导出失败，未新建项目", "error");
+                    if (result?.canceled) this.showToast("已取消新建合成项目", "info");
+                    else this.showToast("项目导出失败，未新建合成项目", "error");
                     return;
                 }
             } else {
-                const discard = confirm("未导出的修改将丢失，确定新建项目吗？");
+                const discard = await this.askThemeConfirm({
+                    title: "确认丢弃未导出修改",
+                    message: "未导出的合成修改将丢失，确定新建合成项目吗？",
+                    okText: "仍要新建",
+                    cancelText: "继续编辑",
+                    danger: true
+                });
                 if (!discard) return;
             }
         }
@@ -1791,7 +1879,7 @@ class CompositionBuilderApp {
         this.rebuildPreview();
         this.generateCodeAndRender(true);
         this.scheduleSave();
-        this.showToast("已新建项目", "success");
+        this.showToast("已新建合成项目", "success");
     }
 
     onProjectClick(e) {
@@ -8072,6 +8160,22 @@ class CompositionBuilderApp {
             this.renderHotkeysList();
             this.scheduleSave();
             this.dom.hkHint.textContent = `已设置为 ${hotkeyToHuman(hk)}`;
+            return;
+        }
+
+        const isMac = /Mac|iPhone|iPad|iPod/i.test(navigator.platform);
+        const mod = isMac ? e.metaKey : e.ctrlKey;
+        const key = String(e.key || "").toLowerCase();
+        const code = String(e.code || "");
+        const hitSave = key === "s" || code === "KeyS";
+        const hitNew = key === "n" || code === "KeyN";
+        if (mod && !e.shiftKey && !e.altKey && (hitNew || hitSave)) {
+            e.preventDefault();
+            e.stopPropagation();
+            if (typeof e.stopImmediatePropagation === "function") e.stopImmediatePropagation();
+            if (hitSave && !e.repeat && !this.isModalOpen()) {
+                this.exportProject();
+            }
             return;
         }
 

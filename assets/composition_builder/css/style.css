@@ -228,6 +228,11 @@ body {
     border-color: color-mix(in srgb, var(--accent) 62%, transparent);
 }
 
+.btn.danger {
+    background: color-mix(in srgb, #ff5c5c 20%, transparent);
+    border-color: color-mix(in srgb, #ff5c5c 62%, transparent);
+}
+
 .btn.icon {
     width: 34px;
     padding: 0;
@@ -1205,6 +1210,40 @@ body[data-theme^="light"] select.input option {
 .modal.modal-bezier {
     width: min(980px, 92vw);
     height: min(640px, 88vh);
+}
+
+.modal.modal-confirm {
+    width: min(560px, 92vw);
+    max-height: min(320px, 78vh);
+}
+
+.modal-mask-confirm {
+    z-index: 80;
+}
+
+.modal.modal-confirm {
+    z-index: 90;
+}
+
+.modal-head.modal-head-simple {
+    grid-template-columns: 1fr auto;
+}
+
+.modal-head.modal-head-simple .modal-title {
+    grid-column: 1;
+    justify-self: start;
+}
+
+.modal-head.modal-head-simple .btn.icon {
+    grid-column: 2;
+    justify-self: end;
+}
+
+.confirm-message {
+    line-height: 1.65;
+    font-size: 14px;
+    color: var(--text);
+    white-space: pre-wrap;
 }
 
 .modal-head {

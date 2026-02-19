@@ -214,6 +214,22 @@
             <button id="btnApplyBezierModal" class="btn primary">应用到当前缩放</button>
         </div>
     </div>
+
+    <div id="confirmMask" class="modal-mask hidden modal-mask-confirm"></div>
+    <div id="confirmModal" class="modal modal-confirm hidden" role="dialog" aria-modal="true" aria-labelledby="confirmTitle">
+        <div class="modal-head modal-head-simple">
+            <div id="confirmTitle" class="modal-title">请确认</div>
+            <button id="btnCloseConfirmModal" class="btn icon">X</button>
+        </div>
+        <div class="modal-body">
+            <div id="confirmMessage" class="confirm-message">确认执行该操作？</div>
+        </div>
+        <div class="modal-foot">
+            <span class="flex-spacer"></span>
+            <button id="btnCancelConfirmModal" class="btn">取消</button>
+            <button id="btnOkConfirmModal" class="btn primary">确定</button>
+        </div>
+    </div>
 </div>
 
 <script src="./assets/points_builder/js/utils.js"></script>
@@ -226,6 +242,6 @@
   }
 }
 </script>
-<script type="module" src="./assets/composition_builder/js/main.js"></script>
+<script type="module" src="./assets/composition_builder/js/main.js?v=20260219_2"></script>
 </body>
 </html>

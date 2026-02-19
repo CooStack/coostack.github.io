@@ -77,6 +77,10 @@ export function initGlobalShortcuts(ctx = {}) {
         const isMac = /Mac|iPhone|iPad|iPod/i.test(navigator.platform);
         const mod = isMac ? e.metaKey : e.ctrlKey;
         const key = (e.key || "").toLowerCase();
+        if (mod && key === "n" && !e.shiftKey && !e.altKey) {
+            e.preventDefault();
+            return;
+        }
         if (mod && key === "s" && !e.shiftKey && !e.altKey) {
             e.preventDefault();
             if (btnSaveJson) btnSaveJson.click();
@@ -443,4 +447,3 @@ export function initGlobalShortcuts(ctx = {}) {
         if (typeof onWindowBlurCleanup === "function") onWindowBlurCleanup();
     });
 }
-

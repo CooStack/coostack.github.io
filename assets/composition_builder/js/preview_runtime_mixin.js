@@ -935,12 +935,7 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
                     const thisAt = (this.previewRuntimeGlobals && typeof this.previewRuntimeGlobals === "object")
                         ? this.previewRuntimeGlobals
                         : {};
-                    const baseVars = this.getExpressionVars(t, t, 0, { includeVectors: true });
-                    const baseProto = Object.getPrototypeOf(baseVars) || {};
-                    const vars = Object.assign({}, baseProto, baseVars);
-                    if (thisAt && typeof thisAt === "object") {
-                        for (const [k, v] of Object.entries(thisAt)) vars[k] = v;
-                    }
+                    const vars = this.createRuntimeExpressionScope(t, t, 0, thisAt, true);
                     vars.rel = U.v(0, 0, 0);
                     if (allowOrder) vars.order = 0;
                     for (let d = 0; d < scopeLevel; d++) {
@@ -1770,6 +1765,40 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
         return cycle.play + dissolveAge;
     }
 
+    createRuntimeExpressionScope(elapsedTick = 0, ageTick = 0, pointIndex = 0, runtimeVars = null, includeVectors = true) {
+        const baseVars = this.getExpressionVars(elapsedTick, ageTick, pointIndex, { includeVectors: includeVectors === true });
+        const localVars = (runtimeVars && typeof runtimeVars === "object") ? runtimeVars : null;
+        if (!localVars) return baseVars;
+        const baseProto = Object.getPrototypeOf(baseVars) || null;
+        if (baseProto && Object.getPrototypeOf(localVars) !== baseProto) {
+            try {
+                Object.setPrototypeOf(localVars, baseProto);
+            } catch {
+            }
+        }
+        const vars = Object.create(localVars);
+        const defineLocal = (key, value) => {
+            try {
+                Object.defineProperty(vars, key, {
+                    configurable: true,
+                    enumerable: true,
+                    writable: true,
+                    value
+                });
+            } catch {
+                try {
+                    vars[key] = value;
+                } catch {
+                }
+            }
+        };
+        defineLocal("age", num(baseVars.age));
+        defineLocal("tick", num(baseVars.tick));
+        defineLocal("tickCount", num(baseVars.tickCount));
+        defineLocal("index", int(baseVars.index));
+        return vars;
+    }
+
     evaluateNumericExpressionWithRuntime(exprRaw, runtimeVars = null, opts = {}) {
         const srcRaw = String(exprRaw || "").trim();
         if (!srcRaw) return 0;
@@ -1779,12 +1808,7 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
         const pointIndex = int(opts.pointIndex || 0);
         const localVars = (runtimeVars && typeof runtimeVars === "object") ? runtimeVars : {};
         const thisAt = (opts.thisAtVars && typeof opts.thisAtVars === "object") ? opts.thisAtVars : localVars;
-        const baseVars = this.getExpressionVars(elapsedTick, ageTick, pointIndex, { includeVectors: true });
-        const baseProto = Object.getPrototypeOf(baseVars) || {};
-        const vars = Object.assign({}, baseProto, baseVars);
-        if (localVars && typeof localVars === "object") {
-            for (const [k, v] of Object.entries(localVars)) vars[k] = v;
-        }
+        const vars = this.createRuntimeExpressionScope(elapsedTick, ageTick, pointIndex, localVars, true);
         vars.thisAt = thisAt;
         let fn = this.previewNumericFnCache.get(src);
         if (fn === undefined) {
@@ -1906,12 +1930,7 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
             addSingle: () => {},
             addMultiple: () => {}
         };
-        const baseVars = this.getExpressionVars(elapsedTick, ageTick, pointIndex, { includeVectors: true });
-        const baseProto = Object.getPrototypeOf(baseVars) || {};
-        const vars = Object.assign({}, baseProto, baseVars);
-        if (runtimeVars && typeof runtimeVars === "object") {
-            for (const [k, v] of Object.entries(runtimeVars)) vars[k] = v;
-        }
+        const vars = this.createRuntimeExpressionScope(elapsedTick, ageTick, pointIndex, runtimeVars, true);
         const shapeScope = (opts.shapeScope && typeof opts.shapeScope === "object") ? opts.shapeScope : null;
         const relPoint = (shapeScope && shapeScope.rel && typeof shapeScope.rel === "object"
             && Number.isFinite(Number(shapeScope.rel.x))

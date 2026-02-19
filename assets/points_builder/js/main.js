@@ -127,6 +127,7 @@ function initPointsBuilderMain() {
     let quickSyncHintEl = null;
     let quickSyncState = null;
     let quickSyncHistoryLockTimer = 0;
+    let quickSyncCardsRenderTimer = 0;
 
     // -------------------------
     // helpers
@@ -273,7 +274,21 @@ function initPointsBuilderMain() {
             quickSyncEditorHostEl.removeEventListener("change", quickSyncEditorHostEl.__pbQuickSyncChangeHandler);
             quickSyncEditorHostEl.__pbQuickSyncChangeHandler = null;
         }
+        if (quickSyncCardsRenderTimer) {
+            cancelAnimationFrame(quickSyncCardsRenderTimer);
+            quickSyncCardsRenderTimer = 0;
+        }
         quickSyncState = null;
+    }
+
+    function scheduleQuickSyncCardsRender() {
+        if (quickSyncCardsRenderTimer) return;
+        quickSyncCardsRenderTimer = requestAnimationFrame(() => {
+            quickSyncCardsRenderTimer = 0;
+            if (typeof renderCards === "function") renderCards();
+            if (paramSync && paramSync.open && typeof renderSyncMenu === "function") renderSyncMenu();
+            applyParamStepToInputs();
+        });
     }
 
     function positionFloatingPanel(panelEl, clientX, clientY) {
@@ -4142,7 +4157,15 @@ function quickSyncTargetIds(ids, anchor = {}) {
         quickSyncState.snapshot = current;
         if (changed) {
             rebuildPreviewAndKotlin();
-            if (opts.rerender) renderAll();
+            if (opts.rerender) {
+                if (quickSyncCardsRenderTimer) {
+                    cancelAnimationFrame(quickSyncCardsRenderTimer);
+                    quickSyncCardsRenderTimer = 0;
+                }
+                renderAll();
+            } else {
+                scheduleQuickSyncCardsRender();
+            }
         }
         if (opts.rerender) {
             rerenderInlineEditor();
