@@ -594,6 +594,14 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
         const ownerVisualAgeDependentCache = (this.previewCardVisualAgeDependentCache instanceof Map)
             ? this.previewCardVisualAgeDependentCache
             : (this.previewCardVisualAgeDependentCache = new Map());
+        const shapeRuntimeLevelsFrameCache = (this.previewFrameShapeRuntimeLevelsCache instanceof Map)
+            ? this.previewFrameShapeRuntimeLevelsCache
+            : (this.previewFrameShapeRuntimeLevelsCache = new Map());
+        shapeRuntimeLevelsFrameCache.clear();
+        const growthPlanFrameCache = (this.previewFrameGrowthPlanCache instanceof Map)
+            ? this.previewFrameGrowthPlanCache
+            : (this.previewFrameGrowthPlanCache = new Map());
+        growthPlanFrameCache.clear();
 
         const ownerIds = this.previewOwners;
         const ownerLocalIndex = this.previewOwnerLocalIndex;
@@ -671,11 +679,27 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
                     ? int(groupCardIndex[groupId] ?? -1)
                     : this.getCardIndexById(owner);
                 let shapeRuntimeLevels = [];
+                const runtimeTickKey = int(Math.round(runtimeElapsedTick * 1000));
                 if (card) {
                     if (card.dataType !== "single") {
-                        shapeRuntimeLevels = this.getShapeRuntimeLevelsForPreview(card, runtimeElapsedTick, skipExprPerPoint);
-                        for (const lv of shapeRuntimeLevels) {
-                            this.applyExpressionGlobalsOnce(lv.actions, runtimeElapsedTick, runtimeAgeTick, frameRuntimeGlobals, lv.axis || globalAxis);
+                        const shapeCacheKey = `${card.id}|${runtimeTickKey}|${skipExprPerPoint ? 1 : 0}`;
+                        let shapeRuntimePack = shapeRuntimeLevelsFrameCache.get(shapeCacheKey);
+                        if (shapeRuntimePack && Array.isArray(shapeRuntimePack.levels)) {
+                            shapeRuntimeLevels = shapeRuntimePack.levels;
+                        } else {
+                            shapeRuntimeLevels = this.getShapeRuntimeLevelsForPreview(card, runtimeElapsedTick, skipExprPerPoint);
+                            shapeRuntimePack = {
+                                levels: shapeRuntimeLevels,
+                                hasExpression: shapeRuntimeLevels.some((lv) => !!lv.hasExpression),
+                                globalsApplied: false
+                            };
+                            shapeRuntimeLevelsFrameCache.set(shapeCacheKey, shapeRuntimePack);
+                        }
+                        if (shapeRuntimePack.hasExpression || !shapeRuntimePack.globalsApplied) {
+                            for (const lv of shapeRuntimeLevels) {
+                                this.applyExpressionGlobalsOnce(lv.actions, runtimeElapsedTick, runtimeAgeTick, frameRuntimeGlobals, lv.axis || globalAxis);
+                            }
+                            shapeRuntimePack.globalsApplied = true;
                         }
                     }
                 }
@@ -687,42 +711,74 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
                 this.syncPreviewStatusWithCycle(frameRuntimeGlobals, cycleCfg, globalCycleAge, elapsedTick);
                 globalAge = this.resolvePreviewAgeWithStatus(ageBase, elapsedTick, cycleCfg, frameRuntimeGlobals);
                 const globalCycleAgeNow = this.resolvePreviewAgeWithStatus(globalCycleAge, elapsedTick, cycleCfg, frameRuntimeGlobals);
-                const visibleLimit = this.evaluateGrowthVisibleLimit(
-                    owner,
-                    ownerCountSafe,
-                    Math.max(0, num(globalAge) - rootDelayTick),
-                    globalCycleAgeNow,
-                    runtimeElapsedTick,
-                    runtimeActions,
-                    shapeRuntimeLevels,
-                    cycleCfg,
-                    {
-                        rootVirtualIndex,
-                        rootVirtualTotal,
-                        rootElapsedTick: elapsedTick,
-                        rootPlan: rootGrowthPlan,
-                        ownerCard: card,
-                        ownerCardIndex: cardIndex
+                const growthAgeTick = Math.max(0, num(globalAge) - rootDelayTick);
+                const canReuseGrowthPlan = !!card
+                    && !runtimeActions.__hasExpression
+                    && !shapeRuntimeLevels.some((lv) => !!lv.hasExpression);
+                const growthPlanKey = canReuseGrowthPlan
+                    ? [
+                        card.id,
+                        ownerCountSafe,
+                        int(Math.round(growthAgeTick * 1000)),
+                        runtimeTickKey,
+                        sequencedRoot ? int(rootVirtualIndex) : 0,
+                        int(Math.round(num(globalCycleAgeNow) * 1000))
+                    ].join("|")
+                    : "";
+                let growthPlanCached = canReuseGrowthPlan ? growthPlanFrameCache.get(growthPlanKey) : null;
+                let visibleLimit = 0;
+                let localGrowthPlan = null;
+                if (growthPlanCached && typeof growthPlanCached === "object") {
+                    visibleLimit = int(growthPlanCached.visibleLimit || 0);
+                    localGrowthPlan = growthPlanCached.localGrowthPlan || null;
+                } else {
+                    visibleLimit = this.evaluateGrowthVisibleLimit(
+                        owner,
+                        ownerCountSafe,
+                        growthAgeTick,
+                        globalCycleAgeNow,
+                        runtimeElapsedTick,
+                        runtimeActions,
+                        shapeRuntimeLevels,
+                        cycleCfg,
+                        {
+                            rootVirtualIndex,
+                            rootVirtualTotal,
+                            rootElapsedTick: elapsedTick,
+                            rootPlan: rootGrowthPlan,
+                            ownerCard: card,
+                            ownerCardIndex: cardIndex
+                        }
+                    );
+                    localGrowthPlan = this.buildLocalGrowthPlan(
+                        card,
+                        ownerCountSafe,
+                        shapeRuntimeLevels,
+                        growthAgeTick,
+                        runtimeElapsedTick
+                    );
+                    if (canReuseGrowthPlan) {
+                        growthPlanFrameCache.set(growthPlanKey, {
+                            visibleLimit,
+                            localGrowthPlan
+                        });
                     }
-                );
-                const localGrowthPlan = this.buildLocalGrowthPlan(
-                    card,
-                    ownerCountSafe,
-                    shapeRuntimeLevels,
-                    Math.max(0, num(globalAge) - rootDelayTick),
-                    runtimeElapsedTick
-                );
+                }
+                const localUnlockTickByIndex = Array.isArray(localGrowthPlan?.unlockTickByIndex)
+                    ? localGrowthPlan.unlockTickByIndex
+                    : [];
                 cached = {
                     owner,
                     ownerCount: ownerCountSafe,
-                    age: Math.max(0, num(globalAge) - rootDelayTick),
+                    age: growthAgeTick,
                     elapsedTick: runtimeElapsedTick,
                     shapeRuntimeLevels,
                     cardRuntimeHasExpression: shapeRuntimeLevels.some((lv) => !!lv.hasExpression),
+                    cardRuntimeHasPointDependentExpression: shapeRuntimeLevels.some((lv) => !!lv.hasPointDependentExpression),
                     cardHasShapeOps: !!(card && card.dataType !== "single"),
                     cardVisualAgeDependent: !!ageDependent,
                     visibleLimit,
-                    localUnlockTickByIndex: localGrowthPlan.unlockTickByIndex
+                    localUnlockTickByIndex
                 };
                 if (groupId >= 0) groupRuntimeCache[groupId] = cached;
             }
@@ -756,6 +812,7 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
             const pointDelayTick = Number.isFinite(localUnlockTick) ? Math.max(0, num(localUnlockTick)) : 0;
             const pointElapsedTick = Math.max(0, num(cached.elapsedTick) - pointDelayTick);
             const pointAgeTick = Math.max(0, num(cached.age) - pointDelayTick);
+            const localCacheRef = localRef;
 
             let anchorsByBirth = groupId >= 0 ? anchorCache[groupId] : null;
             if (!anchorsByBirth) {
@@ -779,13 +836,13 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
             let pz = anchor.z;
             if (useLocalOps && cached.cardHasShapeOps) {
                 let local = null;
-                const localCacheable = !cached.cardRuntimeHasExpression;
+                const localCacheable = !cached.cardRuntimeHasPointDependentExpression;
                 let localsByBirth = groupId >= 0 ? localCache[groupId] : null;
                 if (!localsByBirth) {
                     localsByBirth = [];
                     if (groupId >= 0) localCache[groupId] = localsByBirth;
                 }
-                if (localCacheable) local = localsByBirth[localRef];
+                if (localCacheable) local = localsByBirth[localCacheRef];
                 if (!local) {
                     const levelBaseList = Array.isArray(levelBasesAll[i]) && levelBasesAll[i].length
                         ? levelBasesAll[i]
@@ -809,12 +866,9 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
                         const lvRuntime = runtimeLevels[lvIdx] || null;
                         let lvPoint = U.clone(lvBase);
                         if (lvRuntime) {
-                            const levelSequenced = lvRuntime.sequenced === true;
-                            const lvActionElapsed = levelSequenced ? pointElapsedTick : cached.elapsedTick;
-                            const lvActionAge = levelSequenced ? pointAgeTick : cached.age;
-                            const lvScaleAge = levelSequenced && num(cached.age) < num(cycleCfg.play)
-                                ? pointAgeTick
-                                : cached.age;
+                            const lvActionElapsed = cached.elapsedTick;
+                            const lvActionAge = cached.age;
+                            const lvScaleAge = cached.age;
                             const cardScale = this.resolveScaleFactor(lvRuntime.scale, lvScaleAge, cycleCfg);
                             lvPoint = this.applyScaleFactorToPoint(lvPoint, cardScale);
                             if (lvRuntime.angleOffset) {
@@ -863,7 +917,7 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
                         localSum.z += num(lvPoint.z);
                     }
                     local = localSum;
-                    if (localCacheable) localsByBirth[localRef] = local;
+                    if (localCacheable) localsByBirth[localCacheRef] = local;
                 }
                 px = anchor.x + local.x;
                 py = anchor.y + local.y;
@@ -899,7 +953,7 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
             }
 
             let pointVisual = null;
-            if (!skipExprPerPoint && (cached.cardVisualAgeDependent || pointDelayTick > 0)) {
+            if (!skipExprPerPoint && cached.cardVisualAgeDependent) {
                 let byLocal = groupId >= 0 ? pointVisualCache[groupId] : null;
                 if (!byLocal) {
                     byLocal = [];
@@ -1225,7 +1279,65 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
         return clamp(int(info.counts?.[info.counts.length - 1] || 0), 0, info.safeOwnerCount);
     }
 
-    ensureExpressionVisiblePrefix(actionsOrScript, ownerCount, steps, opts = {}) {
+    serializePreviewGrowthActions(actionsRaw = []) {
+        const walk = (list) => {
+            const src = Array.isArray(list) ? list : [];
+            const parts = [];
+            for (const act of src) {
+                if (!act || typeof act !== "object") continue;
+                if (act.type === "growth_add") {
+                    parts.push(`a:${Math.max(1, int(act.count || 1))}`);
+                    continue;
+                }
+                if (act.type === "conditional_growth") {
+                    const cond = String(act.conditionExpr || "").trim();
+                    const thenSig = walk(act.thenActions || []);
+                    const elseSig = walk(act.elseActions || []);
+                    parts.push(`c:${cond}?{${thenSig}}:{${elseSig}}`);
+                }
+            }
+            return parts.join("|");
+        };
+        return walk(actionsRaw);
+    }
+
+    collectPreviewGrowthNativeActions(actionsRaw = []) {
+        const src = Array.isArray(actionsRaw) ? actionsRaw : [];
+        const out = [];
+        for (const act of src) {
+            if (!act || typeof act !== "object") continue;
+            if (act.type === "growth_add") {
+                out.push({
+                    type: "growth_add",
+                    count: Math.max(1, int(act.count || 1))
+                });
+                continue;
+            }
+            if (act.type === "conditional_native") {
+                const thenActions = this.collectPreviewGrowthNativeActions(act.thenActions || []);
+                const elseActions = this.collectPreviewGrowthNativeActions(act.elseActions || []);
+                if (!thenActions.length && !elseActions.length) continue;
+                const conditionExpr = String(act.conditionExpr || "").trim();
+                const conditionFn = (typeof act.conditionFn === "function")
+                    ? act.conditionFn
+                    : this.getPreviewConditionFn(conditionExpr);
+                out.push({
+                    type: "conditional_growth",
+                    conditionExpr,
+                    conditionFn,
+                    pointIndependent: act.pointIndependent === true,
+                    compileKey: String(act.compileKey || ""),
+                    thenActions,
+                    elseActions
+                });
+            }
+        }
+        return out;
+    }
+
+    evaluatePreviewNativeGrowthDelta(actionsRaw = [], elapsedTick = 0, opts = {}) {
+        const actions = Array.isArray(actionsRaw) ? actionsRaw : [];
+        if (!actions.length) return 0;
         const scopeLevel = Math.max(-1, int(opts.scopeLevel ?? -1));
         const allowOrder = opts.allowOrder === true;
         const sequencedDepths = new Set(
@@ -1233,7 +1345,64 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
                 ? opts.sequencedDepths.map((it) => int(it))
                 : []
         );
+        const runtimeVars = (opts.runtimeVars && typeof opts.runtimeVars === "object") ? opts.runtimeVars : {};
+        const ageTick = Number.isFinite(Number(opts.ageTick)) ? num(opts.ageTick) : num(elapsedTick);
+        const pointIndex = int(opts.pointIndex || 0);
+        let evalVars = null;
+        const getEvalVars = () => {
+            if (evalVars) return evalVars;
+            const vars = this.createRuntimeExpressionScope(elapsedTick, ageTick, pointIndex, runtimeVars, true);
+            vars.rel = U.v(0, 0, 0);
+            if (allowOrder) vars.order = 0;
+            for (let d = 0; d < scopeLevel; d++) {
+                vars[`shapeRel${d}`] = U.v(0, 0, 0);
+                if (sequencedDepths.has(d)) vars[`shapeOrder${d}`] = 0;
+            }
+            vars.thisAt = runtimeVars;
+            evalVars = vars;
+            return evalVars;
+        };
+        const walk = (list) => {
+            const src = Array.isArray(list) ? list : [];
+            let delta = 0;
+            for (const act of src) {
+                if (!act || typeof act !== "object") continue;
+                if (act.type === "growth_add") {
+                    delta += Math.max(1, int(act.count || 1));
+                    continue;
+                }
+                if (act.type === "conditional_growth") {
+                    const fn = (typeof act.conditionFn === "function")
+                        ? act.conditionFn
+                        : this.getPreviewConditionFn(act.conditionExpr);
+                    let pass = false;
+                    if (typeof fn === "function") {
+                        try {
+                            pass = !!fn(getEvalVars());
+                        } catch {
+                            pass = false;
+                        }
+                    }
+                    const branch = pass
+                        ? (Array.isArray(act.thenActions) ? act.thenActions : [])
+                        : (Array.isArray(act.elseActions) ? act.elseActions : []);
+                    delta += walk(branch);
+                }
+            }
+            return delta;
+        };
+        return walk(actions);
+    }
+
+    ensureExpressionVisiblePrefix(actionsOrScript, ownerCount, steps, opts = {}) {
+        const scopeLevel = Math.max(-1, int(opts.scopeLevel ?? -1));
+        const allowOrder = opts.allowOrder === true;
+        const sequencedDepthList = Array.isArray(opts.sequencedDepths)
+            ? opts.sequencedDepths.map((it) => int(it))
+            : [];
+        const sequencedDepths = new Set(sequencedDepthList);
         const expressionActions = [];
+        let nativeGrowthActions = [];
         let sourceSignature = "";
         if (typeof actionsOrScript === "string") {
             const src = String(actionsOrScript || "").trim();
@@ -1247,15 +1416,19 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
                 sourceSignature = `s:${src}`;
             }
         } else {
-            for (const act of (Array.isArray(actionsOrScript) ? actionsOrScript : [])) {
+            const actionList = Array.isArray(actionsOrScript) ? actionsOrScript : [];
+            for (const act of actionList) {
                 if (act?.type === "expression" && String(act.expression || "").trim()) expressionActions.push(act);
             }
-            sourceSignature = expressionActions.map((act) => String(act.expression || "").trim()).join("\n--\n");
+            nativeGrowthActions = this.collectPreviewGrowthNativeActions(actionList);
+            const exprSig = expressionActions.map((act) => String(act.expression || "").trim()).join("\n--\n");
+            const nativeSig = this.serializePreviewGrowthActions(nativeGrowthActions);
+            sourceSignature = `${exprSig}\n##native##\n${nativeSig}`;
         }
-        if (!expressionActions.length) return null;
         const growthApiRe = /\baddSingle\s*\(|\baddMultiple\s*\(/;
-        const hasGrowthApi = expressionActions.some((act) => growthApiRe.test(String(act.expression || "")));
-        if (!hasGrowthApi) return null;
+        const hasExprGrowthApi = expressionActions.some((act) => growthApiRe.test(String(act.expression || "")));
+        const hasNativeGrowth = nativeGrowthActions.length > 0;
+        if (!hasExprGrowthApi && !hasNativeGrowth) return null;
         const safeOwnerCount = Math.max(1, int(ownerCount || 1));
         const scopeSig = `${scopeLevel}|${allowOrder ? 1 : 0}|${Array.from(sequencedDepths).sort((a, b) => a - b).join(",")}`;
         const prefixKey = `${safeOwnerCount}|${scopeSig}|${sourceSignature}`;
@@ -1290,15 +1463,33 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
                 }
                 if (typeof fn === "function") prepared.push(fn);
             }
-            prefix = { counts: [0], actions: prepared };
+            prefix = { counts: [0], actions: prepared, nativeGrowthActions };
             if (this.previewExprPrefixCache.size > 256) this.previewExprPrefixCache.clear();
             this.previewExprPrefixCache.set(prefixKey, prefix);
         }
         const counts = Array.isArray(prefix.counts) ? prefix.counts : [0];
         let visible = Number(counts[counts.length - 1]) || 0;
         const actions = Array.isArray(prefix.actions) ? prefix.actions : [];
+        const nativeActions = Array.isArray(prefix.nativeGrowthActions) ? prefix.nativeGrowthActions : [];
         for (let t = counts.length; t <= steps; t++) {
             if (visible < safeOwnerCount) {
+                if (nativeActions.length) {
+                    const thisAt = (this.previewRuntimeGlobals && typeof this.previewRuntimeGlobals === "object")
+                        ? this.previewRuntimeGlobals
+                        : {};
+                    visible += this.evaluatePreviewNativeGrowthDelta(nativeActions, t, {
+                        scopeLevel,
+                        allowOrder,
+                        sequencedDepths: sequencedDepthList,
+                        runtimeVars: thisAt,
+                        pointIndex: 0,
+                        ageTick: t
+                    });
+                }
+                if (visible >= safeOwnerCount) {
+                    counts[t] = safeOwnerCount;
+                    continue;
+                }
                 for (const fn of actions) {
                     const thisAt = (this.previewRuntimeGlobals && typeof this.previewRuntimeGlobals === "object")
                         ? this.previewRuntimeGlobals
@@ -1541,7 +1732,8 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
             scale: normalizeScaleHelperConfig(card.shapeScale, { type: "none" }),
             angleOffset: this.resolvePreviewAngleOffsetConfig(card),
             actions: rootActions,
-            hasExpression: !!rootActions.__hasExpression
+            hasExpression: !!rootActions.__hasExpression,
+            hasPointDependentExpression: this.isPreviewActionsPointDependent(rootActions)
         });
         const chain = this.getShapeChildChain(card);
         for (let i = 0; i < chain.length; i++) {
@@ -1563,7 +1755,8 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
                 scale: normalizeScaleHelperConfig(lv.scale, { type: "none" }),
                 angleOffset: this.resolvePreviewAngleOffsetConfig(lv),
                 actions,
-                hasExpression: !!actions.__hasExpression
+                hasExpression: !!actions.__hasExpression,
+                hasPointDependentExpression: this.isPreviewActionsPointDependent(actions)
             });
         }
         return levels;
@@ -1616,6 +1809,25 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
             reverseOnDisable: cfg.reverseOnDisable === true,
             status: runtimeVars?.status || null
         });
+    }
+
+    isPreviewExpressionPointDependent(scriptRaw = "") {
+        const src = stripJsForLint(transpileKotlinThisQualifierToJs(scriptRaw));
+        if (!src) return false;
+        if (/\b(?:index|order|rel|point)\b/.test(src)) return true;
+        if (/\bshapeRel\d+\b/.test(src)) return true;
+        if (/\bshapeOrder\d+\b/.test(src)) return true;
+        return false;
+    }
+
+    isPreviewActionsPointDependent(actions = []) {
+        for (const act of (Array.isArray(actions) ? actions : [])) {
+            if (act?.type !== "expression") continue;
+            const src = String(act.expressionRaw || act.expression || "").trim();
+            if (!src) continue;
+            if (this.isPreviewExpressionPointDependent(src)) return true;
+        }
+        return false;
     }
 
     extractLastAssignedExprInScript(scriptRaw, names = []) {
@@ -2156,6 +2368,10 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
                 last.anglePerTick = num(last.anglePerTick) + num(cur.anglePerTick);
                 continue;
             }
+            if (last && last.type === "growth_add" && cur.type === "growth_add") {
+                last.count = Math.max(1, int(last.count || 1)) + Math.max(1, int(cur.count || 1));
+                continue;
+            }
             out.push({
                 ...cur,
                 to: (cur.to && typeof cur.to === "object")
@@ -2204,6 +2420,25 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
     tryFoldSingleExpressionStatement(stmtRaw, dynamicTokenRe, elapsedTick = 0) {
         const stmt = String(stmtRaw || "").trim();
         if (!stmt) return null;
+        const mAddSingle = stmt.match(/^addSingle\s*\(\s*([\s\S]*?)\s*\)$/);
+        if (mAddSingle) {
+            const argExpr = String(mAddSingle[1] || "").trim();
+            if (argExpr && dynamicTokenRe.test(argExpr)) return null;
+            return { type: "growth_add", count: 1 };
+        }
+        const mAddMultiple = stmt.match(/^addMultiple\s*\(\s*([\s\S]*?)\s*\)$/);
+        if (mAddMultiple) {
+            const countExpr = String(mAddMultiple[1] || "").trim();
+            if (!countExpr) return { type: "growth_add", count: 1 };
+            if (dynamicTokenRe.test(countExpr) || !this.isFoldableStaticNumericExpr(countExpr)) return null;
+            const count = Math.max(1, int(this.evaluateNumericExpression(countExpr, {
+                elapsedTick: num(elapsedTick),
+                ageTick: num(elapsedTick),
+                pointIndex: 0,
+                includeVectors: false
+            })));
+            return { type: "growth_add", count };
+        }
         const mRotateAsAxis = stmt.match(/^rotateAsAxis\s*\(\s*([\s\S]+?)\s*\)$/);
         if (mRotateAsAxis) {
             const angleExpr = String(mRotateAsAxis[1] || "").trim();
@@ -2301,6 +2536,9 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
         const accum = Math.max(0, num(elapsedTick));
         const applyNativeAction = (nativeAction) => {
             if (!nativeAction || typeof nativeAction !== "object") return false;
+            if (nativeAction.type === "growth_add") {
+                return true;
+            }
             if (nativeAction.type === "rotateToPoint") {
                 const dir = (nativeAction.to && typeof nativeAction.to === "object" && Number.isFinite(nativeAction.to.x) && Number.isFinite(nativeAction.to.y) && Number.isFinite(nativeAction.to.z))
                     ? nativeAction.to
