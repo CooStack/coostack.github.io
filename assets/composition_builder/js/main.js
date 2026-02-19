@@ -2,7 +2,7 @@ import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { createKindDefs } from "../../points_builder/js/kinds.js";
 import { createBuilderTools } from "../../points_builder/js/builder.js";
-import { createExpressionRuntime } from "./expression_runtime.js";
+import { createExpressionRuntime } from "./expression_runtime.js?v=20260220_1";
 import { InlineCodeEditor, mergeCompletionGroups } from "./code_editor.js?v=20260217_7";
 import {
     isVectorLiteralType,
@@ -24,10 +24,11 @@ import {
     normalizeAngleOffsetFieldName,
     formatAngleValue
 } from "./angle_offset_utils.js";
-import { installPreviewRuntimeMethods } from "./preview_runtime_mixin.js";
+import { installPreviewRuntimeMethods } from "./preview_runtime_mixin.js?v=20260220_8";
 import { installKotlinCodegenMethods } from "./kotlin_codegen_mixin.js";
 import { installCodeOutputMethods } from "./code_output_mixin.js";
-import { installExpressionEditorMethods } from "./expression_editor_mixin.js";
+import { installExpressionEditorMethods } from "./expression_editor_mixin.js?v=20260220_1";
+import { installCodeCompileMethods } from "./code_compile_mixin.js?v=20260220_1";
 import { installTargetPresetMethods } from "./target_preset_mixin.js";
 
 const U = globalThis.Utils;
@@ -373,7 +374,7 @@ const JS_LINT_KEYWORDS = new Set([
 const JS_LINT_GLOBALS = new Set([
     "Math", "Random", "Number", "String", "Boolean", "Object", "Array", "Date", "JSON", "console",
     "parseInt", "parseFloat", "isNaN", "isFinite", "Infinity", "NaN",
-    "PI", "age", "tick", "tickCount", "index",
+    "PI", "age", "tick", "index",
     "rotateToPoint", "rotateAsAxis", "rotateToWithAngle", "addSingle", "addMultiple", "addPreTickAction",
     "setReversedScaleOnCompositionStatus", "particle",
     "thisAt", "status",
@@ -383,7 +384,7 @@ const JS_LINT_GLOBALS = new Set([
 
 const CONTROLLER_SCOPE_RESERVED = new Set([
     "color", "particleColor", "size", "particleSize", "alpha", "particleAlpha",
-    "currentAge", "textureSheet", "status", "tickCount", "particle", "thisAt"
+    "currentAge", "textureSheet", "status", "particle", "thisAt"
 ]);
 
 function stripJsForLint(raw) {
@@ -1135,6 +1136,9 @@ class CompositionBuilderApp {
         this.previewAutoPaused = false;
         this.previewWasPlayingBeforeAutoPause = false;
         this.lastPointsStatusText = "";
+        this.lastFpsStatusText = "";
+        this.previewFpsFrames = 0;
+        this.previewFpsLastTs = 0;
         this.previewCycleCache = null;
         this.previewExprCountCache = new Map();
         this.previewExprPrefixCache = new Map();
@@ -1167,8 +1171,7 @@ class CompositionBuilderApp {
             active: 0
         };
         this.codeEditors = new Map();
-        this.codeApplyTimer = null;
-        this.pendingCodeApplyOpts = null;
+        this.pendingCodeApplyOpts = new Map();
 
         this.exprRuntime = createExpressionRuntime({
             U,
@@ -1219,6 +1222,7 @@ class CompositionBuilderApp {
             btnDownloadCode: document.getElementById("btnDownloadCode"),
             btnPausePreview: document.getElementById("btnPausePreview"),
             btnReplayPreview: document.getElementById("btnReplayPreview"),
+            btnCompileExpr: document.getElementById("btnCompileExpr"),
             btnLeftTabProject: document.getElementById("btnLeftTabProject"),
             btnLeftTabCards: document.getElementById("btnLeftTabCards"),
             leftPageProject: document.getElementById("leftPageProject"),
@@ -1234,6 +1238,7 @@ class CompositionBuilderApp {
             selectBox: document.getElementById("selectBox"),
             statusPoints: document.getElementById("statusPoints"),
             statusSelection: document.getElementById("statusSelection"),
+            statusFps: document.getElementById("statusFps"),
             btnJumpPreviewEnd: document.getElementById("btnJumpPreviewEnd"),
             btnResetCamera: document.getElementById("btnResetCamera"),
             btnFullscreen: document.getElementById("btnFullscreen"),
@@ -1320,6 +1325,7 @@ class CompositionBuilderApp {
         d.btnFullscreen.addEventListener("click", () => this.toggleFullscreen());
         d.btnPausePreview?.addEventListener("click", () => this.togglePreviewPause());
         if (d.btnReplayPreview) d.btnReplayPreview.addEventListener("click", () => this.replayPreview());
+        if (d.btnCompileExpr) d.btnCompileExpr.addEventListener("click", () => this.compileAllCodeEditorSources({ force: true, showToast: true }));
         if (d.btnJumpPreviewEnd) d.btnJumpPreviewEnd.addEventListener("click", () => this.jumpPreviewToPreFade());
 
         d.settingsMask.addEventListener("click", () => this.hideSettings());
@@ -1483,8 +1489,10 @@ class CompositionBuilderApp {
 
         const animate = () => {
             requestAnimationFrame(animate);
+            const frameNow = performance.now();
             this.controls.update();
             if (!this.previewPaused) this.updatePreviewAnimation();
+            this.updatePreviewFps(frameNow);
             this.renderer.render(this.scene, this.camera);
         };
         animate();
@@ -3526,6 +3534,28 @@ class CompositionBuilderApp {
         this.dom.statusSelection.textContent = `选中卡片: ${names.join(", ")}${tail}`;
     }
 
+    updatePreviewFps(now = performance.now()) {
+        if (!this.dom?.statusFps) return;
+        const ts = Number(now);
+        if (!Number.isFinite(ts)) return;
+        if (!(this.previewFpsLastTs > 0)) {
+            this.previewFpsLastTs = ts;
+            this.previewFpsFrames = 0;
+            return;
+        }
+        this.previewFpsFrames += 1;
+        const dt = ts - this.previewFpsLastTs;
+        if (dt < 400) return;
+        const fps = dt > 0 ? (this.previewFpsFrames * 1000 / dt) : 0;
+        this.previewFpsFrames = 0;
+        this.previewFpsLastTs = ts;
+        const text = `FPS: ${fps >= 100 ? fps.toFixed(0) : fps.toFixed(1)}`;
+        if (this.lastFpsStatusText !== text) {
+            this.lastFpsStatusText = text;
+            this.dom.statusFps.textContent = text;
+        }
+    }
+
     addCard() {
         this.pushHistory();
         const card = createDefaultCard(this.state.cards.length);
@@ -3772,64 +3802,6 @@ class CompositionBuilderApp {
             else out[k] = v;
         }
         return out;
-    }
-
-    isCodeEditorSourceFieldTarget(target) {
-        if (!(target instanceof HTMLTextAreaElement)) return false;
-        if (!target.dataset.codeEditor) return false;
-        if (target.dataset.displayField === "expression") return true;
-        if (target.dataset.cardShapeDisplayField === "expression") return true;
-        if (target.dataset.cardShapeChildDisplayField === "expression") return true;
-        if (target.dataset.shapeLevelDisplayField === "expression") return true;
-        if (target.dataset.cactField === "script") return true;
-        return false;
-    }
-
-    queueCodeEditorRefresh(target, opts = {}) {
-        if (!this.isCodeEditorSourceFieldTarget(target)) return false;
-        const valid = this.validateCodeEditorSource(target, target.value || "");
-        this.pendingCodeApplyOpts = this.mergeMutateOptions(this.pendingCodeApplyOpts, Object.assign({ rebuildPreview: true }, opts || {}));
-        clearTimeout(this.codeApplyTimer);
-        this.codeApplyTimer = null;
-        if (!valid.valid) {
-            this.scheduleSave();
-            return true;
-        }
-        const ref = target;
-        this.codeApplyTimer = setTimeout(() => {
-            this.codeApplyTimer = null;
-            const latest = this.validateCodeEditorSource(ref, ref.value || "");
-            if (!latest.valid) return;
-            const applyOpts = this.pendingCodeApplyOpts || { rebuildPreview: true };
-            this.pendingCodeApplyOpts = null;
-            this.afterValueMutate(applyOpts);
-        }, 560);
-        this.scheduleSave();
-        return true;
-    }
-
-    flushCodeEditorRefresh(target) {
-        if (!this.isCodeEditorSourceFieldTarget(target)) return false;
-        const hasPending = !!this.pendingCodeApplyOpts || !!this.codeApplyTimer;
-        if (!hasPending) return false;
-        clearTimeout(this.codeApplyTimer);
-        this.codeApplyTimer = null;
-        const valid = this.validateCodeEditorSource(target, target.value || "");
-        if (!valid.valid) {
-            this.pendingCodeApplyOpts = null;
-            this.scheduleSave();
-            return true;
-        }
-        const applyOpts = this.pendingCodeApplyOpts || { rebuildPreview: true };
-        this.pendingCodeApplyOpts = null;
-        this.afterValueMutate(applyOpts);
-        return true;
-    }
-
-    onCodeEditorFocusOut(e) {
-        const target = e?.target;
-        if (!(target instanceof HTMLTextAreaElement)) return;
-        this.flushCodeEditorRefresh(target);
     }
 
     scheduleSave() {
@@ -7988,6 +7960,7 @@ class CompositionBuilderApp {
                 } catch {
                 }
                 this.codeEditors.delete(ta);
+                if (this.pendingCodeApplyOpts instanceof Map) this.pendingCodeApplyOpts.delete(ta);
             }
         }
         for (const ta of textareas) {
@@ -9441,6 +9414,10 @@ installExpressionEditorMethods(CompositionBuilderApp, {
     JS_LINT_GLOBALS,
     InlineCodeEditor,
     mergeCompletionGroups
+});
+
+installCodeCompileMethods(CompositionBuilderApp, {
+    int
 });
 
 installTargetPresetMethods(CompositionBuilderApp, {

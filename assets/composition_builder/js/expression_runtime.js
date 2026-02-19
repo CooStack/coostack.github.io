@@ -203,7 +203,6 @@ export function createExpressionRuntime(options = {}) {
         const tickValue = Number.isFinite(Number(elapsedTick)) ? Number(elapsedTick) : 0;
         defineLocal("age", Number.isFinite(Number(ageTick)) ? Number(ageTick) : 0);
         defineLocal("tick", tickValue);
-        defineLocal("tickCount", tickValue);
         defineLocal("index", Number.isFinite(Number(pointIndex)) ? Number(pointIndex) : 0);
         return vars;
     }

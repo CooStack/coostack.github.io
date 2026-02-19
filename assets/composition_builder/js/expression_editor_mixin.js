@@ -206,7 +206,6 @@ export function installExpressionEditorMethods(CompositionBuilderApp, deps = {})
         const base = [
             "age",
             "tick",
-            "tickCount",
             "PI",
             "status.displayStatus",
             "status.isDisable()",
@@ -432,7 +431,6 @@ export function installExpressionEditorMethods(CompositionBuilderApp, deps = {})
                 { label: `this@${projectClass}.status.disable()`, insertText: `this@${projectClass}.status.disable()`, detail: "Composition lifecycle", priority: 257 },
                 { label: `this@${projectClass}.status.isEnable()`, insertText: `this@${projectClass}.status.isEnable()`, detail: "Composition lifecycle", priority: 257 },
                 { label: `this@${projectClass}.status.enable()`, insertText: `this@${projectClass}.status.enable()`, detail: "Composition lifecycle", priority: 257 },
-                { label: "tickCount", detail: "预览 tick（不是粒子 tick）", priority: 250 },
                 { label: "RelativeLocation(x, y, z)", insertText: "RelativeLocation($0)", detail: "向量构造", priority: 220 },
                 { label: "Vec3(x, y, z)", insertText: "Vec3($0)", detail: "向量构造", priority: 220 },
                 { label: "Vector3f(x, y, z)", insertText: "Vector3f($0)", detail: "向量构造", priority: 220 },
@@ -461,7 +459,6 @@ export function installExpressionEditorMethods(CompositionBuilderApp, deps = {})
                 { label: "particle.particleSize", detail: "粒子属性", priority: 240 },
                 { label: "age", detail: "当前 age", priority: 250 },
                 { label: "tick", detail: "当前 tick", priority: 250 },
-                { label: "tickCount", detail: "当前 tick（同 tick）", priority: 250 },
                 { label: "index", detail: "点索引", priority: 250 },
                 { label: "status.displayStatus", detail: "当前 Composition 状态", priority: 252 },
                 { label: "status.isDisable()", insertText: "status.isDisable()", detail: "Composition state", priority: 252 },
