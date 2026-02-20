@@ -282,9 +282,42 @@ export function installExpressionEditorMethods(CompositionBuilderApp, deps = {})
         return none;
     }
 
+    isGrowthApiAllowedForCodeEditor(textarea) {
+        if (!(textarea instanceof HTMLTextAreaElement)) {
+            return String(this.state?.compositionType || "") === "sequenced";
+        }
+
+        const cardId = String(textarea.dataset.cardId || "");
+        if (!cardId) return String(this.state?.compositionType || "") === "sequenced";
+        const card = this.getCardById(cardId);
+        if (!card) return false;
+
+        const levelFromRow = textarea.closest?.("[data-shape-level]")?.dataset?.shapeLevel;
+        const rawLevel = textarea.dataset.shapeLevelIdx ?? levelFromRow;
+        if (rawLevel !== undefined) {
+            const levelIdx = Math.max(0, int(rawLevel));
+            return this.getShapeCompositionTypeAtDepth(card, levelIdx + 1) === "sequenced_shape";
+        }
+
+        if (textarea.dataset.cardShapeChildDisplayIdx !== undefined || textarea.dataset.cardShapeChildDisplayField === "expression") {
+            return this.getShapeCompositionTypeAtDepth(card, 1) === "sequenced_shape";
+        }
+        if (textarea.dataset.cardShapeDisplayIdx !== undefined || textarea.dataset.cardShapeDisplayField === "expression") {
+            return this.getShapeCompositionTypeAtDepth(card, 0) === "sequenced_shape";
+        }
+        if (textarea.dataset.cactField === "script") {
+            return this.getShapeCompositionTypeAtDepth(card, 0) === "sequenced_shape";
+        }
+        return this.getShapeCompositionTypeAtDepth(card, 0) === "sequenced_shape";
+    }
+
     getJsValidationAllowedIdentifiers(opts = {}) {
         const allowed = new Set();
-        for (const key of JS_LINT_GLOBALS) allowed.add(key);
+        const allowGrowthApi = opts.allowGrowthApi !== false;
+        for (const key of JS_LINT_GLOBALS) {
+            if (!allowGrowthApi && (key === "addSingle" || key === "addMultiple")) continue;
+            allowed.add(key);
+        }
         const scope = (opts.scope && typeof opts.scope === "object") ? opts.scope : null;
         if (scope?.allowRel) allowed.add("rel");
         if (scope?.allowOrder) allowed.add("order");
@@ -343,6 +376,12 @@ export function installExpressionEditorMethods(CompositionBuilderApp, deps = {})
         } catch (e) {
             return { valid: false, message: `语法错误: ${String(e?.message || e || "invalid script")}` };
         }
+        if (opts.allowGrowthApi === false) {
+            const disallowed = /\b(addSingle|addMultiple)\s*\(/.exec(src);
+            if (disallowed && disallowed[1]) {
+                return { valid: false, message: `Current scope does not allow ${disallowed[1]}()` };
+            }
+        }
         const allowed = this.getJsValidationAllowedIdentifiers(opts);
         const unknown = findFirstUnknownJsIdentifier(src, allowed);
         if (unknown) {
@@ -363,12 +402,91 @@ export function installExpressionEditorMethods(CompositionBuilderApp, deps = {})
         }
         const cardId = String(textarea.dataset.cardId || "");
         const scope = this.getCodeEditorScopeInfo(textarea);
-        const result = this.validateJsExpressionSource(source, { cardId, scope });
+        const allowGrowthApi = this.isGrowthApiAllowedForCodeEditor(textarea);
+        const result = this.validateJsExpressionSource(source, { cardId, scope, allowGrowthApi });
         if (result.valid) return result;
         return {
             valid: false,
             message: `表达式存在问题，此表达式不生效${result.message ? ` ${result.message}` : ""}`
         };
+    }
+
+    buildCodeEditorApiDts(textarea, completions = []) {
+        const cardId = String(textarea?.dataset?.cardId || "");
+        const scope = this.getCodeEditorScopeInfo(textarea);
+        const allowGrowthApi = this.isGrowthApiAllowedForCodeEditor(textarea);
+        const allowed = this.getJsValidationAllowedIdentifiers({ cardId, scope, allowGrowthApi });
+        const declared = new Set();
+        const lines = [];
+        const declareConst = (name, type = "any") => {
+            const id = String(name || "").trim();
+            if (!/^[A-Za-z_$][A-Za-z0-9_$]*$/.test(id)) return;
+            if (declared.has(id)) return;
+            declared.add(id);
+            lines.push(`declare const ${id}: ${type};`);
+        };
+
+        declareConst("Math", "Math");
+        declareConst("PI", "number");
+        declareConst("age", "number");
+        declareConst("tick", "number");
+        declareConst("tickCount", "number");
+        declareConst("index", "number");
+        declareConst("rel", "any");
+        declareConst("order", "any");
+        declareConst("thisAt", "any");
+        lines.push("declare const particle: any;");
+        lines.push("declare const status: {");
+        lines.push("  displayStatus: number;");
+        lines.push("  isDisable(): boolean;");
+        lines.push("  disable(): void;");
+        lines.push("  isEnable(): boolean;");
+        lines.push("  enable(): void;");
+        lines.push("  [key: string]: any;");
+        lines.push("};");
+        lines.push("declare function rotateToPoint(...args: any[]): any;");
+        lines.push("declare function rotateAsAxis(...args: any[]): any;");
+        lines.push("declare function rotateToWithAngle(...args: any[]): any;");
+        if (allowGrowthApi) {
+            lines.push("declare function addSingle(...args: any[]): any;");
+            lines.push("declare function addMultiple(...args: any[]): any;");
+        }
+        lines.push("declare function addPreTickAction(...args: any[]): any;");
+        lines.push("declare function setReversedScaleOnCompositionStatus(...args: any[]): any;");
+        lines.push("declare function RelativeLocation(...args: any[]): any;");
+        lines.push("declare namespace RelativeLocation { function yAxis(...args: any[]): any; }");
+        lines.push("declare function Vec3(...args: any[]): any;");
+        lines.push("declare function Vector3f(...args: any[]): any;");
+
+        for (const name of Array.from(allowed).sort((a, b) => a.localeCompare(b))) {
+            declareConst(name, "any");
+        }
+
+        const reservedFn = new Set(["if", "for", "while", "switch", "catch", "new"]);
+        const fnSet = new Set();
+        const completionList = Array.isArray(completions) ? completions : [];
+        for (const item of completionList) {
+            const src = String(item?.insertText || item?.label || "").trim();
+            const m = /^([A-Za-z_$][A-Za-z0-9_$]*)\s*\(/.exec(src);
+            if (!m) continue;
+            const fnName = String(m[1] || "");
+            if (!fnName || reservedFn.has(fnName) || fnSet.has(fnName)) continue;
+            fnSet.add(fnName);
+            lines.push(`declare function ${fnName}(...args: any[]): any;`);
+        }
+
+        return `${lines.join("\n")}\n`;
+    }
+
+    buildCodeEditorLibs(textarea, completions = []) {
+        return [
+            {
+                id: `composition-api-${String(textarea?.dataset?.codeTitle || "js")}`,
+                name: "__composition_builder_api__.d.ts",
+                content: this.buildCodeEditorApiDts(textarea, completions),
+                enabled: true
+            }
+        ];
     }
 
     refreshCodeEditors() {
@@ -385,20 +503,22 @@ export function installExpressionEditorMethods(CompositionBuilderApp, deps = {})
         }
         for (const ta of textareas) {
             const completions = this.getCodeEditorCompletions(ta);
+            const libs = this.buildCodeEditorLibs(ta, completions);
             const title = String(ta.dataset.codeTitle || "代码编辑");
             const validate = (source) => this.validateCodeEditorSource(ta, source);
             const existing = this.codeEditors.get(ta);
             if (existing) {
                 existing.setCompletions(completions);
                 existing.setValidator(validate);
+                existing.setLibs(libs);
                 continue;
             }
             const editor = new InlineCodeEditor({
                 textarea: ta,
                 title,
                 completions,
-                autoSuggestMin: 1,
-                validate
+                validate,
+                libs
             });
             this.codeEditors.set(ta, editor);
         }
@@ -408,6 +528,7 @@ export function installExpressionEditorMethods(CompositionBuilderApp, deps = {})
         const isControllerScript = String(textarea?.dataset?.cactField || "") === "script";
         const projectClass = sanitizeKotlinClassName(this.state.projectName || "NewComposition");
         const scopeInfo = this.getCodeEditorScopeInfo(textarea);
+        const allowGrowthApi = this.isGrowthApiAllowedForCodeEditor(textarea);
         const base = isControllerScript
             ? [
                 { label: "if (...) { ... }", insertText: "if ($0) {\\n    \\n}", detail: "条件分支", priority: 220 },
@@ -415,22 +536,22 @@ export function installExpressionEditorMethods(CompositionBuilderApp, deps = {})
                 { label: "addMultiple(n)", insertText: "addMultiple($0)", detail: "生长 API", priority: 230 },
                 { label: "color = Vector3f()", insertText: "color = Vector3f($0)", detail: "粒子颜色", priority: 255 },
                 { label: "size = 0.2", insertText: "size = $0", detail: "粒子尺寸", priority: 255 },
-                { label: "particleAlpha = 1.0", insertText: "particleAlpha = $0", detail: "粒子透明", priority: 255 },
+                { label: "particleAlpha = 1.0", insertText: "particleAlpha = $0", detail: "粒子透明度", priority: 255 },
                 { label: "currentAge = 0", insertText: "currentAge = $0", detail: "粒子年龄", priority: 250 },
                 { label: "textureSheet = 0", insertText: "textureSheet = $0", detail: "贴图序号", priority: 250 },
                 { label: "particle.particleColor = Vector3f()", insertText: "particle.particleColor = Vector3f($0)", detail: "粒子颜色", priority: 250 },
                 { label: "particle.particleSize = 0.2", insertText: "particle.particleSize = $0", detail: "粒子尺寸", priority: 250 },
-                { label: "particle.particleAlpha = 1.0", insertText: "particle.particleAlpha = $0", detail: "粒子透明", priority: 250 },
-                { label: "status.displayStatus = 2", insertText: "status.displayStatus = $0", detail: "Composition lifecycle", priority: 258 },
-                { label: "status.isDisable()", insertText: "status.isDisable()", detail: "Composition lifecycle", priority: 258 },
-                { label: "status.disable()", insertText: "status.disable()", detail: "Composition lifecycle", priority: 258 },
-                { label: "status.isEnable()", insertText: "status.isEnable()", detail: "Composition lifecycle", priority: 258 },
-                { label: "status.enable()", insertText: "status.enable()", detail: "Composition lifecycle", priority: 258 },
-                { label: `this@${projectClass}.status.displayStatus`, insertText: `this@${projectClass}.status.displayStatus`, detail: "Composition lifecycle", priority: 257 },
-                { label: `this@${projectClass}.status.isDisable()`, insertText: `this@${projectClass}.status.isDisable()`, detail: "Composition lifecycle", priority: 257 },
-                { label: `this@${projectClass}.status.disable()`, insertText: `this@${projectClass}.status.disable()`, detail: "Composition lifecycle", priority: 257 },
-                { label: `this@${projectClass}.status.isEnable()`, insertText: `this@${projectClass}.status.isEnable()`, detail: "Composition lifecycle", priority: 257 },
-                { label: `this@${projectClass}.status.enable()`, insertText: `this@${projectClass}.status.enable()`, detail: "Composition lifecycle", priority: 257 },
+                { label: "particle.particleAlpha = 1.0", insertText: "particle.particleAlpha = $0", detail: "粒子透明度", priority: 250 },
+                { label: "status.displayStatus = 2", insertText: "status.displayStatus = $0", detail: "Composition 生命周期", priority: 258 },
+                { label: "status.isDisable()", insertText: "status.isDisable()", detail: "Composition 生命周期", priority: 258 },
+                { label: "status.disable()", insertText: "status.disable()", detail: "Composition 生命周期", priority: 258 },
+                { label: "status.isEnable()", insertText: "status.isEnable()", detail: "Composition 生命周期", priority: 258 },
+                { label: "status.enable()", insertText: "status.enable()", detail: "Composition 生命周期", priority: 258 },
+                { label: `this@${projectClass}.status.displayStatus`, insertText: `this@${projectClass}.status.displayStatus`, detail: "Composition 生命周期", priority: 257 },
+                { label: `this@${projectClass}.status.isDisable()`, insertText: `this@${projectClass}.status.isDisable()`, detail: "Composition 生命周期", priority: 257 },
+                { label: `this@${projectClass}.status.disable()`, insertText: `this@${projectClass}.status.disable()`, detail: "Composition 生命周期", priority: 257 },
+                { label: `this@${projectClass}.status.isEnable()`, insertText: `this@${projectClass}.status.isEnable()`, detail: "Composition 生命周期", priority: 257 },
+                { label: `this@${projectClass}.status.enable()`, insertText: `this@${projectClass}.status.enable()`, detail: "Composition 生命周期", priority: 257 },
                 { label: "RelativeLocation(x, y, z)", insertText: "RelativeLocation($0)", detail: "向量构造", priority: 220 },
                 { label: "Vec3(x, y, z)", insertText: "Vec3($0)", detail: "向量构造", priority: 220 },
                 { label: "Vector3f(x, y, z)", insertText: "Vector3f($0)", detail: "向量构造", priority: 220 },
@@ -448,11 +569,11 @@ export function installExpressionEditorMethods(CompositionBuilderApp, deps = {})
                 { label: "rotateToWithAngle(to, angle)", insertText: "rotateToWithAngle($0, 0.05)", detail: "Display API", priority: 260 },
                 { label: "addSingle()", insertText: "addSingle()", detail: "生长 API", priority: 260 },
                 { label: "addMultiple(n)", insertText: "addMultiple($0)", detail: "生长 API", priority: 260 },
-                { label: "addPreTickAction(() => {})", insertText: "addPreTickAction(() => {\\n    $0\\n})", detail: "控制API", priority: 220 },
+                { label: "addPreTickAction(() => {})", insertText: "addPreTickAction(() => {\\n    $0\\n})", detail: "控制器 API", priority: 220 },
                 { label: "RelativeLocation(x, y, z)", insertText: "RelativeLocation($0)", detail: "向量构造", priority: 225 },
                 { label: "Vec3(x, y, z)", insertText: "Vec3($0)", detail: "向量构造", priority: 225 },
                 { label: "Vector3f(x, y, z)", insertText: "Vector3f($0)", detail: "向量构造", priority: 225 },
-                { label: "RelativeLocation.yAxis()", insertText: "RelativeLocation.yAxis()", detail: "轴向", priority: 225 },
+                { label: "RelativeLocation.yAxis()", insertText: "RelativeLocation.yAxis()", detail: "轴向量", priority: 225 },
                 { label: "setReversedScaleOnCompositionStatus(comp)", insertText: "setReversedScaleOnCompositionStatus($0)", detail: "Scale API", priority: 215 },
                 { label: "particle.particleAlpha", detail: "粒子属性", priority: 240 },
                 { label: "particle.particleColor", detail: "粒子属性", priority: 240 },
@@ -477,6 +598,14 @@ export function installExpressionEditorMethods(CompositionBuilderApp, deps = {})
                 { label: "Math.min(a, b)", insertText: "Math.min($0, )", cursorOffset: 11, detail: "数学函数", priority: 180 },
                 { label: "Math.max(a, b)", insertText: "Math.max($0, )", cursorOffset: 11, detail: "数学函数", priority: 180 }
             ];
+        if (!allowGrowthApi) {
+            for (let i = base.length - 1; i >= 0; i--) {
+                const raw = String(base[i]?.insertText || base[i]?.label || "");
+                if (/^addSingle\s*\(/.test(raw) || /^addMultiple\s*\(/.test(raw)) {
+                    base.splice(i, 1);
+                }
+            }
+        }
         const scopeMaxDepthRaw = Number(scopeInfo.maxShapeDepth);
         const hasScopedShapeVars = scopeInfo.allowRel
             || scopeInfo.allowOrder
@@ -500,7 +629,7 @@ export function installExpressionEditorMethods(CompositionBuilderApp, deps = {})
             for (let d = 0; d <= maxDepth; d++) {
                 base.push({ label: `shapeRel${d}`, detail: `shape ${d} 的父级 rel`, priority: 246 - Math.min(d, 8) });
                 if (seqDepth.has(d)) {
-                    base.push({ label: `shapeOrder${d}`, detail: `shape ${d} 的父order（Sequenced）`, priority: 245 - Math.min(d, 8) });
+                    base.push({ label: `shapeOrder${d}`, detail: `shape ${d} 的父级 order（Sequenced）`, priority: 245 - Math.min(d, 8) });
                 }
             }
         }

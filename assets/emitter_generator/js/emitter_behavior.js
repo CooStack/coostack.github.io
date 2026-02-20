@@ -1,12 +1,16 @@
 ﻿import { deepCopy, fmtD, safeNum } from "./utils.js";
 import {
-    conditionFilterToKotlin,
-    createConditionFilter,
-    createVarAction,
-    normalizeConditionFilter,
-    normalizeVarActionList,
-    varActionToKotlin,
+	conditionFilterToKotlin,
+	createConditionFilter,
+	createVarAction,
+	normalizeConditionFilter,
+	normalizeVarActionList,
+	varActionToKotlin,
 } from "./expression_cards.js";
+import {
+	normalizeDoTickExpression,
+	translateDoTickJsToKotlin,
+} from "./do_tick_expression.js";
 
 export const EMITTER_BEHAVIOR_STORAGE_KEY = "pe_emitter_behavior_v1";
 
@@ -35,9 +39,10 @@ function makeDefaultDeathBehavior() {
 }
 
 const DEFAULT_BEHAVIOR = {
-    emitterVars: [],
-    tickActions: [],
-    death: makeDefaultDeathBehavior(),
+	emitterVars: [],
+	tickExpression: "",
+	tickActions: [],
+	death: makeDefaultDeathBehavior(),
 };
 
 export function createEmitterVar() {
@@ -203,17 +208,26 @@ function sanitizeTickAction(raw) {
 }
 
 export function normalizeEmitterBehavior(raw) {
-    const out = deepCopy(DEFAULT_BEHAVIOR);
-    out.death = makeDefaultDeathBehavior();
-    if (!raw || typeof raw !== "object") return out;
+	const out = deepCopy(DEFAULT_BEHAVIOR);
+	out.death = makeDefaultDeathBehavior();
+	if (!raw || typeof raw !== "object") return out;
 
-    const vars = Array.isArray(raw.emitterVars) ? raw.emitterVars : [];
-    out.emitterVars = vars.map(sanitizeEmitterVar);
+	const vars = Array.isArray(raw.emitterVars) ? raw.emitterVars : [];
+	out.emitterVars = vars.map(sanitizeEmitterVar);
 
-    const ticks = Array.isArray(raw.tickActions) ? raw.tickActions : [];
-    out.tickActions = ticks.map((it) => sanitizeTickAction(it));
+	const exprRaw = (raw.tickExpression !== undefined && raw.tickExpression !== null)
+		? raw.tickExpression
+		: (raw.doTickExpression !== undefined && raw.doTickExpression !== null)
+			? raw.doTickExpression
+			: (raw.tickScript !== undefined && raw.tickScript !== null)
+				? raw.tickScript
+				: "";
+	out.tickExpression = normalizeDoTickExpression(exprRaw);
 
-    out.death = sanitizeDeath(raw.death);
+	const ticks = Array.isArray(raw.tickActions) ? raw.tickActions : [];
+	out.tickActions = ticks.map((it) => sanitizeTickAction(it));
+
+	out.death = sanitizeDeath(raw.death);
     return out;
 }
 
@@ -334,14 +348,22 @@ function genVarBoundsApplyFn(vars) {
     return { lines, hasBounds: true };
 }
 
-function genDoTickKotlin(tickActions, hasBounds) {
-    const lines = [];
-    lines.push("override fun doTick() {");
-    let stmtCount = 0;
-    const actions = Array.isArray(tickActions) ? tickActions : [];
-    for (const action of actions) {
-        const stmt = varActionToKotlin(action, { tick: "tick" }, {
-            numFmt: (v) => fmtKNumLiteral(v, 0),
+function genDoTickKotlin(tickExpression, tickActions, hasBounds) {
+	const lines = [];
+	lines.push("override fun doTick() {");
+	const expr = normalizeDoTickExpression(tickExpression);
+	if (expr) {
+		lines.push(translateDoTickJsToKotlin(expr, "    "));
+		if (hasBounds) lines.push("    applyEmitterVarBounds()");
+		lines.push("}");
+		return lines;
+	}
+
+	let stmtCount = 0;
+	const actions = Array.isArray(tickActions) ? tickActions : [];
+	for (const action of actions) {
+		const stmt = varActionToKotlin(action, { tick: "tick" }, {
+			numFmt: (v) => fmtKNumLiteral(v, 0),
         });
         if (!stmt) continue;
         const condExpr = conditionFilterToKotlin(action.condition, {
@@ -465,7 +487,7 @@ export function genEmitterBehaviorKotlin(rawCfg) {
     lines.push(...genEmitterVarsKotlin(cfg.emitterVars));
     const boundsInfo = genVarBoundsApplyFn(cfg.emitterVars);
     lines.push(...boundsInfo.lines);
-    lines.push(...genDoTickKotlin(cfg.tickActions, boundsInfo.hasBounds));
+	lines.push(...genDoTickKotlin(cfg.tickExpression, cfg.tickActions, boundsInfo.hasBounds));
     lines.push("");
     lines.push(...genDeathActionKotlin(cfg.death, boundsInfo.hasBounds));
 

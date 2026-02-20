@@ -2,6 +2,7 @@ import { COMMAND_META } from "./command_meta.js";
 import { conditionFilterToKotlin, normalizeConditionFilter } from "./expression_cards.js";
 import { fmtD, indent, kSupplierVec3, kVec3, sanitizeKNumExpr } from "./utils.js";
 import { genEmitterBehaviorKotlin } from "./emitter_behavior.js";
+import { emitBuilderKotlinFromState } from "./points_builder_bridge.js";
 
 function safeIdent(raw, fallback) {
   const s = String(raw ?? "").trim();
@@ -513,6 +514,41 @@ function buildLocalDataApplyLines(card) {
 
     const addChainLine = (s) => lines.push(pad(chainIndent) + s);
 
+    if (type === "points_builder") {
+      const builderExprRaw = String(emitBuilderKotlinFromState(e.builderState) || "PointsBuilder()");
+      const builderExprLines = builderExprRaw
+        .split(/\r?\n/)
+        .map((line) => line.replace(/\s+$/g, ""))
+        .filter((line) => line.trim().length > 0);
+      const hasBuilderExpr = builderExprLines.length > 0;
+      addChainLine(".addWith {");
+      lines.push(pad(chainIndent + 4) + "val locs = arrayListOf<RelativeLocation>()");
+      if (hasBuilderExpr) {
+        lines.push(pad(chainIndent + 4) + "val source = (");
+        builderExprLines.forEach((line) => {
+          lines.push(pad(chainIndent + 8) + line);
+        });
+        lines.push(pad(chainIndent + 4) + ").createWithoutClone()");
+      } else {
+        lines.push(pad(chainIndent + 4) + "val source = emptyList<RelativeLocation>()");
+      }
+      lines.push(pad(chainIndent + 4) + `val count = (${countExpr}).coerceAtLeast(1)`);
+      lines.push(pad(chainIndent + 4) + "if (source.isEmpty()) {");
+      lines.push(pad(chainIndent + 8) + "repeat(count) {");
+      lines.push(pad(chainIndent + 12) + `locs.add(RelativeLocation(${fmtD(ox)}, ${fmtD(oy)}, ${fmtD(oz)}))`);
+      lines.push(pad(chainIndent + 8) + "}");
+      lines.push(pad(chainIndent + 4) + "} else {");
+      lines.push(pad(chainIndent + 8) + "val rand = kotlin.random.Random.Default");
+      lines.push(pad(chainIndent + 8) + "repeat(count) {");
+      lines.push(pad(chainIndent + 12) + "val base = source[rand.nextInt(source.size)]");
+      lines.push(pad(chainIndent + 12) + `locs.add(RelativeLocation(base.x + ${fmtD(ox)}, base.y + ${fmtD(oy)}, base.z + ${fmtD(oz)}))`);
+      lines.push(pad(chainIndent + 8) + "}");
+      lines.push(pad(chainIndent + 4) + "}");
+      lines.push(pad(chainIndent + 4) + "locs");
+      lines.push(pad(chainIndent) + "}");
+      return;
+    }
+
     if (type === "point") {
       addChainLine(".addWith {");
       lines.push(pad(chainIndent + 4) + `val locs = arrayListOf<RelativeLocation>()`);
@@ -827,5 +863,3 @@ function buildLocalDataApplyLines(card) {
 
   return out.join("\n");
 }
-
-

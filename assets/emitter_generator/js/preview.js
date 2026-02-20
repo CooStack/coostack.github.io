@@ -2,6 +2,8 @@ import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { clamp, lerp, rand, randInt } from "./utils.js";
 import { normalizeEmitterBehavior } from "./emitter_behavior.js";
+import { normalizeBuilderState, evaluateBuilderState } from "./points_builder_bridge.js";
+import { createDoTickRuntimeScope } from "./do_tick_expression.js";
 import {
     normalizeConditionFilter,
 } from "./expression_cards.js";
@@ -11,6 +13,7 @@ export function initPreview(ctx = {}) {
         getState,
         viewportEl,
         statEl,
+        fpsEl,
     } = ctx;
 
     let renderer, scene, camera, controls;
@@ -35,7 +38,16 @@ export function initPreview(ctx = {}) {
             sig: "",
             vars: {},
             tick: 0,
+            doTickCompiledSource: "",
+            doTickCompiledFn: null,
         },
+    };
+    const FPS_SAMPLE_WINDOW = 0.25;
+    const FPS_SMOOTH_ALPHA = 0.35;
+    const fpsRuntime = {
+        accSeconds: 0,
+        frameCount: 0,
+        value: 0,
     };
 
 
@@ -54,6 +66,12 @@ export function initPreview(ctx = {}) {
         return [];
     }
 
+    function getEmitterBuilderPoints(card) {
+        const normalized = normalizeBuilderState(card?.emitter?.builderState);
+        const built = evaluateBuilderState(normalized);
+        return Array.isArray(built?.points) ? built.points : [];
+    }
+
     function ensureEmitterRuntime(emitters) {
         const alive = new Set();
         for (const c of emitters || []) {
@@ -67,6 +85,13 @@ export function initPreview(ctx = {}) {
         for (const id of Array.from(sim.emitRuntime.keys())) {
             if (!alive.has(id)) sim.emitRuntime.delete(id);
         }
+    }
+
+    function setDoTickCompiled(compiled) {
+        const source = String(compiled?.source || "").trim();
+        const fn = (typeof compiled?.fn === "function") ? compiled.fn : null;
+        sim.behaviorRuntime.doTickCompiledSource = source;
+        sim.behaviorRuntime.doTickCompiledFn = fn;
     }
 
     const shouldIgnoreArrowPan = (typeof ctx.shouldIgnoreArrowPan === "function")
@@ -286,11 +311,35 @@ export function initPreview(ctx = {}) {
         }
     }
 
+    function setFpsChipText(text) {
+        if (fpsEl) {
+            fpsEl.textContent = text;
+            return;
+        }
+        const el = document.getElementById("fpsChip");
+        if (el) el.textContent = text;
+    }
+
+    function updateFpsChip(dtSeconds) {
+        if (!(dtSeconds > 0)) return;
+        fpsRuntime.accSeconds += dtSeconds;
+        fpsRuntime.frameCount += 1;
+        if (fpsRuntime.accSeconds < FPS_SAMPLE_WINDOW) return;
+        const instant = fpsRuntime.frameCount / fpsRuntime.accSeconds;
+        fpsRuntime.value = (fpsRuntime.value > 0)
+            ? lerp(fpsRuntime.value, instant, FPS_SMOOTH_ALPHA)
+            : instant;
+        fpsRuntime.accSeconds = 0;
+        fpsRuntime.frameCount = 0;
+        setFpsChipText(`FPS: ${Math.max(0, Math.round(fpsRuntime.value))}`);
+    }
+
     function animate() {
         requestAnimationFrame(animate);
         const now = performance.now();
         const dt = (now - sim.lastTime) / 1000;
         sim.lastTime = now;
+        updateFpsChip(dt);
 
         const state = getState();
         if (state.playing) stepSim(dt);
@@ -695,8 +744,25 @@ export function initPreview(ctx = {}) {
     }
 
     function runDoTickActions(behavior) {
-        const actions = Array.isArray(behavior?.tickActions) ? behavior.tickActions : [];
         const tick = Number(sim.behaviorRuntime.tick) || 0;
+        const exprSource = String(behavior?.tickExpression || "").trim();
+        if (exprSource) {
+            const canRunCompiled = (
+                sim.behaviorRuntime.doTickCompiledSource === exprSource
+                && typeof sim.behaviorRuntime.doTickCompiledFn === "function"
+            );
+            if (canRunCompiled) {
+                try {
+                    const scope = createDoTickRuntimeScope(sim.behaviorRuntime.vars || {}, tick);
+                    sim.behaviorRuntime.doTickCompiledFn(scope);
+                } catch (_) {
+                }
+            }
+            applyVarBounds(behavior);
+            return;
+        }
+
+        const actions = Array.isArray(behavior?.tickActions) ? behavior.tickActions : [];
         for (const action of actions) {
             if (!evaluateConditionFilterFast(action?.condition, false, 0, 0, 0, 0, tick, REMOVE_REASON.UNKNOWN)) continue;
             applyStructuredVarAction(action, { tick });
@@ -804,9 +870,15 @@ export function initPreview(ctx = {}) {
             const minC = Math.max(0, evalNumberFast(pp.countMin, 0, 0, 0, 0, 0, tick, vars, true));
             const maxC = Math.max(minC, evalNumberFast(pp.countMax, minC, 0, 0, 0, 0, tick, vars, true));
             const cnt = randInt(minC, maxC);
+            const spawnCtx = {};
+            if (String(card?.emitter?.type || "") === "points_builder") {
+                // Re-evaluate builder output per emission event, so non-deterministic
+                // builder nodes preserve runtime randomness in preview.
+                spawnCtx.builderPoints = getEmitterBuilderPoints(card);
+            }
             for (let i = 0; i < cnt; i++) {
                 if (sim.particles.length >= MAX_POINTS) break;
-                sim.particles.push(makeParticle(card));
+                sim.particles.push(makeParticle(card, spawnCtx));
             }
         };
 
@@ -876,9 +948,9 @@ export function initPreview(ctx = {}) {
         }
     }
 
-    function makeParticle(card) {
+    function makeParticle(card, spawnCtx = null) {
         const pp = (card && card.particle) ? card.particle : {};
-        const pos = sampleEmitterPosition(card);
+        const pos = sampleEmitterPosition(card, spawnCtx);
         const vars = sim.behaviorRuntime.vars || {};
         const tick = Number(sim.behaviorRuntime.tick) || 0;
         const num = (v, def = 0, min = null, max = null) => evalNumberFast(v, def, 0, 0, 0, 0, tick, vars, false, min, max);
@@ -937,7 +1009,7 @@ export function initPreview(ctx = {}) {
         return vec.applyQuaternion(q);
     }
 
-    function sampleEmitterPosition(card) {
+    function sampleEmitterPosition(card, spawnCtx = null) {
         const e = (card && card.emitter) ? card.emitter : {};
         const pp = (card && card.particle) ? card.particle : {};
         const t = e.type || "point";
@@ -946,6 +1018,18 @@ export function initPreview(ctx = {}) {
             evalNumberExpr(e.offset?.y, 0),
             evalNumberExpr(e.offset?.z, 0)
         );
+        if (t === "points_builder") {
+            const source = Array.isArray(spawnCtx?.builderPoints)
+                ? spawnCtx.builderPoints
+                : getEmitterBuilderPoints(card);
+            if (!source.length) return off.clone();
+            const p = source[randInt(0, source.length - 1)] || { x: 0, y: 0, z: 0 };
+            return new THREE.Vector3(
+                Number.isFinite(Number(p.x)) ? Number(p.x) : 0,
+                Number.isFinite(Number(p.y)) ? Number(p.y) : 0,
+                Number.isFinite(Number(p.z)) ? Number(p.z) : 0
+            ).add(off);
+        }
         if (t === "point") return new THREE.Vector3(0, 0, 0).add(off);
 
         if (t === "box") {
@@ -1544,6 +1628,8 @@ export function initPreview(ctx = {}) {
 
     function resetTime() {
         sim.lastTime = performance.now();
+        fpsRuntime.accSeconds = 0;
+        fpsRuntime.frameCount = 0;
     }
 
     initThree();
@@ -1553,6 +1639,7 @@ export function initPreview(ctx = {}) {
         resizeRenderer,
         clearParticles,
         resetEmission,
+        setDoTickCompiled,
         setShowAxes,
         setShowGrid,
         setPointScale,

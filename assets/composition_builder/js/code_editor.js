@@ -1,71 +1,74 @@
+import { loadMonaco } from "../../code_tip/js/monacoLoader.js";
+import { createLanguageService } from "../../code_tip/js/languageJsTs.js";
+
+const MONACO_UI_FIX_STYLE_ID = "codetip-inline-monaco-ui-fix";
+
+function ensureMonacoUiFixStyle() {
+    if (typeof document === "undefined") return;
+    if (document.getElementById(MONACO_UI_FIX_STYLE_ID)) return;
+    const style = document.createElement("style");
+    style.id = MONACO_UI_FIX_STYLE_ID;
+    style.textContent = `
+.editor-shell .monaco-editor .suggest-widget,
+.editor-shell .monaco-editor .suggest-widget *,
+.monaco-editor .suggest-widget,
+.monaco-editor .suggest-widget * {
+    text-transform: none !important;
+    letter-spacing: normal !important;
+    word-spacing: normal !important;
+    text-indent: 0 !important;
+    text-shadow: none !important;
+    filter: none !important;
+}
+.editor-shell .monaco-editor .suggest-widget .monaco-list-row .monaco-icon-label,
+.editor-shell .monaco-editor .suggest-widget .monaco-list-row .monaco-icon-label .monaco-icon-label-container,
+.editor-shell .monaco-editor .suggest-widget .monaco-list-row .monaco-icon-label .monaco-icon-name-container,
+.editor-shell .monaco-editor .suggest-widget .monaco-list-row .monaco-highlighted-label,
+.editor-shell .monaco-editor .suggest-widget .monaco-list-row .monaco-highlighted-label .highlight,
+.editor-shell .monaco-editor .suggest-widget .monaco-list-row .monaco-icon-label .label-name,
+.editor-shell .monaco-editor .suggest-widget .monaco-list-row .monaco-icon-label .label-description,
+.editor-shell .monaco-editor .suggest-widget .monaco-list-row .details-label,
+.monaco-editor .suggest-widget .monaco-list-row .monaco-icon-label,
+.monaco-editor .suggest-widget .monaco-list-row .monaco-icon-label .monaco-icon-label-container,
+.monaco-editor .suggest-widget .monaco-list-row .monaco-icon-label .monaco-icon-name-container,
+.monaco-editor .suggest-widget .monaco-list-row .monaco-highlighted-label,
+.monaco-editor .suggest-widget .monaco-list-row .monaco-highlighted-label .highlight,
+.monaco-editor .suggest-widget .monaco-list-row .monaco-icon-label .label-name,
+.monaco-editor .suggest-widget .monaco-list-row .monaco-icon-label .label-description,
+.monaco-editor .suggest-widget .monaco-list-row .details-label {
+    opacity: 1 !important;
+    transform: none !important;
+}
+.editor-shell .monaco-editor .suggest-widget .monaco-list-row .monaco-icon-label .label-name,
+.editor-shell .monaco-editor .suggest-widget .monaco-list-row .monaco-icon-label .label-description,
+.monaco-editor .suggest-widget .monaco-list-row .monaco-icon-label .label-name,
+.monaco-editor .suggest-widget .monaco-list-row .monaco-icon-label .label-description {
+    color: var(--text, #e8eef7) !important;
+    font-family: "Cascadia Mono", "JetBrains Mono", Consolas, "Courier New", monospace !important;
+    font-size: 12px !important;
+    line-height: 20px !important;
+}
+.editor-shell .monaco-editor .suggest-widget .monaco-list-row .details-label,
+.monaco-editor .suggest-widget .monaco-list-row .details-label {
+    color: var(--muted, #a9b7cc) !important;
+    font-family: "Cascadia Mono", "JetBrains Mono", Consolas, "Courier New", monospace !important;
+    font-size: 11px !important;
+    line-height: 18px !important;
+}
+.editor-shell .monaco-editor .suggest-widget .monaco-list-row .monaco-highlighted-label .highlight,
+.monaco-editor .suggest-widget .monaco-list-row .monaco-highlighted-label .highlight {
+    color: inherit !important;
+    background: transparent !important;
+}`;
+    document.head.appendChild(style);
+}
+
 function escHtml(s) {
     return String(s ?? "")
         .replaceAll("&", "&amp;")
         .replaceAll("<", "&lt;")
         .replaceAll(">", "&gt;")
-        .replaceAll('"', "&quot;");
-}
-
-const JS_KEYWORDS = new Set([
-    "if", "else", "for", "while", "do", "switch", "case", "default", "break", "continue", "return",
-    "let", "const", "var", "true", "false", "null", "undefined", "new", "this", "typeof", "instanceof",
-    "try", "catch", "finally", "throw", "class", "extends", "super", "import", "from", "export", "as"
-]);
-
-const JS_BUILTINS = new Set([
-    "Math", "PI", "Random", "Number", "String", "Boolean", "Object", "Array",
-    "rotateToPoint", "rotateAsAxis", "rotateToWithAngle", "addSingle", "addMultiple", "addPreTickAction"
-]);
-
-const TOKEN_RE = /\/\*[\s\S]*?\*\/|\/\/[^\n]*|"(?:\\.|[^"])*"|'(?:\\.|[^'])*'|\b\d+(?:\.\d+)?(?:[eE][+\-]?\d+)?\b|\b[A-Za-z_][A-Za-z0-9_]*\b/g;
-
-function classifyToken(token) {
-    if (!token) return "tok-id";
-    if (token.startsWith("//") || token.startsWith("/*")) return "tok-comment";
-    if (token.startsWith("\"") || token.startsWith("'")) return "tok-string";
-    if (/^\d/.test(token)) return "tok-num";
-    if (JS_KEYWORDS.has(token)) return "tok-key";
-    if (JS_BUILTINS.has(token)) return "tok-builtin";
-    return "tok-id";
-}
-
-function highlightJs(source) {
-    const text = String(source || "");
-    let out = "";
-    let last = 0;
-    for (const match of text.matchAll(TOKEN_RE)) {
-        const token = match[0] || "";
-        const idx = match.index || 0;
-        out += escHtml(text.slice(last, idx));
-        out += `<span class="${classifyToken(token)}">${escHtml(token)}</span>`;
-        last = idx + token.length;
-    }
-    out += escHtml(text.slice(last));
-    if (text.endsWith("\n")) out += "\n";
-    return out;
-}
-
-function defaultTokenRange(text, caret) {
-    const src = String(text || "");
-    const at = Math.max(0, Math.min(Number(caret) || 0, src.length));
-    let start = at;
-    while (start > 0 && /[A-Za-z0-9_.$@]/.test(src[start - 1])) start -= 1;
-    let end = at;
-    while (end < src.length && /[A-Za-z0-9_.$@]/.test(src[end])) end += 1;
-    return { start, end, token: src.slice(start, at) };
-}
-
-function splitSuggestionLabel(label, token) {
-    const src = String(label || "");
-    const key = String(token || "");
-    if (!key) return { before: src, match: "", after: "" };
-    const idx = src.toLowerCase().indexOf(key.toLowerCase());
-    if (idx < 0) return { before: src, match: "", after: "" };
-    return {
-        before: src.slice(0, idx),
-        match: src.slice(idx, idx + key.length),
-        after: src.slice(idx + key.length)
-    };
+        .replaceAll("\"", "&quot;");
 }
 
 function toCompletionObjects(items) {
@@ -73,15 +76,27 @@ function toCompletionObjects(items) {
     return arr
         .map((it) => {
             if (!it) return null;
-            if (typeof it === "string") return { label: it, insertText: it, detail: "", priority: 100, cursorOffset: null };
+            if (typeof it === "string") {
+                return {
+                    label: it,
+                    insertText: it,
+                    detail: "",
+                    documentation: "",
+                    priority: 100,
+                    cursorOffset: null
+                };
+            }
             const label = String(it.label || it.insertText || "").trim();
             if (!label) return null;
+            const p = Number(it.priority);
             return {
                 label,
                 insertText: String(it.insertText || label),
                 detail: String(it.detail || ""),
-                priority: Number.isFinite(Number(it.priority)) ? Number(it.priority) : 100,
-                cursorOffset: (typeof it.cursorOffset === "number" && Number.isFinite(it.cursorOffset)) ? it.cursorOffset : null
+                documentation: String(it.documentation || ""),
+                kind: String(it.kind || ""),
+                priority: Number.isFinite(p) ? p : 100,
+                cursorOffset: Number.isFinite(Number(it.cursorOffset)) ? Number(it.cursorOffset) : null
             };
         })
         .filter(Boolean);
@@ -93,10 +108,145 @@ export function mergeCompletionGroups(...groups) {
         for (const it of toCompletionObjects(group)) {
             const key = String(it.label || "");
             const prev = map.get(key);
-            if (!prev || (Number(it.priority) || 0) > (Number(prev.priority) || 0)) map.set(key, it);
+            if (!prev || (Number(it.priority) || 0) > (Number(prev.priority) || 0)) {
+                map.set(key, it);
+            }
         }
     }
     return Array.from(map.values());
+}
+
+function inferKind(item) {
+    const rawKind = String(item?.kind || "").trim().toLowerCase();
+    if (rawKind) return rawKind;
+    const label = String(item?.label || "");
+    if (/\(/.test(label)) return "function";
+    if (/^[A-Z][A-Za-z0-9_]*$/.test(label)) return "class";
+    return "variable";
+}
+
+function toSortText(priority, label) {
+    const p = Number.isFinite(Number(priority)) ? Number(priority) : 0;
+    const inv = String(Math.max(0, 9999 - Math.max(0, Math.min(9999, Math.round(p))))).padStart(4, "0");
+    return `${inv}-${String(label || "").toLowerCase()}`;
+}
+
+function toSnippetInsertText(rawInsertText, cursorOffset = null) {
+    const src = String(rawInsertText || "");
+    if (/\$(?:0|[1-9]\d*|\{\d+(?::[^}]*)?\})/.test(src)) return { snippet: true, insertText: src };
+    if (Number.isFinite(Number(cursorOffset))) {
+        const at = Math.max(0, Math.min(src.length, Number(cursorOffset)));
+        return {
+            snippet: true,
+            insertText: `${src.slice(0, at)}$0${src.slice(at)}`
+        };
+    }
+    return {
+        snippet: false,
+        insertText: src
+    };
+}
+
+function parseValidationMessagePosition(source, message) {
+    const m = /未定义标识符\s*:\s*([A-Za-z_$][A-Za-z0-9_$]*)/.exec(String(message || ""));
+    if (!m) return null;
+    const target = String(m[1] || "");
+    if (!target) return null;
+    const re = new RegExp(`\\b${target.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`);
+    const match = re.exec(String(source || ""));
+    if (!match) return null;
+    const idx = Number(match.index || 0);
+    const prefix = String(source || "").slice(0, idx);
+    const lines = prefix.split("\n");
+    const line = Math.max(1, lines.length);
+    const column = Math.max(1, String(lines[lines.length - 1] || "").length + 1);
+    return {
+        startLineNumber: line,
+        endLineNumber: line,
+        startColumn: column,
+        endColumn: column + target.length
+    };
+}
+
+function normalizeValidationResult(result, source) {
+    if (!result) return { valid: true, message: "", markerRange: null };
+    const ok = !(result.valid === false || result.ok === false || result.error);
+    if (ok) return { valid: true, message: "", markerRange: null };
+    const message = String(result.message || result.error || "表达式存在问题");
+    return {
+        valid: false,
+        message,
+        markerRange: parseValidationMessagePosition(source, message)
+    };
+}
+
+function dispatchBubbledEvent(el, type) {
+    try {
+        if (type === "focus" || type === "blur" || type === "focusin" || type === "focusout") {
+            el.dispatchEvent(new FocusEvent(type, { bubbles: type === "focusin" || type === "focusout" }));
+            return;
+        }
+    } catch (_) {
+        // Ignore FocusEvent constructor failures and fallback.
+    }
+    el.dispatchEvent(new Event(type, { bubbles: type === "input" || type === "change" || type === "focusin" || type === "focusout" }));
+}
+
+function normalizeLibEntries(libs) {
+    const arr = Array.isArray(libs) ? libs : [];
+    return arr
+        .filter((it) => it && typeof it.content === "string")
+        .map((it, index) => ({
+            id: String(it.id || it.name || `inline-lib-${index + 1}`),
+            name: String(it.name || `inline-lib-${index + 1}.d.ts`),
+            content: String(it.content || ""),
+            enabled: it.enabled !== false
+        }));
+}
+
+function buildApiDtsFromCompletions(completions) {
+    const reserved = new Set([
+        "break", "case", "catch", "class", "const", "continue", "debugger", "default",
+        "delete", "do", "else", "enum", "export", "extends", "false", "finally", "for",
+        "function", "if", "import", "in", "instanceof", "let", "new", "null", "return",
+        "super", "switch", "this", "throw", "true", "try", "typeof", "var", "void",
+        "while", "with", "yield", "await", "async"
+    ]);
+    const vars = new Set();
+    const fns = new Set();
+    const list = toCompletionObjects(completions);
+    for (const item of list) {
+        const raw = String(item.insertText || item.label || "").trim();
+        if (!raw) continue;
+        const first = /^[A-Za-z_$][A-Za-z0-9_$]*/.exec(raw);
+        if (first && first[0]) vars.add(first[0]);
+        const call = /^([A-Za-z_$][A-Za-z0-9_$]*)\s*\(/.exec(raw);
+        if (call && call[1]) fns.add(call[1]);
+        const labelCall = /^([A-Za-z_$][A-Za-z0-9_$]*)\s*\(/.exec(String(item.label || "").trim());
+        if (labelCall && labelCall[1]) fns.add(labelCall[1]);
+    }
+    const lines = [];
+    lines.push("declare const PI: number;");
+    lines.push("declare const age: number;");
+    lines.push("declare const tick: number;");
+    lines.push("declare const tickCount: number;");
+    lines.push("declare const index: number;");
+    lines.push("declare const rel: any;");
+    lines.push("declare const order: any;");
+    lines.push("declare const status: any;");
+    lines.push("declare const particle: any;");
+    lines.push("declare const thisAt: any;");
+    for (const name of Array.from(vars).sort((a, b) => a.localeCompare(b))) {
+        if (reserved.has(name)) continue;
+        if (/^(Math|PI|age|tick|tickCount|index|status|particle|thisAt|rel|order)$/.test(name)) continue;
+        lines.push(`declare const ${name}: any;`);
+    }
+    for (const fn of Array.from(fns).sort((a, b) => a.localeCompare(b))) {
+        if (reserved.has(fn)) continue;
+        if (/^(Math|if|for|while|switch|catch|new)$/.test(fn)) continue;
+        lines.push(`declare function ${fn}(...args: any[]): any;`);
+    }
+    return `${lines.join("\n")}\n`;
 }
 
 export class InlineCodeEditor {
@@ -106,8 +256,11 @@ export class InlineCodeEditor {
             title = "代码编辑",
             onChange = () => {},
             completions = [],
-            autoSuggestMin = 1,
-            validate = null
+            validate = null,
+            libs = [],
+            compact = false,
+            singleLine = false,
+            showToolbar = null
         } = options;
 
         if (!(textarea instanceof HTMLTextAreaElement)) {
@@ -116,22 +269,31 @@ export class InlineCodeEditor {
 
         this.textarea = textarea;
         this.title = String(title || "代码编辑");
-        this.onChange = onChange;
-        this.autoSuggestMin = Math.max(0, Number(autoSuggestMin) || 0);
+        this.onChange = typeof onChange === "function" ? onChange : () => {};
+        this.validate = typeof validate === "function" ? validate : null;
         this.completions = mergeCompletionGroups(completions);
-        this.validate = (typeof validate === "function") ? validate : null;
-        this.filteredSuggest = [];
-        this.suggestActive = -1;
-        this.suggestRange = { start: 0, end: 0, token: "" };
-        this.localHistory = [];
-        this.localHistoryIndex = -1;
-        this.isApplyingLocalHistory = false;
+        this.libs = normalizeLibEntries(libs);
+        this.compact = compact === true;
+        this.singleLine = singleLine === true;
+        this.showToolbar = typeof showToolbar === "boolean" ? showToolbar : !this.compact;
+        this.disposed = false;
+        this.monaco = null;
+        this.editor = null;
+        this.model = null;
+        this.languageService = null;
+        this.completionRegistration = null;
+        this.languageDiagnostics = [];
+        this.customValidationResult = { valid: true, message: "", markerRange: null };
+        this.syncingFromModel = false;
+        this.syncingFromSource = false;
+        this.changeLock = false;
+        this.disposables = [];
+        this.monacoReady = false;
+        this.monacoLoadError = null;
 
         this.buildDOM();
-        this.bindEvents();
-        this.renderHighlight();
-        this.runValidation();
-        this.pushLocalHistory(true);
+        this.bindSourceFallback();
+        this.initMonacoAsync();
     }
 
     buildDOM() {
@@ -140,7 +302,8 @@ export class InlineCodeEditor {
         const hostNext = this.textarea.nextSibling;
 
         this.shellEl = document.createElement("div");
-        this.shellEl.className = "editor-shell";
+        this.shellEl.className = "editor-shell editor-shell-monaco editor-loading";
+        if (this.compact) this.shellEl.classList.add("editor-shell-compact");
 
         this.toolbarEl = document.createElement("div");
         this.toolbarEl.className = "editor-toolbar";
@@ -154,35 +317,28 @@ export class InlineCodeEditor {
 
         const hintEl = document.createElement("div");
         hintEl.className = "editor-hint";
-        hintEl.textContent = "Ctrl+/ 注释 | Ctrl+Space 提示";
+        hintEl.textContent = "Monaco / CodeTip";
 
         rightEl.appendChild(hintEl);
         this.toolbarEl.appendChild(titleEl);
         this.toolbarEl.appendChild(rightEl);
 
-        this.bodyEl = document.createElement("div");
-        this.bodyEl.className = "editor-body";
-
         this.errorEl = document.createElement("div");
         this.errorEl.className = "editor-error hidden";
 
-        this.highlightEl = document.createElement("pre");
-        this.highlightEl.className = "editor-highlight";
-        this.highlightEl.setAttribute("aria-hidden", "true");
+        this.bodyEl = document.createElement("div");
+        this.bodyEl.className = "editor-body";
 
-        this.suggestEl = document.createElement("div");
-        this.suggestEl.className = "editor-suggest hidden";
+        this.monacoHostEl = document.createElement("div");
+        this.monacoHostEl.className = "editor-monaco-host";
+        this.bodyEl.appendChild(this.monacoHostEl);
 
-        this.textarea.classList.add("editor-textarea");
-        this.textarea.spellcheck = false;
-        this.textarea.wrap = "off";
-
-        this.bodyEl.appendChild(this.highlightEl);
+        this.textarea.classList.add("editor-source-hidden");
         this.bodyEl.appendChild(this.textarea);
-        this.shellEl.appendChild(this.toolbarEl);
+
+        if (this.showToolbar) this.shellEl.appendChild(this.toolbarEl);
         this.shellEl.appendChild(this.errorEl);
         this.shellEl.appendChild(this.bodyEl);
-        this.shellEl.appendChild(this.suggestEl);
 
         if (field) {
             const labelSpan = field.querySelector(":scope > span");
@@ -197,507 +353,365 @@ export class InlineCodeEditor {
         }
     }
 
-    bindEvents() {
-        this.onInputHandler = () => {
-            this.renderHighlight();
-            this.syncScroll();
-            this.onChange(this.textarea.value);
-            if (!this.isApplyingLocalHistory) this.pushLocalHistory();
+    bindSourceFallback() {
+        this.sourceInputHandler = () => {
+            if (this.syncingFromModel) return;
+            this.syncModelFromSource();
             this.runValidation();
-            this.tryAutoSuggest();
         };
-
-        this.onScrollHandler = () => this.syncScroll();
-
-        this.onBlurHandler = () => setTimeout(() => this.closeSuggest(), 120);
-
-        this.onKeydownHandler = (ev) => {
-            const suggestOpen = !this.suggestEl.classList.contains("hidden");
-            const isMod = ev.ctrlKey || ev.metaKey;
-            if (isMod && !ev.altKey && ev.code === "KeyZ") {
-                ev.preventDefault();
-                if (ev.shiftKey) this.redoLocalHistory();
-                else this.undoLocalHistory();
-                return;
-            }
-            if (isMod && !ev.altKey && ev.code === "KeyX" && (this.textarea.selectionStart || 0) === (this.textarea.selectionEnd || 0)) {
-                ev.preventDefault();
-                this.cutCurrentLine();
-                return;
-            }
-            if (isMod && !ev.altKey && (ev.code === "Slash" || ev.code === "NumpadDivide")) {
-                ev.preventDefault();
-                this.toggleLineComment();
-                return;
-            }
-            if (isMod && ev.code === "Space") {
-                ev.preventDefault();
-                this.openSuggest(true);
-                return;
-            }
-
-            if (suggestOpen) {
-                if (ev.code === "ArrowDown") {
-                    ev.preventDefault();
-                    this.moveSuggestActive(1);
-                    return;
-                }
-                if (ev.code === "ArrowUp") {
-                    ev.preventDefault();
-                    this.moveSuggestActive(-1);
-                    return;
-                }
-                if (ev.code === "Escape") {
-                    ev.preventDefault();
-                    this.closeSuggest();
-                    return;
-                }
-                if (ev.code === "Enter") {
-                    ev.preventDefault();
-                    if (ev.shiftKey) {
-                        this.closeSuggest();
-                        this.insertNewLineWithIndent();
-                    } else {
-                        this.commitActiveSuggest();
-                    }
-                    return;
-                }
-                if (ev.code === "Tab") {
-                    ev.preventDefault();
-                    this.commitActiveSuggest();
-                    return;
-                }
-            }
-
-            if (!isMod && this.handleAutoPair(ev)) return;
-
-            if (!isMod && ev.code === "Tab") {
-                ev.preventDefault();
-                this.insertIndent(ev.shiftKey ? -1 : 1);
-                return;
-            }
-            if (!isMod && ev.code === "Enter") {
-                ev.preventDefault();
-                this.insertNewLineWithIndent();
-                return;
-            }
-        };
-
-        this.onClickSuggestHandler = (ev) => {
-            const btn = ev.target instanceof HTMLElement ? ev.target.closest("button[data-idx]") : null;
-            if (!btn) return;
-            const idx = Number(btn.dataset.idx);
-            if (!Number.isFinite(idx)) return;
-            this.suggestActive = idx;
-            this.commitActiveSuggest();
-        };
-
-        this.textarea.addEventListener("input", this.onInputHandler);
-        this.textarea.addEventListener("scroll", this.onScrollHandler);
-        this.textarea.addEventListener("blur", this.onBlurHandler);
-        this.textarea.addEventListener("keydown", this.onKeydownHandler);
-        this.suggestEl.addEventListener("mousedown", (ev) => ev.preventDefault());
-        this.suggestEl.addEventListener("click", this.onClickSuggestHandler);
+        this.textarea.addEventListener("input", this.sourceInputHandler);
     }
 
-    dispose() {
-        this.textarea.removeEventListener("input", this.onInputHandler);
-        this.textarea.removeEventListener("scroll", this.onScrollHandler);
-        this.textarea.removeEventListener("blur", this.onBlurHandler);
-        this.textarea.removeEventListener("keydown", this.onKeydownHandler);
-        this.suggestEl.removeEventListener("click", this.onClickSuggestHandler);
+    async initMonacoAsync() {
+        try {
+            const monaco = await loadMonaco();
+            if (this.disposed) return;
+            this.monaco = monaco;
+            this.createMonacoEditor();
+            this.monacoReady = true;
+            this.shellEl.classList.remove("editor-loading");
+            this.runValidation();
+        } catch (error) {
+            if (this.disposed) return;
+            this.monacoLoadError = error instanceof Error ? error : new Error(String(error || "Unknown Monaco error"));
+            this.shellEl.classList.remove("editor-loading");
+            this.showFallbackError(`CodeTip 加载失败：${this.monacoLoadError.message}`);
+            this.enablePlainTextareaFallback();
+        }
+    }
+
+    createMonacoEditor() {
+        const monaco = this.monaco;
+        ensureMonacoUiFixStyle();
+        const isLight = String(document.body?.dataset?.theme || "").startsWith("light");
+        const modelUri = monaco.Uri.parse(`inmemory://code-tip-inline/${Date.now()}-${Math.random().toString(16).slice(2)}.js`);
+        this.model = monaco.editor.createModel(String(this.textarea.value || ""), "javascript", modelUri);
+
+        this.editor = monaco.editor.create(this.monacoHostEl, {
+            model: this.model,
+            language: "javascript",
+            theme: isLight ? "vs" : "vs-dark",
+            automaticLayout: true,
+            lineNumbers: this.compact ? "off" : "on",
+            minimap: { enabled: false },
+            scrollBeyondLastLine: false,
+            tabSize: 4,
+            insertSpaces: true,
+            detectIndentation: false,
+            wordWrap: this.singleLine ? "off" : "off",
+            fontFamily: "'Cascadia Mono', 'JetBrains Mono', Consolas, 'Courier New', monospace",
+            fontSize: 12,
+            lineHeight: this.compact ? 18 : 19,
+            suggestFontSize: 12,
+            suggestLineHeight: 20,
+            fixedOverflowWidgets: true,
+            inlineSuggest: { enabled: false },
+            suggest: {
+                showStatusBar: false,
+                preview: false
+            },
+            smoothScrolling: true,
+            quickSuggestions: {
+                comments: true,
+                strings: true,
+                other: true
+            },
+            suggestOnTriggerCharacters: true,
+            parameterHints: { enabled: true },
+            hover: { enabled: true },
+            bracketPairColorization: { enabled: true },
+            glyphMargin: !this.compact,
+            folding: !this.compact,
+            lineDecorationsWidth: this.compact ? 0 : 10,
+            overviewRulerLanes: this.compact ? 0 : 2,
+            scrollbar: this.compact
+                ? {
+                    vertical: "hidden",
+                    horizontal: "hidden",
+                    alwaysConsumeMouseWheel: false
+                }
+                : undefined,
+            padding: this.compact
+                ? { top: 7, bottom: 7 }
+                : undefined
+        });
+
+        this.languageService = createLanguageService({
+            monaco,
+            language: "javascript",
+            model: this.model,
+            libs: []
+        });
+
+        const builtApiDts = buildApiDtsFromCompletions(this.completions);
+        const mergedLibs = normalizeLibEntries([
+            { id: "inline-api", name: "__inline_api__.d.ts", content: builtApiDts, enabled: true },
+            ...this.libs
+        ]);
+        this.languageService.setExtraLibs("inline", mergedLibs);
+
+        this.completionRegistration = this.languageService.registerCompletionProvider({
+            provideCompletionItems: ({ model, position }) => {
+                const word = model.getWordUntilPosition(position);
+                const range = {
+                    startLineNumber: position.lineNumber,
+                    endLineNumber: position.lineNumber,
+                    startColumn: word.startColumn,
+                    endColumn: word.endColumn
+                };
+                const list = toCompletionObjects(this.completions);
+                const suggestions = list.map((item) => {
+                    const insert = toSnippetInsertText(item.insertText || item.label, item.cursorOffset);
+                    return {
+                        label: item.label,
+                        kind: inferKind(item),
+                        detail: item.detail || "",
+                        documentation: item.documentation || "",
+                        insertText: insert.insertText,
+                        snippet: insert.snippet,
+                        sortText: toSortText(item.priority, item.label),
+                        range
+                    };
+                });
+                return { suggestions };
+            }
+        });
+
+        const diagnosticsSubscription = this.languageService.observeDiagnostics((problems) => {
+            this.languageDiagnostics = Array.isArray(problems) ? problems : [];
+            this.refreshErrorUi();
+        });
+        this.disposables.push(diagnosticsSubscription);
+
+        this.disposables.push(
+            this.editor.onDidChangeModelContent(() => {
+                if (this.changeLock) return;
+                this.changeLock = true;
+                try {
+                    const value = this.editor.getValue();
+                    this.syncingFromModel = true;
+                    this.textarea.value = value;
+                    dispatchBubbledEvent(this.textarea, "input");
+                    this.onChange(value);
+                    this.runValidation();
+                } finally {
+                    this.syncingFromModel = false;
+                    this.changeLock = false;
+                }
+            })
+        );
+
+        this.disposables.push(
+            this.editor.onDidBlurEditorWidget(() => {
+                dispatchBubbledEvent(this.textarea, "change");
+                dispatchBubbledEvent(this.textarea, "blur");
+                dispatchBubbledEvent(this.textarea, "focusout");
+                this.runValidation();
+            })
+        );
+
+        if (this.singleLine) {
+            this.disposables.push(
+                this.editor.onKeyDown((ev) => {
+                    if (ev.keyCode === monaco.KeyCode.Enter) {
+                        ev.preventDefault();
+                        this.editor.trigger("keyboard", "closeSuggestWidget", {});
+                        this.editor.getAction("hideSuggestWidget")?.run?.();
+                    }
+                })
+            );
+        }
+
+        this.disposables.push(
+            this.editor.onDidFocusEditorWidget(() => {
+                dispatchBubbledEvent(this.textarea, "focus");
+                dispatchBubbledEvent(this.textarea, "focusin");
+            })
+        );
+    }
+
+    enablePlainTextareaFallback() {
+        this.textarea.classList.remove("editor-source-hidden");
+        this.textarea.classList.remove("hidden");
+        this.textarea.classList.add("editor-textarea-fallback");
+        this.monacoHostEl.classList.add("hidden");
+    }
+
+    showFallbackError(message) {
+        this.errorEl.classList.remove("hidden");
+        this.errorEl.textContent = String(message || "CodeTip 加载失败");
+        this.shellEl.classList.add("editor-invalid");
+    }
+
+    syncModelFromSource() {
+        if (!this.editor || !this.model || this.syncingFromSource) return;
+        if (typeof this.editor.hasTextFocus === "function" && this.editor.hasTextFocus()) return;
+        const sourceValue = String(this.textarea.value || "");
+        if (sourceValue === this.editor.getValue()) return;
+        this.syncingFromSource = true;
+        try {
+            const prevPos = this.editor.getPosition();
+            const fullRange = this.model.getFullModelRange();
+            this.editor.executeEdits("codetip-sync-source", [{
+                range: fullRange,
+                text: sourceValue,
+                forceMoveMarkers: true
+            }]);
+            if (prevPos) {
+                const line = Math.max(1, Math.min(prevPos.lineNumber, this.model.getLineCount()));
+                const col = Math.max(1, Math.min(prevPos.column, this.model.getLineMaxColumn(line)));
+                this.editor.setPosition({ lineNumber: line, column: col });
+            }
+        } finally {
+            this.syncingFromSource = false;
+        }
     }
 
     setCompletions(items) {
         this.completions = mergeCompletionGroups(items);
-        if (!this.suggestEl.classList.contains("hidden")) this.openSuggest(true);
+        if (this.languageService) {
+            const builtApiDts = buildApiDtsFromCompletions(this.completions);
+            const mergedLibs = normalizeLibEntries([
+                { id: "inline-api", name: "__inline_api__.d.ts", content: builtApiDts, enabled: true },
+                ...this.libs
+            ]);
+            this.languageService.setExtraLibs("inline", mergedLibs);
+        }
+        this.runValidation();
     }
 
     setValidator(validate) {
-        this.validate = (typeof validate === "function") ? validate : null;
+        this.validate = typeof validate === "function" ? validate : null;
+        this.runValidation();
+    }
+
+    setLibs(libs) {
+        this.libs = normalizeLibEntries(libs);
+        if (this.languageService) {
+            const builtApiDts = buildApiDtsFromCompletions(this.completions);
+            const mergedLibs = normalizeLibEntries([
+                { id: "inline-api", name: "__inline_api__.d.ts", content: builtApiDts, enabled: true },
+                ...this.libs
+            ]);
+            this.languageService.setExtraLibs("inline", mergedLibs);
+        }
         this.runValidation();
     }
 
     renderHighlight() {
-        this.highlightEl.innerHTML = highlightJs(this.textarea.value);
+        this.syncModelFromSource();
     }
 
     runValidation() {
-        if (typeof this.validate !== "function") {
-            this.shellEl.classList.remove("editor-invalid");
+        const source = this.editor ? this.editor.getValue() : String(this.textarea.value || "");
+        let result = { valid: true, message: "", markerRange: null };
+        if (typeof this.validate === "function") {
+            try {
+                result = normalizeValidationResult(this.validate(source), source);
+            } catch (error) {
+                result = {
+                    valid: false,
+                    message: String(error?.message || error || "表达式存在问题"),
+                    markerRange: null
+                };
+            }
+        }
+        this.customValidationResult = result;
+        this.applyCustomMarkers();
+        this.refreshErrorUi();
+        return result.valid;
+    }
+
+    applyCustomMarkers() {
+        if (!this.monaco || !this.model) return;
+        if (this.customValidationResult.valid) {
+            this.monaco.editor.setModelMarkers(this.model, "codetip-inline-custom", []);
+            return;
+        }
+        const src = this.editor ? this.editor.getValue() : String(this.textarea.value || "");
+        const fallbackRange = {
+            startLineNumber: 1,
+            endLineNumber: 1,
+            startColumn: 1,
+            endColumn: Math.max(2, Math.min(120, src.length + 1))
+        };
+        const range = this.customValidationResult.markerRange || fallbackRange;
+        this.monaco.editor.setModelMarkers(this.model, "codetip-inline-custom", [
+            {
+                severity: this.monaco.MarkerSeverity.Error,
+                message: this.customValidationResult.message || "表达式存在问题",
+                ...range
+            }
+        ]);
+    }
+
+    refreshErrorUi() {
+        if (this.disposed) return;
+        let message = "";
+        let invalid = false;
+        if (!this.customValidationResult.valid) {
+            message = this.customValidationResult.message || "表达式存在问题";
+            invalid = true;
+        } else {
+            const firstErr = this.languageDiagnostics.find((it) => String(it?.severity || "").toLowerCase() === "error");
+            if (firstErr) {
+                message = `语法/类型错误: ${String(firstErr.message || "")}`;
+                invalid = true;
+            }
+        }
+        if (message) {
+            this.errorEl.classList.remove("hidden");
+            this.errorEl.innerHTML = escHtml(message);
+        } else {
             this.errorEl.classList.add("hidden");
             this.errorEl.textContent = "";
-            return true;
         }
-        let result = null;
-        try {
-            result = this.validate(String(this.textarea.value || ""));
-        } catch (e) {
-            result = { valid: false, message: String(e?.message || e || "表达式存在问题") };
-        }
-        const isValid = !(result && (result.valid === false || result.ok === false || result.error));
-        const message = isValid ? "" : String(result?.message || result?.error || "表达式存在问题，此表达式不生效");
-        this.shellEl.classList.toggle("editor-invalid", !isValid);
-        this.errorEl.classList.toggle("hidden", isValid);
-        this.errorEl.textContent = message;
-        return isValid;
+        this.shellEl.classList.toggle("editor-invalid", !!invalid);
     }
 
-    syncScroll() {
-        this.highlightEl.scrollTop = this.textarea.scrollTop;
-        this.highlightEl.scrollLeft = this.textarea.scrollLeft;
-        this.positionSuggest();
-    }
+    dispose() {
+        if (this.disposed) return;
+        this.disposed = true;
 
-    currentTokenRange() {
-        return defaultTokenRange(this.textarea.value, this.textarea.selectionStart || 0);
-    }
+        this.textarea.removeEventListener("input", this.sourceInputHandler);
 
-    openSuggest(manual = false) {
-        const range = this.currentTokenRange();
-        this.suggestRange = range;
-        const token = String(range.token || "");
-
-        if (!token && !manual) {
-            this.closeSuggest();
-            return;
-        }
-
-        let list = Array.isArray(this.completions) ? [...this.completions] : [];
-        if (token) {
-            const t = token.toLowerCase();
-            list = list.filter((it) => String(it.label || "").toLowerCase().includes(t));
-        }
-        list.sort((a, b) => (Number(b.priority) || 0) - (Number(a.priority) || 0));
-        list = list.slice(0, 12);
-
-        if (!list.length) {
-            this.closeSuggest();
-            return;
-        }
-
-        this.filteredSuggest = list;
-        this.suggestActive = 0;
-        this.renderSuggestList();
-        this.suggestEl.classList.remove("hidden");
-        this.positionSuggest();
-    }
-
-    tryAutoSuggest() {
-        const token = String(this.currentTokenRange().token || "");
-        if (token.length < this.autoSuggestMin) {
-            this.closeSuggest();
-            return;
-        }
-        this.openSuggest(false);
-    }
-
-    closeSuggest() {
-        this.suggestEl.classList.add("hidden");
-        this.suggestEl.innerHTML = "";
-        this.filteredSuggest = [];
-        this.suggestActive = -1;
-    }
-
-    moveSuggestActive(delta) {
-        if (!this.filteredSuggest.length) return;
-        const n = this.filteredSuggest.length;
-        this.suggestActive = (this.suggestActive + delta + n) % n;
-        this.renderSuggestList();
-        this.positionSuggest();
-    }
-
-    commitActiveSuggest() {
-        if (!this.filteredSuggest.length) return;
-        const idx = Math.max(0, Math.min(this.suggestActive, this.filteredSuggest.length - 1));
-        const item = this.filteredSuggest[idx];
-        const marker = "$0";
-        const rawInsertText = String(item?.insertText || item?.label || "");
-        let insertText = rawInsertText;
-        let localCursorOffset = null;
-        const markerIdx = rawInsertText.indexOf(marker);
-        if (markerIdx >= 0) {
-            insertText = rawInsertText.replace(marker, "");
-            localCursorOffset = markerIdx;
-        } else if (typeof item?.cursorOffset === "number" && Number.isFinite(item.cursorOffset)) {
-            localCursorOffset = item.cursorOffset;
-        }
-        if (!insertText) return;
-        const snapRange = this.suggestRange || { start: 0, end: 0, token: "" };
-        const current = this.currentTokenRange();
-        const caretNow = Math.max(0, Number(this.textarea.selectionStart) || 0);
-        let start = Math.max(0, Number(snapRange.start) || 0);
-        let end = Math.max(start, Number(snapRange.end) || start);
-        if (caretNow >= current.start && caretNow <= current.end) {
-            start = current.start;
-            end = current.end;
-        }
-
-        // Identifier insertion: keep caret at end by default for identifier-like completions.
-        const isIdentifierLike = /^[A-Za-z_$][A-Za-z0-9_.$@]*$/.test(insertText);
-        if (isIdentifierLike && !Number.isFinite(localCursorOffset)) {
-            localCursorOffset = insertText.length;
-        }
-
-        this.snapshotBeforeEdit();
-        this.textarea.setRangeText(insertText, start, end, "end");
-        let finalCaret = start + insertText.length;
-        if (Number.isFinite(localCursorOffset)) {
-            const caret = Math.max(start, Math.min(start + Number(localCursorOffset), start + insertText.length));
-            finalCaret = caret;
-        }
-        this.forceCaret(finalCaret);
-        this.emitProgrammaticInputChange(finalCaret);
-        this.closeSuggest();
-        this.textarea.focus();
-    }
-
-    positionSuggest() {
-        if (this.suggestEl.classList.contains("hidden")) return;
-        const bodyRect = this.bodyEl.getBoundingClientRect();
-        this.suggestEl.style.left = "10px";
-        this.suggestEl.style.top = `${Math.max(10, Math.min(120, bodyRect.height - 160))}px`;
-    }
-
-    renderSuggestList() {
-        const token = String(this.suggestRange.token || "");
-        const head = token
-            ? `<div class="editor-suggest-head"><span class="editor-suggest-input">${escHtml(token)}</span></div>`
-            : "";
-        const list = this.filteredSuggest.map((it, idx) => {
-            const active = idx === this.suggestActive ? " active" : "";
-            const parts = splitSuggestionLabel(it.label || "", token);
-            const label = `${escHtml(parts.before)}<span class="editor-suggest-match">${escHtml(parts.match)}</span><span class="editor-suggest-tail">${escHtml(parts.after)}</span>`;
-            const detail = escHtml(it.detail || "");
-            return `<button type="button" class="editor-suggest-item${active}" data-idx="${idx}"><span class="editor-suggest-label">${label}</span><small>${detail}</small></button>`;
-        }).join("");
-        this.suggestEl.innerHTML = `${head}${list}`;
-    }
-
-    pushLocalHistory(force = false) {
-        const value = String(this.textarea.value || "");
-        const start = Math.max(0, Number(this.textarea.selectionStart) || 0);
-        const end = Math.max(start, Number(this.textarea.selectionEnd) || start);
-        const snap = { value, start, end };
-        const prev = this.localHistory[this.localHistoryIndex];
-        if (!force && prev && prev.value === snap.value && prev.start === snap.start && prev.end === snap.end) return;
-        if (this.localHistoryIndex < this.localHistory.length - 1) {
-            this.localHistory.splice(this.localHistoryIndex + 1);
-        }
-        this.localHistory.push(snap);
-        if (this.localHistory.length > 400) {
-            const drop = this.localHistory.length - 400;
-            this.localHistory.splice(0, drop);
-        }
-        this.localHistoryIndex = this.localHistory.length - 1;
-    }
-
-    undoLocalHistory() {
-        if (this.localHistoryIndex <= 0) return false;
-        this.localHistoryIndex -= 1;
-        this.applyLocalHistorySnapshot(this.localHistory[this.localHistoryIndex]);
-        return true;
-    }
-
-    redoLocalHistory() {
-        if (this.localHistoryIndex >= this.localHistory.length - 1) return false;
-        this.localHistoryIndex += 1;
-        this.applyLocalHistorySnapshot(this.localHistory[this.localHistoryIndex]);
-        return true;
-    }
-
-    applyLocalHistorySnapshot(snap) {
-        if (!snap) return;
-        const text = String(snap.value || "");
-        const start = Math.max(0, Math.min(Number(snap.start) || 0, text.length));
-        const end = Math.max(start, Math.min(Number(snap.end) || start, text.length));
-        this.isApplyingLocalHistory = true;
-        try {
-            this.textarea.value = text;
-            this.textarea.setSelectionRange(start, end);
-            this.renderHighlight();
-            this.syncScroll();
-            this.closeSuggest();
-            this.textarea.dispatchEvent(new Event("input", { bubbles: true }));
-            this.textarea.dispatchEvent(new Event("change", { bubbles: true }));
-        } finally {
-            this.isApplyingLocalHistory = false;
-        }
-    }
-
-    emitProgrammaticInputChange(caret = null) {
-        this.textarea.dispatchEvent(new Event("input", { bubbles: true }));
-        this.textarea.dispatchEvent(new Event("change", { bubbles: true }));
-        if (typeof caret === "number" && Number.isFinite(caret)) this.forceCaret(caret);
-    }
-
-    forceCaret(caret) {
-        const pos = Math.max(0, Math.min(Number(caret) || 0, String(this.textarea.value || "").length));
-        try {
-            this.textarea.focus();
-            this.textarea.setSelectionRange(pos, pos);
-        } catch {
-        }
-    }
-
-    writeClipboardText(text) {
-        const value = String(text || "");
-        if (!value) return;
-        if (navigator.clipboard?.writeText) {
-            navigator.clipboard.writeText(value).catch(() => this.writeClipboardTextFallback(value));
-            return;
-        }
-        this.writeClipboardTextFallback(value);
-    }
-
-    writeClipboardTextFallback(text) {
-        try {
-            const ta = document.createElement("textarea");
-            ta.value = String(text || "");
-            ta.setAttribute("readonly", "true");
-            ta.style.position = "fixed";
-            ta.style.left = "-99999px";
-            ta.style.top = "-99999px";
-            document.body.appendChild(ta);
-            ta.focus();
-            ta.select();
-            document.execCommand("copy");
-            ta.remove();
-        } catch {
-        }
-    }
-
-    cutCurrentLine() {
-        const text = String(this.textarea.value || "");
-        const start = this.textarea.selectionStart || 0;
-        const end = this.textarea.selectionEnd || start;
-        if (start !== end) return false;
-        const lineStart = text.lastIndexOf("\n", Math.max(0, start - 1)) + 1;
-        let lineEnd = text.indexOf("\n", start);
-        if (lineEnd < 0) lineEnd = text.length;
-        else lineEnd += 1;
-        const cut = text.slice(lineStart, lineEnd);
-        if (!cut) return false;
-        this.snapshotBeforeEdit();
-        this.writeClipboardText(cut);
-        this.textarea.setRangeText("", lineStart, lineEnd, "start");
-        this.textarea.setSelectionRange(lineStart, lineStart);
-        this.emitProgrammaticInputChange();
-        return true;
-    }
-
-    snapshotBeforeEdit() {
-        if (this.isApplyingLocalHistory) return;
-        this.pushLocalHistory();
-    }
-
-    toggleLineComment() {
-        const text = String(this.textarea.value || "");
-        const start = this.textarea.selectionStart || 0;
-        const end = this.textarea.selectionEnd || start;
-        const lineStart = text.lastIndexOf("\n", Math.max(0, start - 1)) + 1;
-        const lineEndRaw = text.indexOf("\n", end);
-        const lineEnd = lineEndRaw < 0 ? text.length : lineEndRaw;
-        const block = text.slice(lineStart, lineEnd);
-        const lines = block.split("\n");
-        const allCommented = lines.every((line) => /^\s*\/\//.test(line));
-        const mapped = lines.map((line) => allCommented ? line.replace(/^(\s*)\/\//, "$1") : line.replace(/^(\s*)/, "$1//"));
-        this.snapshotBeforeEdit();
-        this.textarea.setRangeText(mapped.join("\n"), lineStart, lineEnd, "select");
-        this.emitProgrammaticInputChange();
-    }
-
-    insertIndent(direction = 1) {
-        const start = this.textarea.selectionStart || 0;
-        const end = this.textarea.selectionEnd || start;
-        const text = this.textarea.value;
-        const unit = "    ";
-        this.snapshotBeforeEdit();
-        if (start === end) {
-            if (direction >= 0) {
-                this.textarea.setRangeText(unit, start, end, "end");
-            } else {
-                const lineStart = text.lastIndexOf("\n", Math.max(0, start - 1)) + 1;
-                const before = text.slice(lineStart, start);
-                if (before.endsWith(unit)) this.textarea.setRangeText("", start - unit.length, start, "end");
-            }
-        } else {
-            const lineStart = text.lastIndexOf("\n", Math.max(0, start - 1)) + 1;
-            const lineEndRaw = text.indexOf("\n", end);
-            const lineEnd = lineEndRaw < 0 ? text.length : lineEndRaw;
-            const block = text.slice(lineStart, lineEnd);
-            const mapped = block.split("\n").map((line) => direction >= 0 ? `${unit}${line}` : line.replace(/^ {1,4}/, "")).join("\n");
-            this.textarea.setRangeText(mapped, lineStart, lineEnd, "select");
-        }
-        this.emitProgrammaticInputChange();
-    }
-
-    insertNewLineWithIndent() {
-        const start = this.textarea.selectionStart || 0;
-        const end = this.textarea.selectionEnd || start;
-        const text = this.textarea.value;
-        const lineStart = text.lastIndexOf("\n", Math.max(0, start - 1)) + 1;
-        const linePrefix = text.slice(lineStart, start);
-        const baseIndent = (linePrefix.match(/^[ \t]*/) || [""])[0];
-        this.snapshotBeforeEdit();
-        this.textarea.setRangeText(`\n${baseIndent}`, start, end, "end");
-        this.emitProgrammaticInputChange();
-    }
-
-    handleAutoPair(ev) {
-        if (ev.altKey || ev.ctrlKey || ev.metaKey) return false;
-        const openPairs = {
-            "(": ")",
-            "[": "]",
-            "{": "}",
-            "\"": "\"",
-            "'": "'"
-        };
-        const closePairs = new Set(Object.values(openPairs));
-        const key = String(ev.key || "");
-        const text = String(this.textarea.value || "");
-        const start = this.textarea.selectionStart || 0;
-        const end = this.textarea.selectionEnd || start;
-        const hasSelection = end > start;
-        const applyChange = () => this.emitProgrammaticInputChange();
-
-        if (key in openPairs) {
-            ev.preventDefault();
-            const close = openPairs[key];
-            this.snapshotBeforeEdit();
-            if (hasSelection) {
-                const selected = text.slice(start, end);
-                this.textarea.setRangeText(`${key}${selected}${close}`, start, end, "end");
-                this.textarea.setSelectionRange(start + 1, end + 1);
-            } else if ((key === "\"" || key === "'") && text[start] === key) {
-                this.textarea.setSelectionRange(start + 1, start + 1);
-            } else {
-                this.textarea.setRangeText(`${key}${close}`, start, end, "end");
-                this.textarea.setSelectionRange(start + 1, start + 1);
-            }
-            applyChange();
-            return true;
-        }
-
-        if (!hasSelection && closePairs.has(key) && text[start] === key) {
-            ev.preventDefault();
-            this.textarea.setSelectionRange(start + 1, start + 1);
-            return true;
-        }
-
-        if (ev.code === "Backspace" && !hasSelection && start > 0 && start < text.length) {
-            const prev = text[start - 1];
-            const next = text[start];
-            if (openPairs[prev] === next) {
-                ev.preventDefault();
-                this.snapshotBeforeEdit();
-                this.textarea.setRangeText("", start - 1, start + 1, "end");
-                this.textarea.setSelectionRange(start - 1, start - 1);
-                applyChange();
-                return true;
+        for (const d of this.disposables) {
+            try {
+                d?.dispose?.();
+            } catch (_) {
             }
         }
+        this.disposables = [];
 
-        return false;
+        try {
+            this.completionRegistration?.dispose?.();
+        } catch (_) {
+        }
+        this.completionRegistration = null;
+
+        try {
+            this.languageService?.dispose?.();
+        } catch (_) {
+        }
+        this.languageService = null;
+
+        try {
+            this.editor?.dispose?.();
+        } catch (_) {
+        }
+        this.editor = null;
+
+        try {
+            this.model?.dispose?.();
+        } catch (_) {
+        }
+        this.model = null;
+
+        this.textarea.classList.remove("editor-source-hidden");
+        this.textarea.classList.remove("editor-textarea-fallback");
+
+        if (this.shellEl?.parentNode) {
+            this.shellEl.parentNode.removeChild(this.shellEl);
+        }
     }
 }

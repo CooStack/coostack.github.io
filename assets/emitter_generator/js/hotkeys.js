@@ -108,19 +108,27 @@
     }
 
     function shouldIgnorePlainHotkeys() {
-        const ae = document.activeElement;
-        if (!ae) return false;
-        const tag = (ae.tagName || "").toUpperCase();
-        if (tag === "INPUT") {
-            const type = (ae.type || "text").toLowerCase();
-            if (type === "number") return false;
-            return true;
-        }
-        if (tag === "TEXTAREA") {
-            if ((ae.id === "kotlinOutCmd" || ae.id === "kotlinOutEmitter") && ae.readOnly) return false;
-            return true;
-        }
-        if (ae.isContentEditable) return true;
+        const isEditableNode = (node) => {
+            if (!(node instanceof Element) || typeof node.closest !== "function") return false;
+            const tag = (node.tagName || "").toUpperCase();
+            if (tag === "INPUT") {
+                const type = (node.type || "text").toLowerCase();
+                if (type === "number") return false;
+                return true;
+            }
+            if (tag === "TEXTAREA") {
+                if ((node.id === "kotlinOutCmd" || node.id === "kotlinOutEmitter") && node.readOnly) return false;
+                return true;
+            }
+            if (node.isContentEditable) return true;
+            if (node.closest("[role='textbox'], [role='combobox']")) return true;
+            if (node.closest(".editor-shell-monaco, .editor-monaco-host, .monaco-editor")) return true;
+            if (node.closest(".suggest-widget, .monaco-hover, .monaco-menu-container")) return true;
+            return false;
+        };
+        if (isEditableNode(document.activeElement)) return true;
+        if (isEditableNode(document.activeElement?.closest?.(".monaco-editor"))) return true;
+        if (document.querySelector(".editor-shell-monaco .monaco-editor.focused")) return true;
         return false;
     }
 

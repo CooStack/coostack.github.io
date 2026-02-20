@@ -47,6 +47,7 @@ import {
     mergeCompletionGroups,
     ShaderCodeEditor
 } from "./editors.js";
+import { InlineCodeEditor as JsExprInlineEditor } from "../../composition_builder/js/code_editor.js?v=20260220_5";
 
 function $(id) {
     return document.getElementById(id);

@@ -6,6 +6,13 @@ import { initSettingsSystem } from "./settings.js";
 import { initHotkeysSystem } from "./hotkeys.js";
 import { initLayoutSystem } from "./layout.js";
 import { clamp, safeNum, escapeHtml, deepCopy, deepAssign } from "./utils.js";
+import { InlineCodeEditor, mergeCompletionGroups } from "../../composition_builder/js/code_editor.js?v=20260220_5";
+import {
+    createDefaultBuilderState,
+    normalizeBuilderState,
+    evaluateBuilderState,
+    countBuilderNodes,
+} from "./points_builder_bridge.js";
 import {
     createConditionRule,
     normalizeConditionFilter,
@@ -17,9 +24,16 @@ import {
     createDeathVarAction,
     loadEmitterBehavior,
     saveEmitterBehavior,
-    normalizeEmitterBehavior,
-    isValidEmitterVarName,
+	normalizeEmitterBehavior,
+	isValidEmitterVarName,
 } from "./emitter_behavior.js";
+import {
+	buildDoTickCompletions,
+	compileDoTickExpressionSource,
+	getDoTickAllowedIdentifiers,
+	validateDoTickExpressionSource,
+	normalizeDoTickExpression,
+} from "./do_tick_expression.js";
 
 (() => {
     const EMITTER_TYPE_META = {
@@ -32,6 +46,7 @@ import {
         circle: { title: "圆 (Circle)" },
         arc: { title: "弧 (Arc)" },
         spiral: { title: "螺旋 (Spiral)" },
+        points_builder: { title: "PointsBuilder" },
     };
 
     const EMITTER_TYPE_LIST = Object.keys(EMITTER_TYPE_META);
@@ -145,6 +160,7 @@ import {
             arc: {r: 2.5, start: 0, end: 180, rotate: 0, axis: {x: 0, y: 1, z: 0}},
             arcUnit: "deg",
             spiral: {startR: 0.5, endR: 2.5, height: 2.0, rotateSpeed: 0.35, rBias: 1.0, hBias: 1.0, axis: {x: 0, y: 1, z: 0}},
+            builderState: createDefaultBuilderState(),
         },
         particle: {
             lifeMin: 40,
@@ -194,6 +210,11 @@ import {
     };
 
     const STORAGE_KEY = "pe_state_v2";
+    const EGPB_PREFIX = "egpb_";
+    const EGPB_STATE_KEY = `${EGPB_PREFIX}pb_state_v1`;
+    const EGPB_PROJECT_KEY = `${EGPB_PREFIX}pb_project_name_v1`;
+    const EGPB_THEME_KEY = `${EGPB_PREFIX}pb_theme_v2`;
+    const EGPB_RETURN_EMITTER_KEY = `${EGPB_PREFIX}return_emitter_v1`;
     const HISTORY_MAX = 80;
     const RAD_TO_DEG = 180 / Math.PI;
 
@@ -204,6 +225,14 @@ import {
     const commandCollapseScope = { active: false, manualOpen: new Set() };
     let focusedEmitterId = null;
     let focusedCommandId = null;
+    const doTickEditorState = {
+        editor: null,
+        textarea: null,
+        compileSource: "",
+        compileFn: null,
+        compileOk: true,
+        compileMessage: "",
+    };
 
     function makeDefaultCommands() {
         return cloneDefaultCommands();
@@ -211,7 +240,7 @@ import {
 
     function buildPersistPayload() {
         return {
-            version: 6,
+            version: 7,
             savedAt: new Date().toISOString(),
             state: {
                 commands: deepCopy(state.commands),
@@ -357,6 +386,7 @@ import {
         emitter.spiral.axis.x = normalizeNumExpr(emitter.spiral.axis.x, 0);
         emitter.spiral.axis.y = normalizeNumExpr(emitter.spiral.axis.y, 1);
         emitter.spiral.axis.z = normalizeNumExpr(emitter.spiral.axis.z, 0);
+        emitter.builderState = normalizeBuilderState(emitter.builderState);
 
         const particle = card.particle || (card.particle = {});
         particle.lifeMin = normalizeNumExpr(particle.lifeMin, 40, { min: 1 });
@@ -481,9 +511,143 @@ import {
         return false;
     }
 
+    function getEmitterById(id) {
+        if (!id) return null;
+        return state.emitters.find((it) => it.id === id) || null;
+    }
+
+    function getEmitterIndexById(id) {
+        if (!id) return -1;
+        return state.emitters.findIndex((it) => it.id === id);
+    }
+
+    function getEmitterBuilderStats(card) {
+        const builderState = normalizeBuilderState(card?.emitter?.builderState);
+        const built = evaluateBuilderState(builderState);
+        return {
+            builderState,
+            nodeCount: countBuilderNodes(builderState?.root?.children || []),
+            pointCount: Array.isArray(built?.points) ? built.points.length : 0,
+        };
+    }
+
+    function readEmitterBuilderSandboxState() {
+        try {
+            const raw = localStorage.getItem(EGPB_STATE_KEY);
+            if (!raw) return null;
+            const parsed = JSON.parse(raw);
+            return normalizeBuilderState(parsed?.state || parsed);
+        } catch (err) {
+            console.warn("read emitter builder state failed:", err);
+            return null;
+        }
+    }
+
+    function seedEmitterBuilderSandbox(card) {
+        if (!card) return;
+        const idx = getEmitterIndexById(card.id);
+        const projectName = (idx >= 0) ? `emitter_${idx + 1}` : "emitter_shape";
+        const theme = String(document.body?.getAttribute("data-theme") || "dark-1");
+        try {
+            localStorage.setItem(EGPB_STATE_KEY, JSON.stringify({
+                state: normalizeBuilderState(card?.emitter?.builderState),
+                ts: Date.now(),
+            }));
+            localStorage.setItem(EGPB_PROJECT_KEY, projectName);
+            localStorage.setItem(EGPB_THEME_KEY, theme);
+        } catch (err) {
+            console.warn("seed emitter builder sandbox failed:", err);
+        }
+    }
+
+    function openEmitterBuilderEditor(cardId) {
+        const card = getEmitterById(cardId);
+        if (!card) return;
+        seedEmitterBuilderSandbox(card);
+        saveNow();
+        const q = new URLSearchParams({
+            emit: card.id,
+            return: "../../generator.html",
+            t: String(Date.now()),
+        });
+        window.location.href = `./assets/emitter_generator/pointsbuilder.html?${q.toString()}`;
+    }
+
+    function consumeEmitterBuilderReturnState() {
+        let emitterId = "";
+        try {
+            emitterId = String(localStorage.getItem(EGPB_RETURN_EMITTER_KEY) || "").trim();
+            if (!emitterId) return null;
+            localStorage.removeItem(EGPB_RETURN_EMITTER_KEY);
+        } catch {
+            return null;
+        }
+        const card = getEmitterById(emitterId) || state.emitters[0] || null;
+        const builderState = readEmitterBuilderSandboxState();
+        if (!card || !builderState) return null;
+        card.emitter.type = "points_builder";
+        card.emitter.builderState = builderState;
+        sanitizeEmitterCard(card);
+        return card.id;
+    }
+
+    function importEmitterBuilderJson(cardId) {
+        const card = getEmitterById(cardId);
+        if (!card) return;
+        const input = document.createElement("input");
+        input.type = "file";
+        input.accept = "application/json";
+        input.onchange = async () => {
+            const file = input.files && input.files[0];
+            if (!file) return;
+            try {
+                const text = await file.text();
+                const parsed = JSON.parse(text);
+                card.emitter.type = "points_builder";
+                card.emitter.builderState = normalizeBuilderState(parsed?.state || parsed);
+                sanitizeEmitterCard(card);
+                cardHistory.push();
+                renderEmitterList();
+                scheduleSave();
+                autoGenKotlin();
+                if (preview) preview.resetEmission();
+                toast("PointsBuilder JSON 导入成功", "success");
+            } catch (err) {
+                toast(`PointsBuilder JSON 导入失败: ${err?.message || err}`, "error");
+            }
+        };
+        input.click();
+    }
+
+    function exportEmitterBuilderJson(cardId) {
+        const card = getEmitterById(cardId);
+        if (!card) return;
+        const idx = getEmitterIndexById(card.id);
+        const builderState = normalizeBuilderState(card?.emitter?.builderState);
+        const filename = `emitter_${Math.max(1, idx + 1)}.pointsbuilder.json`;
+        downloadText(filename, JSON.stringify(builderState, null, 2), "application/json");
+        toast("PointsBuilder JSON 已导出", "success");
+    }
+
+    function clearEmitterBuilder(cardId) {
+        const card = getEmitterById(cardId);
+        if (!card) return;
+        if (!confirm("确定清空该发射器的 PointsBuilder 形状？")) return;
+        card.emitter.type = "points_builder";
+        card.emitter.builderState = createDefaultBuilderState();
+        sanitizeEmitterCard(card);
+        cardHistory.push();
+        renderEmitterList();
+        scheduleSave();
+        autoGenKotlin();
+        if (preview) preview.resetEmission();
+        toast("已清空 PointsBuilder 形状", "success");
+    }
+
     const KOTLIN_TAB_KEY = "pe_kotlin_tab_v1";
     const KOTLIN_HEIGHT_KEY = "pe_kotlin_height_v1";
     const PREVIEW_HEIGHT_KEY = "pe_preview_height_v1";
+    const CONFIG_PAGE_KEY = "pe_cfg_page_v2";
     let activeKotlinTab = "command";
     const kotlinCache = { command: "", emitter: "" };
 
@@ -604,6 +768,37 @@ import {
         applyKotlinTab(saved);
         tabs.forEach((btn) => {
             btn.addEventListener("click", () => applyKotlinTab(btn.dataset.tab));
+        });
+    }
+
+    function applyConfigPage(tab) {
+        const next = (tab === "kotlin" || tab === "tick" || tab === "death") ? tab : "emitters";
+        try {
+            localStorage.setItem(CONFIG_PAGE_KEY, next);
+        } catch {}
+
+        document.querySelectorAll(".config-tab").forEach((el) => {
+            el.classList.toggle("active", el.dataset && el.dataset.cfgTab === next);
+        });
+        const pageMap = {
+            emitters: document.getElementById("cfgPageEmitters"),
+            kotlin: document.getElementById("cfgPageKotlin"),
+            tick: document.getElementById("cfgPageTick"),
+            death: document.getElementById("cfgPageDeath"),
+        };
+        Object.keys(pageMap).forEach((key) => {
+            const el = pageMap[key];
+            if (!el) return;
+            el.classList.toggle("active", key === next);
+        });
+    }
+
+    function initConfigPages() {
+        const tabs = Array.from(document.querySelectorAll(".config-tab"));
+        if (!tabs.length) return;
+        applyConfigPage("emitters");
+        tabs.forEach((btn) => {
+            btn.addEventListener("click", () => applyConfigPage(btn.dataset.cfgTab));
         });
     }
 
@@ -980,6 +1175,253 @@ function setVelocitySection($card, mode) {
             out.push(name);
         }
         return out;
+    }
+
+    function buildDoTickApiDts(behavior) {
+        const allowed = getDoTickAllowedIdentifiers(behavior);
+        const declared = new Set();
+        const lines = [];
+        const declareConst = (name, type = "any") => {
+            const id = String(name || "").trim();
+            if (!/^[A-Za-z_$][A-Za-z0-9_$]*$/.test(id)) return;
+            if (declared.has(id)) return;
+            declared.add(id);
+            lines.push(`declare const ${id}: ${type};`);
+        };
+
+        declareConst("Math", "Math");
+        declareConst("PI", "number");
+        declareConst("tick", "number");
+        declareConst("setVar", "(name: string, value: number) => number");
+        declareConst("getVar", "(name: string, fallback?: number) => number");
+        declareConst("hasVar", "(name: string) => boolean");
+        declareConst("addVar", "(name: string, value: number) => number");
+        declareConst("subVar", "(name: string, value: number) => number");
+        declareConst("mulVar", "(name: string, value: number) => number");
+        declareConst("divVar", "(name: string, value: number) => number");
+        declareConst("incVar", "(name: string) => number");
+        declareConst("decVar", "(name: string) => number");
+        declareConst("clampVar", "(name: string, min: number, max: number) => number");
+        declareConst("rand", "(min: number, max?: number) => number");
+        declareConst("randInt", "(min: number, max?: number) => number");
+        declareConst("clamp", "(value: number, min: number, max: number) => number");
+        declareConst("min", "typeof Math.min");
+        declareConst("max", "typeof Math.max");
+        declareConst("abs", "typeof Math.abs");
+        declareConst("floor", "typeof Math.floor");
+        declareConst("ceil", "typeof Math.ceil");
+        declareConst("round", "typeof Math.round");
+        declareConst("trunc", "typeof Math.trunc");
+        declareConst("pow", "typeof Math.pow");
+        declareConst("sqrt", "typeof Math.sqrt");
+        declareConst("sin", "typeof Math.sin");
+        declareConst("cos", "typeof Math.cos");
+        declareConst("tan", "typeof Math.tan");
+        declareConst("log", "typeof Math.log");
+        declareConst("exp", "typeof Math.exp");
+        declareConst("sign", "typeof Math.sign");
+
+        for (const name of Array.from(allowed).sort((a, b) => a.localeCompare(b))) {
+            declareConst(name, "any");
+        }
+
+        return `${lines.join("\n")}\n`;
+    }
+
+    function buildDoTickEditorLibs(behavior) {
+        return [
+            {
+                id: "do-tick-api",
+                name: "__do_tick_api__.d.ts",
+                content: buildDoTickApiDts(behavior),
+                enabled: true
+            }
+        ];
+    }
+
+    function disposeDoTickExpressionEditor() {
+        if (doTickEditorState.editor) {
+            try {
+                doTickEditorState.editor.dispose();
+            } catch (_) {
+            }
+        }
+        doTickEditorState.editor = null;
+        doTickEditorState.textarea = null;
+    }
+
+    function updateDoTickCompileStatusUi(ok, message) {
+        doTickEditorState.compileOk = !!ok;
+        doTickEditorState.compileMessage = String(message || "");
+        const el = document.getElementById("tickExpressionCompileState");
+        if (!el) return;
+        el.classList.remove("ok", "error");
+        el.classList.add(ok ? "ok" : "error");
+        el.textContent = String(message || "");
+    }
+
+    function syncDoTickCompiledToPreview() {
+        if (!preview || typeof preview.setDoTickCompiled !== "function") return;
+        preview.setDoTickCompiled({
+            source: doTickEditorState.compileSource,
+            fn: doTickEditorState.compileFn,
+        });
+    }
+
+    function compileDoTickExpressionFromState(opts = {}) {
+        ensureEmitterBehaviorState();
+        const source = normalizeDoTickExpression(state.emitterBehavior?.tickExpression || "");
+        const result = compileDoTickExpressionSource(source, state.emitterBehavior);
+        if (result.ok) {
+            doTickEditorState.compileSource = result.source;
+            doTickEditorState.compileFn = result.fn;
+            updateDoTickCompileStatusUi(
+                true,
+                source ? "已编译并应用（失焦后生效）" : "doTick 为空：不会执行脚本。"
+            );
+        } else {
+            doTickEditorState.compileSource = "";
+            doTickEditorState.compileFn = null;
+            updateDoTickCompileStatusUi(false, `编译失败：${result.message}`);
+            if (opts.showToast) toast(`doTick 编译失败：${result.message}`, "error");
+        }
+        syncDoTickCompiledToPreview();
+        return result;
+    }
+
+    function applyDoTickExpressionFromEditor(opts = {}) {
+        ensureEmitterBehaviorState();
+        const textarea = doTickEditorState.textarea;
+        if (!(textarea instanceof HTMLTextAreaElement)) return false;
+        const prevSource = normalizeDoTickExpression(state.emitterBehavior?.tickExpression || "");
+        const draft = String(textarea.value || "");
+        const result = compileDoTickExpressionSource(draft, state.emitterBehavior);
+        if (!result.ok) {
+            updateDoTickCompileStatusUi(false, `编译失败：${result.message}`);
+            if (opts.showToast !== false) toast(`doTick 编译失败：${result.message}`, "error");
+            textarea.value = prevSource;
+            if (doTickEditorState.editor) {
+                doTickEditorState.editor.renderHighlight();
+                doTickEditorState.editor.runValidation();
+            }
+            return false;
+        }
+
+        state.emitterBehavior.tickExpression = result.source;
+        doTickEditorState.compileSource = result.source;
+        doTickEditorState.compileFn = result.fn;
+        updateDoTickCompileStatusUi(
+            true,
+            result.source ? "已编译并应用（失焦后生效）" : "doTick 为空：不会执行脚本。"
+        );
+        syncDoTickCompiledToPreview();
+
+        if (result.source !== prevSource) {
+            scheduleHistoryPush();
+            scheduleSave();
+            autoGenKotlin();
+        }
+        return true;
+    }
+
+    function mountDoTickExpressionEditor() {
+        const textarea = document.getElementById("tickExpressionInput");
+        disposeDoTickExpressionEditor();
+        if (!(textarea instanceof HTMLTextAreaElement)) return;
+        ensureDoTickEditorHeightStyle();
+
+        const completions = mergeCompletionGroups(buildDoTickCompletions(state.emitterBehavior));
+        const validate = (source) => validateDoTickExpressionSource(source, state.emitterBehavior);
+        const libs = buildDoTickEditorLibs(state.emitterBehavior);
+        const editor = new InlineCodeEditor({
+            textarea,
+            title: "doTick 表达式（JS）",
+            completions,
+            validate,
+            libs,
+            showToolbar: false
+        });
+        applyDoTickEditorHeight(editor, textarea);
+        doTickEditorState.editor = editor;
+        doTickEditorState.textarea = textarea;
+    }
+
+    function applyDoTickEditorHeight(editor, textarea) {
+        const isMobile = window.matchMedia && window.matchMedia("(max-width: 980px)").matches;
+        const bodyHeight = isMobile ? 360 : 440;
+        const shellHeight = isMobile ? 400 : 480;
+        const fieldMinHeight = isMobile ? 460 : 540;
+        const sourceMin = isMobile ? 280 : 320;
+        try {
+            textarea.style.minHeight = `${sourceMin}px`;
+        } catch {}
+        const fieldEl = textarea.closest(".tick-expression-field");
+        if (fieldEl) {
+            fieldEl.style.minHeight = `${fieldMinHeight}px`;
+        }
+        if (editor && editor.shellEl) {
+            editor.shellEl.style.minHeight = `${shellHeight}px`;
+            editor.shellEl.style.height = `${shellHeight}px`;
+            editor.shellEl.style.maxHeight = `${shellHeight}px`;
+        }
+        if (editor && editor.bodyEl) {
+            editor.bodyEl.style.minHeight = `${bodyHeight}px`;
+            editor.bodyEl.style.height = `${bodyHeight}px`;
+            editor.bodyEl.style.maxHeight = `${bodyHeight}px`;
+        }
+        if (editor && editor.monacoHostEl) {
+            editor.monacoHostEl.style.minHeight = `${bodyHeight}px`;
+            editor.monacoHostEl.style.height = `${bodyHeight}px`;
+            editor.monacoHostEl.style.maxHeight = `${bodyHeight}px`;
+        }
+        const relayout = () => {
+            try {
+                if (editor && editor.editor && typeof editor.editor.layout === "function") {
+                    editor.editor.layout();
+                }
+            } catch {}
+        };
+        requestAnimationFrame(relayout);
+        setTimeout(relayout, 80);
+    }
+
+    const DOTICK_HEIGHT_STYLE_ID = "egpb-dotick-height-force";
+    function ensureDoTickEditorHeightStyle() {
+        try {
+            if (document.getElementById(DOTICK_HEIGHT_STYLE_ID)) return;
+            const style = document.createElement("style");
+            style.id = DOTICK_HEIGHT_STYLE_ID;
+            style.textContent = `
+#tickActionList .tick-expression-field .editor-shell,
+#tickActionList .tick-expression-field .editor-shell.editor-shell-compact {
+  min-height: 400px !important;
+}
+#tickActionList .tick-expression-field .editor-body,
+#tickActionList .tick-expression-field .editor-shell.editor-shell-compact .editor-body {
+  min-height: 400px !important;
+  height: 440px !important;
+  max-height: 440px !important;
+}
+#tickActionList .tick-expression-field textarea#tickExpressionInput {
+  min-height: 320px !important;
+}
+@media (max-width: 980px) {
+  #tickActionList .tick-expression-field .editor-shell,
+  #tickActionList .tick-expression-field .editor-shell.editor-shell-compact {
+    min-height: 320px !important;
+  }
+  #tickActionList .tick-expression-field .editor-body,
+  #tickActionList .tick-expression-field .editor-shell.editor-shell-compact .editor-body {
+    min-height: 320px !important;
+    height: 360px !important;
+    max-height: 360px !important;
+  }
+  #tickActionList .tick-expression-field textarea#tickExpressionInput {
+    min-height: 260px !important;
+  }
+}`;
+            document.head.appendChild(style);
+        } catch {}
     }
 
     function renderOptions(opts, selected) {
@@ -1589,22 +2031,23 @@ function setVelocitySection($card, mode) {
 
         const $tickList = $("#tickActionList");
         if ($tickList.length) {
-            $tickList.empty();
-            if (!behavior.tickActions.length) {
-                $tickList.append(`<div class="small">暂无 doTick 变量修改卡片。</div>`);
-            } else {
-                behavior.tickActions.forEach((t) => {
-                    $tickList.append(renderActionRow(
-                        t,
-                        varNames,
-                        ACTION_VALUE_TYPES_TICK,
-                        "tickActionRow",
-                        "btnDelTickAction",
-                        { withCondition: true }
-                    ));
-                });
-                $tickList.find(".expr-action-row").each((_, el) => refreshActionRowVisibility($(el)));
-            }
+            const src = normalizeDoTickExpression(behavior.tickExpression || "");
+            $tickList.html(`
+<div class="field tick-expression-field">
+  <label>doTick 表达式（JS）</label>
+  <textarea
+    id="tickExpressionInput"
+    class="input script-area"
+    data-code-editor="js"
+    data-code-title="doTick expression"
+    spellcheck="false"
+    placeholder="addVar(&quot;wavePhase&quot;, 0.05)\nif (tick % 20 === 0) {\n  setVar(&quot;pulse&quot;, rand(0, 1))\n}"
+  >${escapeHtml(src)}</textarea>
+  <div class="small">失去焦点后编译并应用变化；预览执行已编译结果。</div>
+  <div id="tickExpressionCompileState" class="small tick-expression-compile-state"></div>
+</div>`);
+            mountDoTickExpressionEditor();
+            compileDoTickExpressionFromState({ showToast: false });
         }
 
         const death = behavior.death || {};
@@ -1697,6 +2140,9 @@ function setVelocitySection($card, mode) {
         state.emitters.forEach((card, index) => {
             sanitizeEmitterCard(card);
             const typeLabel = getEmitterTypeLabel(card.emitter.type);
+            const builderStats = getEmitterBuilderStats(card);
+            const builderNodeCount = builderStats.nodeCount;
+            const builderPointCount = builderStats.pointCount;
             const esc = (v) => escapeHtml(String(v ?? ""));
             const foldIcon = (card.ui && card.ui.collapsed) ? "▸" : "▾";
             const lines = [
@@ -1897,6 +2343,22 @@ function setVelocitySection($card, mode) {
 `      <div class="hint">当 faceToCamera=false 时生效；yaw/pitch/roll 为弧度制。</div>`,
 `    </div>`,
                 `    <div class="panel-subtitle">发射器参数</div>`,
+                `    <div class="emitBox emitSection" data-emit="points_builder">`,
+                `      <div class="kv-list">`,
+                `        <div class="kv-row display-row">`,
+                `          <div class="builder-actions">`,
+                `            <button class="btn small primary btnOpenEmitterBuilder" type="button">编辑 PointsBuilder</button>`,
+                `            <button class="btn small btnImportEmitterBuilder" type="button">导入 JSON</button>`,
+                `            <button class="btn small btnExportEmitterBuilder" type="button">导出 JSON</button>`,
+                `            <button class="btn small btnClearEmitterBuilder" type="button">清空</button>`,
+                `          </div>`,
+                `        </div>`,
+                `        <div class="kv-row display-row">`,
+                `          <div class="builder-meta">节点 ${builderNodeCount} / 预览点 ${builderPointCount}</div>`,
+                `        </div>`,
+                `      </div>`,
+                `      <div class="hint">发射器形状由 PointsBuilder 编辑，Kotlin 代码在 generator 内部生成。</div>`,
+                `    </div>`,
                 `    <div class="emitBox emitSection" data-emit="point">`,
                 `      <div class="hint">点发射：无额外参数</div>`,
                 `    </div>`,
@@ -4302,6 +4764,30 @@ function setVelocitySection($card, mode) {
             if (preview) preview.resetEmission();
         });
 
+        $("#emitList").on("click", ".btnOpenEmitterBuilder", function (e) {
+            e.stopPropagation();
+            const id = $(this).closest(".emitCard").data("id");
+            openEmitterBuilderEditor(id);
+        });
+
+        $("#emitList").on("click", ".btnImportEmitterBuilder", function (e) {
+            e.stopPropagation();
+            const id = $(this).closest(".emitCard").data("id");
+            importEmitterBuilderJson(id);
+        });
+
+        $("#emitList").on("click", ".btnExportEmitterBuilder", function (e) {
+            e.stopPropagation();
+            const id = $(this).closest(".emitCard").data("id");
+            exportEmitterBuilderJson(id);
+        });
+
+        $("#emitList").on("click", ".btnClearEmitterBuilder", function (e) {
+            e.stopPropagation();
+            const id = $(this).closest(".emitCard").data("id");
+            clearEmitterBuilder(id);
+        });
+
         $("#emitList").on("click", ".btnFold", function (e) {
             e.stopPropagation();
             const $card = $(this).closest(".emitCard");
@@ -4464,6 +4950,10 @@ function setVelocitySection($card, mode) {
             refreshAllVarBindings();
             scheduleSave();
             autoGenKotlin();
+        });
+
+        $("#tickActionList").on("focusout", "#tickExpressionInput", function () {
+            applyDoTickExpressionFromEditor({ showToast: true });
         });
 
         $("#tickActionList").on("input change", ".exprInput", function () {
@@ -4869,6 +5359,7 @@ function setVelocitySection($card, mode) {
     function boot() {
         const loaded = loadPersisted();
         if (!loaded) state.commands = makeDefaultCommands();
+        const returnedEmitterId = consumeEmitterBuilderReturnState();
 
         initPanelTools();
         applyStateToForm();
@@ -4876,13 +5367,18 @@ function setVelocitySection($card, mode) {
         autoGenKotlin();
         cardHistory.init();
         scheduleSave();
+        if (returnedEmitterId) {
+            toast("已加载 PointsBuilder 形状", "success");
+        }
 
         preview = initPreview({
             getState: () => state,
             viewportEl: document.getElementById("viewport"),
             statEl: document.getElementById("statChip"),
+            fpsEl: document.getElementById("fpsChip"),
             shouldIgnoreArrowPan,
         });
+        compileDoTickExpressionFromState({ showToast: false });
 
         settingsSystem = initSettingsSystem({
             settingsModal: document.getElementById("settingsModal"),
@@ -4953,6 +5449,7 @@ function setVelocitySection($card, mode) {
         window.addEventListener("resize", () => layoutSystem.applyLayoutState(true));
 
         initKotlinTabs();
+        initConfigPages();
         initKotlinResizer();
         initPreviewResizer();
     }

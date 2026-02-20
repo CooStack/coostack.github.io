@@ -15,7 +15,7 @@
         }
     </script>
     <script src="https://cdn.jsdelivr.net/npm/noisejs@2.1.0/index.min.js"></script>
-    <link rel="stylesheet" href="./assets/emitter_generator/css/style.css"/>
+    <link rel="stylesheet" href="./assets/emitter_generator/css/style.css?v=20260220_5"/>
 </head>
 
 <body data-theme="dark-1">
@@ -75,132 +75,147 @@
                 </div>
             </div>
 
-            <div class="panel-subtitle">发射器卡片</div>
-            <div id="emitList" class="emitList"></div>
-
-            <div class="panel-subtitle">Kotlin 生成选项</div>
-            <div class="grid2">
-                <div class="field">
-                    <label>变量名</label>
-                    <input id="kVarName" type="text" value="command"/>
-                </div>
-                <div class="field">
-                    <label>Supplier / emitter 引用名</label>
-                    <input id="kRefName" type="text" value="emitter"/>
-                </div>
-            </div>
-            <div class="panel-subtitle">全局发射器变量</div>
-            <div id="globalVarList" class="kv-list"></div>
-            <div class="add-row">
-                <button class="btn small" id="btnAddGlobalVar">➕ 添加变量</button>
+            <div class="panel-subtitle behavior-config-title">页面切换</div>
+            <div class="config-tabs" id="cfgPageTabs">
+                <button class="config-tab active" type="button" data-cfg-tab="emitters">发射器卡片</button>
+                <button class="config-tab" type="button" data-cfg-tab="kotlin">Kotlin 生成选项</button>
+                <button class="config-tab" type="button" data-cfg-tab="tick">doTick 表达式</button>
+                <button class="config-tab" type="button" data-cfg-tab="death">死亡行为</button>
             </div>
 
-            <div class="panel-subtitle">doTick 修改语句</div>
-            <div id="tickActionList" class="kv-list"></div>
-            <div class="add-row">
-                <button class="btn small" id="btnAddTickAction">➕ 添加修改卡片</button>
+            <div id="cfgPageEmitters" class="cfg-page active">
+                <div class="panel-subtitle">发射器卡片</div>
+                <div id="emitList" class="emitList"></div>
             </div>
 
-            <div class="panel-subtitle">死亡行为（singleParticleDeathAction）</div>
-            <div class="grid2" id="deathBaseRow">
-                <div class="field">
-                    <label>启用死亡逻辑</label>
-                    <select id="deathEnabled" class="input">
-                        <option value="true">true</option>
-                        <option value="false">false</option>
-                    </select>
-                </div>
-                <div class="field">
-                    <label>模式</label>
-                    <select id="deathMode" class="input">
-                        <option value="dissipate">直接消散</option>
-                        <option value="respawn">重生粒子</option>
-                    </select>
-                </div>
-            </div>
-            <div id="deathLogicBody">
-                <div class="grid2" id="deathConditionHead">
+            <div id="cfgPageKotlin" class="cfg-page">
+                <div class="panel-subtitle">Kotlin 生成选项</div>
+                <div class="grid2">
                     <div class="field">
-                        <label>条件启用</label>
-                        <select id="deathConditionEnabled" class="input">
+                        <label>变量名</label>
+                        <input id="kVarName" type="text" value="command"/>
+                    </div>
+                    <div class="field">
+                        <label>Supplier / emitter 引用名</label>
+                        <input id="kRefName" type="text" value="emitter"/>
+                    </div>
+                </div>
+            </div>
+
+            <div id="cfgPageTick" class="cfg-page">
+                <div class="panel-subtitle">全局发射器变量</div>
+                <div id="globalVarList" class="kv-list"></div>
+                <div class="add-row">
+                    <button class="btn small" id="btnAddGlobalVar">➕ 添加变量</button>
+                </div>
+
+                <div class="panel-subtitle">doTick 表达式</div>
+                <div id="tickActionList" class="kv-list"></div>
+            </div>
+
+            <div id="cfgPageDeath" class="cfg-page">
+                <div class="panel-subtitle">死亡行为（singleParticleDeathAction）</div>
+                <div class="grid2" id="deathBaseRow">
+                    <div class="field">
+                        <label>启用死亡逻辑</label>
+                        <select id="deathEnabled" class="input">
                             <option value="true">true</option>
                             <option value="false">false</option>
                         </select>
                     </div>
-                    <div class="field" id="deathConditionTools">
-                        <label>条件卡片</label>
-                        <button class="btn small" id="btnAddDeathCondRule" type="button">➕ 添加条件</button>
+                    <div class="field">
+                        <label>模式</label>
+                        <select id="deathMode" class="input">
+                            <option value="dissipate">直接消散</option>
+                            <option value="respawn">重生粒子</option>
+                        </select>
                     </div>
                 </div>
-                <div id="deathConditionList" class="kv-list expr-rule-list"></div>
-                <div id="deathRespawnBlock">
-                    <div class="grid3">
+                <div id="deathLogicBody">
+                    <div class="grid2" id="deathConditionHead">
                         <div class="field">
-                            <label>重生数量</label>
-                            <input id="deathRespawnCount" class="input" type="text" inputmode="decimal" value="1"/>
-                        </div>
-                        <div class="field">
-                            <label>size 倍率</label>
-                            <input id="deathSizeMul" class="input" type="text" inputmode="decimal" value="1.0"/>
-                        </div>
-                        <div class="field">
-                            <label>speed 倍率</label>
-                            <input id="deathSpeedMul" class="input" type="text" inputmode="decimal" value="1.0"/>
-                        </div>
-                    </div>
-                    <div class="vec3Row">
-                        <div class="miniLabel">重生偏移 Vec3</div>
-                        <div class="vec3">
-                            <input id="deathOffX" class="input" type="text" inputmode="decimal" value="0"/>
-                            <input id="deathOffY" class="input" type="text" inputmode="decimal" value="0"/>
-                            <input id="deathOffZ" class="input" type="text" inputmode="decimal" value="0"/>
-                        </div>
-                    </div>
-                    <div class="grid2">
-                        <div class="field">
-                            <label>sign 处理</label>
-                            <select id="deathSignMode" class="input">
-                                <option value="keep">保持旧 sign</option>
-                                <option value="set">覆盖 sign</option>
-                            </select>
-                        </div>
-                        <div class="field" id="deathSignValueWrap">
-                            <label>sign 值</label>
-                            <input id="deathSignValue" class="input" type="text" inputmode="decimal" value="0"/>
-                        </div>
-                    </div>
-                    <div class="grid3">
-                        <div class="field">
-                            <label>maxAge 覆盖</label>
-                            <select id="deathMaxAgeEnabled" class="input">
-                                <option value="false">false</option>
+                            <label>条件启用</label>
+                            <select id="deathConditionEnabled" class="input">
                                 <option value="true">true</option>
+                                <option value="false">false</option>
                             </select>
                         </div>
-                        <div class="field">
-                            <label>来源</label>
-                            <select id="deathMaxAgeType" class="input">
-                                <option value="number">常量</option>
-                                <option value="var">变量</option>
-                                <option value="age">age</option>
-                                <option value="maxAge">maxAge</option>
-                                <option value="respawnCount">respawnCount</option>
-                            </select>
-                        </div>
-                        <div class="field">
-                            <label>值</label>
-                            <input id="deathMaxAgeValueNum" class="input" type="number" step="1" min="1" value="1"/>
-                            <select id="deathMaxAgeValueVar" class="input"></select>
+                        <div class="field" id="deathConditionTools">
+                            <label>条件卡片</label>
+                            <button class="btn small" id="btnAddDeathCondRule" type="button">➕ 添加条件</button>
                         </div>
                     </div>
-                </div>
+                    <div id="deathConditionList" class="kv-list expr-rule-list"></div>
+                    <div id="deathRespawnBlock">
+                        <div class="grid3">
+                            <div class="field">
+                                <label>重生数量</label>
+                                <input id="deathRespawnCount" class="input" type="text" inputmode="decimal" value="1"/>
+                            </div>
+                            <div class="field">
+                                <label>size 倍率</label>
+                                <input id="deathSizeMul" class="input" type="text" inputmode="decimal" value="1.0"/>
+                            </div>
+                            <div class="field">
+                                <label>speed 倍率</label>
+                                <input id="deathSpeedMul" class="input" type="text" inputmode="decimal" value="1.0"/>
+                            </div>
+                        </div>
+                        <div class="vec3Row">
+                            <div class="miniLabel">重生偏移 Vec3</div>
+                            <div class="vec3">
+                                <input id="deathOffX" class="input" type="text" inputmode="decimal" value="0"/>
+                                <input id="deathOffY" class="input" type="text" inputmode="decimal" value="0"/>
+                                <input id="deathOffZ" class="input" type="text" inputmode="decimal" value="0"/>
+                            </div>
+                        </div>
+                        <div class="grid2">
+                            <div class="field">
+                                <label>sign 处理</label>
+                                <select id="deathSignMode" class="input">
+                                    <option value="keep">保持旧 sign</option>
+                                    <option value="set">覆盖 sign</option>
+                                </select>
+                            </div>
+                            <div class="field" id="deathSignValueWrap">
+                                <label>sign 值</label>
+                                <input id="deathSignValue" class="input" type="text" inputmode="decimal" value="0"/>
+                            </div>
+                        </div>
+                        <div class="grid3">
+                            <div class="field">
+                                <label>maxAge 覆盖</label>
+                                <select id="deathMaxAgeEnabled" class="input">
+                                    <option value="false">false</option>
+                                    <option value="true">true</option>
+                                </select>
+                            </div>
+                            <div class="field">
+                                <label>来源</label>
+                                <select id="deathMaxAgeType" class="input">
+                                    <option value="number">常量</option>
+                                    <option value="var">变量</option>
+                                    <option value="age">age</option>
+                                    <option value="maxAge">maxAge</option>
+                                    <option value="respawnCount">respawnCount</option>
+                                </select>
+                            </div>
+                            <div class="field">
+                                <label>值</label>
+                                <input id="deathMaxAgeValueNum" class="input" type="number" step="1" min="1" value="1"/>
+                                <select id="deathMaxAgeValueVar" class="input"></select>
+                            </div>
+                        </div>
+                    </div>
 
-                <div class="panel-subtitle" id="deathVarActionTitle">死亡时变量修改语句</div>
-                <div id="deathVarActionList" class="kv-list"></div>
-                <div class="add-row" id="deathVarActionAddRow">
-                    <button class="btn small" id="btnAddDeathVarAction">➕ 添加修改卡片</button>
+                    <div class="panel-subtitle" id="deathVarActionTitle">死亡时变量修改语句</div>
+                    <div id="deathVarActionList" class="kv-list"></div>
+                    <div class="add-row" id="deathVarActionAddRow">
+                        <button class="btn small" id="btnAddDeathVarAction">➕ 添加修改卡片</button>
+                    </div>
                 </div>
             </div>
+
             <div class="hint">
                 预览相机操作：<strong>中键旋转</strong> /
                 <strong>右键平移</strong> / <strong>方向键平移</strong> /
@@ -219,6 +234,7 @@
                 <div class="overlay">
                     <div class="chip">中键旋转 / 右键平移 / 方向键平移 / 滚轮缩放</div>
                     <div class="chip" id="statChip">Particles: 0</div>
+                    <div class="chip" id="fpsChip">FPS: --</div>
                 </div>
                 <div class="fsBtn">
                     <button class="btn" id="btnFull">⛶ 全屏</button>
@@ -326,7 +342,7 @@
                                 <option value="light-1">雾蓝</option>
                                 <option value="light-2">杏露</option>
                                 <option value="light-3">薄荷</option>
-                            </select>
+                            </select>y
                         </div>
                         <div class="settings-toggles">
                             <label class="chk settings-toggle">
@@ -383,8 +399,9 @@
     </footer>
 </div>
 <!-- app -->
+<script src="./assets/points_builder/js/utils.js"></script>
 <script src="./assets/blog/js/codehighlight.js"></script>
-<script type="module" src="./assets/emitter_generator/js/generate.js"></script>
+<script type="module" src="./assets/emitter_generator/js/generate.js?v=20260220_8"></script>
 
 <!-- modal / file input -->
 <div id="modalMask" class="modal-mask hidden" aria-hidden="true">

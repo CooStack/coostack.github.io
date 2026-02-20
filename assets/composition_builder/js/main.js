@@ -3,7 +3,7 @@ import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { createKindDefs } from "../../points_builder/js/kinds.js";
 import { createBuilderTools } from "../../points_builder/js/builder.js";
 import { createExpressionRuntime } from "./expression_runtime.js?v=20260220_1";
-import { InlineCodeEditor, mergeCompletionGroups } from "./code_editor.js?v=20260217_7";
+import { InlineCodeEditor, mergeCompletionGroups } from "./code_editor.js?v=20260220_5";
 import {
     isVectorLiteralType,
     normalizeVectorCtor,
@@ -27,7 +27,7 @@ import {
 import { installPreviewRuntimeMethods } from "./preview_runtime_mixin.js?v=20260220_13";
 import { installKotlinCodegenMethods } from "./kotlin_codegen_mixin.js";
 import { installCodeOutputMethods } from "./code_output_mixin.js";
-import { installExpressionEditorMethods } from "./expression_editor_mixin.js?v=20260220_1";
+import { installExpressionEditorMethods } from "./expression_editor_mixin.js?v=20260220_5";
 import { installCodeCompileMethods } from "./code_compile_mixin.js?v=20260220_1";
 import { installTargetPresetMethods } from "./target_preset_mixin.js";
 
@@ -8142,12 +8142,17 @@ class CompositionBuilderApp {
         const code = String(e.code || "");
         const hitSave = key === "s" || code === "KeyS";
         const hitNew = key === "n" || code === "KeyN";
-        if (mod && !e.shiftKey && !e.altKey && (hitNew || hitSave)) {
+        const hitImport = key === "o" || code === "KeyO";
+        if (mod && !e.shiftKey && !e.altKey && (hitNew || hitSave || hitImport)) {
             e.preventDefault();
             e.stopPropagation();
             if (typeof e.stopImmediatePropagation === "function") e.stopImmediatePropagation();
-            if (hitSave && !e.repeat && !this.isModalOpen()) {
-                this.exportProject();
+            if (!e.repeat && !this.isModalOpen()) {
+                if (hitSave) {
+                    this.exportProject();
+                } else if (hitImport) {
+                    this.dom.fileProject?.click();
+                }
             }
             return;
         }
@@ -8254,9 +8259,18 @@ class CompositionBuilderApp {
     }
 
     isEditableTarget(target) {
-        const el = target;
-        if (!el || !el.closest) return false;
-        return !!el.closest("input, textarea, select, [contenteditable='true']");
+        const isEditableNode = (node) => {
+            if (!(node instanceof Element) || typeof node.closest !== "function") return false;
+            if (node.closest("input, textarea, select, [contenteditable='true']")) return true;
+            if (node.closest("[role='textbox'], [role='combobox']")) return true;
+            if (node.closest(".editor-shell-monaco, .editor-monaco-host, .monaco-editor")) return true;
+            if (node.closest(".suggest-widget, .monaco-hover, .monaco-menu-container")) return true;
+            return false;
+        };
+        if (isEditableNode(target)) return true;
+        if (isEditableNode(document.activeElement)) return true;
+        const focusedMonaco = document.querySelector(".editor-shell-monaco .monaco-editor.focused");
+        return !!focusedMonaco;
     }
 
     openBuilderEditor(cardId, target = "root") {

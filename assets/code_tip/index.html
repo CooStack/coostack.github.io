@@ -1,0 +1,126 @@
+﻿<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>CodeTip 中文演示 - 纯静态 JS/TS 智能提示编辑器</title>
+  <link rel="stylesheet" href="./css/code_tip.css" />
+</head>
+<body class="ct-demo-page">
+  <header class="ct-demo-header">
+    <h1 class="ct-demo-title">CodeTip 编辑器演示</h1>
+    <p class="ct-demo-subtitle">
+      纯静态 HTML/CSS/JS：Monaco + TS Worker，支持中文面板、问题列表、类型库与 TS↔Kotlin 映射。
+    </p>
+  </header>
+
+  <main class="ct-demo-layout">
+    <section class="ct-main-column">
+      <section id="editor"></section>
+    </section>
+
+    <section class="ct-side-column">
+      <section id="preview"></section>
+      <section class="ct-side-panels-grid">
+        <section id="type-library"></section>
+        <section id="type-mapping"></section>
+      </section>
+    </section>
+  </main>
+
+  <script type="module">
+    import { createCodeTipEditor } from "./js/codeTip.js";
+    import { createTypeLibraryPanel } from "./js/typeLibraryPanel.js";
+    import { createTypeMappingPanel } from "./js/typeMappingPanel.js";
+
+    const initialCode = `type DemoReport = {
+  target: string;
+  score: number;
+  stamp: string;
+};
+
+async function runDemo() {
+  const score = await magicBolt("aurora-core", { retries: 2 });
+  const report: DemoReport = {
+    target: "aurora-core",
+    score,
+    stamp: toolkit.nowISO()
+  };
+
+  console.log("report", report);
+  console.log("sum", toolkit.sum(report.score, 12));
+}
+
+runDemo();`;
+
+    const editorApi = await createCodeTipEditor({
+      mount: "#editor",
+      previewMount: "#preview",
+      language: "typescript",
+      initialCode,
+      libs: []
+    });
+
+    editorApi.registerCompletionProvider({
+      provideCompletionItems() {
+        return [
+          {
+            label: "向量示例",
+            kind: "snippet",
+            detail: "插入 Vec3 示例对象",
+            documentation: "用于快速验证映射类型提示",
+            insertText: "const vec: Vec3 = { x: 0, y: 0, z: 0 };",
+            snippet: false
+          }
+        ];
+      }
+    });
+
+    const typeLibraryPanel = createTypeLibraryPanel({
+      mount: "#type-library",
+      onChange(libs) {
+        editorApi.setTypeLibraries(libs);
+      }
+    });
+
+    const typeMappingPanel = createTypeMappingPanel({
+      mount: "#type-mapping",
+      initialMappings: [
+        {
+          id: "default-vec3",
+          type: "alias",
+          ts: "Vec3",
+          kotlin: "net.minecraft.util.math.Vec3d",
+          description: "MC-like 三维向量",
+          enabled: true
+        },
+        {
+          id: "default-list",
+          type: "template",
+          ts: "List<${T}>",
+          kotlin: "kotlin.collections.List<${T}>",
+          description: "Kotlin List 对应 TS 数组语义",
+          enabled: true
+        },
+        {
+          id: "default-record",
+          type: "template",
+          ts: "Record<${K}, ${V}>",
+          kotlin: "kotlin.collections.Map<${K}, ${V}>",
+          description: "Kotlin Map 映射到 TS Record",
+          enabled: true
+        }
+      ],
+      onChange(payload) {
+        editorApi.setMappingDts(payload.dts, "__mapping__.d.ts");
+      }
+    });
+
+    window.codeTipDemo = {
+      editorApi,
+      typeLibraryPanel,
+      typeMappingPanel
+    };
+  </script>
+</body>
+</html>
