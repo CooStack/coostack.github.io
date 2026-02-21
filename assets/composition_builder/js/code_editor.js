@@ -227,18 +227,19 @@ function buildApiDtsFromCompletions(completions) {
     }
     const lines = [];
     lines.push("declare const PI: number;");
-    lines.push("declare const age: number;");
-    lines.push("declare const tick: number;");
-    lines.push("declare const tickCount: number;");
-    lines.push("declare const index: number;");
-    lines.push("declare const rel: any;");
-    lines.push("declare const order: any;");
+    lines.push("declare let age: number;");
+    lines.push("declare let tick: number;");
+    lines.push("declare let tickCount: number;");
+    lines.push("declare let index: number;");
+    lines.push("declare let rel: any;");
+    lines.push("declare let order: any;");
+    lines.push("declare let axis: any;");
     lines.push("declare const status: any;");
-    lines.push("declare const particle: any;");
-    lines.push("declare const thisAt: any;");
+    lines.push("declare let particle: any;");
+    lines.push("declare let thisAt: any;");
     for (const name of Array.from(vars).sort((a, b) => a.localeCompare(b))) {
         if (reserved.has(name)) continue;
-        if (/^(Math|PI|age|tick|tickCount|index|status|particle|thisAt|rel|order)$/.test(name)) continue;
+        if (/^(Math|PI|age|tick|tickCount|index|status|particle|thisAt|rel|order|axis)$/.test(name)) continue;
         lines.push(`declare const ${name}: any;`);
     }
     for (const fn of Array.from(fns).sort((a, b) => a.localeCompare(b))) {

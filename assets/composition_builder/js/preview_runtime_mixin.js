@@ -2787,6 +2787,7 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
         };
         defineLocal("age", num(baseVars.age));
         defineLocal("tick", num(baseVars.tick));
+        defineLocal("tickCount", num(baseVars.tickCount ?? baseVars.tick));
         defineLocal("index", int(baseVars.index));
         return vars;
     }
@@ -2924,23 +2925,35 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
         const persistExpressionVars = !!opts.persistExpressionVars;
         const thisAt = runtimeVars || {};
         const actionKeyBase = String(action?.compileKey || src || "").trim();
-        const resolveActionAccum = (slot = "rot") => {
+        const TAU = Math.PI * 2;
+        const toTau = (rad) => ((num(rad) % TAU) + TAU) % TAU;
+        const resolveActionAccumAngle = (slot = "rot", anglePerTick = 0) => {
             const nowTick = Math.max(0, num(elapsedTick));
-            if (!runtimeVars || !actionKeyBase) return nowTick;
+            const speed = num(anglePerTick);
+            if (!runtimeVars || !actionKeyBase) return speed * nowTick;
             const key = `${actionKeyBase}|${slot}`;
-            const startKey = `__cpbRotStart__${key}`;
+            const accKey = `__cpbRotAccum__${key}`;
             const lastKey = `__cpbRotLast__${key}`;
-            let startTick = Number(runtimeVars[startKey]);
+            let accum = Number(runtimeVars[accKey]);
             let lastTick = Number(runtimeVars[lastKey]);
-            if (!Number.isFinite(startTick)) startTick = nowTick;
-            if (!Number.isFinite(lastTick)) lastTick = nowTick;
-            const gap = nowTick - lastTick;
-            // If this rotate call was skipped for a while (e.g. gated by condition),
-            // shift start to avoid a sudden catch-up jump on re-entry.
-            if (gap > 0.6) startTick += gap;
-            runtimeVars[startKey] = startTick;
+            if (!Number.isFinite(accum)) accum = 0;
+            if (!Number.isFinite(lastTick)) {
+                lastTick = nowTick;
+            } else {
+                let dt = nowTick - lastTick;
+                if (dt < 0) {
+                    dt = 0;
+                    accum = 0;
+                }
+                if (dt > 0 && dt <= 0.6) {
+                    accum += speed * dt;
+                }
+                // dt > 0.6 means this action was likely paused by branch/scope;
+                // skip catch-up so resumed rotation does not jump.
+            }
+            runtimeVars[accKey] = accum;
             runtimeVars[lastKey] = nowTick;
-            return Math.max(0, nowTick - startTick);
+            return accum;
         };
         const api = {
             point: U.clone(point),
@@ -2951,15 +2964,15 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
                 api.axis = U.clone(dir);
             },
             rotateAsAxis: (angle) => {
-                const accum = resolveActionAccum("rotateAsAxis");
-                const rot = (((num(angle) * accum) % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2);
+                const accumAngle = resolveActionAccumAngle("rotateAsAxis", angle);
+                const rot = toTau(accumAngle);
                 api.point = this.rotateAroundUnitAxis(api.point, api.axis, rot);
             },
             rotateToWithAngle: (to, angle) => {
-                const accum = resolveActionAccum("rotateToWithAngle");
                 const dir = this.parseJsVec(to);
                 api.point = this.rotatePointToDirection(api.point, dir, api.axis);
-                const rot = (((num(angle) * accum) % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2);
+                const accumAngle = resolveActionAccumAngle("rotateToWithAngle", angle);
+                const rot = toTau(accumAngle);
                 api.point = this.rotateAroundUnitAxis(api.point, dir, rot);
                 api.axis = U.clone(dir);
             },
@@ -2995,6 +3008,7 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
         }
         vars.rotateToPoint = api.rotateToPoint;
         vars.thisAt = thisAt;
+        vars.axis = U.clone(api.axis);
         try {
             const fn = (typeof action?.fn === "function") ? action.fn : null;
             if (!fn) return { point, axis: startAxis };
@@ -3008,6 +3022,32 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
                 api.addMultiple,
                 thisAt
             );
+            if (Object.prototype.hasOwnProperty.call(vars, "axis")) {
+                const axisValue = vars.axis;
+                let parsedAxis = null;
+                if (axisValue && typeof axisValue === "object"
+                    && Number.isFinite(Number(axisValue.x))
+                    && Number.isFinite(Number(axisValue.y))
+                    && Number.isFinite(Number(axisValue.z))) {
+                    parsedAxis = this.parseJsVec(axisValue);
+                } else if (typeof axisValue === "string") {
+                    const vec = this.parseVecLikeValueWithRuntime(axisValue, runtimeVars || vars, {
+                        elapsedTick,
+                        ageTick,
+                        pointIndex,
+                        thisAtVars: thisAt
+                    });
+                    if (vec && Number.isFinite(Number(vec.x)) && Number.isFinite(Number(vec.y)) && Number.isFinite(Number(vec.z))) {
+                        parsedAxis = this.parseJsVec(vec);
+                    }
+                }
+                if (parsedAxis && U.len(parsedAxis) > 1e-9) {
+                    api.axis = U.clone(parsedAxis);
+                    vars.axis = U.clone(parsedAxis);
+                } else {
+                    vars.axis = U.clone(api.axis);
+                }
+            }
             if (runtimeVars && persistExpressionVars) {
                 for (const key of Object.keys(runtimeVars)) {
                     if (Object.prototype.hasOwnProperty.call(vars, key)) {

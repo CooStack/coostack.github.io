@@ -206,6 +206,8 @@ export function installExpressionEditorMethods(CompositionBuilderApp, deps = {})
         const base = [
             "age",
             "tick",
+            "tickCount",
+            "axis",
             "PI",
             "status.displayStatus",
             "status.isDisable()",
@@ -227,6 +229,7 @@ export function installExpressionEditorMethods(CompositionBuilderApp, deps = {})
             "particle.particleAlpha",
             "particle.particleColor",
             "particle.particleSize",
+            "axis = RelativeLocation($0)",
             "Vec3($0)",
             "RelativeLocation.yAxis()",
             "RelativeLocation($0)",
@@ -416,34 +419,52 @@ export function installExpressionEditorMethods(CompositionBuilderApp, deps = {})
         const scope = this.getCodeEditorScopeInfo(textarea);
         const allowGrowthApi = this.isGrowthApiAllowedForCodeEditor(textarea);
         const allowed = this.getJsValidationAllowedIdentifiers({ cardId, scope, allowGrowthApi });
-        const declared = new Set();
+        const declared = new Map();
         const lines = [];
-        const declareConst = (name, type = "any") => {
+        const declareSymbol = (name, type = "any", mutable = false, opts = {}) => {
             const id = String(name || "").trim();
             if (!/^[A-Za-z_$][A-Za-z0-9_$]*$/.test(id)) return;
-            if (declared.has(id)) return;
-            declared.add(id);
-            lines.push(`declare const ${id}: ${type};`);
+            const prev = declared.get(id);
+            if (!prev) {
+                declared.set(id, { type, mutable: mutable === true });
+                return;
+            }
+            if (mutable === true && opts.keepReadonly !== true) prev.mutable = true;
+            if ((prev.type === "any" || opts.preferType === true) && type && type !== "any") prev.type = type;
         };
 
-        declareConst("Math", "Math");
-        declareConst("PI", "number");
-        declareConst("age", "number");
-        declareConst("tick", "number");
-        declareConst("tickCount", "number");
-        declareConst("index", "number");
-        declareConst("rel", "any");
-        declareConst("order", "any");
-        declareConst("thisAt", "any");
-        lines.push("declare const particle: any;");
-        lines.push("declare const status: {");
-        lines.push("  displayStatus: number;");
-        lines.push("  isDisable(): boolean;");
-        lines.push("  disable(): void;");
-        lines.push("  isEnable(): boolean;");
-        lines.push("  enable(): void;");
-        lines.push("  [key: string]: any;");
-        lines.push("};");
+        const statusType = `{
+  displayStatus: number;
+  isDisable(): boolean;
+  disable(): void;
+  isEnable(): boolean;
+  enable(): void;
+  [key: string]: any;
+}`;
+        declareSymbol("Math", "Math");
+        declareSymbol("PI", "number");
+        // Runtime context values are writable in expression scope; use let to avoid false const diagnostics.
+        declareSymbol("age", "number", true);
+        declareSymbol("tick", "number", true);
+        declareSymbol("tickCount", "number", true);
+        declareSymbol("index", "number", true);
+        declareSymbol("rel", "any", true);
+        declareSymbol("order", "any", true);
+        declareSymbol("axis", "any", true);
+        declareSymbol("thisAt", "any", true);
+        declareSymbol("particle", "any", true);
+        declareSymbol("status", statusType, false, { keepReadonly: true });
+
+        for (const g of (this.state.globalVars || [])) {
+            const name = String(g?.name || "").trim();
+            if (!name) continue;
+            declareSymbol(name, "any", g?.mutable !== false);
+        }
+        for (const c of (this.state.globalConsts || [])) {
+            const name = String(c?.name || "").trim();
+            if (!name) continue;
+            declareSymbol(name, "any", false);
+        }
         lines.push("declare function rotateToPoint(...args: any[]): any;");
         lines.push("declare function rotateAsAxis(...args: any[]): any;");
         lines.push("declare function rotateToWithAngle(...args: any[]): any;");
@@ -459,7 +480,10 @@ export function installExpressionEditorMethods(CompositionBuilderApp, deps = {})
         lines.push("declare function Vector3f(...args: any[]): any;");
 
         for (const name of Array.from(allowed).sort((a, b) => a.localeCompare(b))) {
-            declareConst(name, "any");
+            declareSymbol(name, "any", false);
+        }
+        for (const [name, meta] of declared.entries()) {
+            lines.push(`declare ${meta.mutable ? "let" : "const"} ${name}: ${meta.type || "any"};`);
         }
 
         const reservedFn = new Set(["if", "for", "while", "switch", "catch", "new"]);
@@ -556,6 +580,7 @@ export function installExpressionEditorMethods(CompositionBuilderApp, deps = {})
                 { label: "Vec3(x, y, z)", insertText: "Vec3($0)", detail: "向量构造", priority: 220 },
                 { label: "Vector3f(x, y, z)", insertText: "Vector3f($0)", detail: "向量构造", priority: 220 },
                 { label: "PI", detail: "数学常量", priority: 210 },
+                { label: "tickCount", detail: "当前 tick（同 tick）", priority: 250 },
                 { label: "Math.sin(x)", insertText: "Math.sin($0)", detail: "数学函数", priority: 180 },
                 { label: "Math.cos(x)", insertText: "Math.cos($0)", detail: "数学函数", priority: 180 },
                 { label: "Math.abs(x)", insertText: "Math.abs($0)", detail: "数学函数", priority: 180 },
@@ -580,7 +605,10 @@ export function installExpressionEditorMethods(CompositionBuilderApp, deps = {})
                 { label: "particle.particleSize", detail: "粒子属性", priority: 240 },
                 { label: "age", detail: "当前 age", priority: 250 },
                 { label: "tick", detail: "当前 tick", priority: 250 },
+                { label: "tickCount", detail: "当前 tick（同 tick）", priority: 250 },
                 { label: "index", detail: "点索引", priority: 250 },
+                { label: "axis", detail: "当前轴向向量", priority: 248 },
+                { label: "axis = RelativeLocation(x, y, z)", insertText: "axis = RelativeLocation($0)", detail: "更新当前轴向", priority: 248 },
                 { label: "status.displayStatus", detail: "当前 Composition 状态", priority: 252 },
                 { label: "status.isDisable()", insertText: "status.isDisable()", detail: "Composition state", priority: 252 },
                 { label: "status.disable()", insertText: "status.disable()", detail: "Composition state", priority: 252 },

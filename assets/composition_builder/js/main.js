@@ -2,8 +2,8 @@ import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { createKindDefs } from "../../points_builder/js/kinds.js";
 import { createBuilderTools } from "../../points_builder/js/builder.js";
-import { createExpressionRuntime } from "./expression_runtime.js?v=20260220_1";
-import { InlineCodeEditor, mergeCompletionGroups } from "./code_editor.js?v=20260220_5";
+import { createExpressionRuntime } from "./expression_runtime.js?v=20260221_2";
+import { InlineCodeEditor, mergeCompletionGroups } from "./code_editor.js?v=20260221_6";
 import {
     isVectorLiteralType,
     normalizeVectorCtor,
@@ -24,10 +24,10 @@ import {
     normalizeAngleOffsetFieldName,
     formatAngleValue
 } from "./angle_offset_utils.js";
-import { installPreviewRuntimeMethods } from "./preview_runtime_mixin.js?v=20260220_13";
+import { installPreviewRuntimeMethods } from "./preview_runtime_mixin.js?v=20260221_15";
 import { installKotlinCodegenMethods } from "./kotlin_codegen_mixin.js";
 import { installCodeOutputMethods } from "./code_output_mixin.js";
-import { installExpressionEditorMethods } from "./expression_editor_mixin.js?v=20260220_5";
+import { installExpressionEditorMethods } from "./expression_editor_mixin.js?v=20260221_7";
 import { installCodeCompileMethods } from "./code_compile_mixin.js?v=20260220_1";
 import { installTargetPresetMethods } from "./target_preset_mixin.js";
 
@@ -374,7 +374,7 @@ const JS_LINT_KEYWORDS = new Set([
 const JS_LINT_GLOBALS = new Set([
     "Math", "Random", "Number", "String", "Boolean", "Object", "Array", "Date", "JSON", "console",
     "parseInt", "parseFloat", "isNaN", "isFinite", "Infinity", "NaN",
-    "PI", "age", "tick", "index",
+    "PI", "age", "tick", "tickCount", "index", "axis",
     "rotateToPoint", "rotateAsAxis", "rotateToWithAngle", "addSingle", "addMultiple", "addPreTickAction",
     "setReversedScaleOnCompositionStatus", "particle",
     "thisAt", "status",
