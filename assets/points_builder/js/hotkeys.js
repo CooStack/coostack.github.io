@@ -35,7 +35,7 @@
     const HOTKEY_STORAGE_KEY = "pb_hotkeys_v2";
 
     const DEFAULT_HOTKEYS = {
-        version: 3,
+        version: 6,
         actions: {
             openPicker: "KeyW",          // W
             pickLineXZ: "KeyQ",          // Q
@@ -49,12 +49,14 @@
             toggleFilter: "KeyL",        // L
             toggleSnapGrid: "KeyG",      // G
             toggleSnapParticle: "KeyP",  // P
+            toggleSnapQuick: "",         // deprecated: use per-key grid/particle hotkeys
             snapPlaneXZ: "KeyA",         // A
             snapPlaneXY: "KeyS",         // S
             snapPlaneZY: "KeyD",         // D
             mirrorPlaneXZ: "Shift+KeyA", // Shift + A
             mirrorPlaneXY: "Shift+KeyS", // Shift + S
             mirrorPlaneZY: "Shift+KeyD", // Shift + D
+            lockPlaneHold: "KeyX",       // X
             copyFocused: "Mod+KeyD",     // Ctrl/Cmd + D
             mirrorCopy: "Mod+Shift+KeyM",// Ctrl/Cmd + Shift + M
             triggerFocusedMove: "KeyV",  // V
@@ -173,6 +175,16 @@
                     if (out.actions.triggerFocusedMove === "KeyT") out.actions.triggerFocusedMove = "KeyV";
                     if (!out.actions.triggerFocusedRotate) out.actions.triggerFocusedRotate = "KeyR";
                 }
+                // v5 migration: lockPlaneHold replaces snapVerticalUp/Down
+                if (!Number.isFinite(storedVersion) || storedVersion < 5) {
+                    if (!out.actions.lockPlaneHold && out.actions.snapVerticalUp) {
+                        out.actions.lockPlaneHold = out.actions.snapVerticalUp;
+                    }
+                }
+                // v6 migration: remove legacy "toggle both snaps" default binding.
+                if (!Number.isFinite(storedVersion) || storedVersion < 6) {
+                    out.actions.toggleSnapQuick = "";
+                }
                 return out;
             }
         } catch (e) {
@@ -252,6 +264,7 @@
         {id: "mirrorPlaneXZ", title: "切换镜像平面：XZ", desc: "默认 Shift+A"},
         {id: "mirrorPlaneXY", title: "切换镜像平面：XY", desc: "默认 Shift+S"},
         {id: "mirrorPlaneZY", title: "切换镜像平面：ZY", desc: "默认 Shift+D"},
+        {id: "lockPlaneHold", title: "锁定平面坐标（仅移动法线轴）", desc: "默认 X"},
         {id: "copyFocused", title: "复制当前聚焦卡片", desc: "默认 Ctrl/Cmd + D"},
         {id: "mirrorCopy", title: "镜像复制（直线/三角形/Offset）", desc: "默认 Ctrl/Cmd + Shift + M"},
         {id: "triggerFocusedMove", title: "触发聚焦卡片移动", desc: "默认 V"},

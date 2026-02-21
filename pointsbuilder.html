@@ -56,6 +56,7 @@
             <div class="viewer-hud">
                 <div class="hud-left">
                     <div id="statusLinePick" class="badge hidden"></div>
+                    <div id="statusSnapMode" class="badge hidden"></div>
                     <div id="statusPoints" class="badge">点数：</div>
                 </div>
                 <div class="hud-right">
@@ -208,9 +209,25 @@
                 </div>
                 <div class="settings-panel settings-panel-wide">
                     <div class="settings-panel-title">快捷键</div>
-                    <div class="settings-actions">
-                        <button id="btnOpenHotkeys" class="btn primary">打开快捷键设置</button>
-                        <div class="settings-note">点击配置快捷键。</div>
+                    <div class="settings-form">
+                        <div class="settings-row">
+                            <div class="settings-label">网格吸附快捷键</div>
+                            <label class="chk settings-toggle">
+                                <input id="chkSnapGridKeyToggleMode" type="checkbox"/>
+                                <span>切换模式（单点切换）</span>
+                            </label>
+                        </div>
+                        <div class="settings-row">
+                            <div class="settings-label">粒子吸附快捷键</div>
+                            <label class="chk settings-toggle">
+                                <input id="chkSnapParticleKeyToggleMode" type="checkbox"/>
+                                <span>切换模式（单点切换）</span>
+                            </label>
+                        </div>
+                        <div class="settings-actions">
+                            <button id="btnOpenHotkeys" class="btn primary">打开快捷键设置</button>
+                            <div class="settings-note">未启用切换模式时，长按会临时切换吸附状态。</div>
+                        </div>
                     </div>
                 </div>
             </div>

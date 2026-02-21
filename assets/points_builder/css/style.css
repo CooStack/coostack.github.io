@@ -399,9 +399,9 @@ body {
 
 .toast {
     position: fixed;
-    left: 50%;
+    right: 18px;
     bottom: 18px;
-    transform: translateX(-50%) translateY(6px);
+    transform: translateY(6px);
     padding: 10px 14px;
     border-radius: 999px;
     border: 1px solid rgba(255, 255, 255, .18);
@@ -419,7 +419,7 @@ body {
 
 .toast.show {
     opacity: 1;
-    transform: translateX(-50%) translateY(0);
+    transform: translateY(0);
 }
 
 .toast.success {

@@ -104,6 +104,8 @@ function initPointsBuilderMain() {
     const themeSelect = document.getElementById("themeSelect");
     const chkSnapGrid = document.getElementById("chkSnapGrid");
     const chkSnapParticle = document.getElementById("chkSnapParticle");
+    const chkSnapGridKeyToggleMode = document.getElementById("chkSnapGridKeyToggleMode");
+    const chkSnapParticleKeyToggleMode = document.getElementById("chkSnapParticleKeyToggleMode");
     const selSnapPlane = document.getElementById("selSnapPlane");
     const selMirrorPlane = document.getElementById("selMirrorPlane");
     const inpPointSize = document.getElementById("inpPointSize");
@@ -112,6 +114,7 @@ function initPointsBuilderMain() {
     const inpSnapStep = document.getElementById("inpSnapStep");
     const inpSnapParticleRange = document.getElementById("inpSnapParticleRange");
     const statusLinePick = document.getElementById("statusLinePick");
+    const statusSnapMode = document.getElementById("statusSnapMode");
     const statusPoints = document.getElementById("statusPoints");
 
     const layoutEl = document.querySelector(".layout");
@@ -383,6 +386,11 @@ function initPointsBuilderMain() {
     ];
     const THEME_ORDER = THEMES.map(t => t.id);
     const THEME_KEY = "pb_theme_v2";
+    const GRID_HELPER_SIZE = 256;
+    const GRID_HELPER_DIVISIONS = 256;
+    const LOCK_AXIS_TICK_STEP = 1;
+    const LOCK_AXIS_TICK_HALF_LEN = 0.28;
+    const LOCK_AXIS_GUIDE_COLOR = 0x6cff98;
     const hasTheme = (id) => THEMES.some(t => t.id === id);
     const normalizeTheme = (id) => {
         if (id === "dark") return "dark-1";
@@ -417,11 +425,12 @@ function initPointsBuilderMain() {
                     gridHelper.material.dispose();
                 }
             } catch {}
-            gridHelper = new THREE.GridHelper(256, 256, gridColor, gridColor);
+            gridHelper = new THREE.GridHelper(GRID_HELPER_SIZE, GRID_HELPER_DIVISIONS, gridColor, gridColor);
             gridHelper.position.y = -0.01;
             gridHelper.visible = wasVisible;
             scene.add(gridHelper);
             updateGridForPlane();
+            updateLockPlaneGuideVisual();
         }
         refreshPointBaseColors();
     };
@@ -621,6 +630,8 @@ function initPointsBuilderMain() {
     let offsetPreviewLimit = -1;
     let realtimeKotlin = false;
     let pointPickPreviewEnabled = true;
+    let snapGridKeyToggleMode = false;
+    let snapParticleKeyToggleMode = false;
 
     function normalizeParamStep(v) {
         const n = parseFloat(v);
@@ -650,6 +661,7 @@ function initPointsBuilderMain() {
         if (n === -1) return -1;
         return Math.max(0, n);
     }
+
 
     function applyParamStepToInputs() {
         const step = String(paramStep);
@@ -737,6 +749,24 @@ function initPointsBuilderMain() {
         if (!opts.skipSave) saveSettingsToStorage();
     }
 
+    function setSnapGridKeyToggleMode(v, opts = {}) {
+        const next = (v === true);
+        snapGridKeyToggleMode = next;
+        if (chkSnapGridKeyToggleMode && chkSnapGridKeyToggleMode.checked !== next) {
+            chkSnapGridKeyToggleMode.checked = next;
+        }
+        if (!opts.skipSave) saveSettingsToStorage();
+    }
+
+    function setSnapParticleKeyToggleMode(v, opts = {}) {
+        const next = (v === true);
+        snapParticleKeyToggleMode = next;
+        if (chkSnapParticleKeyToggleMode && chkSnapParticleKeyToggleMode.checked !== next) {
+            chkSnapParticleKeyToggleMode.checked = next;
+        }
+        if (!opts.skipSave) saveSettingsToStorage();
+    }
+
     function collectSettingsPayload() {
         const currentTheme = normalizeTheme(
             (themeSelect && themeSelect.value) ||
@@ -754,7 +784,9 @@ function initPointsBuilderMain() {
             pointPickPreviewEnabled,
             theme: currentTheme,
             pointSize,
-            offsetPreviewLimit
+            offsetPreviewLimit,
+            snapGridKeyToggleMode,
+            snapParticleKeyToggleMode
         };
     }
 
@@ -786,6 +818,12 @@ function initPointsBuilderMain() {
         if (payload.pointPickPreviewEnabled !== undefined) {
             setPointPickPreviewEnabled(payload.pointPickPreviewEnabled, { skipSave: true });
         }
+        if (payload.snapGridKeyToggleMode !== undefined) {
+            setSnapGridKeyToggleMode(payload.snapGridKeyToggleMode, { skipSave: true });
+        }
+        if (payload.snapParticleKeyToggleMode !== undefined) {
+            setSnapParticleKeyToggleMode(payload.snapParticleKeyToggleMode, { skipSave: true });
+        }
         if (payload.theme) {
             const next = normalizeTheme(payload.theme);
             applyTheme(next);
@@ -805,6 +843,14 @@ function initPointsBuilderMain() {
             if (inpPointSize) inpPointSize.value = String(pointSize);
         }
         if (!opts.skipSave) saveSettingsToStorage();
+    }
+
+    function getSnapGridKeyToggleMode() {
+        return !!snapGridKeyToggleMode;
+    }
+
+    function getSnapParticleKeyToggleMode() {
+        return !!snapParticleKeyToggleMode;
     }
 
     function loadSettingsFromStorage() {
@@ -1848,7 +1894,96 @@ function initPointsBuilderMain() {
         return true;
     }
 
+    function collectSelectedRowsForDuplicate(opts = {}) {
+        const mirrorOnly = opts.mirrorOnly === true;
+        const sel = (typeof getCardSelectionIds === "function") ? getCardSelectionIds() : null;
+        const selectedIds = sel ? Array.from(sel).filter(Boolean) : [];
+        if (selectedIds.length <= 1) return [];
+        const rows = collectSelectedDeleteContexts(selectedIds);
+        if (!rows.length) return [];
+        if (!mirrorOnly) return rows;
+        return rows.filter((r) => r && r.ctx && r.ctx.type === "node");
+    }
+
+    function duplicateRows(rows, cloneByRow) {
+        const src = Array.isArray(rows) ? rows : [];
+        if (!src.length || typeof cloneByRow !== "function") return { inserted: [], sourceToClone: new Map() };
+
+        const grouped = new Map();
+        for (const row of src) {
+            const list = row?.ctx?.parentList;
+            if (!Array.isArray(list)) continue;
+            if (!grouped.has(list)) grouped.set(list, []);
+            grouped.get(list).push(row);
+        }
+
+        const inserted = [];
+        const sourceToClone = new Map();
+        for (const [list, group] of grouped.entries()) {
+            group.sort((a, b) => (a?.ctx?.index || 0) - (b?.ctx?.index || 0));
+            let offset = 0;
+            for (const row of group) {
+                const cloned = cloneByRow(row);
+                if (!cloned || !cloned.id) continue;
+                const baseIndex = Number(row?.ctx?.index);
+                const at = Math.max(0, Math.min((Number.isFinite(baseIndex) ? baseIndex : 0) + 1 + offset, list.length));
+                list.splice(at, 0, cloned);
+                offset += 1;
+                inserted.push({ row, cloneId: cloned.id });
+                sourceToClone.set(row.id, cloned.id);
+            }
+        }
+        return { inserted, sourceToClone };
+    }
+
+    function postDuplicateApply(inserted, sourceToClone = new Map()) {
+        if (!Array.isArray(inserted) || !inserted.length) return false;
+        const cloneNodeIds = inserted
+            .filter((it) => it && it.row && it.row.ctx && it.row.ctx.type === "node" && it.cloneId)
+            .map((it) => it.cloneId);
+        const fallbackCloneId = inserted[0]?.cloneId || null;
+        const focusCloneId = (focusedNodeId && sourceToClone && sourceToClone.get(focusedNodeId)) || fallbackCloneId;
+
+        if (cloneNodeIds.length && typeof setCardSelectionIds === "function") {
+            setCardSelectionIds(cloneNodeIds, { replace: true, focus: false, syncWithParamSync: false });
+        }
+        if (focusCloneId) setFocusedNode(focusCloneId, false);
+
+        renderAll();
+        requestAnimationFrame(() => {
+            if (!focusCloneId) return;
+            const el = elCardsRoot.querySelector(`.card[data-id="${focusCloneId}"]`);
+            if (el) {
+                try { el.focus(); } catch {}
+                try { el.scrollIntoView({ block: "nearest" }); } catch {}
+                setFocusedNode(focusCloneId, false);
+            }
+        });
+        return true;
+    }
+
     function copyFocusedCard() {
+        const selectedRows = collectSelectedRowsForDuplicate();
+        if (selectedRows.length > 1) {
+            historyCapture("copy_selected");
+            const { inserted, sourceToClone } = duplicateRows(selectedRows, (row) => {
+                const ctx = row?.ctx;
+                if (!ctx) return null;
+                if (ctx.type === "term") {
+                    const clonedTerm = JSON.parse(JSON.stringify(ctx.term || {}));
+                    clonedTerm.id = uid();
+                    return clonedTerm;
+                }
+                if (ctx.type === "node") return cloneNodeDeep(ctx.node);
+                return null;
+            });
+            if (!inserted.length) return false;
+            ensureAxisEverywhere();
+            postDuplicateApply(inserted, sourceToClone);
+            showToast(`已粘贴 ${inserted.length} 张卡片`, "success");
+            return true;
+        }
+
         if (!focusedNodeId) return false;
         const ctx = findAnyCardContextById(focusedNodeId);
         if (!ctx || !Array.isArray(ctx.parentList)) return false;
@@ -1870,10 +2005,26 @@ function initPointsBuilderMain() {
                 setFocusedNode(cloned.id, false);
             }
         });
+        showToast("已粘贴 1 张卡片", "success");
         return true;
     }
 
     function mirrorCopyFocusedCard() {
+        const selectedRows = collectSelectedRowsForDuplicate({ mirrorOnly: true });
+        if (selectedRows.length > 1) {
+            historyCapture("mirror_copy_selected");
+            const { inserted, sourceToClone } = duplicateRows(selectedRows, (row) => {
+                const node = row?.ctx?.node;
+                if (!node) return null;
+                return mirrorCopyNode(node, mirrorPlane);
+            });
+            if (!inserted.length) return false;
+            ensureAxisEverywhere();
+            postDuplicateApply(inserted, sourceToClone);
+            showToast(`已镜像粘贴 ${inserted.length} 张卡片（${getMirrorPlaneInfo().label}）`, "success");
+            return true;
+        }
+
         if (!focusedNodeId) return false;
         const ctx = findNodeContextById(focusedNodeId);
         if (!ctx || !Array.isArray(ctx.parentList)) return false;
@@ -1890,6 +2041,7 @@ function initPointsBuilderMain() {
                 setFocusedNode(cloned.id, false);
             }
         });
+        showToast(`已镜像粘贴 1 张卡片（${getMirrorPlaneInfo().label}）`, "success");
         return true;
     }
 
@@ -2045,6 +2197,7 @@ function initPointsBuilderMain() {
     let pointPickPreviewLastY = NaN;
     let pointPickPreviewLastZ = NaN;
     let axesHelper, gridHelper, axisLabelGroup;
+    let lockPlaneGuide = null;
     let raycaster, mouse;
     let pickPlane;
     const SNAP_PLANES = {
@@ -2056,6 +2209,10 @@ function initPointsBuilderMain() {
     let mirrorPlane = "XZ";
     let hoverMarker = null;   // ✅ 实时跟随的红点
     let lastPoints = [];      // ✅ 当前预览点，用于“吸附到最近点”
+    let lastPickBasePoint = null;
+    let lastPickMappedPoint = null;
+    let lockPlaneActive = false;
+    let lockPlaneBasePoint = null;
 
     // ✅ 点高亮：卡片获得焦点时，让该卡片“直接新增”的粒子变色
     let nodePointSegments = new Map(); // nodeId -> {start,end}
@@ -2428,6 +2585,98 @@ function initPointsBuilderMain() {
         if (info.normal) {
             gridHelper.position.set(info.normal.x * -0.01, info.normal.y * -0.01, info.normal.z * -0.01);
         }
+        updateLockPlaneGuideVisual();
+    }
+
+    function ensureLockPlaneGuide() {
+        if (lockPlaneGuide || !scene) return lockPlaneGuide;
+        const geom = new THREE.BufferGeometry();
+        const mat = new THREE.LineBasicMaterial({
+            color: LOCK_AXIS_GUIDE_COLOR,
+            transparent: true,
+            opacity: 0.94,
+            depthTest: false,
+            depthWrite: false
+        });
+        lockPlaneGuide = new THREE.LineSegments(geom, mat);
+        lockPlaneGuide.visible = false;
+        lockPlaneGuide.renderOrder = 20;
+        scene.add(lockPlaneGuide);
+        return lockPlaneGuide;
+    }
+
+    function updateLockPlaneGuideVisual() {
+        if (!scene) return;
+        const guide = ensureLockPlaneGuide();
+        if (!guide) return;
+        if (!lockPlaneActive || !lockPlaneBasePoint || !shouldApplyLockPlane()) {
+            guide.visible = false;
+            return;
+        }
+
+        const base = lockPlaneBasePoint;
+        const n = getPlaneNormalVector().clone().normalize();
+        const halfLen = Math.max(1, Number(GRID_HELPER_SIZE) * 0.5);
+        const tickStep = Math.max(0.001, Number(LOCK_AXIS_TICK_STEP) || 1);
+        const tickEachSide = Math.max(0, Math.floor(halfLen / tickStep));
+        const tickCount = tickEachSide * 2 + 1;
+
+        const viewDir = (camera && camera.position)
+            ? new THREE.Vector3(camera.position.x - base.x, camera.position.y - base.y, camera.position.z - base.z)
+            : new THREE.Vector3(0, 1, 0);
+        const nDotView = n.dot(viewDir);
+        const tickDirA = viewDir.clone().addScaledVector(n, -nDotView);
+        if (tickDirA.lengthSq() < 1e-8) tickDirA.crossVectors(n, new THREE.Vector3(0, 1, 0));
+        if (tickDirA.lengthSq() < 1e-8) tickDirA.crossVectors(n, new THREE.Vector3(1, 0, 0));
+        if (tickDirA.lengthSq() < 1e-8) tickDirA.set(0, 0, 1);
+        tickDirA.normalize();
+
+        const tickDirB = new THREE.Vector3().crossVectors(n, tickDirA);
+        if (tickDirB.lengthSq() < 1e-8) tickDirB.crossVectors(n, new THREE.Vector3(1, 0, 0));
+        if (tickDirB.lengthSq() < 1e-8) tickDirB.crossVectors(n, new THREE.Vector3(0, 0, 1));
+        if (tickDirB.lengthSq() < 1e-8) tickDirB.set(0, 1, 0);
+        tickDirB.normalize();
+
+        const segmentCount = 1 + tickCount * 2;
+        const pos = new Float32Array(segmentCount * 2 * 3);
+        let o = 0;
+
+        const sx = base.x - n.x * halfLen;
+        const sy = base.y - n.y * halfLen;
+        const sz = base.z - n.z * halfLen;
+        const ex = base.x + n.x * halfLen;
+        const ey = base.y + n.y * halfLen;
+        const ez = base.z + n.z * halfLen;
+
+        pos[o++] = sx; pos[o++] = sy; pos[o++] = sz;
+        pos[o++] = ex; pos[o++] = ey; pos[o++] = ez;
+
+        for (let i = -tickEachSide; i <= tickEachSide; i++) {
+            const dist = i * tickStep;
+            const cx = base.x + n.x * dist;
+            const cy = base.y + n.y * dist;
+            const cz = base.z + n.z * dist;
+
+            pos[o++] = cx - tickDirA.x * LOCK_AXIS_TICK_HALF_LEN;
+            pos[o++] = cy - tickDirA.y * LOCK_AXIS_TICK_HALF_LEN;
+            pos[o++] = cz - tickDirA.z * LOCK_AXIS_TICK_HALF_LEN;
+
+            pos[o++] = cx + tickDirA.x * LOCK_AXIS_TICK_HALF_LEN;
+            pos[o++] = cy + tickDirA.y * LOCK_AXIS_TICK_HALF_LEN;
+            pos[o++] = cz + tickDirA.z * LOCK_AXIS_TICK_HALF_LEN;
+
+            pos[o++] = cx - tickDirB.x * LOCK_AXIS_TICK_HALF_LEN;
+            pos[o++] = cy - tickDirB.y * LOCK_AXIS_TICK_HALF_LEN;
+            pos[o++] = cz - tickDirB.z * LOCK_AXIS_TICK_HALF_LEN;
+
+            pos[o++] = cx + tickDirB.x * LOCK_AXIS_TICK_HALF_LEN;
+            pos[o++] = cy + tickDirB.y * LOCK_AXIS_TICK_HALF_LEN;
+            pos[o++] = cz + tickDirB.z * LOCK_AXIS_TICK_HALF_LEN;
+        }
+
+        guide.geometry.setAttribute("position", new THREE.BufferAttribute(pos, 3));
+        guide.geometry.computeBoundingSphere();
+        guide.visible = true;
     }
 
     function makeAxisLabelSprite(text, colorHex) {
@@ -2491,6 +2740,64 @@ function initPointsBuilderMain() {
         return {x: hitVec3.x, y: 0, z: hitVec3.z};
     }
 
+    function getPlaneNormalAxisKeyByPlane(plane) {
+        if (plane === "XY") return "z";
+        if (plane === "ZY") return "x";
+        return "y";
+    }
+
+    function getPlaneNormalAxisKey() {
+        return getPlaneNormalAxisKeyByPlane(getPlaneInfo().axis);
+    }
+
+    function getPlaneNormalVector() {
+        const plane = getPlaneInfo().axis;
+        if (plane === "XY") return new THREE.Vector3(0, 0, 1);
+        if (plane === "ZY") return new THREE.Vector3(1, 0, 0);
+        return new THREE.Vector3(0, 1, 0);
+    }
+
+    function shouldApplyLockPlane() {
+        return !!(linePickMode || pointPickMode || offsetMode);
+    }
+
+    function snapValue(v, step) {
+        const s = Number(step) || 1;
+        if (s <= 0) return v;
+        return Math.round(v / s) * s;
+    }
+
+    function mapPickPointLockedFromRay(ray) {
+        if (!ray || !lockPlaneBasePoint) return null;
+        const base = lockPlaneBasePoint;
+        const n = getPlaneNormalVector();
+        const o = ray.origin;
+        const d = ray.direction;
+        const w0 = new THREE.Vector3(base.x - o.x, base.y - o.y, base.z - o.z);
+        const a = d.dot(d);
+        const b = d.dot(n);
+        const c = n.dot(n);
+        const d0 = d.dot(w0);
+        const e0 = n.dot(w0);
+        const denom = a * c - b * b;
+        let v;
+        if (Math.abs(denom) < 1e-8) {
+            v = (c > 0 ? e0 / c : 0);
+        } else {
+            // Closest-point solution on line(base + n*v) vs ray(o + d*t).
+            // Keep sign consistent with axis direction: down drag should decrease Y in XZ lock mode.
+            v = (b * d0 - a * e0) / denom;
+        }
+        const p = {
+            x: base.x + n.x * v,
+            y: base.y + n.y * v,
+            z: base.z + n.z * v
+        };
+        const axisKey = getPlaneNormalAxisKey();
+        p[axisKey] = snapValue(p[axisKey], getSnapStep());
+        return p;
+    }
+
     function snapToGridOnPlane(p, step, planeKey) {
         const s = step || 1;
         const plane = planeKey || getPlaneInfo().axis;
@@ -2522,10 +2829,18 @@ function initPointsBuilderMain() {
 
     function nearestPointCandidate(ref, maxDist = particleSnapRange, planeKey = getPlaneInfo().axis) {
         if (!lastPoints || lastPoints.length === 0) return null;
+        const plane = planeKey || getPlaneInfo().axis;
+        const normalAxis = getPlaneNormalAxisKeyByPlane(plane);
+        const refNormal = Number(ref?.[normalAxis]);
         let best = null;
         let bestD2 = Infinity;
         for (const q of lastPoints) {
-            const d2 = dist2OnPlane(ref, q, planeKey);
+            if (!q) continue;
+            const qNormal = Number(q[normalAxis]);
+            if (Number.isFinite(refNormal) && Number.isFinite(qNormal) && Math.abs(qNormal - refNormal) > maxDist) {
+                continue;
+            }
+            const d2 = dist2OnPlane(ref, q, plane);
             if (d2 < bestD2) {
                 bestD2 = d2;
                 best = q;
@@ -2537,7 +2852,7 @@ function initPointsBuilderMain() {
         return {point: {x: best.x, y: best.y, z: best.z}, d2: bestD2};
     }
 
-    function mapPickPoint(hitVec3, particlePoint = null) {
+    function mapPickPointBase(hitVec3, particlePoint = null) {
         const raw = mapHitToPlaneRaw(hitVec3);
 
         const useGrid = chkSnapGrid && chkSnapGrid.checked;
@@ -2568,6 +2883,87 @@ function initPointsBuilderMain() {
         return raw;
     }
 
+    function mapPickPoint(hitVec3, particlePoint = null) {
+        const base = mapPickPointBase(hitVec3, particlePoint);
+        lastPickBasePoint = base ? {x: base.x, y: base.y, z: base.z} : null;
+        lastPickMappedPoint = base ? {x: base.x, y: base.y, z: base.z} : null;
+        return base;
+    }
+
+    function updatePickHoverFromMapped(mapped, pointerId = null) {
+        if (!mapped) {
+            hideHoverMarker();
+            if (linePickMode) hideLinePickPreview();
+            if (pointPickMode) {
+                pointPickHoverPoint = null;
+                hidePointPickPreview();
+            }
+            if (offsetMode) {
+                offsetHoverPoint = null;
+                updateOffsetPreview(null);
+            }
+            return;
+        }
+
+        if (linePickMode) {
+            setHoverMarkerColor(colorForPickIndex((picked?.length || 0) >= 1 ? 1 : 0));
+            if (picked && picked.length >= 1) updateLinePickPreview(mapped);
+            else hideLinePickPreview();
+        } else if (pointPickMode) {
+            setHoverMarkerColor(0xffcc33);
+            pointPickHoverPoint = mapped;
+            queuePointPickPreview(mapped);
+        } else if (offsetMode) {
+            setHoverMarkerColor(offsetPointColor.getHex());
+            offsetHoverPoint = mapped;
+            updateOffsetPreview(mapped);
+        } else if (rotateMode) {
+            setHoverMarkerColor(rotatePointColor.getHex());
+            if (rotateDragPointerId !== null && (pointerId === null || pointerId === rotateDragPointerId)) {
+                updateRotateFromMappedPoint(mapped);
+            }
+        }
+        showHoverMarker(mapped);
+    }
+
+    function updateSnapModeStatus() {
+        if (!statusSnapMode) return;
+        if (!lockPlaneActive || !shouldApplyLockPlane()) {
+            statusSnapMode.classList.add("hidden");
+            return;
+        }
+        const label = getPlaneInfo().label;
+        const axisKey = getPlaneNormalAxisKey().toUpperCase();
+        statusSnapMode.textContent = `锁定平面：${label}（仅 ${axisKey}）`;
+        statusSnapMode.classList.remove("hidden");
+    }
+
+    function setLockPlaneActive(next) {
+        const active = next === true;
+        if (active && !shouldApplyLockPlane()) {
+            updateSnapModeStatus();
+            updateLockPlaneGuideVisual();
+            return false;
+        }
+        if (lockPlaneActive === active) return lockPlaneActive;
+        lockPlaneActive = active;
+        if (lockPlaneActive) {
+            const base = lastPickMappedPoint || lastPickBasePoint;
+            if (!base) {
+                lockPlaneActive = false;
+                updateSnapModeStatus();
+                updateLockPlaneGuideVisual();
+                return false;
+            }
+            lockPlaneBasePoint = {x: base.x, y: base.y, z: base.z};
+        } else {
+            lockPlaneBasePoint = null;
+        }
+        updateSnapModeStatus();
+        updateLockPlaneGuideVisual();
+        return lockPlaneActive;
+    }
+
     function updatePickLineButtons() {
         const label = getPlaneInfo().label;
         if (btnPickLine) btnPickLine.textContent = `${label} 绘制直线`;
@@ -2588,6 +2984,9 @@ function initPointsBuilderMain() {
     function setSnapPlane(next) {
         const key = SNAP_PLANES[next] ? next : "XZ";
         snapPlane = key;
+        setLockPlaneActive(false);
+        lastPickBasePoint = null;
+        lastPickMappedPoint = null;
         if (selSnapPlane && selSnapPlane.value !== key) selSnapPlane.value = key;
         applyPickPlane();
     }
@@ -2640,9 +3039,10 @@ function initPointsBuilderMain() {
         buildAxisLabels();
         if (chkAxes) axesHelper.visible = chkAxes.checked;
 
-        gridHelper = new THREE.GridHelper(256, 256, 0x223344, 0x223344);
+        gridHelper = new THREE.GridHelper(GRID_HELPER_SIZE, GRID_HELPER_DIVISIONS, 0x223344, 0x223344);
         gridHelper.position.y = -0.01;
         scene.add(gridHelper);
+        ensureLockPlaneGuide();
         if (chkGrid) gridHelper.visible = chkGrid.checked;
         applySceneTheme();
 
@@ -2657,6 +3057,8 @@ function initPointsBuilderMain() {
         updatePickLineButtons();
         updateGridForPlane();
         updateMirrorButtons();
+        updateSnapModeStatus();
+        updateLockPlaneGuideVisual();
 
         window.addEventListener("resize", onResize);
         renderer.domElement.addEventListener("pointerdown", onPointerDown);
@@ -2714,6 +3116,16 @@ function initPointsBuilderMain() {
         chkSnapGrid?.addEventListener("change", () => {
             if (inpSnapStep) inpSnapStep.disabled = !chkSnapGrid.checked;
         });
+        if (chkSnapGridKeyToggleMode) {
+            chkSnapGridKeyToggleMode.addEventListener("change", () => {
+                setSnapGridKeyToggleMode(!!chkSnapGridKeyToggleMode.checked);
+            });
+        }
+        if (chkSnapParticleKeyToggleMode) {
+            chkSnapParticleKeyToggleMode.addEventListener("change", () => {
+                setSnapParticleKeyToggleMode(!!chkSnapParticleKeyToggleMode.checked);
+            });
+        }
         renderer.domElement.addEventListener("contextmenu", onCanvasContextMenu);
         if (inpPointSize) {
             inpPointSize.value = String(pointSize);
@@ -3564,6 +3976,9 @@ function getMappedPointFromEvent(ev) {
     mouse.x = ((ev.clientX - rect.left) / rect.width) * 2 - 1;
     mouse.y = -(((ev.clientY - rect.top) / rect.height) * 2 - 1);
     raycaster.setFromCamera(mouse, camera);
+    if (lockPlaneActive && lockPlaneBasePoint && shouldApplyLockPlane()) {
+        return mapPickPointLockedFromRay(raycaster.ray);
+    }
     const particle = getParticleSnapFromEvent(ev);
     const hit = new THREE.Vector3();
     if (!raycaster.ray.intersectPlane(pickPlane, hit)) return null;
@@ -4408,6 +4823,7 @@ function onCanvasDblClick(ev) {
         applyArrowPan();
         updateAxisLabelScale();
         controls.update();
+        if (lockPlaneActive && lockPlaneBasePoint) updateLockPlaneGuideVisual();
         renderer.render(scene, camera);
     }
 
@@ -4799,6 +5215,9 @@ function onCanvasDblClick(ev) {
         if (offsetMode) stopOffsetMode();
         if (rotateMode) stopRotateMode({ silent: true });
         if (pointPickMode) stopPointPick();
+        setLockPlaneActive(false);
+        lastPickBasePoint = null;
+        lastPickMappedPoint = null;
         _rClickT = 0;
         clearPickMarkers();
         hideLinePickPreview();
@@ -4830,6 +5249,7 @@ function onCanvasDblClick(ev) {
         clearPickMarkers();
         hideLinePickPreview();
         hideHoverMarker();
+        setLockPlaneActive(false);
         linePickMode = false;
         picked = [];
         linePickInsertIndex = null;
@@ -4846,6 +5266,9 @@ function onCanvasDblClick(ev) {
         if (offsetMode) stopOffsetMode();
         if (rotateMode) stopRotateMode({ silent: true });
         if (linePickMode) stopLinePick();
+        setLockPlaneActive(false);
+        lastPickBasePoint = null;
+        lastPickMappedPoint = null;
         const selectedSet = (typeof getCardSelectionIds === "function") ? getCardSelectionIds() : null;
         const selectedIds = normalizeActionTargetIds(selectedSet ? Array.from(selectedSet) : []);
         const selectedCount = selectedIds.length;
@@ -4954,6 +5377,7 @@ function onCanvasDblClick(ev) {
     }
 
     function stopPointPick() {
+        setLockPlaneActive(false);
         hideHoverMarker();
         hidePointPickPreview();
         pointPickMode = false;
@@ -5057,6 +5481,9 @@ function onCanvasDblClick(ev) {
         if (linePickMode) stopLinePick();
         if (pointPickMode) stopPointPick();
         if (rotateMode) stopRotateMode({ silent: true });
+        setLockPlaneActive(false);
+        lastPickBasePoint = null;
+        lastPickMappedPoint = null;
         offsetMode = true;
         offsetTargetIds = usableIds;
         offsetTargetId = usableIds[0] || null;
@@ -5077,6 +5504,7 @@ function onCanvasDblClick(ev) {
 
     function stopOffsetMode() {
         if (!offsetMode) return;
+        setLockPlaneActive(false);
         offsetMode = false;
         offsetTargetId = null;
         offsetTargetIds = [];
@@ -5430,41 +5858,24 @@ function onCanvasDblClick(ev) {
         mouse.x = ((ev.clientX - rect.left) / rect.width) * 2 - 1;
         mouse.y = -(((ev.clientY - rect.top) / rect.height) * 2 - 1);
         raycaster.setFromCamera(mouse, camera);
-        const particle = getParticleSnapFromEvent(ev);
-
-        const hit = new THREE.Vector3();
-        if (raycaster.ray.intersectPlane(pickPlane, hit)) {
-            const mapped = mapPickPoint(hit, particle);
-            if (linePickMode) {
-                setHoverMarkerColor(colorForPickIndex((picked?.length || 0) >= 1 ? 1 : 0));
-                if (picked && picked.length >= 1) updateLinePickPreview(mapped);
-                else hideLinePickPreview();
-            } else if (pointPickMode) {
-                setHoverMarkerColor(0xffcc33);
-                pointPickHoverPoint = mapped;
-                queuePointPickPreview(mapped);
-            } else if (offsetMode) {
-                setHoverMarkerColor(offsetPointColor.getHex());
-                offsetHoverPoint = mapped;
-                updateOffsetPreview(mapped);
-            } else if (rotateMode) {
-                setHoverMarkerColor(rotatePointColor.getHex());
-                if (rotateDragPointerId !== null && ev.pointerId === rotateDragPointerId) {
-                    updateRotateFromMappedPoint(mapped);
-                }
-            }
-            showHoverMarker(mapped);
+        let mapped = null;
+        if (lockPlaneActive && lockPlaneBasePoint && shouldApplyLockPlane()) {
+            mapped = mapPickPointLockedFromRay(raycaster.ray);
         } else {
-            hideHoverMarker();
-            if (linePickMode) hideLinePickPreview();
-            if (pointPickMode) {
-                pointPickHoverPoint = null;
-                hidePointPickPreview();
+            const particle = getParticleSnapFromEvent(ev);
+            const hit = new THREE.Vector3();
+            if (raycaster.ray.intersectPlane(pickPlane, hit)) {
+                mapped = mapPickPoint(hit, particle);
             }
-            if (offsetMode) {
-                offsetHoverPoint = null;
-                updateOffsetPreview(null);
-            }
+        }
+        if (mapped) {
+            updatePickHoverFromMapped(mapped, ev.pointerId);
+            lastPickBasePoint = mapped ? {x: mapped.x, y: mapped.y, z: mapped.z} : null;
+            lastPickMappedPoint = mapped ? {x: mapped.x, y: mapped.y, z: mapped.z} : null;
+        } else {
+            updatePickHoverFromMapped(null, ev.pointerId);
+            lastPickBasePoint = null;
+            lastPickMappedPoint = null;
         }
     }
 
@@ -5562,102 +5973,94 @@ function onCanvasDblClick(ev) {
         // ✅ 屏蔽随后到来的 click（否则可能清空焦点/误聚焦）
         armCanvasClickSuppress(ev);
 
-        const rect = renderer.domElement.getBoundingClientRect();
-        mouse.x = ((ev.clientX - rect.left) / rect.width) * 2 - 1;
-        mouse.y = -(((ev.clientY - rect.top) / rect.height) * 2 - 1);
-        raycaster.setFromCamera(mouse, camera);
-        const particle = getParticleSnapFromEvent(ev);
-
-        const hit = new THREE.Vector3();
-        if (raycaster.ray.intersectPlane(pickPlane, hit)) {
-            const mapped = mapPickPoint(hit, particle);
-            if (pointPickMode) {
-                let target = pointPickTarget;
-                if (target && target.inputs && target.inputs.x && !target.inputs.x.isConnected) {
-                    setPointPickTarget(null);
-                    target = null;
-                }
-                if (!target) {
-                    setPointPickStatus(`${getPlaneInfo().label} 点拾取：请先在菜单里选择要修改的坐标组`);
-                    return;
-                }
-                applyPointToTarget(mapped);
-                stopPointPick();
-                setTimeout(() => hideLinePickStatus(), 900);
+        const mapped = getMappedPointFromEvent(ev);
+        if (!mapped) return;
+        if (pointPickMode) {
+            let target = pointPickTarget;
+            if (target && target.inputs && target.inputs.x && !target.inputs.x.isConnected) {
+                setPointPickTarget(null);
+                target = null;
+            }
+            if (!target) {
+                setPointPickStatus(`${getPlaneInfo().label} 点拾取：请先在菜单里选择要修改的坐标组`);
                 return;
             }
-            const idx = picked.length; // 0=第一个点, 1=第二个点
-            picked.push(mapped);
+            applyPointToTarget(mapped);
+            stopPointPick();
+            setTimeout(() => hideLinePickStatus(), 900);
+            return;
+        }
+        const idx = picked.length; // 0=第一个点, 1=第二个点
+        picked.push(mapped);
 
-            addPickMarker(mapped, colorForPickIndex(idx));
-            setHoverMarkerColor(colorForPickIndex(picked.length >= 1 ? 1 : 0));
-            showHoverMarker(mapped);
+        addPickMarker(mapped, colorForPickIndex(idx));
+        setHoverMarkerColor(colorForPickIndex(picked.length >= 1 ? 1 : 0));
+        showHoverMarker(mapped);
 
-            const required = Math.max(2, Number(linePickRequiredPoints) || 2);
-            if (picked.length < required) {
-                setLinePickStatus(buildLinePickProgressStatus(getPlaneInfo().label));
-            } else if (picked.length === required) {
-                const list = linePickTargetList || state.root.children;
-                const isTriangle = isTrianglePickType();
-                historyCapture(isTriangle ? "pick_fill_triangle" : "pick_line_xz");
+        const required = Math.max(2, Number(linePickRequiredPoints) || 2);
+        if (picked.length < required) {
+            setLinePickStatus(buildLinePickProgressStatus(getPlaneInfo().label));
+        } else if (picked.length === required) {
+            const list = linePickTargetList || state.root.children;
+            const isTriangle = isTrianglePickType();
+            historyCapture(isTriangle ? "pick_fill_triangle" : "pick_line_xz");
 
-                let nn;
-                if (isTriangle) {
-                    const a = picked[0], b = picked[1], c = picked[2];
-                    nn = makeNode("add_fill_triangle", {
-                        params: {
-                            p1x: a.x, p1y: a.y, p1z: a.z,
-                            p2x: b.x, p2y: b.y, p2z: b.z,
-                            p3x: c.x, p3y: c.y, p3z: c.z,
-                            sampler: 3
-                        }
-                    });
-                } else {
-                    const a = picked[0], b = picked[1];
-                    nn = makeNode("add_line", {
-                        params: {sx: a.x, sy: a.y, sz: a.z, ex: b.x, ey: b.y, ez: b.z, count: 30}
-                    });
-                }
+            let nn;
+            if (isTriangle) {
+                const a = picked[0], b = picked[1], c = picked[2];
+                nn = makeNode("add_fill_triangle", {
+                    params: {
+                        p1x: a.x, p1y: a.y, p1z: a.z,
+                        p2x: b.x, p2y: b.y, p2z: b.z,
+                        p3x: c.x, p3y: c.y, p3z: c.z,
+                        sampler: 3
+                    }
+                });
+            } else {
+                const a = picked[0], b = picked[1];
+                nn = makeNode("add_line", {
+                    params: {sx: a.x, sy: a.y, sz: a.z, ex: b.x, ey: b.y, ez: b.z, count: 30}
+                });
+            }
 
-                // ✅ 支持插入位置：如果是从 addBuilder 或某张卡片后进入拾取，则按 insertIndex 插入并可连续插入
-                if (linePickInsertIndex === null || linePickInsertIndex === undefined) {
-                    list.push(nn);
-                } else {
-                    const at = Math.max(0, Math.min(linePickInsertIndex, list.length));
-                    list.splice(at, 0, nn);
-                    linePickInsertIndex = at + 1;
-                }
+            // ✅ 支持插入位置：如果是从 addBuilder 或某张卡片后进入拾取，则按 insertIndex 插入并可连续插入
+            if (linePickInsertIndex === null || linePickInsertIndex === undefined) {
+                list.push(nn);
+            } else {
+                const at = Math.max(0, Math.min(linePickInsertIndex, list.length));
+                list.splice(at, 0, nn);
+                linePickInsertIndex = at + 1;
+            }
 
-                if (isTriangle) {
-                    setLinePickStatus(`${getPlaneInfo().label} 三角拾取[${linePickTargetLabel}]：已添加 addFillTriangle（可在卡片里改 sampler）`);
-                } else {
-                    setLinePickStatus(`${getPlaneInfo().label} 拾取模式[${linePickTargetLabel}]：已添加 addLine（可在卡片里改 count）`);
-                }
-                picked = [];
-                linePickMode = false;
-                // 退出拾取时清掉插入点；聚焦保留由 keepId 处理
-                linePickInsertIndex = null;
-                linePickType = "line";
-                linePickRequiredPoints = 2;
-                setTimeout(() => hideLinePickStatus(), 900);
-                hideHoverMarker();
-                clearPickMarkers();
-                hideLinePickPreview();
-                const keepId = linePickKeepFocusId;
-                renderAll();
-                // 用户要求：若进入拾取前聚焦在 addBuilder，则拾取新增后仍保持聚焦在原卡片上
-                if (keepId) {
-                    requestAnimationFrame(() => {
-                        suppressFocusHistory = true;
-                        const el = elCardsRoot.querySelector(`.card[data-id="${keepId}"]`);
-                        if (el) {
-                            try { el.focus(); } catch {}
-                            try { el.scrollIntoView({ block: "nearest" }); } catch {}
-                            setFocusedNode(keepId, false);
-                        }
-                    suppressFocusHistory = false;
-                    });
-                }
+            if (isTriangle) {
+                setLinePickStatus(`${getPlaneInfo().label} 三角拾取[${linePickTargetLabel}]：已添加 addFillTriangle（可在卡片里改 sampler）`);
+            } else {
+                setLinePickStatus(`${getPlaneInfo().label} 拾取模式[${linePickTargetLabel}]：已添加 addLine（可在卡片里改 count）`);
+            }
+            picked = [];
+            linePickMode = false;
+            // 退出拾取时清掉插入点；聚焦保留由 keepId 处理
+            linePickInsertIndex = null;
+            linePickType = "line";
+            linePickRequiredPoints = 2;
+            setTimeout(() => hideLinePickStatus(), 900);
+            hideHoverMarker();
+            clearPickMarkers();
+            hideLinePickPreview();
+            const keepId = linePickKeepFocusId;
+            renderAll();
+            // 用户要求：若进入拾取前聚焦在 addBuilder，则拾取新增后仍保持聚焦在原卡片上
+            if (keepId) {
+                requestAnimationFrame(() => {
+                    suppressFocusHistory = true;
+                    const el = elCardsRoot.querySelector(`.card[data-id="${keepId}"]`);
+                    if (el) {
+                        try { el.focus(); } catch {}
+                        try { el.scrollIntoView({ block: "nearest" }); } catch {}
+                        setFocusedNode(keepId, false);
+                    }
+                suppressFocusHistory = false;
+                });
             }
         }
     }
@@ -5745,6 +6148,8 @@ function onCanvasDblClick(ev) {
         rebuildPreviewAndKotlin,
         openModal,
         mirrorCopyNode,
+        copyFocusedCard,
+        mirrorCopyFocusedCard,
         cloneNodeDeep,
         cloneNodeListDeep,
         makeNode,
@@ -5884,6 +6289,9 @@ function onCanvasDblClick(ev) {
         triggerImportJson,
         chkSnapGrid,
         chkSnapParticle,
+        getSnapGridKeyToggleMode,
+        getSnapParticleKeyToggleMode,
+        setLockPlaneActive,
         getLinePickMode: () => linePickMode,
         getLinePickType: () => linePickType,
         stopLinePick,

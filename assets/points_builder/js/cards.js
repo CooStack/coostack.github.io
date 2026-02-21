@@ -819,6 +819,8 @@ export function initCardSystem(ctx = {}) {
         rebuildPreviewAndKotlin,
         openModal,
         mirrorCopyNode,
+        copyFocusedCard: copyFocusedCardAction,
+        mirrorCopyFocusedCard: mirrorCopyFocusedCardAction,
         cloneNodeDeep,
         cloneNodeListDeep,
         makeNode,
@@ -2267,11 +2269,15 @@ export function initCardSystem(ctx = {}) {
 
         if (node.kind === "add_line" || node.kind === "add_fill_triangle" || node.kind === "points_on_each_offset") {
             const mirrorBtn = iconBtn("⇋", () => {
+                if (selectedNodeIds.size > 1 && selectedNodeIds.has(node.id) && typeof mirrorCopyFocusedCardAction === "function") {
+                    if (mirrorCopyFocusedCardAction()) return;
+                }
                 const cloned = mirrorCopyNode(node, getMirrorPlane());
                 if (!cloned) return;
                 historyCapture("mirror_copy");
                 siblings.splice(idx + 1, 0, cloned);
                 renderAll();
+                if (typeof showToast === "function") showToast(`已镜像粘贴 1 张卡片（${getMirrorPlaneInfo().label}）`, "success");
                 requestAnimationFrame(() => {
                     const el = elCardsRoot.querySelector(`.card[data-id="${cloned.id}"]`);
                     if (el) {
@@ -2288,10 +2294,14 @@ export function initCardSystem(ctx = {}) {
 
         // ✅ 复制卡片：在当前卡片下方插入一张一模一样的（含子卡片/terms）
         const copyBtn = iconBtn("⧉", () => {
+            if (selectedNodeIds.size > 1 && selectedNodeIds.has(node.id) && typeof copyFocusedCardAction === "function") {
+                if (copyFocusedCardAction()) return;
+            }
             historyCapture("copy_card");
             const cloned = cloneNodeDeep(node);
             siblings.splice(idx + 1, 0, cloned);
             renderAll();
+            if (typeof showToast === "function") showToast("已粘贴 1 张卡片", "success");
 
             // 尝试把焦点放到新卡片，方便继续编辑
             requestAnimationFrame(() => {

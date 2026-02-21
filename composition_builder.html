@@ -70,6 +70,7 @@
             <div class="viewer-hud">
                 <div class="hud-left">
                     <div id="statusPoints" class="badge">点数: 0</div>
+                    <div id="statusSnapMode" class="badge hidden"></div>
                     <div id="statusSelection" class="badge">选中: 无</div>
                     <div id="statusFps" class="badge">FPS: --</div>
                 </div>
@@ -150,11 +151,27 @@
                 </div>
                 <div class="settings-panel settings-panel-wide">
                     <div class="settings-panel-title">快捷键</div>
-                    <div class="settings-actions">
-                        <button id="btnOpenHotkeys" class="btn primary">打开快捷键设置</button>
-                        <button id="btnExportSettings" class="btn">导出设置</button>
-                        <button id="btnImportSettings" class="btn">导入设置</button>
-                        <input id="fileSettings" type="file" accept="application/json" hidden/>
+                    <div class="settings-form">
+                        <div class="settings-row">
+                            <div class="settings-label">网格吸附快捷键</div>
+                            <label class="chk settings-toggle">
+                                <input id="chkSnapGridKeyToggleMode" type="checkbox"/>
+                                <span>切换模式（单点切换）</span>
+                            </label>
+                        </div>
+                        <div class="settings-row">
+                            <div class="settings-label">粒子吸附快捷键</div>
+                            <label class="chk settings-toggle">
+                                <input id="chkSnapParticleKeyToggleMode" type="checkbox"/>
+                                <span>切换模式（单点切换）</span>
+                            </label>
+                        </div>
+                        <div class="settings-actions">
+                            <button id="btnOpenHotkeys" class="btn primary">打开快捷键设置</button>
+                            <button id="btnExportSettings" class="btn">导出设置</button>
+                            <button id="btnImportSettings" class="btn">导入设置</button>
+                            <input id="fileSettings" type="file" accept="application/json" hidden/>
+                        </div>
                     </div>
                 </div>
             </div>

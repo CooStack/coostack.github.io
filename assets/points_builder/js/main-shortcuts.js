@@ -36,6 +36,9 @@ export function initGlobalShortcuts(ctx = {}) {
         triggerImportJson,
         chkSnapGrid,
         chkSnapParticle,
+        getSnapGridKeyToggleMode,
+        getSnapParticleKeyToggleMode,
+        setLockPlaneActive,
         getLinePickMode,
         getLinePickType,
         stopLinePick,
@@ -60,6 +63,17 @@ export function initGlobalShortcuts(ctx = {}) {
         getIsHotkeysOpen,
         getIsSettingsOpen
     } = ctx;
+
+    let gridHoldKeyDown = false;
+    let gridHoldKeyCode = "";
+    let gridHoldActive = false;
+
+    let particleHoldKeyDown = false;
+    let particleHoldKeyCode = "";
+    let particleHoldActive = false;
+
+    let lockPlaneKeyDown = false;
+    let lockPlaneKeyCode = "";
 
     window.addEventListener("keydown", (e) => {
         // 1) Hotkey capture mode (for settings)
@@ -149,6 +163,18 @@ export function initGlobalShortcuts(ctx = {}) {
         // when Add-Card modal is open, avoid triggering kind hotkeys while typing search
         if (modal && !modal.classList.contains("hidden") && document.activeElement === cardSearch && isPlainKey) {
             // allow Esc handled elsewhere
+            return;
+        }
+
+        // 2.45) Lock plane hold
+        if (hotkeyMatchEvent(e, hotkeys.actions.lockPlaneHold)) {
+            if (lockPlaneKeyDown && lockPlaneKeyCode === e.code) return;
+            lockPlaneKeyDown = true;
+            lockPlaneKeyCode = e.code;
+            if (typeof setLockPlaneActive === "function") {
+                e.preventDefault();
+                setLockPlaneActive(true);
+            }
             return;
         }
 
@@ -250,13 +276,37 @@ export function initGlobalShortcuts(ctx = {}) {
             return;
         }
         if (hotkeyMatchEvent(e, hotkeys.actions.toggleSnapGrid)) {
+            const toggleMode = (typeof getSnapGridKeyToggleMode === "function") && getSnapGridKeyToggleMode();
+            if (toggleMode) {
+                e.preventDefault();
+                if (!e.repeat && chkSnapGrid) chkSnapGrid.click();
+                return;
+            }
             e.preventDefault();
-            if (chkSnapGrid) chkSnapGrid.click();
+            if (gridHoldKeyDown && gridHoldKeyCode === e.code) return;
+            gridHoldKeyDown = true;
+            gridHoldKeyCode = e.code;
+            if (!gridHoldActive) {
+                gridHoldActive = true;
+                if (chkSnapGrid) chkSnapGrid.click();
+            }
             return;
         }
         if (hotkeyMatchEvent(e, hotkeys.actions.toggleSnapParticle)) {
+            const toggleMode = (typeof getSnapParticleKeyToggleMode === "function") && getSnapParticleKeyToggleMode();
+            if (toggleMode) {
+                e.preventDefault();
+                if (!e.repeat && chkSnapParticle) chkSnapParticle.click();
+                return;
+            }
             e.preventDefault();
-            if (chkSnapParticle) chkSnapParticle.click();
+            if (particleHoldKeyDown && particleHoldKeyCode === e.code) return;
+            particleHoldKeyDown = true;
+            particleHoldKeyCode = e.code;
+            if (!particleHoldActive) {
+                particleHoldActive = true;
+                if (chkSnapParticle) chkSnapParticle.click();
+            }
             return;
         }
 
@@ -434,6 +484,29 @@ export function initGlobalShortcuts(ctx = {}) {
         if (isArrowKey(e.code) && panKeyState) {
             panKeyState[e.code] = false;
         }
+        if (gridHoldKeyDown && e.code === gridHoldKeyCode) {
+            gridHoldKeyDown = false;
+            gridHoldKeyCode = "";
+            if (gridHoldActive) {
+                gridHoldActive = false;
+                if (chkSnapGrid) chkSnapGrid.click();
+            }
+        }
+        if (particleHoldKeyDown && e.code === particleHoldKeyCode) {
+            particleHoldKeyDown = false;
+            particleHoldKeyCode = "";
+            if (particleHoldActive) {
+                particleHoldActive = false;
+                if (chkSnapParticle) chkSnapParticle.click();
+            }
+        }
+        if (lockPlaneKeyDown && e.code === lockPlaneKeyCode) {
+            lockPlaneKeyDown = false;
+            lockPlaneKeyCode = "";
+            if (typeof setLockPlaneActive === "function") {
+                setLockPlaneActive(false);
+            }
+        }
     }, true);
 
     window.addEventListener("blur", () => {
@@ -442,6 +515,29 @@ export function initGlobalShortcuts(ctx = {}) {
             panKeyState.ArrowDown = false;
             panKeyState.ArrowLeft = false;
             panKeyState.ArrowRight = false;
+        }
+        if (gridHoldKeyDown) {
+            gridHoldKeyDown = false;
+            gridHoldKeyCode = "";
+            if (gridHoldActive) {
+                gridHoldActive = false;
+                if (chkSnapGrid) chkSnapGrid.click();
+            }
+        }
+        if (particleHoldKeyDown) {
+            particleHoldKeyDown = false;
+            particleHoldKeyCode = "";
+            if (particleHoldActive) {
+                particleHoldActive = false;
+                if (chkSnapParticle) chkSnapParticle.click();
+            }
+        }
+        if (lockPlaneKeyDown) {
+            lockPlaneKeyDown = false;
+            lockPlaneKeyCode = "";
+            if (typeof setLockPlaneActive === "function") {
+                setLockPlaneActive(false);
+            }
         }
         if (typeof hideActionMenu === "function") hideActionMenu();
         if (typeof onWindowBlurCleanup === "function") onWindowBlurCleanup();
