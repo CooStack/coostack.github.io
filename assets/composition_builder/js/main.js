@@ -9155,27 +9155,44 @@ class CompositionBuilderApp {
             const angleExpr = act.angleMode === "expr"
                 ? rewriteClassQualifier(String(act.angleExpr || "0.0"), className)
                 : U.angleToKotlinRadExpr(num(act.angleValue), normalizeAngleUnit(act.angleUnit));
-            lines.push(`${innerIndent}applyDisplayAction {`);
+            const blockLines = [];
+            const usePreTickWrapper = act.type === "expression"
+                || ((act.type === "rotateAsAxis" || act.type === "rotateToWithAngle") && act.angleMode === "expr");
             if (act.type === "rotateToPoint") {
-                lines.push(`${innerIndent}    rotateToPoint(${toExpr})`);
+                blockLines.push(`${innerIndent}    rotateToPoint(${toExpr})`);
             } else if (act.type === "rotateAsAxis") {
-                lines.push(`${innerIndent}    rotateAsAxis(${angleExpr})`);
+                if (usePreTickWrapper) {
+                    blockLines.push(`${innerIndent}    addPreTickAction {`);
+                    blockLines.push(`${innerIndent}        rotateAsAxis(${angleExpr})`);
+                    blockLines.push(`${innerIndent}    }`);
+                } else {
+                    blockLines.push(`${innerIndent}    rotateAsAxis(${angleExpr})`);
+                }
             } else if (act.type === "rotateToWithAngle") {
-                lines.push(`${innerIndent}    rotateToWithAngle(${toExpr}, ${angleExpr})`);
+                if (usePreTickWrapper) {
+                    blockLines.push(`${innerIndent}    addPreTickAction {`);
+                    blockLines.push(`${innerIndent}        rotateToWithAngle(${toExpr}, ${angleExpr})`);
+                    blockLines.push(`${innerIndent}    }`);
+                } else {
+                    blockLines.push(`${innerIndent}    rotateToWithAngle(${toExpr}, ${angleExpr})`);
+                }
             } else if (act.type === "expression") {
                 const rawExpr = String(act.expression || "").trim();
                 const check = this.validateJsExpressionSource(rawExpr, { cardId: card.id, scope: scopeInfo || undefined });
                 const expr = rewriteClassQualifier(rawExpr, className);
                 if (expr && check.valid) {
-                    lines.push(`${innerIndent}    addPreTickAction {`);
-                    lines.push(translateJsBlockToKotlin(expr, `${innerIndent}        `));
-                    lines.push(`${innerIndent}    }`);
+                    blockLines.push(`${innerIndent}    addPreTickAction {`);
+                    blockLines.push(translateJsBlockToKotlin(expr, `${innerIndent}        `));
+                    blockLines.push(`${innerIndent}    }`);
                 }
             }
             if (needReverseScale && i === displayActions.length - 1) {
                 const cls = sanitizeKotlinClassName(className);
-                lines.push(`${innerIndent}    setReversedScaleOnCompositionStatus(this@${cls})`);
+                blockLines.push(`${innerIndent}    setReversedScaleOnCompositionStatus(this@${cls})`);
             }
+            if (!blockLines.length) continue;
+            lines.push(`${innerIndent}applyDisplayAction {`);
+            lines.push(...blockLines);
             lines.push(`${innerIndent}}`);
         }
         if (needReverseScale && !displayActions.length) {

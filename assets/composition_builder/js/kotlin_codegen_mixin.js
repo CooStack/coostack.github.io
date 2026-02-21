@@ -536,29 +536,29 @@ export function installKotlinCodegenMethods(CompositionBuilderApp, deps = {}) {
         const useAngleOffsetAnimator = !!offsetAngleExpr && !!offsetCfg;
         const shapeScale = normalizeScaleHelperConfig(card.shapeScale, { type: "none" });
         const needReverseScale = shapeScale.type !== "none" && shapeScale.reversedOnDisable;
-        const appendOffsetAnimator = () => {
+        const appendOffsetAnimator = (targetLines, callIndent = `${innerIndent}    `) => {
             if (!useAngleOffsetAnimator) return;
             const glowTick = Math.max(1, int(offsetCfg.glowTick || 20));
             const easeName = normalizeAngleOffsetEaseName(offsetCfg.easeName || "outCubic");
             const reverseOnDisable = offsetCfg.reverseOnDisable === true;
             const cls = sanitizeKotlinClassName(className);
-            lines.push(`${innerIndent}    val animator = AngleAnimator(${glowTick}, ${offsetAngleExpr}, Eases.${easeName})`);
-            lines.push(`${innerIndent}    animator.reset()`);
-            lines.push(`${innerIndent}    val timeline = Timeline()`);
-            lines.push(`${innerIndent}        .step {`);
-            lines.push(`${innerIndent}            rotateAsAxis(animator.glowDelta())`);
-            lines.push(`${innerIndent}            animator.finished`);
-            lines.push(`${innerIndent}        }`);
+            targetLines.push(`${callIndent}val animator = AngleAnimator(${glowTick}, ${offsetAngleExpr}, Eases.${easeName})`);
+            targetLines.push(`${callIndent}animator.reset()`);
+            targetLines.push(`${callIndent}val timeline = Timeline()`);
+            targetLines.push(`${callIndent}    .step {`);
+            targetLines.push(`${callIndent}        rotateAsAxis(animator.glowDelta())`);
+            targetLines.push(`${callIndent}        animator.finished`);
+            targetLines.push(`${callIndent}    }`);
             if (reverseOnDisable) {
-                lines.push(`${innerIndent}        .step {`);
-                lines.push(`${innerIndent}            if (!this@${cls}.status.isDisable()) return@step false`);
-                lines.push(`${innerIndent}            rotateAsAxis(animator.fadeDelta())`);
-                lines.push(`${innerIndent}            animator.finished`);
-                lines.push(`${innerIndent}        }`);
+                targetLines.push(`${callIndent}    .step {`);
+                targetLines.push(`${callIndent}        if (!this@${cls}.status.isDisable()) return@step false`);
+                targetLines.push(`${callIndent}        rotateAsAxis(animator.fadeDelta())`);
+                targetLines.push(`${callIndent}        animator.finished`);
+                targetLines.push(`${callIndent}    }`);
             }
-            lines.push(`${innerIndent}    addPreTickAction {`);
-            lines.push(`${innerIndent}        timeline.doTick()`);
-            lines.push(`${innerIndent}    }`);
+            targetLines.push(`${callIndent}addPreTickAction {`);
+            targetLines.push(`${callIndent}    timeline.doTick()`);
+            targetLines.push(`${callIndent}}`);
         };
         if (displayActions.length) {
             for (let i = 0; i < displayActions.length; i++) {
@@ -567,33 +567,50 @@ export function installKotlinCodegenMethods(CompositionBuilderApp, deps = {}) {
                 const angleExpr = act.angleMode === "expr"
                     ? rewriteClassQualifier(String(act.angleExpr || "0.0"), className)
                     : U.angleToKotlinRadExpr(num(act.angleValue), normalizeAngleUnit(act.angleUnit));
-                lines.push(`${innerIndent}applyDisplayAction {`);
-                if (useAngleOffsetAnimator && i === 0) appendOffsetAnimator();
+                const blockLines = [];
+                if (useAngleOffsetAnimator && i === 0) appendOffsetAnimator(blockLines);
+                const usePreTickWrapper = act.type === "expression"
+                    || ((act.type === "rotateAsAxis" || act.type === "rotateToWithAngle") && act.angleMode === "expr");
                 if (act.type === "rotateToPoint") {
-                    lines.push(`${innerIndent}    rotateToPoint(${toExpr})`);
+                    blockLines.push(`${innerIndent}    rotateToPoint(${toExpr})`);
                 } else if (act.type === "rotateAsAxis") {
-                    lines.push(`${innerIndent}    rotateAsAxis(${angleExpr})`);
+                    if (usePreTickWrapper) {
+                        blockLines.push(`${innerIndent}    addPreTickAction {`);
+                        blockLines.push(`${innerIndent}        rotateAsAxis(${angleExpr})`);
+                        blockLines.push(`${innerIndent}    }`);
+                    } else {
+                        blockLines.push(`${innerIndent}    rotateAsAxis(${angleExpr})`);
+                    }
                 } else if (act.type === "rotateToWithAngle") {
-                    lines.push(`${innerIndent}    rotateToWithAngle(${toExpr}, ${angleExpr})`);
+                    if (usePreTickWrapper) {
+                        blockLines.push(`${innerIndent}    addPreTickAction {`);
+                        blockLines.push(`${innerIndent}        rotateToWithAngle(${toExpr}, ${angleExpr})`);
+                        blockLines.push(`${innerIndent}    }`);
+                    } else {
+                        blockLines.push(`${innerIndent}    rotateToWithAngle(${toExpr}, ${angleExpr})`);
+                    }
                 } else if (act.type === "expression") {
                     const rawExpr = String(act.expression || "").trim();
                     const check = this.validateJsExpressionSource(rawExpr, { cardId: card.id, scope: scopeInfo || undefined });
                     const expr = rewriteClassQualifier(rawExpr, className);
                     if (expr && check.valid) {
-                        lines.push(`${innerIndent}    addPreTickAction {`);
-                        lines.push(translateJsBlockToKotlin(expr, `${innerIndent}        `));
-                        lines.push(`${innerIndent}    }`);
+                        blockLines.push(`${innerIndent}    addPreTickAction {`);
+                        blockLines.push(translateJsBlockToKotlin(expr, `${innerIndent}        `));
+                        blockLines.push(`${innerIndent}    }`);
                     }
                 }
                 if (needReverseScale && i === displayActions.length - 1) {
                     const cls = sanitizeKotlinClassName(className);
-                    lines.push(`${innerIndent}    setReversedScaleOnCompositionStatus(this@${cls})`);
+                    blockLines.push(`${innerIndent}    setReversedScaleOnCompositionStatus(this@${cls})`);
                 }
+                if (!blockLines.length) continue;
+                lines.push(`${innerIndent}applyDisplayAction {`);
+                lines.push(...blockLines);
                 lines.push(`${innerIndent}}`);
             }
         } else if (useAngleOffsetAnimator || needReverseScale) {
             lines.push(`${innerIndent}applyDisplayAction {`);
-            if (useAngleOffsetAnimator) appendOffsetAnimator();
+            if (useAngleOffsetAnimator) appendOffsetAnimator(lines);
             if (needReverseScale) {
                 const cls = sanitizeKotlinClassName(className);
                 lines.push(`${innerIndent}    setReversedScaleOnCompositionStatus(this@${cls})`);
