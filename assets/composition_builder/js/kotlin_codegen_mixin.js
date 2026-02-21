@@ -615,8 +615,9 @@ export function installKotlinCodegenMethods(CompositionBuilderApp, deps = {}) {
     buildOnDisplayMethod(className) {
         const actions = this.state.displayActions || [];
         const projectScale = normalizeScaleHelperConfig(this.state.projectScale, { type: "none" });
-        const needReverseScale = projectScale.type !== "none" && projectScale.reversedOnDisable;
-        if (!actions.length && !needReverseScale) {
+        const hasProjectScale = projectScale.type !== "none";
+        const needReverseScale = hasProjectScale && projectScale.reversedOnDisable;
+        if (!actions.length && !hasProjectScale) {
             return [
                 "    override fun onDisplay() {",
                 "    }"
@@ -625,6 +626,17 @@ export function installKotlinCodegenMethods(CompositionBuilderApp, deps = {}) {
         const lines = [];
         lines.push("    override fun onDisplay() {");
         lines.push("        addPreTickAction {");
+        if (hasProjectScale) {
+            if (needReverseScale) {
+                lines.push("            if (status.isEnable()) {");
+                lines.push("                scaleHelper.doScale()");
+                lines.push("            } else {");
+                lines.push("                scaleHelper.doScaleReversed()");
+                lines.push("            }");
+            } else {
+                lines.push("            scaleHelper.doScale()");
+            }
+        }
         for (const raw of actions) {
             const act = normalizeDisplayAction(raw);
             const toExpr = rewriteClassQualifier(String(act.toExpr || act.toPreset || "RelativeLocation.yAxis()"), className);
@@ -643,10 +655,6 @@ export function installKotlinCodegenMethods(CompositionBuilderApp, deps = {}) {
                 const expr = rewriteClassQualifier(rawExpr, className);
                 if (expr && check.valid) lines.push(translateJsBlockToKotlin(expr, "            "));
             }
-        }
-        if (needReverseScale) {
-            const cls = sanitizeKotlinClassName(className);
-            lines.push(`            setReversedScaleOnCompositionStatus(this@${cls})`);
         }
         lines.push("        }");
         lines.push("    }");

@@ -7159,8 +7159,15 @@ class CompositionBuilderApp {
 
     rotatePointToDirection(point, toDir, fromAxis = null) {
         const axis = (fromAxis && U.len(fromAxis) > 1e-6) ? U.norm(fromAxis) : this.resolveCompositionAxisDirection();
+        const dir = this.parseJsVec(toDir);
+        const dot = num(axis.x) * num(dir.x) + num(axis.y) * num(dir.y) + num(axis.z) * num(dir.z);
+        if (dot >= 0.999999) return point;
         const points = [U.clone(point)];
-        rotatePointsToPointUpright(points, toDir, axis);
+        if (typeof U.rotatePointsToPoint === "function") {
+            U.rotatePointsToPoint(points, dir, axis);
+        } else {
+            rotatePointsToPointUpright(points, dir, axis);
+        }
         return points[0] || point;
     }
 
@@ -8307,6 +8314,7 @@ class CompositionBuilderApp {
         this.setCardBuilderState(card, target, state);
         this.focusedCardId = card.id;
         this.selectedCardIds = new Set([card.id]);
+        this.saveStateNow();
         let msg = "已从 PointsBuilder 返回并加载 Builder";
         if (target === "shape") msg = "已返回并加载 Shape Builder";
         if (target === "shape_child") msg = "已返回并加载子点 Builder";
@@ -9191,8 +9199,9 @@ class CompositionBuilderApp {
     buildOnDisplayMethod(className) {
         const actions = this.state.displayActions || [];
         const projectScale = normalizeScaleHelperConfig(this.state.projectScale, { type: "none" });
-        const needReverseScale = projectScale.type !== "none" && projectScale.reversedOnDisable;
-        if (!actions.length && !needReverseScale) {
+        const hasProjectScale = projectScale.type !== "none";
+        const needReverseScale = hasProjectScale && projectScale.reversedOnDisable;
+        if (!actions.length && !hasProjectScale) {
             return [
                 "    override fun onDisplay() {",
                 "    }"
@@ -9201,6 +9210,17 @@ class CompositionBuilderApp {
         const lines = [];
         lines.push("    override fun onDisplay() {");
         lines.push("        addPreTickAction {");
+        if (hasProjectScale) {
+            if (needReverseScale) {
+                lines.push("            if (status.isEnable()) {");
+                lines.push("                scaleHelper.doScale()");
+                lines.push("            } else {");
+                lines.push("                scaleHelper.doScaleReversed()");
+                lines.push("            }");
+            } else {
+                lines.push("            scaleHelper.doScale()");
+            }
+        }
         for (const raw of actions) {
             const act = normalizeDisplayAction(raw);
             const toExpr = rewriteClassQualifier(String(act.toExpr || act.toPreset || "RelativeLocation.yAxis()"), className);
@@ -9219,10 +9239,6 @@ class CompositionBuilderApp {
                 const expr = rewriteClassQualifier(rawExpr, className);
                 if (expr && check.valid) lines.push(translateJsBlockToKotlin(expr, "            "));
             }
-        }
-        if (needReverseScale) {
-            const cls = sanitizeKotlinClassName(className);
-            lines.push(`            setReversedScaleOnCompositionStatus(this@${cls})`);
         }
         lines.push("        }");
         lines.push("    }");

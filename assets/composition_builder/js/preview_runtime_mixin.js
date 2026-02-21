@@ -2888,7 +2888,11 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
         const dot = num(axis.x) * num(dir.x) + num(axis.y) * num(dir.y) + num(axis.z) * num(dir.z);
         if (dot >= 0.999999) return point;
         const points = [U.clone(point)];
-        rotatePointsToPointUpright(points, dir, axis);
+        if (typeof U.rotatePointsToPoint === "function") {
+            U.rotatePointsToPoint(points, dir, axis);
+        } else {
+            rotatePointsToPointUpright(points, dir, axis);
+        }
         return points[0] || point;
     }
 
