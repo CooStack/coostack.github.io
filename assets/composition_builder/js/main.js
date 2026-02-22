@@ -7588,9 +7588,26 @@ class CompositionBuilderApp {
         this.previewCycleCache = null;
         this.previewExprCountCache.clear();
         this.previewExprPrefixCache.clear();
+        if (this.previewFoldSimpleActionCache && typeof this.previewFoldSimpleActionCache.clear === "function") {
+            this.previewFoldSimpleActionCache.clear();
+        }
         this.previewCondFnCache.clear();
         this.previewNumericFnCache.clear();
         this.previewControllerFnCache.clear();
+        if (this.previewCardVisualAgeDependentCache && typeof this.previewCardVisualAgeDependentCache.clear === "function") {
+            this.previewCardVisualAgeDependentCache.clear();
+        }
+        if (this.previewFrameShapeRuntimeLevelsCache && typeof this.previewFrameShapeRuntimeLevelsCache.clear === "function") {
+            this.previewFrameShapeRuntimeLevelsCache.clear();
+        }
+        if (this.previewFrameGrowthPlanCache && typeof this.previewFrameGrowthPlanCache.clear === "function") {
+            this.previewFrameGrowthPlanCache.clear();
+        }
+        if (Array.isArray(this.previewFrameGroupRuntimeCache)) this.previewFrameGroupRuntimeCache.fill(undefined);
+        if (Array.isArray(this.previewFrameAnchorCache)) this.previewFrameAnchorCache.fill(undefined);
+        if (Array.isArray(this.previewFrameLocalCache)) this.previewFrameLocalCache.fill(undefined);
+        if (Array.isArray(this.previewFrameGroupVisualCache)) this.previewFrameGroupVisualCache.fill(undefined);
+        if (Array.isArray(this.previewFrameGroupPointVisualCache)) this.previewFrameGroupPointVisualCache.fill(undefined);
         this.previewRuntimeGlobals = null;
         this.previewRuntimeAppliedTick = -1;
     }

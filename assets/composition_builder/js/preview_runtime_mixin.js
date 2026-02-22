@@ -2877,7 +2877,13 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
                 ageTick,
                 0,
                 axis,
-                { runtimeVars, persistExpressionVars: true }
+                {
+                    runtimeVars,
+                    persistExpressionVars: true,
+                    // Global pass is used to update state variables only; do not advance
+                    // geometry rotation accumulators here, or replay can stutter/jitter.
+                    accumulateRotation: false
+                }
             );
             axis = res?.axis || axis;
         }
@@ -2923,13 +2929,16 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
         if (!src) return { point, axis: startAxis };
         const runtimeVars = (opts.runtimeVars && typeof opts.runtimeVars === "object") ? opts.runtimeVars : null;
         const persistExpressionVars = !!opts.persistExpressionVars;
+        const accumulateRotation = opts.accumulateRotation !== false;
         const thisAt = runtimeVars || {};
         const actionKeyBase = String(action?.compileKey || src || "").trim();
         const TAU = Math.PI * 2;
+        const MAX_ACCUM_DT = 1.2;
         const toTau = (rad) => ((num(rad) % TAU) + TAU) % TAU;
         const resolveActionAccumAngle = (slot = "rot", anglePerTick = 0) => {
             const nowTick = Math.max(0, num(elapsedTick));
             const speed = num(anglePerTick);
+            if (!accumulateRotation) return speed * nowTick;
             if (!runtimeVars || !actionKeyBase) return speed * nowTick;
             const key = `${actionKeyBase}|${slot}`;
             const accKey = `__cpbRotAccum__${key}`;
@@ -2945,10 +2954,10 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
                     dt = 0;
                     accum = 0;
                 }
-                if (dt > 0 && dt <= 0.6) {
+                if (dt > 0 && dt <= MAX_ACCUM_DT) {
                     accum += speed * dt;
                 }
-                // dt > 0.6 means this action was likely paused by branch/scope;
+                // Large dt means this action was likely paused by branch/scope;
                 // skip catch-up so resumed rotation does not jump.
             }
             runtimeVars[accKey] = accum;
