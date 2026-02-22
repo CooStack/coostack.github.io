@@ -240,7 +240,8 @@ function buildApiDtsFromCompletions(completions) {
     for (const name of Array.from(vars).sort((a, b) => a.localeCompare(b))) {
         if (reserved.has(name)) continue;
         if (/^(Math|PI|age|tick|tickCount|index|status|particle|thisAt|rel|order|axis)$/.test(name)) continue;
-        lines.push(`declare const ${name}: any;`);
+        // Use let to avoid false "assignment to constant" diagnostics for project symbols.
+        lines.push(`declare let ${name}: any;`);
     }
     for (const fn of Array.from(fns).sort((a, b) => a.localeCompare(b))) {
         if (reserved.has(fn)) continue;

@@ -39,6 +39,7 @@ export function installKotlinCodegenMethods(CompositionBuilderApp, deps = {}) {
             "import cn.coostack.cooparticlesapi.annotations.CodecField",
             "import cn.coostack.cooparticlesapi.annotations.CooAutoRegister",
             "import cn.coostack.cooparticlesapi.animation.timeline.*",
+            "import cn.coostack.cooparticlesapi.extend.asRelative",
             "import cn.coostack.cooparticlesapi.network.particle.composition.*",
             "import cn.coostack.cooparticlesapi.particles.ParticleDisplayer",
             "import cn.coostack.cooparticlesapi.particles.impl.*",
@@ -84,7 +85,7 @@ export function installKotlinCodegenMethods(CompositionBuilderApp, deps = {}) {
             const name = uniqueName(v.name, "value");
             const type = String(v.type || "Double").trim() || "Double";
             const rawValue = String(v.value || "").trim();
-            let value = rewriteClassQualifier(rawValue || defaultLiteralForKotlinType(type), className);
+            let value = this.rewriteCodeExpr(rawValue || defaultLiteralForKotlinType(type), className);
             if (/^float$/i.test(type)) {
                 if (isPlainNumericLiteralText(value)) value = normalizeKotlinFloatLiteralText(value);
                 else if (!/\.toFloat\(\)\s*$/.test(value)) value = `(${value}).toFloat()`;
@@ -99,7 +100,7 @@ export function installKotlinCodegenMethods(CompositionBuilderApp, deps = {}) {
             const name = uniqueName(c.name, "constant");
             const type = String(c.type || "Int").trim() || "Int";
             const rawValue = String(c.value || "").trim();
-            let value = rewriteClassQualifier(rawValue || defaultLiteralForKotlinType(type), className);
+            let value = this.rewriteCodeExpr(rawValue || defaultLiteralForKotlinType(type), className);
             if (/^float$/i.test(type)) {
                 if (isPlainNumericLiteralText(value)) value = normalizeKotlinFloatLiteralText(value);
                 else if (!/\.toFloat\(\)\s*$/.test(value)) value = `(${value}).toFloat()`;
@@ -130,7 +131,7 @@ export function installKotlinCodegenMethods(CompositionBuilderApp, deps = {}) {
 
     buildInitBlock(className, sequencedRoot) {
         const lines = [];
-        const axisExpr = rewriteClassQualifier(
+        const axisExpr = this.rewriteRelativeTargetExpr(
             String(this.state.compositionAxisExpr || this.state.compositionAxisPreset || "RelativeLocation.yAxis()"),
             className
         );
@@ -145,10 +146,10 @@ export function installKotlinCodegenMethods(CompositionBuilderApp, deps = {}) {
             const animates = this.state.compositionAnimates.map((a) => normalizeAnimate(a));
             if (animates.length) {
                 const first = animates[0];
-                lines.push(`        animate.addAnimate(${Math.max(1, int(first.count))}) { ${rewriteClassQualifier(first.condition || "true", className)} }`);
+                lines.push(`        animate.addAnimate(${Math.max(1, int(first.count))}) { ${this.rewriteAnimateConditionExpr(first.condition || "true", className)} }`);
                 for (let i = 1; i < animates.length; i++) {
                     const it = animates[i];
-                    lines.push(`            .addAnimate(${Math.max(1, int(it.count))}) { ${rewriteClassQualifier(it.condition || "true", className)} }`);
+                    lines.push(`            .addAnimate(${Math.max(1, int(it.count))}) { ${this.rewriteAnimateConditionExpr(it.condition || "true", className)} }`);
                 }
             }
         }
@@ -180,8 +181,8 @@ export function installKotlinCodegenMethods(CompositionBuilderApp, deps = {}) {
     }
 
     emitCardPut(card, className, sequencedRoot, cardIndex = 0) {
-        if (card.bindMode === "point") return this.emitCardPutPoint(card, className, sequencedRoot);
-        return this.emitCardPutAll(card, className, sequencedRoot);
+        if (card.bindMode === "point") return this.emitCardPutPoint(card, className, sequencedRoot, cardIndex);
+        return this.emitCardPutAll(card, className, sequencedRoot, cardIndex);
     }
 
     resolveAngleOffsetConfig(raw, className) {
@@ -194,7 +195,7 @@ export function installKotlinCodegenMethods(CompositionBuilderApp, deps = {}) {
         const totalAngleRaw = raw.angleOffsetAngleMode === "expr"
             ? String(raw.angleOffsetAngleExpr || raw.angleOffsetAnglePreset || "PI * 2")
             : U.angleToKotlinRadExpr(num(raw.angleOffsetAngleValue || 0), normalizeAngleUnit(raw.angleOffsetAngleUnit || "deg"));
-        const totalAngleExpr = rewriteClassQualifier(totalAngleRaw || "0.0", className) || "0.0";
+        const totalAngleExpr = this.rewriteCodeExpr(totalAngleRaw || "0.0", className) || "0.0";
         return { count, glowTick, easeName, reverseOnDisable, totalAngleExpr };
     }
 
@@ -208,18 +209,95 @@ export function installKotlinCodegenMethods(CompositionBuilderApp, deps = {}) {
         return this.resolveAngleOffsetConfig(level, className);
     }
 
-    emitCardPutAll(card, className, sequencedRoot) {
+    normalizeVectorCtorNumericLiteral(rawArg, mode = "double") {
+        const raw = String(rawArg || "").trim();
+        if (!/^-?(?:\d+\.?\d*|\.\d+)(?:[fFdDlL])?$/.test(raw)) return raw;
+        let core = raw;
+        if (/[fFdDlL]$/.test(core)) core = core.slice(0, -1);
+        if (!core) return raw;
+        if (mode === "float") {
+            if (!core.includes(".")) return `${core}F`;
+            if (core.endsWith(".")) core = `${core}0`;
+            return `${core}F`;
+        }
+        if (!core.includes(".")) return `${core}.0`;
+        if (core.endsWith(".")) return `${core}0`;
+        return core;
+    }
+
+    rewriteVectorCtorNumericLiterals(exprRaw) {
+        const src = String(exprRaw || "");
+        const rewrite = (ctor, a, b, c) => {
+            const mode = ctor === "Vector3f" ? "float" : "double";
+            const x = this.normalizeVectorCtorNumericLiteral(a, mode);
+            const y = this.normalizeVectorCtorNumericLiteral(b, mode);
+            const z = this.normalizeVectorCtorNumericLiteral(c, mode);
+            return `${ctor}(${x}, ${y}, ${z})`;
+        };
+        let out = src.replace(
+            /\bVector3f\s*\(\s*([^,]+)\s*,\s*([^,]+)\s*,\s*([^)]+)\s*\)/g,
+            (m, a, b, c) => rewrite("Vector3f", a, b, c)
+        );
+        out = out.replace(
+            /\bVec3\s*\(\s*([^,]+)\s*,\s*([^,]+)\s*,\s*([^)]+)\s*\)/g,
+            (m, a, b, c) => rewrite("Vec3", a, b, c)
+        );
+        out = out.replace(
+            /\bRelativeLocation\s*\(\s*([^,]+)\s*,\s*([^,]+)\s*,\s*([^)]+)\s*\)/g,
+            (m, a, b, c) => rewrite("RelativeLocation", a, b, c)
+        );
+        return out;
+    }
+
+    rewriteCodeExpr(exprRaw, className) {
+        const qualified = rewriteClassQualifier(String(exprRaw || ""), className);
+        return this.rewriteVectorCtorNumericLiterals(qualified);
+    }
+
+    rewriteAnimateConditionExpr(exprRaw, className) {
+        return this.rewriteCodeExpr(exprRaw, className);
+    }
+
+    shouldAutoAsRelative(exprRaw, className) {
+        const expr = String(exprRaw || "").trim();
+        if (!expr || /\.asRelative\(\)\s*$/.test(expr)) return false;
+        if (/^(Vec3|Vector3f)\s*\(/.test(expr)) return true;
+        const cls = sanitizeKotlinClassName(className || "NewComposition");
+        for (const v of (this.state.globalVars || [])) {
+            const rawName = String(v?.name || "").trim();
+            const name = sanitizeKotlinIdentifier(rawName, "");
+            const type = String(v?.type || "").trim();
+            if (!name || (type !== "Vec3" && type !== "Vector3f")) continue;
+            if (expr === name || expr === `this@${cls}.${name}`) return true;
+        }
+        return false;
+    }
+
+    rewriteRelativeTargetExpr(exprRaw, className) {
+        const expr = this.rewriteCodeExpr(exprRaw, className).trim();
+        if (!expr) return "RelativeLocation.yAxis()";
+        if (this.shouldAutoAsRelative(expr, className)) {
+            if (/^(Vec3|Vector3f)\s*\(/.test(expr)) return `(${expr}).asRelative()`;
+            return `${expr}.asRelative()`;
+        }
+        return expr;
+    }
+
+    emitCardPutAll(card, className, sequencedRoot, cardIndex = 0) {
         const builderExpr = this.emitBuilderExpr(card);
         const offsetCfg = this.resolveCardAngleOffsetConfig(card, className);
         if (offsetCfg) {
+            const suffix = Math.max(0, int(cardIndex)) + 1;
+            const countVar = `angleOffsetCount${suffix}`;
+            const angleVar = `finalAngle${suffix}`;
             const dataExpr = this.emitCompositionDataExpr(card, className, sequencedRoot, "                        ", {
-                angleOffsetExpr: "finalAngle",
+                angleOffsetExpr: angleVar,
                 angleOffsetConfig: offsetCfg
             });
             return [
-                `        val angleOffsetCount = ${Math.max(1, int(offsetCfg.count))}`,
-                "        repeat(angleOffsetCount) { index ->",
-                `            val finalAngle = (${offsetCfg.totalAngleExpr}) * index.toDouble() / angleOffsetCount.toDouble()`,
+                `        val ${countVar} = ${Math.max(1, int(offsetCfg.count))}`,
+                `        repeat(${countVar}) { index ->`,
+                `            val ${angleVar} = (${offsetCfg.totalAngleExpr}) * index.toDouble() / ${countVar}.toDouble()`,
                 "            result.putAll(",
                 `${indentText(builderExpr, "                ")}`,
                 "                    .createWithCompositionData { rel ->",
@@ -240,18 +318,21 @@ export function installKotlinCodegenMethods(CompositionBuilderApp, deps = {}) {
         ].join("\n");
     }
 
-    emitCardPutPoint(card, className, sequencedRoot) {
+    emitCardPutPoint(card, className, sequencedRoot, cardIndex = 0) {
         const rel = relExpr(card.point?.x, card.point?.y, card.point?.z);
         const offsetCfg = this.resolveCardAngleOffsetConfig(card, className);
         if (offsetCfg) {
+            const suffix = Math.max(0, int(cardIndex)) + 1;
+            const countVar = `angleOffsetCount${suffix}`;
+            const angleVar = `finalAngle${suffix}`;
             const dataExpr = this.emitCompositionDataExpr(card, className, sequencedRoot, "                    ", {
-                angleOffsetExpr: "finalAngle",
+                angleOffsetExpr: angleVar,
                 angleOffsetConfig: offsetCfg
             });
             return [
-                `        val angleOffsetCount = ${Math.max(1, int(offsetCfg.count))}`,
-                "        repeat(angleOffsetCount) { index ->",
-                `            val finalAngle = (${offsetCfg.totalAngleExpr}) * index.toDouble() / angleOffsetCount.toDouble()`,
+                `        val ${countVar} = ${Math.max(1, int(offsetCfg.count))}`,
+                `        repeat(${countVar}) { index ->`,
+                `            val ${angleVar} = (${offsetCfg.totalAngleExpr}) * index.toDouble() / ${countVar}.toDouble()`,
                 "            result[",
                 dataExpr,
                 `            ] = ${rel}`,
@@ -310,7 +391,7 @@ export function installKotlinCodegenMethods(CompositionBuilderApp, deps = {}) {
             lines.push(`${indentBase}.addParticleInstanceInit {`);
             for (const it of card.particleInit) {
                 const target = sanitizeKotlinIdentifier(it.target || "size", "size");
-                let expr = rewriteClassQualifier(String(it.expr || "").trim(), className);
+                let expr = this.rewriteCodeExpr(String(it.expr || "").trim(), className);
                 expr = normalizeParticleExpr(target, expr);
                 if (!expr) continue;
                 lines.push(`${indentBase}    ${target} = ${expr}`);
@@ -328,7 +409,7 @@ export function installKotlinCodegenMethods(CompositionBuilderApp, deps = {}) {
             for (const v of (card.controllerVars || [])) {
                 const vName = sanitizeKotlinIdentifier(v.name || "v", "v");
                 const vType = sanitizeKotlinIdentifier(v.type || "Boolean", "Boolean");
-                let expr = rewriteClassQualifier(String(v.expr || "").trim(), className);
+                let expr = this.rewriteCodeExpr(String(v.expr || "").trim(), className);
                 expr = rewriteStatus(expr, className);
                 if (!expr) expr = defaultLiteralForKotlinType(vType);
                 lines.push(`${indentBase}    var ${vName}: ${vType} = ${expr}`);
@@ -372,7 +453,7 @@ export function installKotlinCodegenMethods(CompositionBuilderApp, deps = {}) {
         const cls = isSequenced ? "SequencedParticleShapeComposition" : "ParticleShapeComposition";
         const applyFn = "applyPoint";
         const childType = ["single", "particle_shape", "sequenced_shape"].includes(String(card.shapeChildType || "")) ? String(card.shapeChildType) : "single";
-        const axisExpr = rewriteClassQualifier(String(card.shapeAxisExpr || card.shapeAxisPreset || "RelativeLocation.yAxis()"), className);
+        const axisExpr = this.rewriteRelativeTargetExpr(String(card.shapeAxisExpr || card.shapeAxisPreset || "RelativeLocation.yAxis()"), className);
         const scale = normalizeScaleHelperConfig(card.shapeScale, { type: "none" });
         const shapeBindMode = card.shapeBindMode === "builder" ? "builder" : "point";
         const shapePointExpr = relExpr(card.shapePoint?.x, card.shapePoint?.y, card.shapePoint?.z);
@@ -449,7 +530,7 @@ export function installKotlinCodegenMethods(CompositionBuilderApp, deps = {}) {
             const isSequenced = level.type === "sequenced_shape";
             const cls = isSequenced ? "SequencedParticleShapeComposition" : "ParticleShapeComposition";
             const applyFn = "applyPoint";
-            const axisExpr = rewriteClassQualifier(String(level.axisExpr || level.axisPreset || "RelativeLocation.yAxis()"), className);
+            const axisExpr = this.rewriteRelativeTargetExpr(String(level.axisExpr || level.axisPreset || "RelativeLocation.yAxis()"), className);
             const scale = normalizeScaleHelperConfig(level.scale, { type: "none" });
             const bindMode = level.bindMode === "builder" ? "builder" : "point";
             const pointExpr = relExpr(level.point?.x, level.point?.y, level.point?.z);
@@ -563,9 +644,9 @@ export function installKotlinCodegenMethods(CompositionBuilderApp, deps = {}) {
         if (displayActions.length) {
             for (let i = 0; i < displayActions.length; i++) {
                 const act = displayActions[i];
-                const toExpr = rewriteClassQualifier(String(act.toExpr || act.toPreset || "RelativeLocation.yAxis()"), className);
+                const toExpr = this.rewriteRelativeTargetExpr(String(act.toExpr || act.toPreset || "RelativeLocation.yAxis()"), className);
                 const angleExpr = act.angleMode === "expr"
-                    ? rewriteClassQualifier(String(act.angleExpr || "0.0"), className)
+                    ? this.rewriteCodeExpr(String(act.angleExpr || "0.0"), className)
                     : U.angleToKotlinRadExpr(num(act.angleValue), normalizeAngleUnit(act.angleUnit));
                 const blockLines = [];
                 if (useAngleOffsetAnimator && i === 0) appendOffsetAnimator(blockLines);
@@ -592,7 +673,7 @@ export function installKotlinCodegenMethods(CompositionBuilderApp, deps = {}) {
                 } else if (act.type === "expression") {
                     const rawExpr = String(act.expression || "").trim();
                     const check = this.validateJsExpressionSource(rawExpr, { cardId: card.id, scope: scopeInfo || undefined });
-                    const expr = rewriteClassQualifier(rawExpr, className);
+                    const expr = this.rewriteCodeExpr(rawExpr, className);
                     if (expr && check.valid) {
                         blockLines.push(`${innerIndent}    addPreTickAction {`);
                         blockLines.push(translateJsBlockToKotlin(expr, `${innerIndent}        `));
@@ -620,9 +701,9 @@ export function installKotlinCodegenMethods(CompositionBuilderApp, deps = {}) {
         if (supportsAnimate && card.growthAnimates?.length) {
             const arr = card.growthAnimates.map((a) => normalizeAnimate(a));
             if (arr.length) {
-                lines.push(`${innerIndent}animate.addAnimate(${arr[0].count}) { ${rewriteClassQualifier(arr[0].condition, className)} }`);
+                lines.push(`${innerIndent}animate.addAnimate(${arr[0].count}) { ${this.rewriteAnimateConditionExpr(arr[0].condition || "true", className)} }`);
                 for (let i = 1; i < arr.length; i++) {
-                    lines.push(`${innerIndent}    .addAnimate(${arr[i].count}) { ${rewriteClassQualifier(arr[i].condition, className)} }`);
+                    lines.push(`${innerIndent}    .addAnimate(${arr[i].count}) { ${this.rewriteAnimateConditionExpr(arr[i].condition || "true", className)} }`);
                 }
             }
         }
@@ -656,9 +737,9 @@ export function installKotlinCodegenMethods(CompositionBuilderApp, deps = {}) {
         }
         for (const raw of actions) {
             const act = normalizeDisplayAction(raw);
-            const toExpr = rewriteClassQualifier(String(act.toExpr || act.toPreset || "RelativeLocation.yAxis()"), className);
+            const toExpr = this.rewriteRelativeTargetExpr(String(act.toExpr || act.toPreset || "RelativeLocation.yAxis()"), className);
             const angleExpr = act.angleMode === "expr"
-                ? rewriteClassQualifier(String(act.angleExpr || "0.0"), className)
+                ? this.rewriteCodeExpr(String(act.angleExpr || "0.0"), className)
                 : U.angleToKotlinRadExpr(num(act.angleValue), normalizeAngleUnit(act.angleUnit));
             if (act.type === "rotateToPoint") {
                 lines.push(`            rotateToPoint(${toExpr})`);
@@ -669,7 +750,7 @@ export function installKotlinCodegenMethods(CompositionBuilderApp, deps = {}) {
             } else if (act.type === "expression") {
                 const rawExpr = String(act.expression || "").trim();
                 const check = this.validateJsExpressionSource(rawExpr, { cardId: "" });
-                const expr = rewriteClassQualifier(rawExpr, className);
+                const expr = this.rewriteCodeExpr(rawExpr, className);
                 if (expr && check.valid) lines.push(translateJsBlockToKotlin(expr, "            "));
             }
         }

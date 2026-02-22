@@ -34,6 +34,7 @@ export function installTargetPresetMethods(CompositionBuilderApp, deps = {}) {
             if (!name) continue;
             const type = String(v.type || "").trim();
             if (type === "Vec3") out.push({ label: `${name}.asRelative()`, expr: `${name}.asRelative()` });
+            if (type === "Vector3f") out.push({ label: `${name}.asRelative()`, expr: `${name}.asRelative()` });
             if (type === "RelativeLocation") out.push({ label: `${name}`, expr: `${name}` });
         }
         return out;
@@ -90,7 +91,7 @@ export function installTargetPresetMethods(CompositionBuilderApp, deps = {}) {
         if (target === "alpha" || target === "particlealpha" || target === "particle.particlealpha") return "1.0";
         if (target === "currentage" || target === "age") return "0";
         if (target === "texturesheet") return "0";
-        if (target === "color" || target === "particlecolor" || target === "particle.particlecolor") return "Vec3(0.0, 0.0, 0.0)";
+        if (target === "color" || target === "particlecolor" || target === "particle.particlecolor") return "Vector3f(0F, 0F, 0F)";
         return "0";
     }
 

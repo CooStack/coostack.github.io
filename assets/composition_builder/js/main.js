@@ -501,7 +501,7 @@ function normalizeAnimate(a) {
     const x = Object.assign({}, a || {});
     x.id = x.id || uid();
     x.count = Math.max(1, int(x.count || 1));
-    x.condition = String(x.condition || "age > 0");
+    x.condition = String(x.condition || "");
     return x;
 }
 
@@ -1935,7 +1935,7 @@ class CompositionBuilderApp {
                 if (idx >= 0 && idx < this.state.globalConsts.length) this.state.globalConsts.splice(idx, 1);
                 break;
             case "add-comp-animate":
-                this.state.compositionAnimates.push(normalizeAnimate({ count: 1, condition: "age > 1" }));
+                this.state.compositionAnimates.push(normalizeAnimate({ count: 1, condition: "" }));
                 break;
             case "remove-comp-animate":
                 if (idx >= 0 && idx < this.state.compositionAnimates.length) this.state.compositionAnimates.splice(idx, 1);
@@ -2828,7 +2828,7 @@ class CompositionBuilderApp {
                     const level = this.getNestedShapeLevel(card, levelIdx, true);
                     if (level) {
                         if (!Array.isArray(level.growthAnimates)) level.growthAnimates = [];
-                        level.growthAnimates.push(normalizeAnimate({ count: 1, condition: "age > 1" }));
+                        level.growthAnimates.push(normalizeAnimate({ count: 1, condition: "" }));
                         this.setNestedShapeLevel(card, levelIdx, level);
                     }
                     break;
@@ -3185,6 +3185,15 @@ class CompositionBuilderApp {
             return;
         }
 
+        if (t.dataset.pinitColorIdx !== undefined) {
+            const item = card.particleInit[int(t.dataset.pinitColorIdx)];
+            if (!item) return;
+            this.updateParticleInitColorValue(item, t.value);
+            this.syncParticleInitInlineInputs(card.id, t.dataset.pinitColorIdx, item);
+            this.afterValueMutate({ rebuildPreview: true });
+            return;
+        }
+
         if (t.dataset.pinitIdx !== undefined) {
             const item = card.particleInit[int(t.dataset.pinitIdx)];
             if (!item) return;
@@ -3223,6 +3232,7 @@ class CompositionBuilderApp {
             if (field === "expr") {
                 item.expr = String(t.value || "");
                 item.exprPreset = this.resolveParticleInitPresetExpr(item.expr, item.target);
+                this.syncParticleInitInlineInputs(card.id, t.dataset.pinitIdx, item);
                 this.afterValueMutate({ rebuildPreview: true });
                 return;
             }
@@ -3362,7 +3372,7 @@ class CompositionBuilderApp {
             item.count = Math.max(1, int(target.value || 1));
             return;
         }
-        if (field === "condition") item.condition = String(target.value || "true");
+        if (field === "condition") item.condition = String(target.value || "");
     }
 
     applyDisplayActionField(item, field, target) {
@@ -3695,7 +3705,7 @@ class CompositionBuilderApp {
     addCardAnimate(cardId, key) {
         const card = this.getCardById(cardId);
         if (!card || !Array.isArray(card[key])) return;
-        card[key].push(normalizeAnimate({ count: 1, condition: "age > 1" }));
+        card[key].push(normalizeAnimate({ count: 1, condition: "" }));
     }
 
     removeCardAnimate(cardId, key, idx) {
@@ -4951,6 +4961,7 @@ class CompositionBuilderApp {
             if (!name) continue;
             const type = String(v.type || "").trim();
             if (type === "Vec3") out.push({ label: `${name}.asRelative()`, expr: `${name}.asRelative()` });
+            if (type === "Vector3f") out.push({ label: `${name}.asRelative()`, expr: `${name}.asRelative()` });
             if (type === "RelativeLocation") out.push({ label: `${name}`, expr: `${name}` });
         }
         return out;
@@ -5006,7 +5017,7 @@ class CompositionBuilderApp {
         if (target === "alpha" || target === "particlealpha" || target === "particle.particlealpha") return "1.0";
         if (target === "currentage" || target === "age") return "0";
         if (target === "texturesheet") return "0";
-        if (target === "color" || target === "particlecolor" || target === "particle.particlecolor") return "Vec3(0.0, 0.0, 0.0)";
+        if (target === "color" || target === "particlecolor" || target === "particle.particlecolor") return "Vector3f(0F, 0F, 0F)";
         return "0";
     }
 
@@ -5092,6 +5103,26 @@ class CompositionBuilderApp {
         return "";
     }
 
+    updateParticleInitColorValue(item, hex) {
+        if (!item || !this.isParticleInitVectorTarget(item.target)) return;
+        const c = hexToVector01(hex);
+        item.expr = formatVectorLiteral("Vector3f", c.x, c.y, c.z);
+        item.exprPreset = "";
+    }
+
+    syncParticleInitInlineInputs(cardId, pinitIdx, item) {
+        const idx = int(pinitIdx);
+        if (idx < 0 || !item || !this.dom?.cardsRoot) return;
+        if (!this.isParticleInitVectorTarget(item.target)) return;
+        const root = this.dom.cardsRoot;
+        const colorInput = root.querySelector(`input[data-card-id="${cardId}"][data-pinit-color-idx="${idx}"]`);
+        if (!colorInput) return;
+        const parsed = this.exprRuntime.parseVecLikeValue(item.expr || this.getParticleInitDefaultExprByTarget(item.target));
+        if (document.activeElement !== colorInput) {
+            colorInput.value = vectorToHex01(parsed.x, parsed.y, parsed.z);
+        }
+    }
+
     renderParticleInitRows(card) {
         const list = Array.isArray(card?.particleInit) ? card.particleInit : [];
         return list.map((it, pIdx) => {
@@ -5100,12 +5131,24 @@ class CompositionBuilderApp {
             const valuePresetOptions = this.getParticleInitValuePresetOptionsHtml(presetSelected, it.target);
             const manualVisible = !presetSelected;
             const manualPlaceholder = this.getParticleInitDefaultExprByTarget(it.target);
+            const isVectorTarget = this.isParticleInitVectorTarget(it.target);
+            const parsedVector = this.exprRuntime.parseVecLikeValue(it.expr || manualPlaceholder);
+            const colorHex = vectorToHex01(parsedVector.x, parsedVector.y, parsedVector.z);
+            const valueClass = [
+                "pinit-value",
+                manualVisible ? "" : "preset-only",
+                (manualVisible && isVectorTarget) ? "vector-manual" : ""
+            ].filter(Boolean).join(" ");
+            const colorPicker = (manualVisible && isVectorTarget)
+                ? `<input class="input vector-color pinit-color" type="color" data-card-id="${card.id}" data-pinit-color-idx="${pIdx}" value="${esc(colorHex)}" title="打开调色盘"/>`
+                : "";
             return `
                 <div class="kv-row grid-pinit">
                     <select class="input" data-card-id="${card.id}" data-pinit-idx="${pIdx}" data-pinit-field="target">${targetOptions}</select>
-                    <div class="pinit-value ${manualVisible ? "" : "preset-only"}">
+                    <div class="${valueClass}">
                         <select class="input expr-input" data-card-id="${card.id}" data-pinit-idx="${pIdx}" data-pinit-field="exprPreset">${valuePresetOptions}</select>
                         <input class="input expr-input mono ${manualVisible ? "" : "pinit-manual-hidden"}" data-card-id="${card.id}" data-pinit-idx="${pIdx}" data-pinit-field="expr" value="${esc(it.expr || "")}" placeholder="${esc(manualPlaceholder)}"/>
+                        ${colorPicker}
                     </div>
                     <button class="btn small" data-act="remove-pinit" data-card-id="${card.id}" data-idx="${pIdx}">删除</button>
                 </div>
@@ -5902,7 +5945,8 @@ class CompositionBuilderApp {
                     elapsedTick,
                     runtimeActions,
                     shapeRuntimeLevels,
-                    cycleCfg
+                    cycleCfg,
+                    frameRuntimeGlobals
                 );
                 cached = {
                     ownerCount,
@@ -6121,10 +6165,15 @@ class CompositionBuilderApp {
         return { appear, live, fade, play, total };
     }
 
-    evaluateGrowthVisibleLimit(ownerCardId, ownerCount, ageTick, globalCycleAge, elapsedTick, globalRuntimeActions = [], shapeRuntimeLevels = [], cycleCfg = null) {
+    evaluateGrowthVisibleLimit(ownerCardId, ownerCount, ageTick, globalCycleAge, elapsedTick, globalRuntimeActions = [], shapeRuntimeLevels = [], cycleCfg = null, runtimeVars = null) {
         const cycle = cycleCfg || this.getPreviewCycleConfig();
         const sequencedRoot = this.state.compositionType === "sequenced";
         let growthAge = num(ageTick);
+        const runtimeScope = (runtimeVars && typeof runtimeVars === "object")
+            ? runtimeVars
+            : ((this.previewRuntimeGlobals && typeof this.previewRuntimeGlobals === "object")
+                ? this.previewRuntimeGlobals
+                : null);
 
         const totalCards = Math.max(1, this.state.cards.length);
         const cardIndexRaw = this.getCardIndexById(ownerCardId);
@@ -6133,7 +6182,7 @@ class CompositionBuilderApp {
         let hasRootGrowthSource = false;
 
         if (sequencedRoot && this.state.compositionAnimates.length) {
-            const n = this.computeAnimateVisibleCount(this.state.compositionAnimates, globalCycleAge, elapsedTick, 0);
+            const n = this.computeAnimateVisibleCount(this.state.compositionAnimates, globalCycleAge, elapsedTick, 0, runtimeScope);
             rootVisibleCards = Math.min(rootVisibleCards, n);
             hasRootGrowthSource = true;
         }
@@ -6164,7 +6213,7 @@ class CompositionBuilderApp {
                 let levelLimit = Math.max(1, ownerCount);
                 let hasLevelGrowthSource = false;
                 if (Array.isArray(lv.growthAnimates) && lv.growthAnimates.length) {
-                    const n = this.computeAnimateVisibleCount(lv.growthAnimates, growthAge, elapsedTick, 0);
+                    const n = this.computeAnimateVisibleCount(lv.growthAnimates, growthAge, elapsedTick, 0, runtimeScope);
                     levelLimit = Math.min(levelLimit, n);
                     hasLevelGrowthSource = true;
                 }
@@ -6809,21 +6858,27 @@ class CompositionBuilderApp {
         return false;
     }
 
-    computeAnimateVisibleCount(list, ageTick, tick, index) {
+    computeAnimateVisibleCount(list, ageTick, tick, index, runtimeVars = null) {
         const arr = Array.isArray(list) ? list.map((it) => normalizeAnimate(it)) : [];
         if (!arr.length) return Number.POSITIVE_INFINITY;
         let count = 0;
         for (const it of arr) {
-            if (!this.evaluateAnimateCondition(it.condition, ageTick, tick, index)) continue;
+            if (!this.evaluateAnimateCondition(it.condition, ageTick, tick, index, runtimeVars)) continue;
             count += Math.max(1, int(it.count || 1));
         }
         return count;
     }
 
-    evaluateAnimateCondition(exprRaw, ageTick, tick, index) {
+    evaluateAnimateCondition(exprRaw, ageTick, tick, index, runtimeVars = null) {
         const expr = String(exprRaw || "").trim();
         if (!expr) return true;
-        const vars = this.getExpressionVars(tick, ageTick, index);
+        const runtimeScope = (runtimeVars && typeof runtimeVars === "object")
+            ? runtimeVars
+            : ((this.previewRuntimeGlobals && typeof this.previewRuntimeGlobals === "object")
+                ? this.previewRuntimeGlobals
+                : null);
+        const vars = this.createRuntimeExpressionScope(tick, ageTick, index, runtimeScope, true);
+        vars.thisAt = runtimeScope || vars;
         let fn = this.previewCondFnCache.get(expr);
         if (fn === undefined) {
             try {
@@ -7840,7 +7895,7 @@ class CompositionBuilderApp {
             if (!name) continue;
             base.push(name);
             base.push(`this@${projectClass}.${name}`);
-            if (String(g.type || "") === "Vec3") base.push(`${name}.asRelative()`);
+            if (String(g.type || "") === "Vec3" || String(g.type || "") === "Vector3f") base.push(`${name}.asRelative()`);
         }
         for (const c of this.state.globalConsts) {
             const name = String(c.name || "").trim();
@@ -8106,8 +8161,8 @@ class CompositionBuilderApp {
                 detail: "全局变量（限定访问）",
                 priority: 208
             });
-            if (String(g.type || "").trim() === "Vec3") {
-                vars.push({ label: `${name}.asRelative()`, detail: "Vec3 -> Relative", priority: 205 });
+            if (String(g.type || "").trim() === "Vec3" || String(g.type || "").trim() === "Vector3f") {
+                vars.push({ label: `${name}.asRelative()`, detail: "Vec3/Vector3f -> Relative", priority: 205 });
             }
         }
         if (!isControllerScript) {

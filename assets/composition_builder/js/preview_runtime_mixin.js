@@ -621,7 +621,10 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
         const sequencedRoot = this.state.compositionType === "sequenced";
         const rootVirtualTotal = Math.max(1, int(this.previewRootVirtualTotal || this.state.cards.length || 1));
         const rootGrowthPlan = sequencedRoot
-            ? this.buildSequencedRootGrowthPlan(runtimeActions, rootVirtualTotal, globalCycleAge, elapsedTick)
+            ? this.buildSequencedRootGrowthPlan(runtimeActions, rootVirtualTotal, globalCycleAge, elapsedTick, {
+                runtimeVars: frameRuntimeGlobals,
+                axis: globalAxis
+            })
             : null;
 
         let frustum = null;
@@ -748,14 +751,16 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
                             rootPlan: rootGrowthPlan,
                             ownerCard: card,
                             ownerCardIndex: cardIndex
-                        }
+                        },
+                        frameRuntimeGlobals
                     );
                     localGrowthPlan = this.buildLocalGrowthPlan(
                         card,
                         ownerCountSafe,
                         shapeRuntimeLevels,
                         growthAgeTick,
-                        runtimeElapsedTick
+                        runtimeElapsedTick,
+                        frameRuntimeGlobals
                     );
                     if (canReuseGrowthPlan) {
                         growthPlanFrameCache.set(growthPlanKey, {
@@ -1080,12 +1085,19 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
         return { appear, live, fade, play, total };
     }
 
-    evaluateGrowthVisibleLimit(ownerCardId, ownerCount, ageTick, globalCycleAge, elapsedTick, globalRuntimeActions = [], shapeRuntimeLevels = [], cycleCfg = null, rootCtx = null) {
+    evaluateGrowthVisibleLimit(ownerCardId, ownerCount, ageTick, globalCycleAge, elapsedTick, globalRuntimeActions = [], shapeRuntimeLevels = [], cycleCfg = null, rootCtx = null, runtimeVars = null) {
         const cycle = cycleCfg || this.getPreviewCycleConfig();
         const sequencedRoot = this.state.compositionType === "sequenced";
         let growthAge = num(ageTick);
         const rootGrowthAge = num(globalCycleAge);
         const rootInfo = (rootCtx && typeof rootCtx === "object") ? rootCtx : {};
+        const runtimeScope = (runtimeVars && typeof runtimeVars === "object")
+            ? runtimeVars
+            : ((rootInfo.runtimeVars && typeof rootInfo.runtimeVars === "object")
+                ? rootInfo.runtimeVars
+                : ((this.previewRuntimeGlobals && typeof this.previewRuntimeGlobals === "object")
+                    ? this.previewRuntimeGlobals
+                    : null));
 
         const totalCards = Math.max(1, int(rootInfo.rootVirtualTotal || this.previewRootVirtualTotal || this.state.cards.length));
         const cardIndexRaw = Number.isFinite(Number(rootInfo.ownerCardIndex))
@@ -1110,7 +1122,7 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
                 : Number.POSITIVE_INFINITY;
         } else {
             if (sequencedRoot && this.state.compositionAnimates.length) {
-                const n = this.computeAnimateVisibleCount(this.state.compositionAnimates, globalCycleAge, rootElapsedTick, 0);
+                const n = this.computeAnimateVisibleCount(this.state.compositionAnimates, globalCycleAge, rootElapsedTick, 0, runtimeScope);
                 rootVisibleCards = Math.min(rootVisibleCards, n);
                 hasRootGrowthSource = true;
             }
@@ -1135,13 +1147,14 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
             ownerCount,
             growthAge,
             elapsedTick,
-            shapeRuntimeLevels
+            shapeRuntimeLevels,
+            runtimeScope
         );
         if (!Number.isFinite(localLimit)) return Math.max(1, ownerCount);
         return clamp(int(localLimit), 0, Math.max(1, ownerCount));
     }
 
-    evaluateLocalGrowthVisibleLimit(card, ownerCount, growthAge, elapsedTick, shapeRuntimeLevels = []) {
+    evaluateLocalGrowthVisibleLimit(card, ownerCount, growthAge, elapsedTick, shapeRuntimeLevels = [], runtimeVars = null) {
         if (!card) return Math.max(1, ownerCount);
         let visibleLimit = Math.max(1, ownerCount);
         let hasLocalGrowthSource = false;
@@ -1153,7 +1166,7 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
                 let levelLimit = Math.max(1, ownerCount);
                 let hasLevelGrowthSource = false;
                 if (Array.isArray(lv.growthAnimates) && lv.growthAnimates.length) {
-                    const n = this.computeAnimateVisibleCount(lv.growthAnimates, growthAge, elapsedTick, 0);
+                    const n = this.computeAnimateVisibleCount(lv.growthAnimates, growthAge, elapsedTick, 0, runtimeVars);
                     levelLimit = Math.min(levelLimit, n);
                     hasLevelGrowthSource = true;
                 }
@@ -1200,14 +1213,14 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
         return clamp(int(visibleLimit), 0, Math.max(1, ownerCount));
     }
 
-    buildLocalGrowthPlan(card, ownerCount, shapeRuntimeLevels = [], ageTick = 0, elapsedTick = 0) {
+    buildLocalGrowthPlan(card, ownerCount, shapeRuntimeLevels = [], ageTick = 0, elapsedTick = 0, runtimeVars = null) {
         const maxCount = Math.max(1, int(ownerCount || 1));
         const steps = Math.max(0, Math.floor(num(ageTick)));
         const unlockTickByIndex = new Array(maxCount).fill(Number.POSITIVE_INFINITY);
         let previousVisible = 0;
 
         for (let t = 0; t <= steps; t++) {
-            let limit = this.evaluateLocalGrowthVisibleLimit(card, maxCount, t, t, shapeRuntimeLevels);
+            let limit = this.evaluateLocalGrowthVisibleLimit(card, maxCount, t, t, shapeRuntimeLevels, runtimeVars);
             if (!Number.isFinite(limit)) limit = maxCount;
             let visible = clamp(int(limit), 0, maxCount);
             if (visible < previousVisible) visible = previousVisible;
@@ -1224,20 +1237,37 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
         };
     }
 
-    buildSequencedRootGrowthPlan(globalRuntimeActions, totalCards, globalCycleAge, elapsedTick) {
+    buildSequencedRootGrowthPlan(globalRuntimeActions, totalCards, globalCycleAge, elapsedTick, opts = null) {
         const maxCards = Math.max(1, int(totalCards || 1));
         const steps = Math.max(0, Math.floor(num(globalCycleAge)));
         const counts = new Array(steps + 1).fill(0);
         const unlockTickByIndex = new Array(maxCards).fill(Number.POSITIVE_INFINITY);
         let hasSource = false;
         let previousVisible = 0;
+        const options = (opts && typeof opts === "object") ? opts : {};
+        const baseRuntimeScope = (options.runtimeVars && typeof options.runtimeVars === "object")
+            ? options.runtimeVars
+            : ((this.previewRuntimeGlobals && typeof this.previewRuntimeGlobals === "object")
+                ? this.previewRuntimeGlobals
+                : null);
+        const replayGlobalVars = baseRuntimeScope ? this.buildPreviewRuntimeGlobals(0, 0, 0) : null;
+        const replayStartAxis = (options.axis && typeof options.axis === "object")
+            ? this.parseJsVec(options.axis)
+            : this.resolveCompositionAxisDirection();
+        const hasReplayExpressions = !!(replayGlobalVars && Array.isArray(globalRuntimeActions)
+            && globalRuntimeActions.some((act) => act?.type === "expression"));
 
         for (let t = 0; t <= steps; t++) {
             let visibleLimit = Number.POSITIVE_INFINITY;
             let hasTickSource = false;
+            let tickRuntimeScope = baseRuntimeScope;
+            if (hasReplayExpressions) {
+                this.applyExpressionGlobalsOnce(globalRuntimeActions, t, t, replayGlobalVars, replayStartAxis);
+                tickRuntimeScope = replayGlobalVars;
+            }
 
             if (Array.isArray(this.state.compositionAnimates) && this.state.compositionAnimates.length) {
-                const n = this.computeAnimateVisibleCount(this.state.compositionAnimates, t, t, 0);
+                const n = this.computeAnimateVisibleCount(this.state.compositionAnimates, t, t, 0, tickRuntimeScope);
                 if (Number.isFinite(n)) {
                     visibleLimit = Math.min(visibleLimit, n);
                     hasTickSource = true;
@@ -2083,21 +2113,27 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
         return false;
     }
 
-    computeAnimateVisibleCount(list, ageTick, tick, index) {
+    computeAnimateVisibleCount(list, ageTick, tick, index, runtimeVars = null) {
         const arr = Array.isArray(list) ? list.map((it) => normalizeAnimate(it)) : [];
         if (!arr.length) return Number.POSITIVE_INFINITY;
         let count = 0;
         for (const it of arr) {
-            if (!this.evaluateAnimateCondition(it.condition, ageTick, tick, index)) continue;
+            if (!this.evaluateAnimateCondition(it.condition, ageTick, tick, index, runtimeVars)) continue;
             count += Math.max(1, int(it.count || 1));
         }
         return count;
     }
 
-    evaluateAnimateCondition(exprRaw, ageTick, tick, index) {
+    evaluateAnimateCondition(exprRaw, ageTick, tick, index, runtimeVars = null) {
         const expr = String(exprRaw || "").trim();
         if (!expr) return true;
-        const vars = this.getExpressionVars(tick, ageTick, index);
+        const runtimeScope = (runtimeVars && typeof runtimeVars === "object")
+            ? runtimeVars
+            : ((this.previewRuntimeGlobals && typeof this.previewRuntimeGlobals === "object")
+                ? this.previewRuntimeGlobals
+                : null);
+        const vars = this.createRuntimeExpressionScope(tick, ageTick, index, runtimeScope, true);
+        vars.thisAt = runtimeScope || vars;
         const fn = this.getPreviewConditionFn(expr);
         if (typeof fn !== "function") return false;
         try {

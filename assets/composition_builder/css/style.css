@@ -558,8 +558,18 @@ body[data-theme^="light"] select.input option {
     align-items: center;
 }
 
+.pinit-value.vector-manual {
+    grid-template-columns: minmax(170px, .95fr) minmax(0, 1.35fr) 58px;
+}
+
 .pinit-value.preset-only {
     grid-template-columns: minmax(170px, .95fr);
+}
+
+.pinit-color {
+    min-width: 0;
+    height: 30px;
+    padding: 2px 4px;
 }
 
 .pinit-manual-hidden {
@@ -1607,6 +1617,9 @@ body[data-theme^="light"] select.input option {
     .pinit-value {
         grid-template-columns: minmax(130px, .9fr) minmax(0, 1.2fr);
     }
+    .pinit-value.vector-manual {
+        grid-template-columns: minmax(130px, .9fr) minmax(0, 1.2fr) 56px;
+    }
     .grid5 {
         grid-template-columns: 130px repeat(3, minmax(0, 1fr)) auto;
     }
@@ -1637,6 +1650,9 @@ body[data-theme^="light"] select.input option {
         grid-template-columns: 1fr;
     }
     .pinit-value {
+        grid-template-columns: 1fr;
+    }
+    .pinit-value.vector-manual {
         grid-template-columns: 1fr;
     }
 }
@@ -1685,6 +1701,9 @@ body[data-theme^="light"] select.input option {
         grid-template-columns: 1fr;
     }
     .pinit-value {
+        grid-template-columns: 1fr;
+    }
+    .pinit-value.vector-manual {
         grid-template-columns: 1fr;
     }
 }
