@@ -4,7 +4,7 @@
     <meta charset="utf-8"/>
     <meta name="viewport" content="width=device-width,initial-scale=1"/>
     <title>Composition 构建器</title>
-    <link rel="stylesheet" href="./assets/composition_builder/css/style.css?v=20260220_4"/>
+    <link rel="stylesheet" href="./assets/composition_builder/css/style.css?v=20260222_2"/>
 </head>
 <body data-theme="dark-1">
 <div id="app">
@@ -49,7 +49,11 @@
             <div id="leftPageCards" class="left-page hidden">
                 <div class="panel-title card-title-row">
                     <span>卡片</span>
-                    <button id="btnAddCard2" class="btn small primary">添加</button>
+                    <div class="card-title-row-actions">
+                        <button id="btnCollapseAllCardSections" class="btn small" title="折叠所有卡片">折叠所有</button>
+                        <button id="btnExpandAllCardSections" class="btn small" title="展开所有卡片">展开所有</button>
+                        <button id="btnAddCard2" class="btn small primary">添加</button>
+                    </div>
                 </div>
                 <div id="cardsRoot" class="cards"></div>
             </div>
@@ -261,6 +265,6 @@
   }
 }
 </script>
-<script type="module" src="./assets/composition_builder/js/main.js?v=20260221_20"></script>
+<script type="module" src="./assets/composition_builder/js/main.js?v=20260222_3"></script>
 </body>
 </html>

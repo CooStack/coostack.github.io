@@ -900,7 +900,7 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
                                 const shapeScope = {
                                     rel: anchorBase,
                                     order: int(localIndex),
-                                    // shapeRelN ????????????????????????????????????
+                                    // shapeRelN 需要使用当前 shape 已转换的点集做索引
                                     shapeRels: transformedLevelRels,
                                     shapeOrders: transformedLevelOrders
                                 };

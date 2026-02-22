@@ -452,27 +452,37 @@ function findFirstUnknownJsIdentifier(raw, allowedNames = new Set()) {
 function safeNumberLiteral(value, kotlinType) {
     const t = String(kotlinType || "").trim().toLowerCase();
     const raw = String(value ?? "").trim();
+    const toIntText = (n) => String(n < 0 ? Math.ceil(n) : Math.floor(n));
     if (!raw) {
-        if (t === "int") return "0";
-        if (t === "float") return "0f";
-        if (t === "long") return "0L";
-        if (t === "double") return "0.0";
-        if (t === "boolean") return "false";
-        return "0";
-    }
-    if (t === "float") {
-        if (/^-?\d+(\.\d+)?f$/i.test(raw)) return raw;
-        if (/^-?\d+(\.\d+)?$/.test(raw)) return `${raw}f`;
-    }
-    if (t === "long") {
-        if (/^-?\d+L$/i.test(raw)) return raw;
-        if (/^-?\d+$/.test(raw)) return `${raw}L`;
-    }
-    if (t === "double") {
-        if (/^-?\d+$/.test(raw)) return `${raw}.0`;
+        return defaultLiteralForKotlinType(kotlinType);
     }
     if (t === "boolean") {
-        return /^true$/i.test(raw) ? "true" : "false";
+        if (/^true$/i.test(raw)) return "true";
+        if (/^false$/i.test(raw)) return "false";
+        return raw;
+    }
+    if (t === "string") {
+        return raw || "\"\"";
+    }
+    if (!isPlainNumericLiteralText(raw)) {
+        return raw;
+    }
+    const cleaned = raw.replace(/[fFdDlL]/g, "");
+    const n = Number(cleaned);
+    if (!Number.isFinite(n)) {
+        return defaultLiteralForKotlinType(kotlinType);
+    }
+    if (t === "int" || t === "short" || t === "byte") {
+        return toIntText(n);
+    }
+    if (t === "long") {
+        return `${toIntText(n)}L`;
+    }
+    if (t === "float") {
+        return normalizeKotlinFloatLiteralText(cleaned);
+    }
+    if (t === "double") {
+        return normalizeKotlinDoubleLiteralText(cleaned);
     }
     return raw;
 }
@@ -481,8 +491,16 @@ function normalizeGlobalVar(v) {
     const x = Object.assign({}, v || {});
     x.id = x.id || uid();
     x.name = String(x.name || "value");
-    x.type = String(x.type || "Double");
-    x.value = String(x.value ?? "0.0");
+    const typeRaw = String(x.type || "Double");
+    x.type = GLOBAL_VAR_TYPES.includes(typeRaw) ? typeRaw : "Double";
+    const defaultValue = defaultLiteralForKotlinType(x.type);
+    x.value = String(x.value ?? defaultValue);
+    if (isVectorLiteralType(x.type)) {
+        const parsed = parseVectorLiteralNumbers(x.value, { x: 0, y: 0, z: 0 });
+        x.value = formatVectorLiteral(x.type, parsed.x, parsed.y, parsed.z);
+    } else {
+        x.value = safeNumberLiteral(x.value, x.type);
+    }
     x.codec = x.codec !== false;
     x.mutable = x.mutable !== false;
     return x;
@@ -492,8 +510,16 @@ function normalizeGlobalConst(v) {
     const x = Object.assign({}, v || {});
     x.id = x.id || uid();
     x.name = String(x.name || "constant");
-    x.type = String(x.type || "Int");
-    x.value = String(x.value ?? "0");
+    const typeRaw = String(x.type || "Int");
+    x.type = GLOBAL_VAR_TYPES.includes(typeRaw) ? typeRaw : "Int";
+    const defaultValue = defaultLiteralForKotlinType(x.type);
+    x.value = String(x.value ?? defaultValue);
+    if (isVectorLiteralType(x.type)) {
+        const parsed = parseVectorLiteralNumbers(x.value, { x: 0, y: 0, z: 0 });
+        x.value = formatVectorLiteral(x.type, parsed.x, parsed.y, parsed.z);
+    } else {
+        x.value = safeNumberLiteral(x.value, x.type);
+    }
     return x;
 }
 
@@ -593,7 +619,7 @@ function normalizeShapeNestedLevel(raw, index = 0) {
     x.angleOffsetAnglePreset = String(x.angleOffsetAnglePreset || x.angleOffsetAngleExpr || "PI * 2");
     x.scale = normalizeScaleHelperConfig(x.scale, { type: "none" });
     x.growthAnimates = Array.isArray(x.growthAnimates) ? x.growthAnimates.map((it) => normalizeAnimate(it)) : [];
-    x.name = String(x.name || `嵌套层 ${index + 2}`);
+    x.name = String(x.name || `嵌套层${index + 2}`);
     return x;
 }
 
@@ -1207,6 +1233,8 @@ class CompositionBuilderApp {
             btnNewProject: document.getElementById("btnNewProject"),
             btnAddCard: document.getElementById("btnAddCard"),
             btnAddCard2: document.getElementById("btnAddCard2"),
+            btnCollapseAllCardSections: document.getElementById("btnCollapseAllCardSections"),
+            btnExpandAllCardSections: document.getElementById("btnExpandAllCardSections"),
             btnUndo: document.getElementById("btnUndo"),
             btnRedo: document.getElementById("btnRedo"),
             btnSettings: document.getElementById("btnSettings"),
@@ -1294,6 +1322,18 @@ class CompositionBuilderApp {
         d.btnNewProject?.addEventListener("click", () => this.handleNewProjectClick());
         d.btnAddCard.addEventListener("click", () => this.addCard());
         d.btnAddCard2.addEventListener("click", () => this.addCard());
+        d.btnCollapseAllCardSections?.addEventListener("click", () => {
+            this.setAllCardsFolded(true);
+            this.setAllCardsSectionsCollapsed(true);
+            this.renderCards();
+            this.scheduleSave();
+        });
+        d.btnExpandAllCardSections?.addEventListener("click", () => {
+            this.setAllCardsFolded(false);
+            this.setAllCardsSectionsCollapsed(false);
+            this.renderCards();
+            this.scheduleSave();
+        });
         d.btnUndo.addEventListener("click", () => this.undo());
         d.btnRedo.addEventListener("click", () => this.redo());
         d.btnSettings.addEventListener("click", () => this.showSettings());
@@ -1782,7 +1822,7 @@ class CompositionBuilderApp {
 
     refreshPauseButtonUi() {
         if (!this.dom?.btnPausePreview) return;
-        this.dom.btnPausePreview.textContent = this.previewPaused ? "播放" : "暂停";
+        this.dom.btnPausePreview.textContent = this.previewPaused ? "继续" : "暂停";
         this.dom.btnPausePreview.classList.toggle("primary", !!this.previewPaused);
     }
 
@@ -1923,13 +1963,13 @@ class CompositionBuilderApp {
         this.pushHistory();
         switch (act) {
             case "add-global-var":
-                this.state.globalVars.push(normalizeGlobalVar({ name: `value${this.state.globalVars.length + 1}`, type: "Double", value: "0.0", codec: true, mutable: true }));
+                this.state.globalVars.push(normalizeGlobalVar({ name: "value" + (this.state.globalVars.length + 1), type: "Double", value: "0.0", codec: true, mutable: true }));
                 break;
             case "remove-global-var":
                 if (idx >= 0 && idx < this.state.globalVars.length) this.state.globalVars.splice(idx, 1);
                 break;
             case "add-global-const":
-                this.state.globalConsts.push(normalizeGlobalConst({ name: `const${this.state.globalConsts.length + 1}`, type: "Int", value: "0" }));
+                this.state.globalConsts.push(normalizeGlobalConst({ name: "const" + (this.state.globalConsts.length + 1), type: "Int", value: "0" }));
                 break;
             case "remove-global-const":
                 if (idx >= 0 && idx < this.state.globalConsts.length) this.state.globalConsts.splice(idx, 1);
@@ -2005,6 +2045,9 @@ class CompositionBuilderApp {
             const item = this.state.globalConsts[int(t.dataset.constIdx)];
             if (!item) return;
             this.applyObjectField(item, t.dataset.constField, t);
+            if (t.dataset.constField === "type") {
+                this.ensureGlobalConstValueShape(item);
+            }
             const field = String(t.dataset.constField || "");
             const rebuildPreview = ["name", "type", "value"].includes(field);
             this.afterValueMutate({ rebuildPreview, rerenderCards: field === "name" || field === "type" });
@@ -2106,7 +2149,7 @@ class CompositionBuilderApp {
         let out = seed;
         let i = 2;
         while (this.findDuplicateGlobalSymbolName(out, scopeKind, scopeIndex)) {
-            out = `${seed}_${i}`;
+            out = String(seed) + "_" + String(i);
             i += 1;
             if (i > 999) break;
         }
@@ -2907,6 +2950,10 @@ class CompositionBuilderApp {
 
         const head = e.target.closest(".card-head[data-card-id]");
         if (head) {
+            const targetNode = e.target;
+            if (targetNode instanceof Element && targetNode.closest("input, textarea, select, [contenteditable='true'], [role='textbox'], [role='combobox'], .editor-shell-monaco, .editor-monaco-host, .monaco-editor, .suggest-widget, .monaco-hover, .monaco-menu-container")) {
+                return;
+            }
             this.selectCardById(head.dataset.cardId, e.ctrlKey || e.metaKey);
         }
     }
@@ -2932,6 +2979,11 @@ class CompositionBuilderApp {
                 return;
             }
             this.applyObjectField(card, t.dataset.cardField, t);
+            if (cardField === "name") {
+                this.updateSelectionStatus();
+                this.afterValueMutate({ rebuildPreview: false, rerenderCards: false, rerenderProject: false });
+                return;
+            }
             if (t.dataset.cardField === "rotateToPreset") {
                 card.rotateToExpr = card.rotateToPreset || card.rotateToExpr;
                 const vec = this.exprRuntime.parseVecLikeValue(card.rotateToExpr || "");
@@ -3502,10 +3554,6 @@ class CompositionBuilderApp {
     selectCardById(cardId, append = false) {
         const card = this.getCardById(cardId);
         if (!card) return;
-        if (card.folded) card.folded = false;
-        if (this.isCardAllSectionsCollapsed(card)) {
-            this.setCardAllSectionsCollapsed(card.id, false);
-        }
         if (!append) this.selectedCardIds.clear();
         if (append && this.selectedCardIds.has(card.id) && this.selectedCardIds.size > 1) {
             this.selectedCardIds.delete(card.id);
@@ -3637,6 +3685,19 @@ class CompositionBuilderApp {
         card.folded = !card.folded;
     }
 
+    setCardFolded(cardId, folded) {
+        const card = this.getCardById(cardId);
+        if (!card) return;
+        card.folded = !!folded;
+    }
+
+    setAllCardsFolded(folded) {
+        for (const card of (Array.isArray(this.state.cards) ? this.state.cards : [])) {
+            if (!card || !card.id) continue;
+            this.setCardFolded(card.id, folded);
+        }
+    }
+
     isCardSectionCollapsed(card, sectionKey) {
         if (!card || !sectionKey) return false;
         const key = String(sectionKey || "");
@@ -3664,6 +3725,13 @@ class CompositionBuilderApp {
         if (!card) return;
         card.sectionCollapse = normalizeCardSectionCollapse(card.sectionCollapse);
         for (const key of CARD_SECTION_KEYS) card.sectionCollapse[key] = !!collapsed;
+    }
+
+    setAllCardsSectionsCollapsed(collapsed) {
+        for (const card of (Array.isArray(this.state.cards) ? this.state.cards : [])) {
+            if (!card || !card.id) continue;
+            this.setCardAllSectionsCollapsed(card.id, collapsed);
+        }
     }
 
     isCardAllSectionsCollapsed(card) {
@@ -4009,10 +4077,24 @@ class CompositionBuilderApp {
 
     ensureGlobalVarValueShape(item) {
         if (!item) return;
-        if (!isVectorLiteralType(item.type)) return;
-        const parsed = this.exprRuntime.parseVecLikeValue(item.value || "");
-        const ctor = this.vectorCtorForVarType(item.type);
-        item.value = formatVectorLiteral(ctor, parsed.x, parsed.y, parsed.z);
+        if (isVectorLiteralType(item.type)) {
+            const parsed = this.exprRuntime.parseVecLikeValue(item.value || "");
+            const ctor = this.vectorCtorForVarType(item.type);
+            item.value = formatVectorLiteral(ctor, parsed.x, parsed.y, parsed.z);
+            return;
+        }
+        item.value = safeNumberLiteral(item.value, item.type);
+    }
+
+    ensureGlobalConstValueShape(item) {
+        if (!item) return;
+        if (isVectorLiteralType(item.type)) {
+            const parsed = this.exprRuntime.parseVecLikeValue(item.value || "");
+            const ctor = this.vectorCtorForVarType(item.type);
+            item.value = formatVectorLiteral(ctor, parsed.x, parsed.y, parsed.z);
+            return;
+        }
+        item.value = safeNumberLiteral(item.value, item.type);
     }
 
     updateGlobalVarVectorValue(item, axis, value) {
@@ -4094,7 +4176,7 @@ class CompositionBuilderApp {
                 <input class="input" type="number" step="${this.state.settings.paramStep}" data-var-vec-idx="${i}" data-var-vec-axis="y" value="${esc(formatNumberCompact(parsed.y))}" placeholder="y"/>
                 <input class="input" type="number" step="${this.state.settings.paramStep}" data-var-vec-idx="${i}" data-var-vec-axis="z" value="${esc(formatNumberCompact(parsed.z))}" placeholder="z"/>
                 ${String(v.type || "").trim() === "Vector3f"
-                    ? `<input class="input vector-color" type="color" data-var-color-idx="${i}" value="${esc(colorHex)}" title="打开调色盘"/>`
+                    ? `<input class="input vector-color" type="color" data-var-color-idx="${i}" value="${esc(colorHex)}" title="打开调色板"/>`
                     : `<div></div>`}
             </div>
         `;
@@ -4140,7 +4222,7 @@ class CompositionBuilderApp {
                 <div class="section-title">项目设置</div>
                 <div class="grid2">
                     <label class="field">
-                        <span>项目名字</span>
+                        <span>项目名称</span>
                         <input class="input" data-pf="projectName" value="${esc(s.projectName)}" placeholder="NewComposition"/>
                     </label>
                     <label class="field">
@@ -4155,7 +4237,7 @@ class CompositionBuilderApp {
                         <input class="input" type="number" min="0" step="1" data-pf="disabledInterval" value="${esc(String(s.disabledInterval))}"/>
                     </label>
                     <label class="field">
-                        <span>播放时间 (tick, 不含消散)</span>
+                        <span>播放时长 (tick, 不含消散)</span>
                         <input class="input" type="number" min="1" step="1" data-pf="previewPlayTicks" value="${esc(String(s.previewPlayTicks || 70))}"/>
                     </label>
                 </div>
@@ -4178,7 +4260,7 @@ class CompositionBuilderApp {
                         <input class="input" type="number" step="${this.state.settings.paramStep}" data-axis-field="axisManualX" value="${esc(formatNumberCompact(s.compositionAxisManualX))}" placeholder="x"/>
                         <input class="input" type="number" step="${this.state.settings.paramStep}" data-axis-field="axisManualY" value="${esc(formatNumberCompact(s.compositionAxisManualY))}" placeholder="y"/>
                         <input class="input" type="number" step="${this.state.settings.paramStep}" data-axis-field="axisManualZ" value="${esc(formatNumberCompact(s.compositionAxisManualZ))}" placeholder="z"/>
-                        <button class="btn small primary" data-act="apply-project-axis-manual">套用手动输入</button>
+                        <button class="btn small primary" data-act="apply-project-axis-manual">应用手动输入</button>
                     </div>
                 </div>
                 ${this.renderScaleHelperEditor({
@@ -4191,13 +4273,13 @@ class CompositionBuilderApp {
                 <div class="section-title">全局变量</div>
                 <div class="list-tools">
                     <button class="btn small primary" data-act="add-global-var">添加变量</button>
-                    <div class="mini-note">变量可在表达式里直接使用</div>
+                    <div class="mini-note">变量可在表达式中直接使用</div>
                 </div>
                 <div class="kv-list">${varRows}</div>
             </div>
 
             <div class="section-block">
-                <div class="section-title">全局非同步常量</div>
+                <div class="section-title">全局常量</div>
                 <div class="list-tools">
                     <button class="btn small primary" data-act="add-global-const">添加常量</button>
                 </div>
@@ -4482,7 +4564,7 @@ class CompositionBuilderApp {
     renderNestedShapeLevelBlock(card, levelRaw, levelIdx) {
         const level = normalizeShapeNestedLevel(levelRaw, levelIdx - 1);
         const collapsed = !!level.collapsed;
-        const foldIcon = collapsed ? "▶" : "▼";
+        const foldIcon = collapsed ? "▸" : "▾";
         const childType = level.type;
         const bindMode = level.bindMode === "builder" ? "builder" : "point";
         const builderStats = this.evaluateBuilderPoints(level.builderState);
@@ -4493,7 +4575,7 @@ class CompositionBuilderApp {
                 card.id,
                 `shapeLevelGrowth:${levelIdx}`,
                 level.growthAnimates,
-                `嵌套层 ${levelIdx + 1} 生长动画`,
+                `嵌套层${levelIdx + 1} 生长动画`,
                 "add-shape-level-growth-animate",
                 "remove-shape-level-growth-animate",
                 { embedOnly: true }
@@ -4504,7 +4586,7 @@ class CompositionBuilderApp {
             <div class="subgroup subgroup-tight nested-shape-level ${collapsed ? "collapsed" : ""}" data-shape-level="${levelIdx}">
                 <div class="subgroup-head">
                     <button class="iconbtn subgroup-toggle" data-act="toggle-shape-level-fold" data-card-id="${card.id}" data-shape-level-idx="${levelIdx}" title="${collapsed ? "展开" : "折叠"}">${foldIcon}</button>
-                    <div class="subgroup-title">嵌套层 ${levelIdx + 1}</div>
+                    <div class="subgroup-title">嵌套层${levelIdx + 1}</div>
                 </div>
                 <div class="subgroup-body">
                     <div class="grid2">
@@ -4542,7 +4624,7 @@ class CompositionBuilderApp {
                                     <select class="input" data-card-id="${card.id}" data-cvar-idx="${cIdx}" data-cvar-field="type">
                                         ${CONTROLLER_VAR_TYPES.map((tp) => `<option value="${esc(tp)}" ${it.type === tp ? "selected" : ""}>${esc(tp)}</option>`).join("")}
                                     </select>
-                                    <input class="input" data-card-id="${card.id}" data-cvar-idx="${cIdx}" data-cvar-field="expr" value="${esc(it.expr)}" placeholder="初值"/>
+                                    <input class="input" data-card-id="${card.id}" data-cvar-idx="${cIdx}" data-cvar-field="expr" value="${esc(it.expr)}" placeholder="初始值"/>
                                     <div></div><div></div>
                                     <button class="btn small" data-act="remove-cvar" data-card-id="${card.id}" data-idx="${cIdx}">删除</button>
                                 </div>
@@ -4555,7 +4637,7 @@ class CompositionBuilderApp {
                         <div class="mini-note">子点来源</div>
                         <div class="grid2">
                             <label class="field">
-                                <span>子点基础选项</span>
+                                <span>子点绑定选项</span>
                                 <select class="input" data-card-id="${card.id}" data-shape-level-idx="${levelIdx}" data-shape-level-field="bindMode">
                                     <option value="point" ${bindMode === "point" ? "selected" : ""}>point</option>
                                     <option value="builder" ${bindMode === "builder" ? "selected" : ""}>PointsBuilder</option>
@@ -4702,7 +4784,7 @@ class CompositionBuilderApp {
         const bezierRows = scale.type === "bezier" ? `
             <div class="grid2">
                 <label class="field">
-                    <span>起始曲柄 RelativeLocation(x,y,z)</span>
+                    <span>起始曲线 RelativeLocation(x,y,z)</span>
                     <div class="grid3">
                         <input class="input" type="number" step="${this.state.settings.paramStep}" ${cardAttr} ${fieldAttr}="c1x" value="${esc(formatNumberCompact(scale.c1x))}" placeholder="x"/>
                         <input class="input" type="number" step="${this.state.settings.paramStep}" ${cardAttr} ${fieldAttr}="c1y" value="${esc(formatNumberCompact(scale.c1y))}" placeholder="y"/>
@@ -4710,7 +4792,7 @@ class CompositionBuilderApp {
                     </div>
                 </label>
                 <label class="field">
-                    <span>结束曲柄 RelativeLocation(x,y,z)</span>
+                    <span>结束曲线 RelativeLocation(x,y,z)</span>
                     <div class="grid3">
                         <input class="input" type="number" step="${this.state.settings.paramStep}" ${cardAttr} ${fieldAttr}="c2x" value="${esc(formatNumberCompact(scale.c2x))}" placeholder="x"/>
                         <input class="input" type="number" step="${this.state.settings.paramStep}" ${cardAttr} ${fieldAttr}="c2y" value="${esc(formatNumberCompact(scale.c2y))}" placeholder="y"/>
@@ -4740,7 +4822,7 @@ class CompositionBuilderApp {
                     <input class="input" type="number" step="${this.state.settings.paramStep}" ${cardAttr} ${fieldAttr}="max" value="${esc(formatNumberCompact(scale.max))}"/>
                 </label>
                 <label class="field">
-                    <span>缩放时间 (tick)</span>
+                    <span>缩放时长 (tick)</span>
                     <input class="input" type="number" min="1" step="1" ${cardAttr} ${fieldAttr}="tick" value="${esc(String(scale.tick))}"/>
                 </label>
             </div>
@@ -4998,11 +5080,11 @@ class CompositionBuilderApp {
 
     getParticleInitTargetLabel(targetRaw = "") {
         const target = String(targetRaw || "").trim();
-        if (target === "size" || target === "particleSize") return `${target} (粒子尺寸)`;
+        if (target === "size" || target === "particleSize") return `${target} (粒子大小)`;
         if (target === "particleAlpha" || target === "alpha") return `${target} (透明度)`;
         if (target === "currentAge" || target === "age") return `${target} (年龄)`;
         if (target === "textureSheet") return "textureSheet (贴图序号)";
-        if (target === "color" || target === "particleColor") return `${target} (颜色 Vec3)`;
+        if (target === "color" || target === "particleColor") return `${target} (颜色 Vector3f)`;
         return target;
     }
 
@@ -5140,7 +5222,7 @@ class CompositionBuilderApp {
                 (manualVisible && isVectorTarget) ? "vector-manual" : ""
             ].filter(Boolean).join(" ");
             const colorPicker = (manualVisible && isVectorTarget)
-                ? `<input class="input vector-color pinit-color" type="color" data-card-id="${card.id}" data-pinit-color-idx="${pIdx}" value="${esc(colorHex)}" title="打开调色盘"/>`
+                ? `<input class="input vector-color pinit-color" type="color" data-card-id="${card.id}" data-pinit-color-idx="${pIdx}" value="${esc(colorHex)}" title="打开调色板"/>`
                 : "";
             return `
                 <div class="kv-row grid-pinit">
@@ -5215,7 +5297,7 @@ class CompositionBuilderApp {
                 toggle.dataset.act = "toggle-section-fold";
                 toggle.dataset.cardId = cardId;
                 toggle.dataset.sectionKey = sectionKey;
-                toggle.textContent = collapsed ? "▶" : "▼";
+                toggle.textContent = collapsed ? "▸" : "▾";
                 toggle.title = collapsed ? "展开" : "折叠";
                 const titleWrap = document.createElement("div");
                 titleWrap.className = "subgroup-title";
@@ -5237,7 +5319,7 @@ class CompositionBuilderApp {
 
     renderCardHtml(card, idx) {
         const selected = this.selectedCardIds.has(card.id);
-        const fold = card.folded ? "▶" : "▼";
+        const fold = card.folded ? "▸" : "▾";
         const builderStats = this.evaluateBuilderPoints(card.builderState);
         const builderNodeCount = this.countBuilderNodes(card.builderState?.root?.children || []);
         const builderPointCount = (builderStats.points || []).length;
@@ -5245,11 +5327,18 @@ class CompositionBuilderApp {
         const shapeBindMode = card.shapeBindMode === "builder" ? "builder" : "point";
 
         return `
-            <section class="card ${selected ? "selected" : ""}" data-card-id="${card.id}">
+            <section class="card ${selected ? "selected" : ""} ${card.folded ? "folded" : ""}" data-card-id="${card.id}">
                 <header class="card-head" data-card-id="${card.id}">
                     <div class="card-head-left">
                         <button class="iconbtn" data-act="toggle-fold" data-card-id="${card.id}" title="折叠">${fold}</button>
-                        <div class="card-name">${esc(card.name || `卡片 ${idx + 1}`)}</div>
+                        <input
+                            class="input card-name-input"
+                            data-card-id="${card.id}"
+                            data-card-field="name"
+                            value="${esc(card.name || `\u5361\u7247 ${idx + 1}`)}"
+                            placeholder="\u5361\u7247\u5907\u6ce8 / \u540d\u79f0"
+                            title="\u53ef\u7f16\u8f91\u5361\u7247\u5907\u6ce8\u540d\u79f0"
+                        />
                     </div>
                     <div class="card-head-actions">
                         <button class="btn small" data-act="collapse-all-sections" data-card-id="${card.id}" title="折叠全部分区">折叠所有</button>
@@ -5339,7 +5428,7 @@ class CompositionBuilderApp {
                                             <select class="input" data-card-id="${card.id}" data-cvar-idx="${cIdx}" data-cvar-field="type">
                                                 ${CONTROLLER_VAR_TYPES.map((tp) => `<option value="${esc(tp)}" ${it.type === tp ? "selected" : ""}>${esc(tp)}</option>`).join("")}
                                             </select>
-                                            <input class="input" data-card-id="${card.id}" data-cvar-idx="${cIdx}" data-cvar-field="expr" value="${esc(it.expr)}" placeholder="初值"/>
+                                            <input class="input" data-card-id="${card.id}" data-cvar-idx="${cIdx}" data-cvar-field="expr" value="${esc(it.expr)}" placeholder="初始值"/>
                                             <div></div><div></div>
                                             <button class="btn small" data-act="remove-cvar" data-card-id="${card.id}" data-idx="${cIdx}">删除</button>
                                         </div>
@@ -5493,7 +5582,7 @@ class CompositionBuilderApp {
                                 <select class="input" data-card-id="${card.id}" data-cvar-idx="${cIdx}" data-cvar-field="type">
                                     ${CONTROLLER_VAR_TYPES.map((tp) => `<option value="${esc(tp)}" ${it.type === tp ? "selected" : ""}>${esc(tp)}</option>`).join("")}
                                 </select>
-                                <input class="input" data-card-id="${card.id}" data-cvar-idx="${cIdx}" data-cvar-field="expr" value="${esc(it.expr)}" placeholder="初值"/>
+                                <input class="input" data-card-id="${card.id}" data-cvar-idx="${cIdx}" data-cvar-field="expr" value="${esc(it.expr)}" placeholder="初始值"/>
                                 <div></div><div></div>
                                 <button class="btn small" data-act="remove-cvar" data-card-id="${card.id}" data-idx="${cIdx}">删除</button>
                             </div>
@@ -5523,7 +5612,7 @@ class CompositionBuilderApp {
             )
             : "";
         const childCollapsed = !!card.shapeChildCollapsed;
-        const childFoldIcon = childCollapsed ? "▶" : "▼";
+        const childFoldIcon = childCollapsed ? "▸" : "▾";
         const nestedBlocks = this.renderNestedShapeLevels(card);
 
         return `
@@ -5534,13 +5623,13 @@ class CompositionBuilderApp {
                 <div class="subgroup subgroup-tight nested-shape-level ${childCollapsed ? "collapsed" : ""}" data-shape-level="0">
                     <div class="subgroup-head">
                         <button class="iconbtn subgroup-toggle" data-act="toggle-shape-child-fold" data-card-id="${card.id}" title="${childCollapsed ? "展开" : "折叠"}">${childFoldIcon}</button>
-                        <div class="subgroup-title">嵌套层 1</div>
+                        <div class="subgroup-title">嵌套层1</div>
                     </div>
                     <div class="subgroup-body">
                         <div class="mini-note">子点来源</div>
                         <div class="grid2">
                             <label class="field">
-                                <span>子点基础选项</span>
+                                <span>子点绑定选项</span>
                                 <select class="input" data-card-id="${card.id}" data-card-shape-child-field="bindMode">
                                     <option value="point" ${childBindMode === "point" ? "selected" : ""}>point</option>
                                     <option value="builder" ${childBindMode === "builder" ? "selected" : ""}>PointsBuilder</option>
@@ -6026,7 +6115,7 @@ class CompositionBuilderApp {
                                 const shapeScope = {
                                     rel: anchorBase,
                                     order: int(localIndex),
-                                    // shapeRelN ????????????????????????????????????
+                                    // shapeRelN 需要使用当前 shape 已转换的点集做索引
                                     shapeRels: transformedLevelRels,
                                     shapeOrders: transformedLevelOrders
                                 };
@@ -6226,7 +6315,7 @@ class CompositionBuilderApp {
                     levelLimit = Math.min(levelLimit, exprCount);
                     hasLevelGrowthSource = true;
                 }
-                // Sequenced 形状未配置任何生长来源时，初始可见数量应为 0。
+                // Sequenced 形状未配置任何几何生长来源时，初始可见数量应为 0。
                 if (!hasLevelGrowthSource) return 0;
                 visibleLimit = Math.min(visibleLimit, levelLimit);
                 hasLocalGrowthSource = true;
@@ -8070,19 +8159,18 @@ class CompositionBuilderApp {
         const base = isControllerScript
             ? [
                 { label: "if (...) { ... }", insertText: "if ($0) {\\n    \\n}", detail: "条件分支", priority: 220 },
-                { label: "addSingle()", insertText: "addSingle()", detail: "生长 API", priority: 230 },
-                { label: "addMultiple(n)", insertText: "addMultiple($0)", detail: "生长 API", priority: 230 },
+                { label: "addSingle()", insertText: "addSingle()", detail: "粒子生成 API", priority: 230 },
+                { label: "addMultiple(n)", insertText: "addMultiple($0)", detail: "粒子生成 API", priority: 230 },
                 { label: "color = Vector3f()", insertText: "color = Vector3f($0)", detail: "粒子颜色", priority: 255 },
-                { label: "size = 0.2", insertText: "size = $0", detail: "粒子尺寸", priority: 255 },
+                { label: "size = 0.2", insertText: "size = $0", detail: "粒子大小", priority: 255 },
                 { label: "particleAlpha = 1.0", insertText: "particleAlpha = $0", detail: "粒子透明度", priority: 255 },
                 { label: "currentAge = 0", insertText: "currentAge = $0", detail: "粒子年龄", priority: 250 },
                 { label: "textureSheet = 0", insertText: "textureSheet = $0", detail: "贴图序号", priority: 250 },
                 { label: "particle.particleColor = Vector3f()", insertText: "particle.particleColor = Vector3f($0)", detail: "粒子颜色", priority: 250 },
-                { label: "particle.particleSize = 0.2", insertText: "particle.particleSize = $0", detail: "粒子尺寸", priority: 250 },
+                { label: "particle.particleSize = 0.2", insertText: "particle.particleSize = $0", detail: "粒子大小", priority: 250 },
                 { label: "particle.particleAlpha = 1.0", insertText: "particle.particleAlpha = $0", detail: "粒子透明度", priority: 250 },
                 { label: "status.displayStatus = 2", insertText: "status.displayStatus = $0", detail: "Composition lifecycle", priority: 258 },
                 { label: `this@${projectClass}.status.displayStatus`, insertText: `this@${projectClass}.status.displayStatus`, detail: "Composition lifecycle", priority: 257 },
-                { label: "tickCount", detail: "预览 tick（不是粒子 tick）", priority: 250 },
                 { label: "RelativeLocation(x, y, z)", insertText: "RelativeLocation($0)", detail: "向量构造", priority: 220 },
                 { label: "Vec3(x, y, z)", insertText: "Vec3($0)", detail: "向量构造", priority: 220 },
                 { label: "Vector3f(x, y, z)", insertText: "Vector3f($0)", detail: "向量构造", priority: 220 },
@@ -8098,20 +8186,19 @@ class CompositionBuilderApp {
                 { label: "rotateToPoint(to)", insertText: "rotateToPoint($0)", detail: "Display API", priority: 260 },
                 { label: "rotateAsAxis(angle)", insertText: "rotateAsAxis($0)", detail: "Display API", priority: 260 },
                 { label: "rotateToWithAngle(to, angle)", insertText: "rotateToWithAngle($0, 0.05)", detail: "Display API", priority: 260 },
-                { label: "addSingle()", insertText: "addSingle()", detail: "生长 API", priority: 260 },
-                { label: "addMultiple(n)", insertText: "addMultiple($0)", detail: "生长 API", priority: 260 },
+                { label: "addSingle()", insertText: "addSingle()", detail: "粒子生成 API", priority: 260 },
+                { label: "addMultiple(n)", insertText: "addMultiple($0)", detail: "粒子生成 API", priority: 260 },
                 { label: "addPreTickAction(() => {})", insertText: "addPreTickAction(() => {\\n    $0\\n})", detail: "控制器 API", priority: 220 },
                 { label: "RelativeLocation(x, y, z)", insertText: "RelativeLocation($0)", detail: "向量构造", priority: 225 },
                 { label: "Vec3(x, y, z)", insertText: "Vec3($0)", detail: "向量构造", priority: 225 },
                 { label: "Vector3f(x, y, z)", insertText: "Vector3f($0)", detail: "向量构造", priority: 225 },
-                { label: "RelativeLocation.yAxis()", insertText: "RelativeLocation.yAxis()", detail: "轴向量", priority: 225 },
+                { label: "RelativeLocation.yAxis()", insertText: "RelativeLocation.yAxis()", detail: "轴向向量", priority: 225 },
                 { label: "setReversedScaleOnCompositionStatus(comp)", insertText: "setReversedScaleOnCompositionStatus($0)", detail: "Scale API", priority: 215 },
                 { label: "particle.particleAlpha", detail: "粒子属性", priority: 240 },
                 { label: "particle.particleColor", detail: "粒子属性", priority: 240 },
                 { label: "particle.particleSize", detail: "粒子属性", priority: 240 },
                 { label: "age", detail: "当前 age", priority: 250 },
                 { label: "tick", detail: "当前 tick", priority: 250 },
-                { label: "tickCount", detail: "当前 tick（同 tick）", priority: 250 },
                 { label: "index", detail: "点索引", priority: 250 },
                 { label: "status.displayStatus", detail: "当前 Composition 状态", priority: 252 },
                 { label: `this@${projectClass}.status.displayStatus`, insertText: `this@${projectClass}.status.displayStatus`, detail: "Composition state (qualified)", priority: 251 },
@@ -8128,10 +8215,10 @@ class CompositionBuilderApp {
             || (Number.isFinite(scopeMaxDepthRaw) && int(scopeMaxDepthRaw) >= 0);
         if (hasScopedShapeVars) {
             if (scopeInfo.allowRel) {
-                base.push({ label: "rel", detail: "当前层的父级 rel", priority: 248 });
+                base.push({ label: "rel", detail: "当前层级的父级 rel", priority: 248 });
             }
             if (scopeInfo.allowOrder) {
-                base.push({ label: "order", detail: "当前层的父级 order（Sequenced）", priority: 248 });
+                base.push({ label: "order", detail: "当前层级的父级 order（Sequenced）", priority: 248 });
             }
             const scopeMaxDepth = scopeMaxDepthRaw;
             const maxDepth = Number.isFinite(scopeMaxDepth)
@@ -8387,11 +8474,11 @@ class CompositionBuilderApp {
         this.focusedCardId = card.id;
         this.selectedCardIds = new Set([card.id]);
         this.saveStateNow();
-        let msg = "已从 PointsBuilder 返回并加载 Builder";
+        let msg = "已返回 PointsBuilder 并加载根 Builder";
         if (target === "shape") msg = "已返回并加载 Shape Builder";
         if (target === "shape_child") msg = "已返回并加载子点 Builder";
         if (/^shape_level:\d+$/.test(target)) {
-            msg = `已返回并加载嵌套层 ${Math.max(2, int(target.split(":")[1]) + 2)} Builder`;
+            msg = `已返回并加载嵌套层${Math.max(2, int(target.split(":")[1]) + 2)} Builder`;
         }
         this.showToast(msg, "success");
     }
@@ -8686,7 +8773,7 @@ class CompositionBuilderApp {
         if (!card) return;
         const normalizedTarget = normalizeBuilderTarget(target);
         const targetLabel = /^shape_level:\d+$/.test(normalizedTarget)
-            ? `嵌套层 ${Math.max(2, int(normalizedTarget.split(":")[1]) + 2)} Builder`
+            ? `嵌套层${Math.max(2, int(normalizedTarget.split(":")[1]) + 2)} Builder`
             : (normalizedTarget === "shape" ? "Shape Builder" : (normalizedTarget === "shape_child" ? "子点 Builder" : "Builder"));
         const input = document.createElement("input");
         input.type = "file";
@@ -8719,7 +8806,7 @@ class CompositionBuilderApp {
                 ? "shape_builder"
                 : (normalizedTarget === "shape_child" ? "shape_child_builder" : "builder"));
         const targetLabel = /^shape_level:\d+$/.test(normalizedTarget)
-            ? `嵌套层 ${Math.max(2, int(normalizedTarget.split(":")[1]) + 2)} Builder`
+            ? `嵌套层${Math.max(2, int(normalizedTarget.split(":")[1]) + 2)} Builder`
             : (normalizedTarget === "shape" ? "Shape Builder" : (normalizedTarget === "shape_child" ? "子点 Builder" : "Builder"));
         const name = sanitizeFileBase(card.name || suffix) || suffix;
         const result = await this.saveTextWithPicker({
@@ -8856,7 +8943,11 @@ class CompositionBuilderApp {
             const type = String(v.type || "Double").trim() || "Double";
             const rawValue = String(v.value || "").trim();
             let value = rewriteClassQualifier(rawValue || defaultLiteralForKotlinType(type), className);
-            if (/^float$/i.test(type)) {
+            if (/^(int|short|byte|long)$/i.test(type) && isPlainNumericLiteralText(value)) {
+                value = safeNumberLiteral(value, type);
+            } else if (/^boolean$/i.test(type)) {
+                value = safeNumberLiteral(value, type);
+            } else if (/^float$/i.test(type)) {
                 if (isPlainNumericLiteralText(value)) value = normalizeKotlinFloatLiteralText(value);
                 else if (!/\.toFloat\(\)\s*$/.test(value)) value = `(${value}).toFloat()`;
             } else if (/^double$/i.test(type) && isPlainNumericLiteralText(value)) {
@@ -8871,7 +8962,11 @@ class CompositionBuilderApp {
             const type = String(c.type || "Int").trim() || "Int";
             const rawValue = String(c.value || "").trim();
             let value = rewriteClassQualifier(rawValue || defaultLiteralForKotlinType(type), className);
-            if (/^float$/i.test(type)) {
+            if (/^(int|short|byte|long)$/i.test(type) && isPlainNumericLiteralText(value)) {
+                value = safeNumberLiteral(value, type);
+            } else if (/^boolean$/i.test(type)) {
+                value = safeNumberLiteral(value, type);
+            } else if (/^float$/i.test(type)) {
                 if (isPlainNumericLiteralText(value)) value = normalizeKotlinFloatLiteralText(value);
                 else if (!/\.toFloat\(\)\s*$/.test(value)) value = `(${value}).toFloat()`;
             } else if (/^double$/i.test(type) && isPlainNumericLiteralText(value)) {
@@ -9594,3 +9689,5 @@ installPreviewRuntimeMethods(CompositionBuilderApp, {
 
 const app = new CompositionBuilderApp();
 app.init();
+
+

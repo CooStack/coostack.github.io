@@ -76,7 +76,7 @@ export function installTargetPresetMethods(CompositionBuilderApp, deps = {}) {
         if (target === "particleAlpha" || target === "alpha") return `${target} (透明度)`;
         if (target === "currentAge" || target === "age") return `${target} (年龄)`;
         if (target === "textureSheet") return "textureSheet (贴图序号)";
-        if (target === "color" || target === "particleColor") return `${target} (颜色 Vec3)`;
+        if (target === "color" || target === "particleColor") return `${target} (颜色 Vector3f)`;
         return target;
     }
 
@@ -140,7 +140,6 @@ export function installTargetPresetMethods(CompositionBuilderApp, deps = {}) {
             return `<option value="${esc(val)}" ${active ? "selected" : ""}>${esc(it.label)}</option>`;
         }).join("");
     }
-
     resolveParticleInitPresetExpr(exprRaw = "", targetRaw = "") {
         const expr = String(exprRaw || "").trim();
         if (!expr) return "";
@@ -187,3 +186,4 @@ export function installTargetPresetMethods(CompositionBuilderApp, deps = {}) {
         CompositionBuilderApp.prototype[key] = TargetPresetMixin.prototype[key];
     }
 }
+
