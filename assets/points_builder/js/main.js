@@ -388,6 +388,10 @@ function initPointsBuilderMain() {
     const THEME_KEY = "pb_theme_v2";
     const GRID_HELPER_SIZE = 256;
     const GRID_HELPER_DIVISIONS = 256;
+    const MIRROR_HINT_GRID_DURATION_MS = 800;
+    const MIRROR_HINT_GRID_MAX_OPACITY = 0.9;
+    const MIRROR_HINT_GRID_OFFSET = -0.04;
+    const MIRROR_HINT_GRID_COLOR_MIX = 0.44;
     const LOCK_AXIS_TICK_STEP = 1;
     const LOCK_AXIS_TICK_HALF_LEN = 0.28;
     const LOCK_AXIS_GUIDE_COLOR = 0x6cff98;
@@ -432,6 +436,7 @@ function initPointsBuilderMain() {
             updateGridForPlane();
             updateLockPlaneGuideVisual();
         }
+        updateMirrorPlaneHintTheme();
         refreshPointBaseColors();
     };
     const applyTheme = (id) => {
@@ -2197,6 +2202,8 @@ function initPointsBuilderMain() {
     let pointPickPreviewLastY = NaN;
     let pointPickPreviewLastZ = NaN;
     let axesHelper, gridHelper, axisLabelGroup;
+    let mirrorHintGrid = null;
+    let mirrorHintGridExpireAt = 0;
     let lockPlaneGuide = null;
     let raycaster, mouse;
     let pickPlane;
@@ -2573,18 +2580,97 @@ function initPointsBuilderMain() {
         return SNAP_PLANES[mirrorPlane] || SNAP_PLANES.XZ;
     }
 
-    function updateGridForPlane() {
-        if (!gridHelper) return;
-        const info = getPlaneInfo();
-        gridHelper.rotation.set(0, 0, 0);
+    function getGridHelperMaterials(helper) {
+        if (!helper || !helper.material) return [];
+        return Array.isArray(helper.material) ? helper.material : [helper.material];
+    }
+
+    function applyGridTransformForPlane(helper, planeKey, offset = -0.01) {
+        if (!helper) return;
+        const info = SNAP_PLANES[planeKey] || SNAP_PLANES.XZ;
+        helper.rotation.set(0, 0, 0);
         if (info.axis === "XY") {
-            gridHelper.rotation.x = Math.PI / 2;
+            helper.rotation.x = Math.PI / 2;
         } else if (info.axis === "ZY") {
-            gridHelper.rotation.z = -Math.PI / 2;
+            helper.rotation.z = -Math.PI / 2;
         }
         if (info.normal) {
-            gridHelper.position.set(info.normal.x * -0.01, info.normal.y * -0.01, info.normal.z * -0.01);
+            const off = Number.isFinite(Number(offset)) ? Number(offset) : -0.01;
+            helper.position.set(info.normal.x * off, info.normal.y * off, info.normal.z * off);
         }
+    }
+
+    function getMirrorHintGridColor() {
+        const base = new THREE.Color(readCssColor("--grid-color", "#223344"));
+        return base.lerp(new THREE.Color(1, 1, 1), MIRROR_HINT_GRID_COLOR_MIX);
+    }
+
+    function setMirrorHintGridOpacity(opacity) {
+        if (!mirrorHintGrid) return;
+        const alpha = clamp(Number(opacity), 0, 1);
+        for (const mat of getGridHelperMaterials(mirrorHintGrid)) {
+            if (!mat) continue;
+            mat.transparent = true;
+            mat.opacity = alpha;
+            mat.depthWrite = false;
+            mat.depthTest = false;
+            mat.needsUpdate = true;
+        }
+    }
+
+    function updateMirrorPlaneHintTheme() {
+        if (!mirrorHintGrid) return;
+        const color = getMirrorHintGridColor();
+        for (const mat of getGridHelperMaterials(mirrorHintGrid)) {
+            if (!mat || !mat.color) continue;
+            mat.color.copy(color);
+            mat.needsUpdate = true;
+        }
+    }
+
+    function ensureMirrorPlaneHintGrid() {
+        if (mirrorHintGrid || !scene) return mirrorHintGrid;
+        const color = getMirrorHintGridColor();
+        mirrorHintGrid = new THREE.GridHelper(GRID_HELPER_SIZE, GRID_HELPER_DIVISIONS, color, color);
+        mirrorHintGrid.visible = false;
+        mirrorHintGrid.renderOrder = 18;
+        applyGridTransformForPlane(mirrorHintGrid, mirrorPlane, MIRROR_HINT_GRID_OFFSET);
+        setMirrorHintGridOpacity(0);
+        scene.add(mirrorHintGrid);
+        return mirrorHintGrid;
+    }
+
+    function triggerMirrorPlaneHint(planeKey) {
+        const helper = ensureMirrorPlaneHintGrid();
+        if (!helper) return;
+        applyGridTransformForPlane(helper, planeKey, MIRROR_HINT_GRID_OFFSET);
+        updateMirrorPlaneHintTheme();
+        mirrorHintGridExpireAt = performance.now() + MIRROR_HINT_GRID_DURATION_MS;
+        helper.visible = true;
+        setMirrorHintGridOpacity(MIRROR_HINT_GRID_MAX_OPACITY);
+    }
+
+    function updateMirrorPlaneHint() {
+        if (!mirrorHintGrid || !mirrorHintGrid.visible) return;
+        const now = performance.now();
+        if (!(mirrorHintGridExpireAt > 0)) {
+            mirrorHintGrid.visible = false;
+            return;
+        }
+        const remain = mirrorHintGridExpireAt - now;
+        if (remain <= 0) {
+            mirrorHintGrid.visible = false;
+            mirrorHintGridExpireAt = 0;
+            setMirrorHintGridOpacity(0);
+            return;
+        }
+        const t = clamp(remain / MIRROR_HINT_GRID_DURATION_MS, 0, 1);
+        setMirrorHintGridOpacity(MIRROR_HINT_GRID_MAX_OPACITY * t * t);
+    }
+
+    function updateGridForPlane() {
+        if (!gridHelper) return;
+        applyGridTransformForPlane(gridHelper, snapPlane, -0.01);
         updateLockPlaneGuideVisual();
     }
 
@@ -2996,6 +3082,7 @@ function initPointsBuilderMain() {
         mirrorPlane = key;
         if (selMirrorPlane && selMirrorPlane.value !== key) selMirrorPlane.value = key;
         updateMirrorButtons();
+        triggerMirrorPlaneHint(key);
     }
 
     function applyPickPlane() {
@@ -4824,6 +4911,7 @@ function onCanvasDblClick(ev) {
         updateAxisLabelScale();
         controls.update();
         if (lockPlaneActive && lockPlaneBasePoint) updateLockPlaneGuideVisual();
+        updateMirrorPlaneHint();
         renderer.render(scene, camera);
     }
 
