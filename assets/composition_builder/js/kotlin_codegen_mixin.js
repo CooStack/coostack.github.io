@@ -651,7 +651,8 @@ export function installKotlinCodegenMethods(CompositionBuilderApp, deps = {}) {
                 const blockLines = [];
                 if (useAngleOffsetAnimator && i === 0) appendOffsetAnimator(blockLines);
                 const usePreTickWrapper = act.type === "expression"
-                    || ((act.type === "rotateAsAxis" || act.type === "rotateToWithAngle") && act.angleMode === "expr");
+                    || act.type === "rotateToWithAngle"
+                    || (act.type === "rotateAsAxis" && act.angleMode === "expr");
                 if (act.type === "rotateToPoint") {
                     blockLines.push(`${innerIndent}    rotateToPoint(${toExpr})`);
                 } else if (act.type === "rotateAsAxis") {

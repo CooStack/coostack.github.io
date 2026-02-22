@@ -25,7 +25,7 @@ import {
     formatAngleValue
 } from "./angle_offset_utils.js";
 import { installPreviewRuntimeMethods } from "./preview_runtime_mixin.js?v=20260221_15";
-import { installKotlinCodegenMethods } from "./kotlin_codegen_mixin.js";
+import { installKotlinCodegenMethods } from "./kotlin_codegen_mixin.js?v=20260222_1";
 import { installCodeOutputMethods } from "./code_output_mixin.js";
 import { installExpressionEditorMethods } from "./expression_editor_mixin.js?v=20260221_7";
 import { installCodeCompileMethods } from "./code_compile_mixin.js?v=20260220_1";
@@ -9324,7 +9324,8 @@ class CompositionBuilderApp {
                 : U.angleToKotlinRadExpr(num(act.angleValue), normalizeAngleUnit(act.angleUnit));
             const blockLines = [];
             const usePreTickWrapper = act.type === "expression"
-                || ((act.type === "rotateAsAxis" || act.type === "rotateToWithAngle") && act.angleMode === "expr");
+                || act.type === "rotateToWithAngle"
+                || (act.type === "rotateAsAxis" && act.angleMode === "expr");
             if (act.type === "rotateToPoint") {
                 blockLines.push(`${innerIndent}    rotateToPoint(${toExpr})`);
             } else if (act.type === "rotateAsAxis") {
