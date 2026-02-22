@@ -240,6 +240,7 @@
         const ctx = el.chart.getContext("2d", { alpha: true });
         const pad = { l: 44, r: 16, t: 16, b: 34 };
         let dragTarget = "";
+        let dragPendingLowerY = null;
         let rafId = 0;
 
         const cubic = (a, b, c, d, t) => {
@@ -499,6 +500,7 @@
             ev.preventDefault();
             const p = getMousePos(ev);
             dragTarget = pickHandle(p.x, p.y);
+            dragPendingLowerY = null;
             if (dragTarget) {
                 el.chart.setPointerCapture?.(ev.pointerId);
                 updateStatus(`拖拽 ${dragTarget.toUpperCase()}`);
@@ -521,18 +523,35 @@
                 if (Math.abs(py - minPy) <= snapPx) nextY = state.min;
                 else if (Math.abs(py - maxPy) <= snapPx) nextY = state.max;
             }
+            const currentY = dragTarget === "c1" ? num(state.c1y) : num(state.c2y);
+            const isRaise = nextY >= currentY - 1e-9;
             if (dragTarget === "c1") {
                 state.c1x = nextX;
-                state.c1y = nextY;
+                if (isRaise) {
+                    state.c1y = nextY;
+                    dragPendingLowerY = null;
+                } else {
+                    dragPendingLowerY = nextY;
+                }
             } else if (dragTarget === "c2") {
                 state.c2x = nextX;
-                state.c2y = nextY;
+                if (isRaise) {
+                    state.c2y = nextY;
+                    dragPendingLowerY = null;
+                } else {
+                    dragPendingLowerY = nextY;
+                }
             }
             scheduleRender();
         };
 
         const onPointerUp = (ev) => {
             if (!dragTarget) return;
+            if (Number.isFinite(Number(dragPendingLowerY))) {
+                if (dragTarget === "c1") state.c1y = num(dragPendingLowerY);
+                else if (dragTarget === "c2") state.c2y = num(dragPendingLowerY);
+            }
+            dragPendingLowerY = null;
             dragTarget = "";
             el.chart.releasePointerCapture?.(ev.pointerId);
             updateStatus("已更新曲线");

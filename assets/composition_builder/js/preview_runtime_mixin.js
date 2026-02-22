@@ -770,6 +770,7 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
                 cached = {
                     owner,
                     ownerCount: ownerCountSafe,
+                    statusAge: globalAge,
                     age: growthAgeTick,
                     elapsedTick: runtimeElapsedTick,
                     shapeRuntimeLevels,
@@ -821,7 +822,9 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
             }
             let anchor = anchorsByBirth[anchorRef];
             if (!anchor) {
-                const globalScale = this.resolveScaleFactor(this.state.projectScale, cached.age, cycleCfg);
+                const globalScale = this.resolveScaleFactor(this.state.projectScale, cached.age, cycleCfg, {
+                    fadeAgeTick: cached.statusAge
+                });
                 anchor = this.applyScaleFactorToPoint(anchorBase, globalScale);
                 anchor = this.applyRuntimeActionsToPoint(anchor, runtimeActions, cached.elapsedTick, cached.age, anchorRef, globalAxis, {
                     skipExpression: skipExprPerPoint,
@@ -869,7 +872,9 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
                             const lvActionElapsed = cached.elapsedTick;
                             const lvActionAge = cached.age;
                             const lvScaleAge = cached.age;
-                            const cardScale = this.resolveScaleFactor(lvRuntime.scale, lvScaleAge, cycleCfg);
+                            const cardScale = this.resolveScaleFactor(lvRuntime.scale, lvScaleAge, cycleCfg, {
+                                fadeAgeTick: cached.statusAge
+                            });
                             lvPoint = this.applyScaleFactorToPoint(lvPoint, cardScale);
                             if (lvRuntime.angleOffset) {
                                 const levelOffsetIndex = lvOffsetRef;
@@ -1526,14 +1531,17 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
         };
     }
 
-    resolveScaleFactor(rawScaleCfg, ageTick, cycleCfg = null) {
+    resolveScaleFactor(rawScaleCfg, ageTick, cycleCfg = null, opts = {}) {
         const cfg = normalizeScaleHelperConfig(rawScaleCfg, { type: "none" });
         if (cfg.type === "none") return 1;
         const cycle = cycleCfg || this.getPreviewCycleConfig();
         const age = num(ageTick);
+        const fadeAgeBase = Number.isFinite(Number(opts?.fadeAgeTick))
+            ? num(opts.fadeAgeTick)
+            : age;
         const fadeStart = cycle.play;
-        const inFade = age >= fadeStart;
-        const fadeAge = Math.max(0, age - fadeStart);
+        const inFade = fadeAgeBase >= fadeStart;
+        const fadeAge = Math.max(0, fadeAgeBase - fadeStart);
         const tickMax = Math.max(1, int(cfg.tick || 1));
         const growTick = Math.min(tickMax, Math.max(0, age));
         let curveTick = growTick;
