@@ -1,4 +1,4 @@
-﻿export function initLayoutSystem(options = {}) {
+export function initLayoutSystem(options = {}) {
     const {
         layoutEl,
         panelLeft,

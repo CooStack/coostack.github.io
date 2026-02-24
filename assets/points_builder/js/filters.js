@@ -1,4 +1,4 @@
-﻿export function initFilterSystem(ctx) {
+export function initFilterSystem(ctx) {
     const {
         KIND,
         showToast,

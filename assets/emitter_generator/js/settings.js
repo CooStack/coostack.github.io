@@ -1,11 +1,11 @@
-﻿import { countDecimalsFromString, safeNum } from "./utils.js";
+import { countDecimalsFromString, safeNum } from "./utils.js";
 
 const THEMES = [
     { id: "dark-1", label: "夜岚" },
     { id: "dark-2", label: "深潮" },
     { id: "dark-3", label: "焰砂" },
-    { id: "light-1", label: "雾蓝" },
-    { id: "light-2", label: "杏露" },
+    { id: "light-1", label: "" },
+    { id: "light-2", label: "¶" },
     { id: "light-3", label: "薄荷" }
 ];
 const THEME_ORDER = THEMES.map(t => t.id);
@@ -22,13 +22,72 @@ export function initSettingsSystem(ctx = {}) {
         chkGrid,
         inpPointSize,
         inpParamStep,
+        selMotionSnapPlane,
+        chkMotionSnapGrid,
+        inpMotionSnapStep,
+        inpMotionSnapRadius,
         onShowAxes,
         onShowGrid,
         onPointSize,
+        onMotionSnapSettingsChange,
     } = ctx;
 
     const SETTINGS_STORAGE_KEY = "pe_settings_v1";
     let paramStep = 0.1;
+    let motionSnapPlane = "XZ";
+    let motionSnapGrid = false;
+    let motionSnapStep = 0.5;
+    let motionSnapRadius = 0.35;
+
+    function normalizeMotionPlane(raw) {
+        const s = String(raw || "XZ").toUpperCase();
+        if (s === "XY" || s === "ZY") return s;
+        return "XZ";
+    }
+
+    function normalizeMotionSnapStep(raw) {
+        const n = Number(raw);
+        if (!Number.isFinite(n) || n <= 0) return 0.5;
+        return n;
+    }
+
+    function normalizeMotionSnapRadius(raw) {
+        const n = Number(raw);
+        if (!Number.isFinite(n) || n < 0) return 0.35;
+        return n;
+    }
+
+    function getMotionSnapSettings() {
+        return {
+            plane: motionSnapPlane,
+            snapGrid: !!motionSnapGrid,
+            snapStep: motionSnapStep,
+            snapRadius: motionSnapRadius,
+        };
+    }
+
+    function syncMotionSnapForm() {
+        if (selMotionSnapPlane) selMotionSnapPlane.value = motionSnapPlane;
+        if (chkMotionSnapGrid) chkMotionSnapGrid.checked = !!motionSnapGrid;
+        if (inpMotionSnapStep) inpMotionSnapStep.value = String(motionSnapStep);
+        if (inpMotionSnapRadius) inpMotionSnapRadius.value = String(motionSnapRadius);
+    }
+
+    function notifyMotionSnapSettingsChange() {
+        syncMotionSnapForm();
+        if (typeof onMotionSnapSettingsChange === "function") {
+            onMotionSnapSettingsChange(getMotionSnapSettings());
+        }
+    }
+
+    function setMotionSnapSettings(next = {}, opts = {}) {
+        motionSnapPlane = normalizeMotionPlane(next.plane ?? motionSnapPlane);
+        motionSnapGrid = !!(next.snapGrid ?? motionSnapGrid);
+        motionSnapStep = normalizeMotionSnapStep(next.snapStep ?? motionSnapStep);
+        motionSnapRadius = normalizeMotionSnapRadius(next.snapRadius ?? motionSnapRadius);
+        notifyMotionSnapSettingsChange();
+        if (!opts.skipSave) saveSettingsToStorage();
+    }
 
     function hasTheme(id) {
         return THEMES.some(t => t.id === id);
@@ -137,12 +196,16 @@ export function initSettingsSystem(ctx = {}) {
             "dark-1"
         );
         return {
-            version: 1,
+            version: 2,
             paramStep,
             theme: currentTheme,
             showAxes: chkAxes ? !!chkAxes.checked : true,
             showGrid: chkGrid ? !!chkGrid.checked : true,
             pointSize: safeNum(inpPointSize?.value, 1.0),
+            motionSnapPlane,
+            motionSnapGrid: !!motionSnapGrid,
+            motionSnapStep,
+            motionSnapRadius,
         };
     }
 
@@ -168,10 +231,17 @@ export function initSettingsSystem(ctx = {}) {
         if (inpPointSize && payload.pointSize !== undefined) {
             inpPointSize.value = String(payload.pointSize);
         }
+        setMotionSnapSettings({
+            plane: payload.motionSnapPlane,
+            snapGrid: payload.motionSnapGrid,
+            snapStep: payload.motionSnapStep,
+            snapRadius: payload.motionSnapRadius,
+        }, { skipSave: true });
 
         if (typeof onShowAxes === "function") onShowAxes(chkAxes ? chkAxes.checked : true);
         if (typeof onShowGrid === "function") onShowGrid(chkGrid ? chkGrid.checked : true);
         if (typeof onPointSize === "function" && inpPointSize) onPointSize(inpPointSize.value);
+        notifyMotionSnapSettingsChange();
         if (!opts.skipSave) saveSettingsToStorage();
     }
 
@@ -227,11 +297,41 @@ export function initSettingsSystem(ctx = {}) {
     if (inpParamStep) {
         inpParamStep.addEventListener("input", () => setParamStep(inpParamStep.value));
     }
+    if (selMotionSnapPlane) {
+        selMotionSnapPlane.addEventListener("change", () => {
+            setMotionSnapSettings({
+                plane: selMotionSnapPlane.value,
+            });
+        });
+    }
+    if (chkMotionSnapGrid) {
+        chkMotionSnapGrid.addEventListener("change", () => {
+            setMotionSnapSettings({
+                snapGrid: !!chkMotionSnapGrid.checked,
+            });
+        });
+    }
+    if (inpMotionSnapStep) {
+        inpMotionSnapStep.addEventListener("input", () => {
+            setMotionSnapSettings({
+                snapStep: inpMotionSnapStep.value,
+            });
+        });
+    }
+    if (inpMotionSnapRadius) {
+        inpMotionSnapRadius.addEventListener("input", () => {
+            setMotionSnapSettings({
+                snapRadius: inpMotionSnapRadius.value,
+            });
+        });
+    }
 
     initThemeToggle();
 
     return {
         getParamStep: () => paramStep,
+        getMotionSnapSettings,
+        setMotionSnapSettings,
         applyParamStepToInputs,
         showSettingsModal,
         hideSettingsModal,

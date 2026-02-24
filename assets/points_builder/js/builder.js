@@ -1,4 +1,4 @@
-﻿export function createBuilderTools(ctx) {
+export function createBuilderTools(ctx) {
     const { KIND, U, getState, getKotlinEndMode } = ctx || {};
 
     // Eval（同时计算：每个卡片新增的点在最终点数组里的区间，用于高亮）

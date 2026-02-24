@@ -1,4 +1,4 @@
-﻿import { deepCopy, fmtD, safeNum } from "./utils.js";
+import { deepCopy, fmtD, safeNum } from "./utils.js";
 import {
 	conditionFilterToKotlin,
 	createConditionFilter,
@@ -45,11 +45,63 @@ const DEFAULT_BEHAVIOR = {
 	death: makeDefaultDeathBehavior(),
 };
 
+export const EMITTER_VAR_TYPES = [
+    "Int",
+    "Long",
+    "Float",
+    "Double",
+    "Boolean",
+    "String",
+    "Vec3",
+    "RelativeLocation",
+    "Vector3f",
+];
+
+const NUMERIC_EMITTER_VAR_TYPES = new Set(["Int", "Long", "Float", "Double"]);
+const VECTOR_EMITTER_VAR_TYPES = new Set(["Vec3", "RelativeLocation", "Vector3f"]);
+
+export function isNumericEmitterVarType(type) {
+    return NUMERIC_EMITTER_VAR_TYPES.has(String(type || "").trim());
+}
+
+function isVectorEmitterVarType(type) {
+    return VECTOR_EMITTER_VAR_TYPES.has(String(type || "").trim());
+}
+
+export function normalizeEmitterVarType(rawType) {
+    const raw = String(rawType || "").trim();
+    const lowered = raw.toLowerCase();
+    if (lowered === "int") return "Int";
+    if (lowered === "long") return "Long";
+    if (lowered === "float") return "Float";
+    if (lowered === "double") return "Double";
+    if (lowered === "boolean" || lowered === "bool") return "Boolean";
+    if (lowered === "string") return "String";
+    if (lowered === "vec3") return "Vec3";
+    if (lowered === "relativelocation") return "RelativeLocation";
+    if (lowered === "vector3f") return "Vector3f";
+    return EMITTER_VAR_TYPES.includes(raw) ? raw : "Double";
+}
+
+function defaultValueForEmitterVarType(type) {
+    const t = normalizeEmitterVarType(type);
+    if (t === "Int") return 0;
+    if (t === "Long") return 0;
+    if (t === "Float") return 0;
+    if (t === "Double") return 0;
+    if (t === "Boolean") return false;
+    if (t === "String") return "";
+    if (t === "Vec3") return "Vec3(0.0, 0.0, 0.0)";
+    if (t === "RelativeLocation") return "RelativeLocation(0.0, 0.0, 0.0)";
+    if (t === "Vector3f") return "Vector3f(0.0f, 0.0f, 0.0f)";
+    return 0;
+}
+
 export function createEmitterVar() {
     return {
         id: ID_SEED(),
         name: "",
-        type: "double", // int | double
+        type: "Double",
         defaultValue: 0,
         minEnabled: false,
         minValue: 0,
@@ -74,31 +126,54 @@ export function isValidEmitterVarName(name) {
 }
 
 function sanitizeEmitterVar(v) {
+    const type = normalizeEmitterVarType(v?.type);
     const out = {
         id: String(v?.id || ID_SEED()),
         name: String(v?.name || "").trim(),
-        type: String(v?.type || "double").toLowerCase() === "int" ? "int" : "double",
-        defaultValue: 0,
+        type,
+        defaultValue: defaultValueForEmitterVarType(type),
         minEnabled: !!v?.minEnabled,
         minValue: 0,
         maxEnabled: !!v?.maxEnabled,
         maxValue: 0,
     };
-    const n = Number(v?.defaultValue);
-    if (Number.isFinite(n)) out.defaultValue = n;
-    const nMin = Number(v?.minValue);
-    const nMax = Number(v?.maxValue);
-    if (Number.isFinite(nMin)) out.minValue = nMin;
-    if (Number.isFinite(nMax)) out.maxValue = nMax;
-    if (out.type === "int") out.defaultValue = Math.trunc(out.defaultValue);
-    if (out.type === "int") {
-        out.minValue = Math.trunc(out.minValue);
-        out.maxValue = Math.trunc(out.maxValue);
-    }
-    if (out.minEnabled && out.maxEnabled && out.minValue > out.maxValue) {
-        const t = out.minValue;
-        out.minValue = out.maxValue;
-        out.maxValue = t;
+    if (isNumericEmitterVarType(type)) {
+        const n = Number(v?.defaultValue);
+        if (Number.isFinite(n)) out.defaultValue = n;
+        const nMin = Number(v?.minValue);
+        const nMax = Number(v?.maxValue);
+        if (Number.isFinite(nMin)) out.minValue = nMin;
+        if (Number.isFinite(nMax)) out.maxValue = nMax;
+        if (type === "Int" || type === "Long") {
+            out.defaultValue = Math.trunc(Number(out.defaultValue) || 0);
+            out.minValue = Math.trunc(Number(out.minValue) || 0);
+            out.maxValue = Math.trunc(Number(out.maxValue) || 0);
+        }
+        if (out.minEnabled && out.maxEnabled && out.minValue > out.maxValue) {
+            const t = out.minValue;
+            out.minValue = out.maxValue;
+            out.maxValue = t;
+        }
+    } else {
+        out.minEnabled = false;
+        out.maxEnabled = false;
+        out.minValue = 0;
+        out.maxValue = 0;
+        if (type === "Boolean") {
+            if (typeof v?.defaultValue === "boolean") {
+                out.defaultValue = v.defaultValue;
+            } else {
+                const s = String(v?.defaultValue ?? "").trim().toLowerCase();
+                out.defaultValue = (s === "true");
+            }
+        } else if (type === "String") {
+            out.defaultValue = String(v?.defaultValue ?? "");
+        } else if (isVectorEmitterVarType(type)) {
+            const rawValue = String(v?.defaultValue ?? "").trim();
+            out.defaultValue = rawValue || String(defaultValueForEmitterVarType(type));
+        } else {
+            out.defaultValue = defaultValueForEmitterVarType(type);
+        }
     }
     return out;
 }
@@ -251,16 +326,61 @@ export function saveEmitterBehavior(cfg) {
 }
 
 function sanitizeDefaultForType(v, type) {
-    const n = Number(v);
-    if (!Number.isFinite(n)) return type === "int" ? "0" : "0.0";
-    if (type === "int") return String(Math.trunc(n));
-    return fmtD(n);
+    const t = normalizeEmitterVarType(type);
+    const raw = String(v ?? "").trim();
+    const n = Number(raw === "" ? v : raw);
+    if (t === "Int") {
+        if (!Number.isFinite(n)) return "0";
+        return String(Math.trunc(n));
+    }
+    if (t === "Long") {
+        if (!Number.isFinite(n)) return "0L";
+        return `${Math.trunc(n)}L`;
+    }
+    if (t === "Float") {
+        if (!Number.isFinite(n)) return "0.0f";
+        return `${fmtD(n)}f`;
+    }
+    if (t === "Double") {
+        if (!Number.isFinite(n)) return "0.0";
+        return fmtD(n);
+    }
+    if (t === "Boolean") {
+        if (typeof v === "boolean") return v ? "true" : "false";
+        if (/^true$/i.test(raw)) return "true";
+        if (/^false$/i.test(raw)) return "false";
+        return "false";
+    }
+    if (t === "String") {
+        if (/^\"[\s\S]*\"$/.test(raw)) return raw;
+        const txt = String(v ?? "");
+        const escaped = txt
+            .replace(/\\/g, "\\\\")
+            .replace(/"/g, "\\\"")
+            .replace(/\r/g, "\\r")
+            .replace(/\n/g, "\\n");
+        return `"${escaped}"`;
+    }
+    if (isVectorEmitterVarType(t)) {
+        if (raw) return raw;
+        return String(defaultValueForEmitterVarType(t));
+    }
+    return "0.0";
 }
 
 function sanitizeBoundForType(v, type) {
+    if (!isNumericEmitterVarType(type)) return "0.0";
+    const t = normalizeEmitterVarType(type);
     const n = Number(v);
-    if (!Number.isFinite(n)) return type === "int" ? "0" : "0.0";
-    if (type === "int") return String(Math.trunc(n));
+    if (!Number.isFinite(n)) {
+        if (t === "Int") return "0";
+        if (t === "Long") return "0L";
+        if (t === "Float") return "0.0f";
+        return "0.0";
+    }
+    if (t === "Int") return String(Math.trunc(n));
+    if (t === "Long") return `${Math.trunc(n)}L`;
+    if (t === "Float") return `${fmtD(n)}f`;
     return fmtD(n);
 }
 
@@ -309,8 +429,8 @@ function genEmitterVarsKotlin(vars) {
     const lines = [];
     for (const v of vars) {
         if (!isValidEmitterVarName(v.name)) continue;
-        const type = v.type === "int" ? "Int" : "Double";
-        const def = sanitizeDefaultForType(v.defaultValue, v.type);
+        const type = normalizeEmitterVarType(v.type);
+        const def = sanitizeDefaultForType(v.defaultValue, type);
         lines.push("@CodecField");
         lines.push(`var ${v.name}: ${type} = ${def}`);
         lines.push("");
@@ -323,6 +443,7 @@ function genVarBoundsApplyFn(vars) {
     const valid = vars.filter((v) => isValidEmitterVarName(v.name));
     const clamps = [];
     for (const v of valid) {
+        if (!isNumericEmitterVarType(v.type)) continue;
         if (!v.minEnabled && !v.maxEnabled) continue;
         if (v.minEnabled && v.maxEnabled) {
             const lo = sanitizeBoundForType(v.minValue, v.type);
@@ -399,14 +520,6 @@ function genDoTickKotlin(tickExpression, tickActions, hasBounds) {
 function genDeathActionKotlin(death, hasBounds) {
     const lines = [];
     if (!death.enabled) {
-        lines.push("override fun singleParticleDeathAction(");
-        lines.push("    oldControler: ParticleControler,");
-        lines.push("    oldData: ControlableParticleData,");
-        lines.push("    respawnCount: Int,");
-        lines.push("    reason: RemoveReason");
-        lines.push("): List<Pair<ControlableParticleData, RelativeLocation>> {");
-        lines.push("    return listOf()");
-        lines.push("}");
         return lines;
     }
 
@@ -488,8 +601,11 @@ export function genEmitterBehaviorKotlin(rawCfg) {
     const boundsInfo = genVarBoundsApplyFn(cfg.emitterVars);
     lines.push(...boundsInfo.lines);
 	lines.push(...genDoTickKotlin(cfg.tickExpression, cfg.tickActions, boundsInfo.hasBounds));
-    lines.push("");
-    lines.push(...genDeathActionKotlin(cfg.death, boundsInfo.hasBounds));
+    const deathLines = genDeathActionKotlin(cfg.death, boundsInfo.hasBounds);
+    if (deathLines.length) {
+        lines.push("");
+        lines.push(...deathLines);
+    }
 
     return lines.join("\n").replace(/\n{3,}/g, "\n\n").trim();
 }

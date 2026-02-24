@@ -1,4 +1,4 @@
-﻿export const zhCN = {
+export const zhCN = {
   app: {
     title: "CodeTip 编辑器演示",
     subtitle: "纯静态 HTML/CSS/JS，Monaco + TypeScript Worker，支持 JS/TS 智能提示、问题面板、类型库与类型映射。"

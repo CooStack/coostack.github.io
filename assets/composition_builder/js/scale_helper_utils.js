@@ -1,4 +1,4 @@
-﻿export const SCALE_HELPER_TYPES = ["none", "linear", "bezier"];
+export const SCALE_HELPER_TYPES = ["none", "linear", "bezier"];
 
 function toNum(v) {
     const n = Number(v);

@@ -1,4 +1,4 @@
-﻿const idSeed = {
+const idSeed = {
   value: 0
 };
 

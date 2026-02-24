@@ -1,4 +1,4 @@
-﻿import {
+import {
     fmtD,
     fmtB,
     kVec3,
@@ -8,26 +8,58 @@
     deepCopy,
 } from "./utils.js";
 import { createConditionFilter, normalizeConditionFilter } from "./expression_cards.js";
+import { createFloatCurve, normalizeFloatCurve, curveToKotlin } from "./command_curve.js";
+
+const IDENT_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
 function fmtIExpr(v, fallback = 0) {
     const n = Number(v);
     if (Number.isFinite(n)) return String(Math.trunc(n));
     const raw = String(v ?? "").trim();
-    if (!raw) return String(Math.trunc(fallback));
-    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(raw)) return String(Math.trunc(fallback));
+    if (!raw || !IDENT_RE.test(raw)) return String(Math.trunc(fallback));
     return `(${raw}).toInt()`;
+}
+
+function normalizeNumeric(value, fallback = 0) {
+    const n = Number(value);
+    if (Number.isFinite(n)) return n;
+    const raw = String(value ?? "").trim();
+    if (IDENT_RE.test(raw)) return raw;
+    return fallback;
+}
+
+function normalizeFieldParam(field, rawValue) {
+    if (!field) return rawValue;
+    if (field.t === "bool") return !!rawValue;
+    if (field.t === "text") return String(rawValue ?? "");
+    if (field.t === "select") {
+        const raw = String(rawValue ?? "").trim();
+        const opts = Array.isArray(field.opts) ? field.opts.map((it) => String(it[0])) : [];
+        return opts.includes(raw) ? raw : field.def;
+    }
+    if (field.t === "curve") {
+        const defValue = Number(field?.def?.value);
+        const fallback = Number.isFinite(defValue) ? defValue : 0;
+        return normalizeFloatCurve(rawValue, fallback);
+    }
+    return normalizeNumeric(rawValue, field.def);
+}
+
+function makeVecSupplierLine(mode, expr, x, y, z, fallbackExpr) {
+    if (mode === "expr") return kTrailingLambda(expr, fallbackExpr);
+    return `(${kSupplierVec3(x, y, z)})`;
 }
 
 export const COMMAND_META = {
     ParticleNoiseCommand: {
         title: "Noise 噪声扰动",
         fields: [
-            {k: "strength", t: "number", step: 0.001, def: 0.05},
-            {k: "frequency", t: "number", step: 0.001, def: 0.01},
-            {k: "speed", t: "number", step: 0.001, def: 0.05},
-            {k: "affectY", t: "number", step: 0.01, def: 1.0},
-            {k: "clampSpeed", t: "number", step: 0.01, def: 15.0},
-            {k: "useLifeCurve", t: "bool", def: true},
+            { k: "strength", t: "number", step: 0.001, def: 0.03 },
+            { k: "frequency", t: "number", step: 0.001, def: 0.15 },
+            { k: "speed", t: "number", step: 0.001, def: 0.12 },
+            { k: "affectY", t: "number", step: 0.01, def: 1.0 },
+            { k: "clampSpeed", t: "number", step: 0.01, def: 0.8 },
+            { k: "useLifeCurve", t: "bool", def: true },
         ],
         toKotlin: (c) => chain([
             `ParticleNoiseCommand()`,
@@ -43,28 +75,28 @@ export const COMMAND_META = {
     ParticleDragCommand: {
         title: "Drag 空气阻力",
         fields: [
-            {k: "damping", t: "number", step: 0.01, def: 0.8},
-            {k: "linear", t: "number", step: 0.001, def: 0.005},
-            {k: "minSpeed", t: "number", step: 0.001, def: 0.01},
+            { k: "damping", t: "number", step: 0.01, def: 0.15 },
+            { k: "minSpeed", t: "number", step: 0.001, def: 0.0 },
+            { k: "linear", t: "number", step: 0.001, def: 0.0 },
         ],
         toKotlin: (c) => chain([
             `ParticleDragCommand()`,
             `.damping(${fmtD(c.params.damping)})`,
-            `.linear(${fmtD(c.params.linear)})`,
             `.minSpeed(${fmtD(c.params.minSpeed)})`,
+            `.linear(${fmtD(c.params.linear)})`,
         ]),
     },
 
     ParticleFlowFieldCommand: {
         title: "FlowField 流场",
         fields: [
-            {k: "amplitude", t: "number", step: 0.01, def: 0.15},
-            {k: "frequency", t: "number", step: 0.01, def: 0.25},
-            {k: "timeScale", t: "number", step: 0.01, def: 0.06},
-            {k: "phaseOffset", t: "number", step: 0.01, def: 0.0},
-            {k: "worldOffsetX", t: "number", step: 0.01, def: 0.0},
-            {k: "worldOffsetY", t: "number", step: 0.01, def: 0.0},
-            {k: "worldOffsetZ", t: "number", step: 0.01, def: 0.0},
+            { k: "amplitude", t: "number", step: 0.01, def: 0.15 },
+            { k: "frequency", t: "number", step: 0.01, def: 0.25 },
+            { k: "timeScale", t: "number", step: 0.01, def: 0.06 },
+            { k: "phaseOffset", t: "number", step: 0.01, def: 0.0 },
+            { k: "worldOffsetX", t: "number", step: 0.01, def: 0.0 },
+            { k: "worldOffsetY", t: "number", step: 0.01, def: 0.0 },
+            { k: "worldOffsetZ", t: "number", step: 0.01, def: 0.0 },
         ],
         toKotlin: (c) => chain([
             `ParticleFlowFieldCommand()`,
@@ -79,28 +111,21 @@ export const COMMAND_META = {
     ParticleAttractionCommand: {
         title: "Attraction 吸引/排斥",
         fields: [
-            {
-                k: "targetMode", t: "select", def: "const", opts: [
-                    ["const", "常量 Vec3"],
-                    ["expr", "Kotlin 表达式"],
-                ]
-            },
-            {k: "targetX", t: "number", step: 0.01, def: 0.0},
-            {k: "targetY", t: "number", step: 0.01, def: 0.0},
-            {k: "targetZ", t: "number", step: 0.01, def: 0.0},
-            {k: "targetExpr", t: "text", def: "this.pos"},
-
-            {k: "strength", t: "number", step: 0.01, def: 0.8},
-            {k: "range", t: "number", step: 0.01, def: 8.0},
-            {k: "falloffPower", t: "number", step: 0.01, def: 2.0},
-            {k: "minDistance", t: "number", step: 0.01, def: 0.25},
+            { k: "targetMode", t: "select", def: "const", opts: [["const", "常量 Vec3"], ["expr", "Kotlin 表达式"]] },
+            { k: "targetX", t: "number", step: 0.01, def: 0.0 },
+            { k: "targetY", t: "number", step: 0.01, def: 0.0 },
+            { k: "targetZ", t: "number", step: 0.01, def: 0.0 },
+            { k: "targetExpr", t: "text", def: "this.pos" },
+            { k: "strength", t: "number", step: 0.01, def: 0.8 },
+            { k: "range", t: "number", step: 0.01, def: 8.0 },
+            { k: "falloffPower", t: "number", step: 0.01, def: 2.0 },
+            { k: "minDistance", t: "number", step: 0.01, def: 0.25 },
         ],
         toKotlin: (c) => {
             const p = c.params;
             const targetLine = (p.targetMode === "expr")
-                ? `.target${kTrailingLambda(p.targetExpr, "this.pos")}`
-                : `.target(${kSupplierVec3(p.targetX, p.targetY, p.targetZ)})`;
-
+                ? `.target${makeVecSupplierLine("expr", p.targetExpr, 0, 0, 0, "this.pos")}`
+                : `.target${makeVecSupplierLine("const", "", p.targetX, p.targetY, p.targetZ, "this.pos")}`;
             return chain([
                 `ParticleAttractionCommand()`,
                 targetLine,
@@ -115,40 +140,26 @@ export const COMMAND_META = {
     ParticleOrbitCommand: {
         title: "Orbit 轨道",
         fields: [
-            {
-                k: "centerMode", t: "select", def: "const", opts: [
-                    ["const", "常量 Vec3"],
-                    ["expr", "Kotlin 表达式"],
-                ]
-            },
-            {k: "centerX", t: "number", step: 0.01, def: 0.0},
-            {k: "centerY", t: "number", step: 0.01, def: 0.0},
-            {k: "centerZ", t: "number", step: 0.01, def: 0.0},
-            {k: "centerExpr", t: "text", def: "this.pos"},
-
-            {k: "axisX", t: "number", step: 0.01, def: 0.0},
-            {k: "axisY", t: "number", step: 0.01, def: 1.0},
-            {k: "axisZ", t: "number", step: 0.01, def: 0.0},
-
-            {k: "radius", t: "number", step: 0.01, def: 3.0},
-            {k: "angularSpeed", t: "number", step: 0.01, def: 0.35},
-            {k: "radialCorrect", t: "number", step: 0.01, def: 0.25},
-            {k: "minDistance", t: "number", step: 0.01, def: 0.2},
-            {
-                k: "mode", t: "select", def: "PHYSICAL", opts: [
-                    ["PHYSICAL", "PHYSICAL"],
-                    ["SPRING", "SPRING"],
-                    ["SNAP", "SNAP"],
-                ]
-            },
-            {k: "maxRadialStep", t: "number", step: 0.01, def: 0.5},
+            { k: "centerMode", t: "select", def: "const", opts: [["const", "常量 Vec3"], ["expr", "Kotlin 表达式"]] },
+            { k: "centerX", t: "number", step: 0.01, def: 0.0 },
+            { k: "centerY", t: "number", step: 0.01, def: 0.0 },
+            { k: "centerZ", t: "number", step: 0.01, def: 0.0 },
+            { k: "centerExpr", t: "text", def: "this.pos" },
+            { k: "axisX", t: "number", step: 0.01, def: 0.0 },
+            { k: "axisY", t: "number", step: 0.01, def: 1.0 },
+            { k: "axisZ", t: "number", step: 0.01, def: 0.0 },
+            { k: "radius", t: "number", step: 0.01, def: 3.0 },
+            { k: "angularSpeed", t: "number", step: 0.01, def: 0.35 },
+            { k: "radialCorrect", t: "number", step: 0.01, def: 0.25 },
+            { k: "minDistance", t: "number", step: 0.01, def: 0.2 },
+            { k: "mode", t: "select", def: "PHYSICAL", opts: [["PHYSICAL", "PHYSICAL"], ["SPRING", "SPRING"], ["SNAP", "SNAP"]] },
+            { k: "maxRadialStep", t: "number", step: 0.01, def: 0.5 },
         ],
         toKotlin: (c) => {
             const p = c.params;
             const centerLine = (p.centerMode === "expr")
-                ? `.center${kTrailingLambda(p.centerExpr, "this.pos")}`
-                : `.center(${kSupplierVec3(p.centerX, p.centerY, p.centerZ)})`;
-
+                ? `.center${makeVecSupplierLine("expr", p.centerExpr, 0, 0, 0, "this.pos")}`
+                : `.center${makeVecSupplierLine("const", "", p.centerX, p.centerY, p.centerZ, "this.pos")}`;
             return chain([
                 `ParticleOrbitCommand()`,
                 centerLine,
@@ -166,35 +177,26 @@ export const COMMAND_META = {
     ParticleVortexCommand: {
         title: "Vortex 漩涡（吸入 center）",
         fields: [
-            {
-                k: "centerMode", t: "select", def: "const", opts: [
-                    ["const", "常量 Vec3"],
-                    ["expr", "Kotlin 表达式"],
-                ]
-            },
-            {k: "centerX", t: "number", step: 0.01, def: 0.0},
-            {k: "centerY", t: "number", step: 0.01, def: 0.0},
-            {k: "centerZ", t: "number", step: 0.01, def: 0.0},
-            {k: "centerExpr", t: "text", def: "this.pos"},
-
-            {k: "axisX", t: "number", step: 0.01, def: 0.0},
-            {k: "axisY", t: "number", step: 0.01, def: 1.0},
-            {k: "axisZ", t: "number", step: 0.01, def: 0.0},
-
-            {k: "swirlStrength", t: "number", step: 0.01, def: 0.8},
-            {k: "radialPull", t: "number", step: 0.01, def: 0.35},
-            {k: "axialLift", t: "number", step: 0.01, def: 0.0},
-
-            {k: "range", t: "number", step: 0.01, def: 10.0},
-            {k: "falloffPower", t: "number", step: 0.01, def: 2.0},
-            {k: "minDistance", t: "number", step: 0.01, def: 0.2},
+            { k: "centerMode", t: "select", def: "const", opts: [["const", "常量 Vec3"], ["expr", "Kotlin 表达式"]] },
+            { k: "centerX", t: "number", step: 0.01, def: 0.0 },
+            { k: "centerY", t: "number", step: 0.01, def: 0.0 },
+            { k: "centerZ", t: "number", step: 0.01, def: 0.0 },
+            { k: "centerExpr", t: "text", def: "this.pos" },
+            { k: "axisX", t: "number", step: 0.01, def: 0.0 },
+            { k: "axisY", t: "number", step: 0.01, def: 1.0 },
+            { k: "axisZ", t: "number", step: 0.01, def: 0.0 },
+            { k: "swirlStrength", t: "number", step: 0.01, def: 0.8 },
+            { k: "radialPull", t: "number", step: 0.01, def: 0.35 },
+            { k: "axialLift", t: "number", step: 0.01, def: 0.0 },
+            { k: "range", t: "number", step: 0.01, def: 10.0 },
+            { k: "falloffPower", t: "number", step: 0.01, def: 2.0 },
+            { k: "minDistance", t: "number", step: 0.01, def: 0.2 },
         ],
         toKotlin: (c) => {
             const p = c.params;
             const centerLine = (p.centerMode === "expr")
-                ? `.center${kTrailingLambda(p.centerExpr, "this.pos")}`
-                : `.center(${kSupplierVec3(p.centerX, p.centerY, p.centerZ)})`;
-
+                ? `.center${makeVecSupplierLine("expr", p.centerExpr, 0, 0, 0, "this.pos")}`
+                : `.center${makeVecSupplierLine("const", "", p.centerX, p.centerY, p.centerZ, "this.pos")}`;
             return chain([
                 `ParticleVortexCommand()`,
                 centerLine,
@@ -212,31 +214,23 @@ export const COMMAND_META = {
     ParticleRotationForceCommand: {
         title: "RotationForce 切向旋转力",
         fields: [
-            {
-                k: "centerMode", t: "select", def: "const", opts: [
-                    ["const", "常量 Vec3"],
-                    ["expr", "Kotlin 表达式"],
-                ]
-            },
-            {k: "centerX", t: "number", step: 0.01, def: 0.0},
-            {k: "centerY", t: "number", step: 0.01, def: 0.0},
-            {k: "centerZ", t: "number", step: 0.01, def: 0.0},
-            {k: "centerExpr", t: "text", def: "this.pos"},
-
-            {k: "axisX", t: "number", step: 0.01, def: 0.0},
-            {k: "axisY", t: "number", step: 0.01, def: 1.0},
-            {k: "axisZ", t: "number", step: 0.01, def: 0.0},
-
-            {k: "strength", t: "number", step: 0.01, def: 0.35},
-            {k: "range", t: "number", step: 0.01, def: 8.0},
-            {k: "falloffPower", t: "number", step: 0.01, def: 2.0},
+            { k: "centerMode", t: "select", def: "const", opts: [["const", "常量 Vec3"], ["expr", "Kotlin 表达式"]] },
+            { k: "centerX", t: "number", step: 0.01, def: 0.0 },
+            { k: "centerY", t: "number", step: 0.01, def: 0.0 },
+            { k: "centerZ", t: "number", step: 0.01, def: 0.0 },
+            { k: "centerExpr", t: "text", def: "this.pos" },
+            { k: "axisX", t: "number", step: 0.01, def: 0.0 },
+            { k: "axisY", t: "number", step: 0.01, def: 1.0 },
+            { k: "axisZ", t: "number", step: 0.01, def: 0.0 },
+            { k: "strength", t: "number", step: 0.01, def: 0.35 },
+            { k: "range", t: "number", step: 0.01, def: 8.0 },
+            { k: "falloffPower", t: "number", step: 0.01, def: 2.0 },
         ],
         toKotlin: (c) => {
             const p = c.params;
             const centerLine = (p.centerMode === "expr")
-                ? `.center${kTrailingLambda(p.centerExpr, "this.pos")}`
-                : `.center(${kSupplierVec3(p.centerX, p.centerY, p.centerZ)})`;
-
+                ? `.center${makeVecSupplierLine("expr", p.centerExpr, 0, 0, 0, "this.pos")}`
+                : `.center${makeVecSupplierLine("const", "", p.centerX, p.centerY, p.centerZ, "this.pos")}`;
             return chain([
                 `ParticleRotationForceCommand()`,
                 centerLine,
@@ -251,40 +245,32 @@ export const COMMAND_META = {
     ParticleDistortionCommand: {
         title: "Distortion 扭曲环",
         fields: [
-            {
-                k: "centerMode", t: "select", def: "const", opts: [
-                    ["const", "常量 Vec3"],
-                    ["expr", "Kotlin 表达式"],
-                ]
-            },
-            {k: "centerX", t: "number", step: 0.01, def: 0.0},
-            {k: "centerY", t: "number", step: 0.01, def: 0.0},
-            {k: "centerZ", t: "number", step: 0.01, def: 0.0},
-            {k: "centerExpr", t: "text", def: "Vec3.ZERO"},
-
-            {k: "axisX", t: "number", step: 0.01, def: 0.0},
-            {k: "axisY", t: "number", step: 0.01, def: 1.0},
-            {k: "axisZ", t: "number", step: 0.01, def: 0.0},
-
-            {k: "radius", t: "number", step: 0.01, def: 3.0},
-            {k: "radialStrength", t: "number", step: 0.01, def: 0.35},
-            {k: "axialStrength", t: "number", step: 0.01, def: 0.25},
-            {k: "tangentialStrength", t: "number", step: 0.01, def: 0.0},
-            {k: "frequency", t: "number", step: 0.01, def: 0.25},
-            {k: "timeScale", t: "number", step: 0.01, def: 0.1},
-            {k: "phaseOffset", t: "number", step: 0.01, def: 0.0},
-            {k: "followStrength", t: "number", step: 0.01, def: 0.35},
-            {k: "maxStep", t: "number", step: 0.01, def: 0.6},
-            {k: "baseAxial", t: "number", step: 0.01, def: 0.0},
-            {k: "seedOffset", t: "number", step: 1, def: 0},
-            {k: "useLifeCurve", t: "bool", def: false},
+            { k: "centerMode", t: "select", def: "const", opts: [["const", "常量 Vec3"], ["expr", "Kotlin 表达式"]] },
+            { k: "centerX", t: "number", step: 0.01, def: 0.0 },
+            { k: "centerY", t: "number", step: 0.01, def: 0.0 },
+            { k: "centerZ", t: "number", step: 0.01, def: 0.0 },
+            { k: "centerExpr", t: "text", def: "Vec3.ZERO" },
+            { k: "axisX", t: "number", step: 0.01, def: 0.0 },
+            { k: "axisY", t: "number", step: 0.01, def: 1.0 },
+            { k: "axisZ", t: "number", step: 0.01, def: 0.0 },
+            { k: "radius", t: "number", step: 0.01, def: 3.0 },
+            { k: "radialStrength", t: "number", step: 0.01, def: 0.35 },
+            { k: "axialStrength", t: "number", step: 0.01, def: 0.25 },
+            { k: "tangentialStrength", t: "number", step: 0.01, def: 0.0 },
+            { k: "frequency", t: "number", step: 0.01, def: 0.25 },
+            { k: "timeScale", t: "number", step: 0.01, def: 0.1 },
+            { k: "phaseOffset", t: "number", step: 0.01, def: 0.0 },
+            { k: "followStrength", t: "number", step: 0.01, def: 0.35 },
+            { k: "maxStep", t: "number", step: 0.01, def: 0.6 },
+            { k: "baseAxial", t: "number", step: 0.01, def: 0.0 },
+            { k: "seedOffset", t: "number", step: 1, def: 0 },
+            { k: "useLifeCurve", t: "bool", def: false },
         ],
         toKotlin: (c) => {
             const p = c.params;
             const centerLine = (p.centerMode === "expr")
-                ? `.center${kTrailingLambda(p.centerExpr, "Vec3.ZERO")}`
-                : `.center(${kSupplierVec3(p.centerX, p.centerY, p.centerZ)})`;
-
+                ? `.center${makeVecSupplierLine("expr", p.centerExpr, 0, 0, 0, "Vec3.ZERO")}`
+                : `.center${makeVecSupplierLine("const", "", p.centerX, p.centerY, p.centerZ, "Vec3.ZERO")}`;
             return chain([
                 `ParticleDistortionCommand()`,
                 centerLine,
@@ -307,7 +293,8 @@ export const COMMAND_META = {
 
     ParticleGravityCommand: {
         title: "Gravity 重力(物理)",
-        fields: [{k: "emitterRef", t: "text", def: ""}],
+        notice: "历史 bug：若只 `data.velocity.add(...)` 不回写会失效，必须回写 `data.velocity = ...`。",
+        fields: [{ k: "emitterRef", t: "text", def: "" }],
         toKotlin: (c, ctx) => {
             const ref = (c.params.emitterRef && c.params.emitterRef.trim().length)
                 ? c.params.emitterRef.trim()
@@ -315,128 +302,111 @@ export const COMMAND_META = {
             return `ParticleGravityCommand(${ref})`;
         },
     },
+
+    ParticleLifetimeMotionCommand: {
+        title: "LifetimeMotion 生命周期运动",
+        notice: "X=生命周期进度(0~1)，Y=数值。force 曲线每 tick 叠加到速度；velocity 曲线按 velocityMode 直接作用在速度上。",
+        fields: [
+            { k: "forceX", t: "curve", def: createFloatCurve("constant", 0.0) },
+            { k: "forceY", t: "curve", def: createFloatCurve("constant", 0.0) },
+            { k: "forceZ", t: "curve", def: createFloatCurve("constant", 0.0) },
+            { k: "velocityX", t: "curve", def: createFloatCurve("constant", 0.0) },
+            { k: "velocityY", t: "curve", def: createFloatCurve("constant", 0.0) },
+            { k: "velocityZ", t: "curve", def: createFloatCurve("constant", 0.0) },
+            { k: "forceSpace", t: "select", def: "WORLD", opts: [["WORLD", "WORLD"], ["LOCAL", "LOCAL"]] },
+            { k: "velocitySpace", t: "select", def: "WORLD", opts: [["WORLD", "WORLD"], ["LOCAL", "LOCAL"]] },
+            { k: "velocityMode", t: "select", def: "ADD", opts: [["ADD", "ADD"], ["OVERRIDE", "OVERRIDE"], ["MULTIPLY", "MULTIPLY"]] },
+            { k: "randomizePerParticle", t: "bool", def: false },
+            { k: "randomScaleMin", t: "number", step: 0.01, def: 1.0 },
+            { k: "randomScaleMax", t: "number", step: 0.01, def: 1.0 },
+            { k: "randomSeedOffset", t: "number", step: 1, def: 0 },
+            { k: "maxVelocityDeltaPerTick", t: "number", step: 0.01, def: 0.0 },
+        ],
+        toKotlin: (c) => {
+            const p = c.params;
+            return chain([
+                `ParticleLifetimeMotionCommand()`,
+                `.forceCurves(${curveToKotlin(p.forceX, 0.0)}, ${curveToKotlin(p.forceY, 0.0)}, ${curveToKotlin(p.forceZ, 0.0)})`,
+                `.velocityCurves(${curveToKotlin(p.velocityX, 0.0)}, ${curveToKotlin(p.velocityY, 0.0)}, ${curveToKotlin(p.velocityZ, 0.0)})`,
+                `.forceSpace(ParticleMotionSpace.${p.forceSpace})`,
+                `.velocitySpace(ParticleMotionSpace.${p.velocitySpace})`,
+                `.velocityMode(ParticleLifetimeVelocityMode.${p.velocityMode})`,
+                `.randomizePerParticle(${fmtB(p.randomizePerParticle)})`,
+                `.randomScale(${fmtD(p.randomScaleMin)}, ${fmtD(p.randomScaleMax)})`,
+                `.randomSeedOffset(${fmtIExpr(p.randomSeedOffset, 0)})`,
+                `.maxVelocityDeltaPerTick(${fmtD(p.maxVelocityDeltaPerTick)})`,
+            ]);
+        },
+    },
+
+    ParticleInheritVelocityCommand: {
+        title: "InheritVelocity 继承速度",
+        notice: "默认 source = `Supplier { emitter.emitterVelocity }`；若目标项目无该字段，请切自定义 source 或先计算 emitterVelocity。",
+        fields: [
+            { k: "sourceMode", t: "select", def: "emitter_velocity", opts: [["emitter_velocity", "默认 emitterVelocity"], ["custom", "自定义表达式"]] },
+            { k: "sourceExpr", t: "text", def: "emitter.emitterVelocity" },
+            { k: "mode", t: "select", def: "INITIAL", opts: [["INITIAL", "INITIAL"], ["CURRENT", "CURRENT"]] },
+            { k: "multiplier", t: "number", step: 0.01, def: 1.0 },
+            { k: "axisMaskX", t: "number", step: 0.01, def: 1.0 },
+            { k: "axisMaskY", t: "number", step: 0.01, def: 1.0 },
+            { k: "axisMaskZ", t: "number", step: 0.01, def: 1.0 },
+            { k: "overLifetime", t: "curve", def: createFloatCurve("constant", 1.0) },
+            { k: "damping", t: "number", step: 0.01, def: 0.0 },
+            { k: "maxContributionSpeed", t: "number", step: 0.01, def: 0.0 },
+            { k: "space", t: "select", def: "WORLD", opts: [["WORLD", "WORLD"], ["LOCAL", "LOCAL"]] },
+            { k: "randomizePerParticle", t: "bool", def: false },
+            { k: "randomScaleMin", t: "number", step: 0.01, def: 1.0 },
+            { k: "randomScaleMax", t: "number", step: 0.01, def: 1.0 },
+            { k: "randomSeedOffset", t: "number", step: 1, def: 0 },
+        ],
+        toKotlin: (c, ctx) => {
+            const p = c.params;
+            const fallbackSource = `${ctx.kRefName}.emitterVelocity`;
+            const rawExpr = String(p.sourceExpr ?? "").trim();
+            let sourceExpr = (p.sourceMode === "custom") ? (rawExpr || fallbackSource) : fallbackSource;
+            if (sourceExpr === "emitter.emitterVelocity") sourceExpr = fallbackSource;
+            return chain([
+                `ParticleInheritVelocityCommand()`,
+                `.source(Supplier { ${sourceExpr} })`,
+                `.mode(ParticleInheritMode.${p.mode})`,
+                `.multiplier(${fmtD(p.multiplier)})`,
+                `.axisMask(${kVec3(p.axisMaskX, p.axisMaskY, p.axisMaskZ)})`,
+                `.overLifetime(${curveToKotlin(p.overLifetime, 1.0)})`,
+                `.damping(${fmtD(p.damping)})`,
+                `.maxContributionSpeed(${fmtD(p.maxContributionSpeed)})`,
+                `.space(ParticleMotionSpace.${p.space})`,
+                `.randomizePerParticle(${fmtB(p.randomizePerParticle)})`,
+                `.randomScale(${fmtD(p.randomScaleMin)}, ${fmtD(p.randomScaleMax)})`,
+                `.randomSeedOffset(${fmtIExpr(p.randomSeedOffset, 0)})`,
+            ]);
+        },
+    },
 };
 
-const TIP_CENTER_MODE = "中心来源：常量 Vec3 或 Kotlin 表达式（Supplier）。";
-const TIP_CENTER_X = "中心坐标 X（centerMode=常量时生效）。";
-const TIP_CENTER_Y = "中心坐标 Y（centerMode=常量时生效）。";
-const TIP_CENTER_Z = "中心坐标 Z（centerMode=常量时生效）。";
-const TIP_CENTER_EXPR = "Kotlin 表达式（返回 Vec3），用于动态中心。";
-const TIP_TARGET_MODE = "目标来源：常量 Vec3 或 Kotlin 表达式（Supplier）。";
-const TIP_TARGET_X = "目标坐标 X（targetMode=常量时生效）。";
-const TIP_TARGET_Y = "目标坐标 Y（targetMode=常量时生效）。";
-const TIP_TARGET_Z = "目标坐标 Z（targetMode=常量时生效）。";
-const TIP_TARGET_EXPR = "Kotlin 表达式（返回 Vec3），用于动态目标。";
-const TIP_AXIS_X = "轴向量 X 分量（会 normalize）。";
-const TIP_AXIS_Y = "轴向量 Y 分量（会 normalize）。";
-const TIP_AXIS_Z = "轴向量 Z 分量（会 normalize）。";
-const TIP_WORLD_OFFSET_X = "世界坐标偏移 X（让流场在不同位置不完全一致）。";
-const TIP_WORLD_OFFSET_Y = "世界坐标偏移 Y（让流场在不同位置不完全一致）。";
-const TIP_WORLD_OFFSET_Z = "世界坐标偏移 Z（让流场在不同位置不完全一致）。";
-
 const COMMAND_TIPS = {
-    ParticleNoiseCommand: {
-        strength: "噪声加速度强度（每 tick 叠加到 velocity 的幅度）。值越大扰动越猛，越小越细微。",
-        frequency: "空间频率（噪声随空间变化的密度）。越大更细碎更抖；越小更平滑。",
-        speed: "时间滚动速度（噪声随时间变化快慢）。越大变化更快；越小更缓慢。",
-        affectY: "Y 轴影响比例（垂直扰动缩放）。越大上下翻滚明显，越小更贴地。",
-        clampSpeed: "速度上限（限制最终速度，防止噪声累加失控）。",
-        useLifeCurve: "是否按生命周期衰减/调制扰动强度。",
+    ParticleNoiseCommand: { strength: "噪声强度", frequency: "空间频率", speed: "时间滚动速度", affectY: "Y 轴影响", clampSpeed: "限速", useLifeCurve: "是否生命周期调制" },
+    ParticleDragCommand: { damping: "阻尼强度", minSpeed: "最小速度阈值", linear: "额外线性阻力" },
+    ParticleFlowFieldCommand: { amplitude: "振幅", frequency: "空间频率", timeScale: "时间缩放", phaseOffset: "相位偏移", worldOffsetX: "世界偏移X", worldOffsetY: "世界偏移Y", worldOffsetZ: "世界偏移Z" },
+    ParticleGravityCommand: { emitterRef: "ClassParticleEmitters 引用名" },
+    ParticleInheritVelocityCommand: {
+        sourceExpr: "默认建议：emitter.emitterVelocity；可改成自定义 source 表达式",
+        overLifetime: "生命周期乘子曲线：X=进度(0~1), Y=倍率",
     },
-    ParticleDragCommand: {
-        damping: "阻尼强度（每 tick 速度衰减比例）。0=不阻尼，越大减速越快。",
-        linear: "额外线性阻力（每 tick 再缩小一次速度）。建议保持 0，除非需要低速更粘。",
-        minSpeed: "最小速度阈值（<=0 不启用）。低于阈值直接归零，避免抖动。",
-    },
-    ParticleFlowFieldCommand: {
-        amplitude: "振幅（每 tick 速度增量幅度）。",
-        frequency: "空间频率（纹理密度）。越大更细碎，越小更平滑。",
-        timeScale: "时间缩放（流场随时间变化速度）。0=静态。",
-        phaseOffset: "相位偏移（错开不同发射器的流场相位）。",
-        worldOffsetX: TIP_WORLD_OFFSET_X,
-        worldOffsetY: TIP_WORLD_OFFSET_Y,
-        worldOffsetZ: TIP_WORLD_OFFSET_Z,
-    },
-    ParticleAttractionCommand: {
-        targetMode: TIP_TARGET_MODE,
-        targetX: TIP_TARGET_X,
-        targetY: TIP_TARGET_Y,
-        targetZ: TIP_TARGET_Z,
-        targetExpr: TIP_TARGET_EXPR,
-        strength: "强度（>0 吸引，<0 排斥）。",
-        range: "有效范围（距离越远衰减越大）。",
-        falloffPower: "衰减幂次（1=线性，2=更接近平方反比）。",
-        minDistance: "最小距离钳制，避免距离过小导致爆炸/NaN。",
-    },
-    ParticleOrbitCommand: {
-        centerMode: TIP_CENTER_MODE,
-        centerX: TIP_CENTER_X,
-        centerY: TIP_CENTER_Y,
-        centerZ: TIP_CENTER_Z,
-        centerExpr: TIP_CENTER_EXPR,
-        axisX: TIP_AXIS_X,
-        axisY: TIP_AXIS_Y,
-        axisZ: TIP_AXIS_Z,
-        radius: "目标轨道半径。",
-        angularSpeed: "角速度强度（每 tick 切向速度增量）。",
-        radialCorrect: "径向纠正强度（拉回目标半径）。",
-        minDistance: "最小距离钳制，避免靠近中心时数值异常。",
-        mode: "轨道模式：PHYSICAL / SPRING / SNAP。",
-        maxRadialStep: "每 tick 最大径向修正量（PHYSICAL/SPRING 有效）。",
-    },
-    ParticleVortexCommand: {
-        centerMode: TIP_CENTER_MODE,
-        centerX: TIP_CENTER_X,
-        centerY: TIP_CENTER_Y,
-        centerZ: TIP_CENTER_Z,
-        centerExpr: TIP_CENTER_EXPR,
-        axisX: TIP_AXIS_X,
-        axisY: TIP_AXIS_Y,
-        axisZ: TIP_AXIS_Z,
-        swirlStrength: "切向旋转强度（每 tick 切向速度增量）。",
-        radialPull: "径向吸入强度（朝轴线收拢）。",
-        axialLift: "轴向升降强度（沿轴上升/下降）。",
-        range: "衰减范围（>0）。",
-        falloffPower: "衰减幂次（1=线性，2=更强衰减）。",
-        minDistance: "最小距离钳制，避免 r=0 抖动/爆炸。",
-    },
-    ParticleRotationForceCommand: {
-        centerMode: TIP_CENTER_MODE,
-        centerX: TIP_CENTER_X,
-        centerY: TIP_CENTER_Y,
-        centerZ: TIP_CENTER_Z,
-        centerExpr: TIP_CENTER_EXPR,
-        axisX: TIP_AXIS_X,
-        axisY: TIP_AXIS_Y,
-        axisZ: TIP_AXIS_Z,
-        strength: "旋转强度（每 tick 切向速度增量）。",
-        range: "衰减范围（>0）。",
-        falloffPower: "衰减幂次。",
-    },
-    ParticleDistortionCommand: {
-        centerMode: TIP_CENTER_MODE,
-        centerX: TIP_CENTER_X,
-        centerY: TIP_CENTER_Y,
-        centerZ: TIP_CENTER_Z,
-        centerExpr: TIP_CENTER_EXPR,
-        axisX: TIP_AXIS_X,
-        axisY: TIP_AXIS_Y,
-        axisZ: TIP_AXIS_Z,
-        radius: "基础半径（未扭曲前的目标环半径）。",
-        radialStrength: "径向扭曲强度（沿半径方向噪声幅度）。",
-        axialStrength: "轴向扭曲强度（沿轴线方向起伏）。",
-        tangentialStrength: "切向扭曲强度（沿环方向滑移）。",
-        frequency: "空间频率（噪声随位置变化密度）。",
-        timeScale: "时间变化速度（噪声滚动快慢）。",
-        phaseOffset: "相位偏移（错开不同发射器的噪声起点）。",
-        followStrength: "跟随强度（被拉回扭曲环的力度）。",
-        maxStep: "每 tick 最大修正步长（限制过猛拉回）。",
-        baseAxial: "基础轴向偏移（整体沿轴线抬高/降低）。",
-        seedOffset: "噪声种子偏移（同效果的不同随机外观）。",
-        useLifeCurve: "是否按生命周期衰减扭曲强度。",
-    },
-    ParticleGravityCommand: {
-        emitterRef: "Emitter 引用名（ClassParticleEmitters），用于读取 gravity。",
+    ParticleLifetimeMotionCommand: {
+        forceX: "每 tick 叠加到速度的 X 向加速度曲线",
+        forceY: "每 tick 叠加到速度的 Y 向加速度曲线",
+        forceZ: "每 tick 叠加到速度的 Z 向加速度曲线",
+        velocityX: "速度曲线 X 分量（按 velocityMode 作用）",
+        velocityY: "速度曲线 Y 分量（按 velocityMode 作用）",
+        velocityZ: "速度曲线 Z 分量（按 velocityMode 作用）",
+        forceSpace: "force 曲线使用 WORLD 还是 LOCAL 坐标",
+        velocitySpace: "velocity 曲线使用 WORLD 还是 LOCAL 坐标",
+        velocityMode: "ADD=叠加，OVERRIDE=覆盖，MULTIPLY=按分量乘",
+        randomizePerParticle: "开启后每个粒子独立随机缩放曲线强度",
+        randomScaleMin: "随机缩放最小值",
+        randomScaleMax: "随机缩放最大值",
+        randomSeedOffset: "随机种子偏移，用于切换随机序列",
+        maxVelocityDeltaPerTick: "每 tick 最大速度改变量限制（0=不限制）",
     },
 };
 
@@ -450,16 +420,22 @@ for (const [type, tips] of Object.entries(COMMAND_TIPS)) {
     }
 }
 
-export function newCommand(type) {
+function buildDefaultParams(type) {
     const meta = COMMAND_META[type];
     const params = {};
-    meta.fields.forEach(f => params[f.k] = f.def);
-    // signs: 生效标识列表（为空表示对所有粒子生效）
+    for (const field of meta.fields) {
+        params[field.k] = normalizeFieldParam(field, deepCopy(field.def));
+    }
+    return params;
+}
+
+export function newCommand(type) {
+    if (!COMMAND_META[type]) throw new Error(`Unknown command type: ${type}`);
     return {
         id: cryptoRandomId(),
         type,
         enabled: true,
-        params,
+        params: buildDefaultParams(type),
         signs: [],
         lifeFilter: createConditionFilter(),
         ui: { collapsed: false },
@@ -469,57 +445,19 @@ export function newCommand(type) {
 export function cryptoRandomId() {
     const a = new Uint32Array(4);
     (window.crypto || window.msCrypto).getRandomValues(a);
-    return Array.from(a).map(x => x.toString(16)).join("");
+    return Array.from(a).map((x) => x.toString(16)).join("");
 }
 
 const FIELD_CN = {
-    strength: "强度",
-    frequency: "频率",
-    speed: "速度",
-    affectY: "影响Y轴",
-    clampSpeed: "速度上限",
-    useLifeCurve: "使用生命曲线",
-    damping: "阻尼",
-    linear: "线性阻力",
-    minSpeed: "最小速度",
-    amplitude: "振幅",
-    timeScale: "时间缩放",
-    phaseOffset: "相位偏移",
-    worldOffsetX: "世界偏移X",
-    worldOffsetY: "世界偏移Y",
-    worldOffsetZ: "世界偏移Z",
-    targetMode: "目标模式",
-    targetX: "目标X",
-    targetY: "目标Y",
-    targetZ: "目标Z",
-    targetExpr: "目标表达式",
-    centerMode: "中心模式",
-    centerX: "中心X",
-    centerY: "中心Y",
-    centerZ: "中心Z",
-    centerExpr: "中心表达式",
-    axisX: "轴X",
-    axisY: "轴Y",
-    axisZ: "轴Z",
-    radius: "半径",
-    angularSpeed: "角速度",
-    radialCorrect: "径向修正",
-    minDistance: "最小距离",
-    mode: "模式",
-    maxRadialStep: "最大径向步长",
-    swirlStrength: "旋转强度",
-    radialPull: "径向吸引",
-    axialLift: "轴向提升",
-    range: "范围",
-    falloffPower: "衰减指数",
-    radialStrength: "径向扭曲强度",
-    axialStrength: "轴向扭曲强度",
-    tangentialStrength: "切向扭曲强度",
-    followStrength: "跟随强度",
-    maxStep: "最大步长",
-    baseAxial: "轴向基准",
-    seedOffset: "噪声种子偏移",
-    emitterRef: "发射器引用",
+    sourceMode: "source模式",
+    sourceExpr: "source表达式",
+    overLifetime: "生命周期曲线",
+    forceX: "ForceX 曲线",
+    forceY: "ForceY 曲线",
+    forceZ: "ForceZ 曲线",
+    velocityX: "VelocityX 曲线",
+    velocityY: "VelocityY 曲线",
+    velocityZ: "VelocityZ 曲线",
 };
 
 export function humanFieldName(k) {
@@ -534,6 +472,17 @@ export function cloneDefaultCommands() {
     ];
 }
 
+function normalizeCommandParams(type, rawParams) {
+    const meta = COMMAND_META[type];
+    const out = buildDefaultParams(type);
+    const params = (rawParams && typeof rawParams === "object") ? rawParams : {};
+    for (const field of meta.fields) {
+        const next = Object.prototype.hasOwnProperty.call(params, field.k) ? params[field.k] : out[field.k];
+        out[field.k] = normalizeFieldParam(field, next);
+    }
+    return out;
+}
+
 export function normalizeCommand(raw) {
     if (!raw || typeof raw !== "object") return null;
     const type = raw.type;
@@ -541,14 +490,11 @@ export function normalizeCommand(raw) {
     const base = newCommand(type);
     if (typeof raw.id === "string" && raw.id.trim().length) base.id = raw.id.trim();
     if (typeof raw.enabled === "boolean") base.enabled = raw.enabled;
-    if (raw.params && typeof raw.params === "object") {
-        base.params = Object.assign({}, base.params, deepCopy(raw.params));
-    }
+    base.params = normalizeCommandParams(type, raw.params);
     if (raw.ui && typeof raw.ui === "object") {
         base.ui = Object.assign({}, base.ui, deepCopy(raw.ui));
     }
 
-    // 生效标识（兼容旧字段名）
     const rawSigns = raw.signs ?? raw.effectSigns ?? raw.applySigns;
     if (Array.isArray(rawSigns)) {
         const out = [];
@@ -564,7 +510,6 @@ export function normalizeCommand(raw) {
         base.signs = out;
     }
 
-    // 生命周期过滤（兼容旧字段）
     const lf = raw.lifeFilter && typeof raw.lifeFilter === "object" ? raw.lifeFilter : {};
     const legacyExpr = String(raw.lifeExpr ?? raw.ageExpr ?? "");
     const legacyEnabled = (raw.lifeFilterEnabled ?? raw.ageFilterEnabled);
@@ -574,6 +519,9 @@ export function normalizeCommand(raw) {
         rules: lf.rules,
         expr: String(lf.expr ?? legacyExpr),
     }, { allowReason: false });
-
     return base;
 }
+
+
+
+

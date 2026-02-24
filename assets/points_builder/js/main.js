@@ -1,4 +1,4 @@
-﻿import * as THREE from "three";
+import * as THREE from "three";
 import {OrbitControls} from "three/addons/controls/OrbitControls.js";
 import { createCardInputs, initCardSystem } from "./cards.js";
 import { initFilterSystem } from "./filters.js";

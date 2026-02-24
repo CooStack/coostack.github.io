@@ -1,4 +1,4 @@
-﻿export const MONACO_VERSION = "0.55.1";
+export const MONACO_VERSION = "0.55.1";
 export const MONACO_BASE_URL = `https://cdn.jsdelivr.net/npm/monaco-editor@${MONACO_VERSION}/min/vs`;
 
 let loaderPromise = null;

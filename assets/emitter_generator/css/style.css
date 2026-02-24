@@ -599,21 +599,35 @@
         grid-template-columns: 1fr 1fr 1fr;
         gap: 8px;
         min-width: 0;
+        border: 1px solid color-mix(in srgb, var(--line2) 82%, transparent);
+        border-radius: 14px;
+        padding: 8px;
+        background: color-mix(in srgb, var(--panel-soft) 72%, transparent);
+        box-shadow: inset 0 1px 0 color-mix(in srgb, #fff 7%, transparent);
       }
-      .vec3Row .vec3 input {
+      .vec3Row .vec3 .vec3Cell {
+        display: flex;
+        align-items: center;
+        min-width: 0;
+        border: 1px solid color-mix(in srgb, var(--line2) 76%, transparent);
+        border-radius: 12px;
+        padding: 6px;
+        background: color-mix(in srgb, var(--input-bg) 78%, transparent);
+      }
+      .vec3Row .vec3 .vec3Cell input {
         width: 100%;
         min-width: 0;
         padding: 10px 8px;
         font-family: var(--mono);
         font-size: 13px;
         text-align: center;
-        border-radius: 12px;
-        border: 1px solid var(--line2);
+        border-radius: 10px;
+        border: 1px solid color-mix(in srgb, var(--line2) 92%, transparent);
         background: var(--input-bg);
         color: var(--text);
         outline: none;
       }
-      .vec3Row .vec3 input:focus {
+      .vec3Row .vec3 .vec3Cell input:focus {
         border-color: color-mix(in srgb, var(--accent) 60%, var(--line2));
         box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 18%, transparent);
         background: var(--input-bg-focus);
@@ -852,6 +866,12 @@
       .emission-field.active {
         display: block;
       }
+      .root-life-field {
+        display: none;
+      }
+      .root-life-field.active {
+        display: block;
+      }
       
       .face-field {
         display: none;
@@ -887,6 +907,101 @@
       .add-row .btn {
         height: 40px;
         padding: 0 12px;
+      }
+      .cmd-page {
+        display: none;
+      }
+      .cmd-page.active {
+        display: block;
+      }
+      .cmdQueueList {
+        padding: 12px 14px 14px 14px;
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+      }
+      .cmdQueueCard {
+        border: 1px solid color-mix(in srgb, var(--text) 14%, transparent);
+        background: color-mix(in srgb, var(--panel) 78%, transparent);
+        border-radius: 18px;
+        overflow: hidden;
+        box-shadow: 0 10px 26px color-mix(in srgb, #000 22%, transparent),
+          inset 0 1px 0 rgba(255, 255, 255, 0.06);
+        backdrop-filter: blur(12px) saturate(1.15);
+      }
+      .cmdQueueCard.active {
+        border-color: color-mix(in srgb, var(--accent) 42%, var(--line2));
+      }
+      .cmdQueueHead {
+        display: grid;
+        grid-template-columns: 36px 1fr auto;
+        align-items: center;
+        gap: 10px;
+        padding: 10px;
+        border-bottom: 1px solid var(--line);
+        background: color-mix(in srgb, var(--panel-head) 55%, transparent);
+      }
+      .cmdQueueTitle {
+        font-weight: 900;
+        letter-spacing: 0.2px;
+        line-height: 1.1;
+      }
+      .cmdQueueTitle .sub {
+        display: block;
+        font-size: 12px;
+        font-weight: 600;
+        color: var(--muted);
+        margin-top: 3px;
+      }
+      .cmdQueueBtns {
+        display: flex;
+        gap: 6px;
+      }
+      .cmdQueueBody {
+        padding: 12px;
+      }
+      .cmdQueueMeta {
+        margin-top: 8px;
+      }
+      .queueSignWrap .signChips {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        margin: 6px 0 8px 0;
+      }
+      .queueSignWrap .chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 6px 10px;
+        border-radius: 999px;
+        border: 1px solid var(--line2);
+        background: color-mix(in srgb, var(--input-bg) 80%, transparent);
+        color: color-mix(in srgb, var(--text) 92%, transparent);
+        box-shadow: none;
+      }
+      .queueSignWrap .chip-muted {
+        opacity: 0.75;
+      }
+      .queueSignWrap .chipX {
+        border: none;
+        background: transparent;
+        color: var(--muted);
+        cursor: pointer;
+        font-size: 14px;
+        line-height: 1;
+        padding: 0 2px;
+      }
+      .queueSignWrap .chipX:hover {
+        color: var(--text);
+      }
+      .queueSignWrap .signRow {
+        display: flex;
+        gap: 8px;
+        align-items: center;
+      }
+      .queueSignWrap .queueSignInput {
+        max-width: 160px;
       }
       .cmdList {
         padding: 12px 14px 14px 14px;
@@ -1178,6 +1293,215 @@
       .cmdLifeWrap.is-disabled .lifeRuleTools,
       .cmdLifeWrap.is-disabled .cmdLifeBody {
         display: none;
+      }
+      .cmdNotice {
+        margin-top: 10px;
+      }
+      .cmdCurveField {
+        grid-column: 1 / -1;
+        border: 1px solid var(--line2);
+        border-radius: 12px;
+        padding: 10px;
+        background: color-mix(in srgb, var(--panel-soft) 70%, transparent);
+        outline: none;
+      }
+      .cmdCurveField.is-active {
+        border-color: color-mix(in srgb, var(--accent) 55%, var(--line2));
+        box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 16%, transparent);
+      }
+      .cmdCurveHead {
+        margin-bottom: 8px;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        justify-content: space-between;
+      }
+      .cmdCurveHead select {
+        width: 180px;
+      }
+      .cmdCurveAxisHint {
+        color: var(--muted);
+      }
+      .cmdCurveBody {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+      }
+      .cmdCurveValueRow {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 8px;
+      }
+      .cmdCurveValueRow-single {
+        grid-template-columns: minmax(0, 1fr);
+      }
+      .cmdCurveValueRow .field {
+        margin: 0;
+      }
+      .cmdCurveGraphWrap {
+        width: 100%;
+        border: 1px solid var(--line2);
+        border-radius: 10px;
+        background: color-mix(in srgb, var(--input-bg) 75%, transparent);
+        overflow: hidden;
+      }
+      .cmdCurveGraph {
+        width: 100%;
+        height: auto;
+        aspect-ratio: 320 / 170;
+        display: block;
+        cursor: crosshair;
+      }
+      .cmdCurvePlotBg {
+        fill: color-mix(in srgb, var(--panel-soft) 82%, transparent);
+      }
+      .cmdCurveGrid {
+        stroke: color-mix(in srgb, var(--line2) 70%, transparent);
+        stroke-width: 1;
+      }
+      .cmdCurveAxisZero {
+        stroke: color-mix(in srgb, var(--accent) 35%, transparent);
+        stroke-width: 1.2;
+        stroke-dasharray: 4 3;
+      }
+      .cmdCurveLine {
+        fill: none;
+        stroke: color-mix(in srgb, var(--accent) 82%, #8ec5ff);
+        stroke-width: 2;
+      }
+      .cmdCurveSelectBox {
+        fill: color-mix(in srgb, var(--accent) 20%, transparent);
+        stroke: color-mix(in srgb, var(--accent) 70%, #8ec5ff);
+        stroke-width: 1.1;
+        stroke-dasharray: 4 2;
+      }
+      .cmdCurvePoint {
+        fill: color-mix(in srgb, var(--accent) 88%, #8ec5ff);
+        stroke: #ffffff;
+        stroke-width: 1.2;
+        cursor: grab;
+      }
+      .cmdCurvePoint:active {
+        cursor: grabbing;
+      }
+      .cmdCurvePoint.is-selected {
+        fill: #ffd166;
+        stroke: #1b1f2b;
+        stroke-width: 1.4;
+      }
+      .cmdCurveAxisText {
+        fill: color-mix(in srgb, var(--text) 78%, transparent);
+        font-size: 10px;
+        dominant-baseline: middle;
+      }
+      .cmdCurveToolbar {
+        margin-top: 8px;
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+      }
+      .cmdCurveRangeRow {
+        margin-top: 6px;
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
+        gap: 8px;
+        align-items: end;
+      }
+      .cmdCurveRangeRow .field {
+        margin: 0;
+      }
+      .cmdCurveRangeInput {
+        text-align: right;
+        font-family: var(--mono);
+      }
+      .cmdCurveRangeHandle {
+        fill: transparent;
+        cursor: ns-resize;
+      }
+      .cmdCurveRangeHandle:hover {
+        fill: color-mix(in srgb, var(--accent) 20%, transparent);
+      }
+      .cmdCurveDelSelected:disabled {
+        opacity: 0.45;
+      }
+      .cmdCurveHintText {
+        margin-top: 6px;
+        color: var(--muted);
+        line-height: 1.45;
+      }
+      .curve-point-menu {
+        position: fixed;
+        left: 0;
+        top: 0;
+        min-width: 220px;
+        max-width: 280px;
+        padding: 10px;
+        border: 1px solid var(--line2);
+        border-radius: 12px;
+        background: linear-gradient(
+          180deg,
+          color-mix(in srgb, var(--panel) 92%, transparent),
+          color-mix(in srgb, var(--panel-soft) 90%, transparent)
+        );
+        box-shadow: var(--shadow);
+        z-index: 100210;
+        display: none;
+        pointer-events: auto;
+        backdrop-filter: blur(12px);
+        -webkit-backdrop-filter: blur(12px);
+      }
+      .curve-point-menu.open {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+      }
+      .curve-point-menu-title {
+        font-size: 12px;
+        font-weight: 700;
+        color: var(--text);
+      }
+      .curve-point-menu-meta {
+        font-size: 12px;
+        color: var(--muted);
+      }
+      .curve-point-menu-label {
+        font-size: 12px;
+        color: var(--muted);
+      }
+      .curvePointMenuInput {
+        width: 100%;
+        min-width: 0;
+        padding: 10px 10px;
+        border-radius: 12px;
+        border: 1px solid var(--line2);
+        background: var(--input-bg);
+        color: var(--text);
+        outline: none;
+        text-align: right;
+        font-family: var(--mono);
+      }
+      .curvePointMenuInput:focus {
+        border-color: color-mix(in srgb, var(--accent) 60%, var(--line2));
+        box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 18%, transparent);
+        background: var(--input-bg-focus);
+      }
+      .curve-point-menu.is-invalid .curvePointMenuInput {
+        border-color: var(--danger);
+        box-shadow: 0 0 0 2px color-mix(in srgb, var(--danger) 24%, transparent);
+      }
+      .curve-point-menu-actions {
+        display: flex;
+        justify-content: flex-end;
+        gap: 8px;
+      }
+      .cmdVec3Field .vec3Row {
+        padding: 0;
+      }
+      .cmdVec3Field .vec3 {
+        width: 100%;
+      }
+      .cmdVec3Field .vec3 input {
+        text-align: center;
       }
       .kv-list {
         display: flex;

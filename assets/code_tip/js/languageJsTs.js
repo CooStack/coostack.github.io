@@ -1,4 +1,4 @@
-﻿import { createId, sanitizeFileName, toArray } from "./utils.js";
+import { createId, sanitizeFileName, toArray } from "./utils.js";
 import { t } from "./i18nZhCN.js";
 
 let globalDefaultsConfigured = false;

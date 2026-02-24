@@ -1,4 +1,4 @@
-﻿const TAU = Math.PI * 2;
+const TAU = Math.PI * 2;
 
 function clamp01(v) {
     const n = Number(v);

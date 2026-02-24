@@ -1,4 +1,4 @@
-﻿import { createId, resolveElement } from "./utils.js";
+import { createId, resolveElement } from "./utils.js";
 
 function buildSandboxSource(channel) {
   const safeChannel = JSON.stringify(channel);

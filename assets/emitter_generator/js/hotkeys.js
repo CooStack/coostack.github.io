@@ -1,4 +1,4 @@
-﻿export function initHotkeysSystem(ctx) {
+export function initHotkeysSystem(ctx) {
     const {
         hkModal,
         hkMask,
@@ -46,6 +46,9 @@
             undo: "Mod+KeyZ",
             redo: "Mod+Shift+KeyZ",
             openSettings: "KeyH",
+            motionSnapPlaneXZ: "KeyA",
+            motionSnapPlaneXY: "KeyS",
+            motionSnapPlaneZY: "KeyD",
         },
     };
 
@@ -201,16 +204,19 @@
     let hotkeyCapture = null;
 
     const HOTKEY_ACTION_DEFS = [
-        {id: "togglePlay", title: "播放/暂停", desc: "默认 Space"},
+        {id: "togglePlay", title: "播放 / 暂停预览", desc: "默认 Space"},
         {id: "clearParticles", title: "清空粒子", desc: "默认 C"},
         {id: "generateKotlin", title: "生成 Kotlin", desc: "默认 G"},
         {id: "copyKotlin", title: "复制 Kotlin", desc: "默认 Ctrl/Cmd+Shift+C"},
         {id: "importJson", title: "导入 JSON", desc: "默认 Ctrl/Cmd+O"},
         {id: "exportJson", title: "导出 JSON", desc: "默认 Ctrl/Cmd+S"},
-        {id: "toggleFullscreen", title: "预览全屏 / 退出全屏", desc: "默认 F"},
+        {id: "toggleFullscreen", title: "预览区全屏 / 退出", desc: "默认 F"},
         {id: "undo", title: "撤回", desc: "默认 Ctrl/Cmd+Z"},
         {id: "redo", title: "重做", desc: "默认 Ctrl/Cmd+Shift+Z"},
         {id: "openSettings", title: "打开设置", desc: "默认 H"},
+        {id: "motionSnapPlaneXZ", title: "关键帧平面 XZ", desc: "默认 A"},
+        {id: "motionSnapPlaneXY", title: "关键帧平面 XY", desc: "默认 S"},
+        {id: "motionSnapPlaneZY", title: "关键帧平面 ZY", desc: "默认 D"},
     ];
 
     let _settingsWasOpenWhenHotkeys = false;
@@ -239,7 +245,7 @@
         hkModal?.classList.add("hidden");
         hkMask?.classList.add("hidden");
         hotkeyCapture = null;
-        if (hkHint) hkHint.textContent = "设置后按键，Esc 取消，Backspace/Delete 清空。配置会保存到浏览器。";
+        if (hkHint) hkHint.textContent = "Esc 关闭 · Backspace/Delete 清空绑定";
 
         try { settingsModal && settingsModal.classList.remove("under"); } catch {}
         try { settingsMask && settingsMask.classList.remove("under"); } catch {}
@@ -253,7 +259,7 @@
 
     function beginHotkeyCapture(target) {
         hotkeyCapture = target;
-        if (hkHint) hkHint.textContent = `正在设置：${target.title || target.id}（按下新按键；Esc 取消；Backspace/Delete 清空）`;
+        if (hkHint) hkHint.textContent = `正在设置「${target.title || target.id}」：Esc 取消，Backspace/Delete 清空`;
     }
 
     function setHotkeyFor(target, hk) {
@@ -338,14 +344,14 @@
 
         if (e.code === "Escape") {
             hotkeyCapture = null;
-            if (hkHint) hkHint.textContent = "已取消。";
+        if (hkHint) hkHint.textContent = "Esc 关闭 · Backspace/Delete 清空绑定";
             renderHotkeysList();
             return true;
         }
         if (e.code === "Backspace" || e.code === "Delete") {
             setHotkeyFor(hotkeyCapture, "");
             hotkeyCapture = null;
-            if (hkHint) hkHint.textContent = "已清空。";
+        if (hkHint) hkHint.textContent = "Esc 关闭 · Backspace/Delete 清空绑定";
             return true;
         }
 
@@ -355,7 +361,7 @@
         }
         setHotkeyFor(hotkeyCapture, hk);
         hotkeyCapture = null;
-        if (hkHint) hkHint.textContent = "已保存。";
+        if (hkHint) hkHint.textContent = "Esc 关闭 · Backspace/Delete 清空绑定";
         return true;
     }
 
@@ -403,7 +409,7 @@
             }
             showToast && showToast("导入成功", "success");
         } catch (e) {
-            showToast && showToast(`导入失败-格式错误(${e.message || e})`, "error");
+            showToast && showToast(`ʧ-ʽ(${e.message || e})`, "error");
         } finally {
             fileHotkeys.value = "";
         }

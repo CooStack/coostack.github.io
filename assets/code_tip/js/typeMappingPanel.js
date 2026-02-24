@@ -1,4 +1,4 @@
-﻿import { resolveElement, createId, downloadTextFile, readTextFile } from "./utils.js";
+import { resolveElement, createId, downloadTextFile, readTextFile } from "./utils.js";
 import { t } from "./i18nZhCN.js";
 import { mappingToDts, mappingToMarkdown, mappingToKotlinStub } from "./mappingToDts.js";
 

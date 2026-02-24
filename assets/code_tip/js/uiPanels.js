@@ -1,4 +1,4 @@
-﻿import { resolveElement } from "./utils.js";
+import { resolveElement } from "./utils.js";
 import { t } from "./i18nZhCN.js";
 
 function createElement(tag, className, text) {

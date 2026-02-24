@@ -1,4 +1,4 @@
-﻿const TYPESCRIPT_CDN = "https://cdn.jsdelivr.net/npm/typescript@5.9.3/lib/typescript.js";
+const TYPESCRIPT_CDN = "https://cdn.jsdelivr.net/npm/typescript@5.9.3/lib/typescript.js";
 
 let tsReadyPromise = null;
 

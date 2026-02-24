@@ -4,6 +4,7 @@ import { clamp, lerp, rand, randInt } from "./utils.js";
 import { normalizeEmitterBehavior } from "./emitter_behavior.js";
 import { normalizeBuilderState, evaluateBuilderState } from "./points_builder_bridge.js";
 import { createDoTickRuntimeScope } from "./do_tick_expression.js";
+import { sampleFloatCurve } from "./command_curve.js";
 import {
     normalizeConditionFilter,
 } from "./expression_cards.js";
@@ -64,6 +65,17 @@ export function initPreview(ctx = {}) {
             }];
         }
         return [];
+    }
+
+    function getCommandQueuesFromState(state) {
+        const rawQueues = state?.commandQueues;
+        if (Array.isArray(rawQueues) && rawQueues.length) return rawQueues;
+        if (rawQueues && typeof rawQueues === "object") {
+            const values = Object.values(rawQueues).filter((it) => it && typeof it === "object");
+            if (values.length) return values;
+        }
+        const legacy = Array.isArray(state?.commands) ? state.commands : [];
+        return [{ id: "legacy_queue", signs: [], commands: legacy }];
     }
 
     function getEmitterBuilderPoints(card) {
@@ -842,6 +854,10 @@ export function initPreview(ctx = {}) {
                 sign: particle.sign,
                 respawnCount,
                 seed: particle.seed,
+                pitch: Number(particle.pitch) || 0,
+                yaw: Number(particle.yaw) || 0,
+                roll: Number(particle.roll) || 0,
+                cmdState: {},
             };
             if (death.signMode === "set") {
                 np.sign = evalNumberFast(death.signValue, particle.sign, age, life, sign, respawnCount, tick, vars, true);
@@ -864,6 +880,8 @@ export function initPreview(ctx = {}) {
         const tps = Math.max(1, Number(state.ticksPerSecond) || 20);
         const vars = sim.behaviorRuntime.vars || {};
         const tick = Number(sim.behaviorRuntime.tick) || 0;
+        const rootLifecycle = normalizeRootLifecycle(state?.rootLifecycle);
+        const canEmitThisTick = shouldEmitOnParentTick(rootLifecycle, tick);
 
         const spawnFor = (card) => {
             const pp = (card && card.particle) ? card.particle : {};
@@ -885,6 +903,8 @@ export function initPreview(ctx = {}) {
         for (const card of emitters) {
             const id = card && card.id != null ? String(card.id) : null;
             if (!id) continue;
+            if (!canEmitThisTick) continue;
+            if (!emitterWindowActive(card?.emission, tick, (v, def) => evalNumberFast(v, def, 0, 0, 0, 0, tick, vars, true))) continue;
             const mode = (card.emission && card.emission.mode) || "continuous";
             const rt = sim.emitRuntime.get(id);
             if (!rt) continue;
@@ -907,20 +927,34 @@ export function initPreview(ctx = {}) {
             }
         }
 
-        const cmds = [];
-        for (const c of (state.commands || [])) {
-            if (!c || !c.enabled) continue;
-            let signSet = null;
-            if (Array.isArray(c.signs) && c.signs.length) {
-                signSet = new Set();
-                for (const s of c.signs) {
+        const commandQueues = [];
+        for (const queue of getCommandQueuesFromState(state)) {
+            if (!queue || typeof queue !== "object") continue;
+            let queueSignSet = null;
+            if (Array.isArray(queue.signs) && queue.signs.length) {
+                queueSignSet = new Set();
+                for (const s of queue.signs) {
                     const v = Math.trunc(Number(s));
-                    if (Number.isFinite(v)) signSet.add(v);
+                    if (Number.isFinite(v)) queueSignSet.add(v);
                 }
             }
-            const lf = normalizeConditionFilter(c.lifeFilter, { allowReason: false });
-            const hasLifeFilter = !!(lf && typeof lf === "object" && lf.enabled);
-            cmds.push({ cmd: c, signSet, hasLifeFilter, lifeFilter: lf });
+            const cmds = [];
+            const queueCmds = Array.isArray(queue.commands) ? queue.commands : [];
+            for (const c of queueCmds) {
+                if (!c || !c.enabled) continue;
+                let signSet = null;
+                if (Array.isArray(c.signs) && c.signs.length) {
+                    signSet = new Set();
+                    for (const s of c.signs) {
+                        const v = Math.trunc(Number(s));
+                        if (Number.isFinite(v)) signSet.add(v);
+                    }
+                }
+                const lf = normalizeConditionFilter(c.lifeFilter, { allowReason: false });
+                const hasLifeFilter = !!(lf && typeof lf === "object" && lf.enabled);
+                cmds.push({ cmd: c, signSet, hasLifeFilter, lifeFilter: lf });
+            }
+            commandQueues.push({ queueSignSet, cmds });
         }
 
         for (let i = sim.particles.length - 1; i >= 0; i--) {
@@ -928,10 +962,13 @@ export function initPreview(ctx = {}) {
             p.age++;
             const ps = Math.trunc(Number(p.sign) || 0);
 
-            for (const item of cmds) {
-                if (item.signSet && !item.signSet.has(ps)) continue;
-                if (item.hasLifeFilter && !evaluateLifeFilter(item.lifeFilter, p.age, p.life, ps, p.respawnCount, tick)) continue;
-                applyCommandJS(item.cmd, p, 1);
+            for (const q of commandQueues) {
+                if (q.queueSignSet && !q.queueSignSet.has(ps)) continue;
+                for (const item of q.cmds) {
+                    if (item.signSet && !item.signSet.has(ps)) continue;
+                    if (item.hasLifeFilter && !evaluateLifeFilter(item.lifeFilter, p.age, p.life, ps, p.respawnCount, tick)) continue;
+                    applyCommandJS(item.cmd, p, 1);
+                }
             }
             p.prevPos.copy(p.pos);
             p.pos.add(p.vel);
@@ -984,6 +1021,10 @@ export function initPreview(ctx = {}) {
 
         const c0 = hexToRgb01(pp.colorStart || "#ffffff");
         const c1 = hexToRgb01(pp.colorEnd || "#ffffff");
+        const faceToCamera = (card?.template?.faceToCamera !== false);
+        const pitch = faceToCamera ? 0 : num(card?.template?.pitch, 0);
+        const yaw = faceToCamera ? 0 : num(card?.template?.yaw, 0);
+        const roll = faceToCamera ? 0 : num(card?.template?.roll, 0);
 
         return {
             pos,
@@ -997,6 +1038,10 @@ export function initPreview(ctx = {}) {
             sign: intNum(card?.template?.sign, 0),
             respawnCount: 0,
             seed: (Math.random() * 1e9) | 0,
+            pitch,
+            yaw,
+            roll,
+            cmdState: {},
         };
     }
 
@@ -1251,6 +1296,99 @@ export function initPreview(ctx = {}) {
         return p.normalize();
     }
 
+    function hashString32(raw) {
+        const s = String(raw ?? "");
+        let h = 2166136261 >>> 0;
+        for (let i = 0; i < s.length; i++) {
+            h ^= s.charCodeAt(i);
+            h = Math.imul(h, 16777619);
+        }
+        return h >>> 0;
+    }
+
+    function mulberry32(seed) {
+        let t = seed >>> 0;
+        return () => {
+            t += 0x6d2b79f5;
+            let x = Math.imul(t ^ (t >>> 15), 1 | t);
+            x ^= x + Math.imul(x ^ (x >>> 7), 61 | x);
+            return ((x ^ (x >>> 14)) >>> 0) / 4294967296;
+        };
+    }
+
+    function clampVectorLength(vec, maxLen) {
+        if (!(maxLen > 0)) return vec;
+        const len = vec.length();
+        if (len <= 1e-9 || len <= maxLen) return vec;
+        return vec.multiplyScalar(maxLen / len);
+    }
+
+    function transformMotionVector(vec, space, particle) {
+        if (String(space || "WORLD") !== "LOCAL") return vec;
+        const pitch = Number(particle?.pitch) || 0;
+        const yaw = Number(particle?.yaw) || 0;
+        const roll = Number(particle?.roll) || 0;
+        const euler = new THREE.Euler(pitch, yaw, roll, "XYZ");
+        return vec.applyEuler(euler);
+    }
+
+    function parseSourceVecExpr(raw, evalNumber) {
+        const text = String(raw || "").trim();
+        if (!text) return null;
+        let m = /^Vec3\s*\((.+),(.+),(.+)\)\s*$/.exec(text);
+        if (!m) {
+            const parts = text.split(",").map((it) => it.trim());
+            if (parts.length === 3) {
+                return new THREE.Vector3(
+                    evalNumber(parts[0], 0),
+                    evalNumber(parts[1], 0),
+                    evalNumber(parts[2], 0)
+                );
+            }
+            return null;
+        }
+        return new THREE.Vector3(
+            evalNumber(m[1], 0),
+            evalNumber(m[2], 0),
+            evalNumber(m[3], 0)
+        );
+    }
+
+    function normalizeRootLifecycleMode(rawMode) {
+        const modeRaw = String(rawMode || "interval").trim().toLowerCase();
+        if (modeRaw === "once") return "once";
+        if (modeRaw === "interval_n_tick" || modeRaw === "intervalntick") return "interval_n_tick";
+        return "interval";
+    }
+
+    function normalizeRootLifecycle(raw) {
+        const src = (raw && typeof raw === "object") ? raw : {};
+        const mode = normalizeRootLifecycleMode(src.mode);
+        const intervalNum = Number(src.intervalTick);
+        const maxTickNum = Number(src.maxTick);
+        const intervalTick = Number.isFinite(intervalNum) ? Math.max(1, Math.trunc(intervalNum)) : 1;
+        const maxTick = Number.isFinite(maxTickNum) ? Math.max(1, Math.trunc(maxTickNum)) : 120;
+        return { mode, intervalTick, maxTick };
+    }
+
+    function shouldEmitOnParentTick(lifecycle, tick) {
+        const t = Math.max(0, Math.trunc(Number(tick) || 0));
+        if (lifecycle.mode === "once") return t === 1;
+        if (lifecycle.mode === "interval") return ((t - 1) % lifecycle.intervalTick) === 0;
+        if (t > lifecycle.maxTick) return false;
+        return ((t - 1) % lifecycle.intervalTick) === 0;
+    }
+
+    function emitterWindowActive(emission, tick, evalNumber) {
+        const startRaw = emission?.startTick;
+        const endRaw = emission?.endTick;
+        const startTick = Math.max(0, Math.trunc(evalNumber(startRaw, 0)));
+        const endTick = Math.trunc(evalNumber(endRaw, -1));
+        if (tick < startTick) return false;
+        if (endTick >= 0 && tick > endTick) return false;
+        return true;
+    }
+
     function applyCommandJS(cmd, particle, dt) {
         const p = cmd.params;
         const vars = sim.behaviorRuntime.vars || {};
@@ -1270,10 +1408,25 @@ export function initPreview(ctx = {}) {
             const max = (opts && typeof opts.max === "number") ? opts.max : null;
             return evalNumberFast(v, def, age, life, sign, respawnCount, tick, vars, intMode, min, max);
         };
+        const t01 = (baseLife > 0) ? clamp(baseAge / baseLife, 0, 1) : 0.0;
+        const cmdId = String(cmd?.id || cmd?.type || "command");
+        const cmdStateMap = (particle.cmdState && typeof particle.cmdState === "object")
+            ? particle.cmdState
+            : (particle.cmdState = {});
+        const ensureCmdState = (kind, factory) => {
+            const key = `${cmdId}:${kind}`;
+            if (!cmdStateMap[key]) cmdStateMap[key] = factory();
+            return cmdStateMap[key];
+        };
+        const curveValue = (curve, fallback = 0, extra = null) => sampleFloatCurve(
+            curve,
+            t01,
+            (v, def) => num(v, def, extra),
+            fallback
+        );
 
         switch (cmd.type) {
             case "ParticleNoiseCommand": {
-                const t01 = (baseLife > 0) ? (baseAge / baseLife) : 0.0;
                 const seed = (particle.seed | 0);
 
                 const strength = num(p.strength, 0.03);
@@ -1580,6 +1733,159 @@ export function initPreview(ctx = {}) {
                     dv.multiplyScalar(maxStep / dvLen);
                 }
                 particle.vel.add(dv);
+                break;
+            }
+
+            case "ParticleLifetimeMotionCommand": {
+                const state = ensureCmdState("lifetime_motion", () => ({
+                    applied: new THREE.Vector3(0, 0, 0),
+                    random: null,
+                }));
+                const randomize = !!p.randomizePerParticle;
+                let scale = { x: 1, y: 1, z: 1 };
+                if (randomize) {
+                    const minScale = Math.min(num(p.randomScaleMin, 1.0), num(p.randomScaleMax, 1.0));
+                    const maxScale = Math.max(num(p.randomScaleMin, 1.0), num(p.randomScaleMax, 1.0));
+                    const seedOffset = Math.trunc(num(p.randomSeedOffset, 0));
+                    const randomKey = `${minScale}|${maxScale}|${seedOffset}`;
+                    if (!state.random || state.random.key !== randomKey) {
+                        const seed = ((particle.seed | 0) ^ seedOffset ^ hashString32(cmdId)) >>> 0;
+                        const rng = mulberry32(seed);
+                        const pick = () => (Math.abs(maxScale - minScale) < 1e-9) ? minScale : (minScale + (maxScale - minScale) * rng());
+                        state.random = { key: randomKey, x: pick(), y: pick(), z: pick() };
+                    }
+                    scale = state.random;
+                } else {
+                    state.random = null;
+                }
+
+                const force = new THREE.Vector3(
+                    curveValue(p.forceX, 0.0),
+                    curveValue(p.forceY, 0.0),
+                    curveValue(p.forceZ, 0.0)
+                );
+                force.set(force.x * scale.x, force.y * scale.y, force.z * scale.z);
+                transformMotionVector(force, p.forceSpace, particle);
+                if (force.lengthSq() > 1e-12) {
+                    particle.vel.add(force);
+                }
+
+                const sampledVelocity = new THREE.Vector3(
+                    curveValue(p.velocityX, 0.0),
+                    curveValue(p.velocityY, 0.0),
+                    curveValue(p.velocityZ, 0.0)
+                );
+                sampledVelocity.set(sampledVelocity.x * scale.x, sampledVelocity.y * scale.y, sampledVelocity.z * scale.z);
+                transformMotionVector(sampledVelocity, p.velocitySpace, particle);
+
+                const velocityMode = String(p.velocityMode || "ADD");
+                const maxDelta = num(p.maxVelocityDeltaPerTick, 0.0);
+                if (velocityMode === "OVERRIDE") {
+                    state.applied.set(0, 0, 0);
+                    let target = sampledVelocity.clone();
+                    if (maxDelta > 0.0) {
+                        const delta = target.clone().sub(particle.vel);
+                        clampVectorLength(delta, maxDelta);
+                        target = particle.vel.clone().add(delta);
+                    }
+                    particle.vel.copy(target);
+                } else if (velocityMode === "MULTIPLY") {
+                    state.applied.set(0, 0, 0);
+                    const current = particle.vel.clone();
+                    let target = new THREE.Vector3(
+                        current.x * sampledVelocity.x,
+                        current.y * sampledVelocity.y,
+                        current.z * sampledVelocity.z
+                    );
+                    if (maxDelta > 0.0) {
+                        const delta = target.clone().sub(current);
+                        clampVectorLength(delta, maxDelta);
+                        target = current.add(delta);
+                    }
+                    particle.vel.copy(target);
+                } else {
+                    const delta = sampledVelocity.clone().sub(state.applied);
+                    clampVectorLength(delta, maxDelta);
+                    if (delta.lengthSq() > 1e-12) {
+                        particle.vel.add(delta);
+                    }
+                    state.applied.add(delta);
+                }
+                break;
+            }
+
+            case "ParticleInheritVelocityCommand": {
+                const state = ensureCmdState("inherit_velocity", () => ({
+                    initialized: false,
+                    applied: new THREE.Vector3(0, 0, 0),
+                    random: null,
+                }));
+                const randomize = !!p.randomizePerParticle;
+                let scale = { x: 1, y: 1, z: 1 };
+                if (randomize) {
+                    const minScale = Math.min(num(p.randomScaleMin, 1.0), num(p.randomScaleMax, 1.0));
+                    const maxScale = Math.max(num(p.randomScaleMin, 1.0), num(p.randomScaleMax, 1.0));
+                    const seedOffset = Math.trunc(num(p.randomSeedOffset, 0));
+                    const randomKey = `${minScale}|${maxScale}|${seedOffset}`;
+                    if (!state.random || state.random.key !== randomKey) {
+                        const seed = ((particle.seed | 0) ^ seedOffset ^ hashString32(cmdId)) >>> 0;
+                        const rng = mulberry32(seed);
+                        const pick = () => (Math.abs(maxScale - minScale) < 1e-9) ? minScale : (minScale + (maxScale - minScale) * rng());
+                        state.random = { key: randomKey, x: pick(), y: pick(), z: pick() };
+                    }
+                    scale = state.random;
+                } else {
+                    state.random = null;
+                }
+
+                let source = new THREE.Vector3(0, 0, 0);
+                if (String(p.sourceMode || "emitter_velocity") === "custom") {
+                    const parsed = parseSourceVecExpr(p.sourceExpr, (v, def) => num(v, def));
+                    if (parsed) source.copy(parsed);
+                } else if (particle.emitterVelocity && particle.emitterVelocity.isVector3) {
+                    source.copy(particle.emitterVelocity);
+                }
+
+                source.set(
+                    source.x * num(p.axisMaskX, 1.0),
+                    source.y * num(p.axisMaskY, 1.0),
+                    source.z * num(p.axisMaskZ, 1.0)
+                );
+                source.set(source.x * scale.x, source.y * scale.y, source.z * scale.z);
+
+                const multiplier = num(p.multiplier, 1.0);
+                const lifeMul = curveValue(p.overLifetime, 1.0);
+                source.multiplyScalar(multiplier * lifeMul);
+                transformMotionVector(source, p.space, particle);
+                clampVectorLength(source, num(p.maxContributionSpeed, 0.0));
+
+                const mode = String(p.mode || "INITIAL");
+                const damping = num(p.damping, 0.0);
+                let target;
+                if (mode === "CURRENT") {
+                    state.initialized = true;
+                    if (damping > 0.0) {
+                        const follow = clamp(1.0 - expDampFactor(damping, 1.0), 0, 1);
+                        target = state.applied.clone().add(source.clone().sub(state.applied).multiplyScalar(follow));
+                    } else {
+                        target = source.clone();
+                    }
+                } else {
+                    if (!state.initialized) {
+                        state.initialized = true;
+                        target = source.clone();
+                    } else if (damping > 0.0) {
+                        target = state.applied.clone().multiplyScalar(expDampFactor(damping, 1.0));
+                    } else {
+                        target = state.applied.clone();
+                    }
+                }
+
+                const delta = target.clone().sub(state.applied);
+                if (delta.lengthSq() > 1e-12) {
+                    particle.vel.add(delta);
+                }
+                state.applied.copy(target);
                 break;
             }
 

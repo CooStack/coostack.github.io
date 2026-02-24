@@ -1,4 +1,4 @@
-﻿<!doctype html>
+<!doctype html>
 <html lang="zh-CN">
 <head>
     <meta charset="utf-8"/>
@@ -15,7 +15,7 @@
         }
     </script>
     <script src="https://cdn.jsdelivr.net/npm/noisejs@2.1.0/index.min.js"></script>
-    <link rel="stylesheet" href="./assets/emitter_generator/css/style.css?v=20260220_5"/>
+    <link rel="stylesheet" href="./assets/emitter_generator/css/style.css?v=20260224_6"/>
 </head>
 
 <body data-theme="dark-1">
@@ -100,6 +100,13 @@
                         <input id="kRefName" type="text" value="emitter"/>
                     </div>
                 </div>
+                <div class="panel-subtitle">总发射器生命周期（父级）</div>
+                <div class="grid3">
+                    <div class="field"><label>模式</label><select id="rootLifecycleMode" class="input"><option value="once">once（单次）</option><option value="interval">interval（按间隔持续）</option><option value="interval_n_tick">interval_n_tick（按间隔，持续 N tick）</option></select></div>
+                    <div class="field root-life-field" data-root-life="interval"><label>间隔 tick</label><input id="rootLifecycleInterval" class="input" type="number" step="1" min="1" value="1" data-step-fixed="1"/></div>
+                    <div class="field root-life-field" data-root-life="interval_n_tick"><label>总持续 tick (N)</label><input id="rootLifecycleMaxTick" class="input" type="number" step="1" min="1" value="120" data-step-fixed="1"/></div>
+                </div>
+                <div class="hint">父生命周期驱动全部子发射器；每个子发射器再用 <code>startTick/endTick</code> 控制生效窗口。示例：父 <code>maxTick=50</code>，子 A <code>0~10</code>，子 B <code>15~50</code>。注意：<code>endTick=-1</code> 仅表示子窗口不限，父模式若为 <code>interval_n_tick</code> 仍会在 N tick 后停止发射。</div>
             </div>
 
             <div id="cfgPageTick" class="cfg-page">
@@ -271,39 +278,19 @@
 
         <!-- 右侧命令队列 -->
         <section class="panel right">
-            <div class="panel-title">命令队列（可拖拽排序）</div>
-            <div id="commandTools" class="panel-tools command-tools">
-                <button class="btn small" id="btnExpandCommands">展开全部</button>
-                <button class="btn small" id="btnCollapseCommands">折叠全部</button>
+            <div id="commandPanelTitle" class="panel-title">命令队列</div>
+
+            <div id="commandQueuePage" class="cmd-page active">
+                <div class="panel-tools command-tools"><button class="btn small" id="btnAddCmdQueue">+ 添加命令队列</button></div>
+                <div id="cmdQueueList" class="cmdQueueList"></div>
+                <div class="hint">每个队列：command 名字 + sign 列表，sign 不填代表全部生效。<br/>双击卡片进入命令编辑。</div>
             </div>
 
-            <div class="add-row">
-                <select id="addCommandType">
-                    <option value="ParticleNoiseCommand">Noise 噪声扰动</option>
-                    <option value="ParticleDragCommand">Drag 空气阻力</option>
-                    <option value="ParticleFlowFieldCommand">FlowField 流场</option>
-                    <option value="ParticleAttractionCommand">
-                        Attraction 吸引/排斥
-                    </option>
-                    <option value="ParticleOrbitCommand">Orbit 轨道</option>
-                    <option value="ParticleVortexCommand">
-                        Vortex 漩涡（吸入 center）
-                    </option>
-                    <option value="ParticleRotationForceCommand">
-                        RotationForce 切向旋转力
-                    </option>
-                    <option value="ParticleDistortionCommand">
-                        Distortion 扭曲环
-                    </option>
-                    <option value="ParticleGravityCommand">Gravity 重力(物理)</option>
-                </select>
-                <button class="btn" id="btnAddCmd">➕ 添加</button>
-            </div>
-
-            <div id="cmdList" class="cmdList"></div>
-
-            <div class="hint">
-                拖动卡片左侧“≡”排序；关闭“启用”则生成代码时跳过该命令。
+            <div id="commandEditorPage" class="cmd-page">
+                <div id="commandTools" class="panel-tools command-tools"><button class="btn small" id="btnBackCmdQueues">返回队列</button><span class="chip" id="activeQueueBadge">队列 #1</span><button class="btn small" id="btnExpandCommands">展开全部</button><button class="btn small" id="btnCollapseCommands">折叠全部</button></div>
+                <div class="add-row"><select id="addCommandType"><option value="ParticleNoiseCommand">Noise 噪声扰动</option><option value="ParticleDragCommand">Drag 空气阻力</option><option value="ParticleFlowFieldCommand">FlowField 流场</option><option value="ParticleAttractionCommand">Attraction 吸引/排斥</option><option value="ParticleOrbitCommand">Orbit 轨道</option><option value="ParticleVortexCommand">Vortex 旋涡（吸入 center）</option><option value="ParticleRotationForceCommand">RotationForce 切向旋转力</option><option value="ParticleDistortionCommand">Distortion 扭曲环</option><option value="ParticleGravityCommand">Gravity 重力(物理)</option><option value="ParticleLifetimeMotionCommand">LifetimeMotion 生命周期运动</option><option value="ParticleInheritVelocityCommand">InheritVelocity 继承速度</option></select><button class="btn" id="btnAddCmd">➕ 添加</button></div>
+                <div id="cmdList" class="cmdList"></div>
+                <div class="hint">拖动卡片左侧“≡”排序；关闭“启用”则生成代码时跳过该命令。<br/>Gravity 历史 bug：生成模板必须回写 <code>data.velocity = data.velocity.add(...)</code>。</div>
             </div>
         </section>
     </main>
@@ -343,7 +330,7 @@
                                 <option value="light-1">雾蓝</option>
                                 <option value="light-2">杏露</option>
                                 <option value="light-3">薄荷</option>
-                            </select>y
+                            </select>
                         </div>
                         <div class="settings-toggles">
                             <label class="chk settings-toggle">
@@ -378,6 +365,16 @@
                             <button id="btnOpenHotkeys" class="btn primary">打开快捷键设置</button>
                             <div class="settings-note">未启用切换模式时，长按会临时切换吸附状态。</div>
                         </div>
+                    </div>
+                </div>
+                <div class="settings-panel settings-panel-wide">
+                    <div class="settings-panel-title">关键帧</div>
+                    <div class="settings-form">
+                        <div class="settings-row"><div class="settings-label">关键帧吸附平面</div><select id="selMotionSnapPlane" class="input"><option value="XZ">XZ</option><option value="XY">XY</option><option value="ZY">ZY</option></select></div>
+                        <div class="settings-row"><div class="settings-label"></div><label class="chk settings-toggle"><input id="chkMotionSnapGrid" type="checkbox"/><span>拖动关键帧时启用网格吸附</span></label></div>
+                        <div class="settings-row"><div class="settings-label">网格步长</div><input id="inpMotionSnapStep" class="input" type="number" value="0.5" step="0.01" min="0.0001"/></div>
+                        <div class="settings-row"><div class="settings-label">吸附半径</div><input id="inpMotionSnapRadius" class="input" type="number" value="0.35" step="0.01" min="0"/></div>
+                        <div class="settings-actions"><button id="btnOpenHotkeys" class="btn primary">打开快捷键设置</button><div class="settings-note">A / S / D 快速切换 XZ / XY / ZY 平面</div></div>
                     </div>
                 </div>
             </div>
@@ -418,7 +415,7 @@
 <!-- app -->
 <script src="./assets/points_builder/js/utils.js"></script>
 <script src="./assets/blog/js/codehighlight.js"></script>
-<script type="module" src="./assets/emitter_generator/js/generate.js?v=20260220_8"></script>
+<script type="module" src="./assets/emitter_generator/js/generate.js?v=20260224_6"></script>
 
 <!-- modal / file input -->
 <div id="modalMask" class="modal-mask hidden" aria-hidden="true">

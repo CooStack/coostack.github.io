@@ -1,4 +1,4 @@
-﻿import { createId } from "./utils.js";
+import { createId } from "./utils.js";
 
 export function createCompiler(options = {}) {
   const workerUrl = options.workerUrl || new URL("./compilerWorker.js", import.meta.url);

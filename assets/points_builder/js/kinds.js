@@ -1,4 +1,4 @@
-﻿import * as THREE from "three";
+import * as THREE from "three";
 
 export function createKindDefs(ctx) {
     const { U, num, int, relExpr, rotatePointsToPointUpright } = ctx || {};

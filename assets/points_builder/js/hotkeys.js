@@ -1,4 +1,4 @@
-﻿export function initHotkeysSystem(ctx) {
+export function initHotkeysSystem(ctx) {
     const {
         modal,
         modalMask,

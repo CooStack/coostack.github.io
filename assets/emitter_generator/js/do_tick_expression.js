@@ -1,4 +1,4 @@
-﻿const IDENT_RE = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
+const IDENT_RE = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
 
 const JS_LINT_KEYWORDS = new Set([
     "if", "else", "for", "while", "do", "switch", "case", "default", "break", "continue", "return",

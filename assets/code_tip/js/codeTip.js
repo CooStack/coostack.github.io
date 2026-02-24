@@ -1,4 +1,4 @@
-﻿import { loadMonaco } from "./monacoLoader.js";
+import { loadMonaco } from "./monacoLoader.js";
 import { createEditorCore } from "./editorCore.js";
 import { createLanguageService, normalizeLanguage } from "./languageJsTs.js";
 import { createCompiler } from "./compiler.js";

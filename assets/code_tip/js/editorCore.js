@@ -1,4 +1,4 @@
-﻿import { createId } from "./utils.js";
+import { createId } from "./utils.js";
 import { normalizeLanguage } from "./languageJsTs.js";
 
 export function createEditorCore(options) {

@@ -1,4 +1,4 @@
-﻿import { t } from "./i18nZhCN.js";
+import { t } from "./i18nZhCN.js";
 
 const BUILTIN_GENERIC_TARGET = {
   List: "Array",

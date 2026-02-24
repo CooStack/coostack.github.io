@@ -1,4 +1,4 @@
-﻿
+
 import { COMMAND_META, newCommand, normalizeCommand, humanFieldName, cloneDefaultCommands } from "./command_meta.js";
 import { initPreview } from "./preview.js";
 import { genCommandKotlin, genEmitterKotlin } from "./kotlin_gen.js";
@@ -6,6 +6,7 @@ import { initSettingsSystem } from "./settings.js";
 import { initHotkeysSystem } from "./hotkeys.js";
 import { initLayoutSystem } from "./layout.js";
 import { clamp, safeNum, escapeHtml, deepCopy, deepAssign } from "./utils.js";
+import { normalizeFloatCurve } from "./command_curve.js";
 import { InlineCodeEditor, mergeCompletionGroups } from "../../composition_builder/js/code_editor.js?v=20260220_5";
 import {
     createDefaultBuilderState,
@@ -22,7 +23,10 @@ import {
     createEmitterVar,
     createTickAction,
     createDeathVarAction,
+    EMITTER_VAR_TYPES,
+    isNumericEmitterVarType,
     loadEmitterBehavior,
+    normalizeEmitterVarType,
     saveEmitterBehavior,
 	normalizeEmitterBehavior,
 	isValidEmitterVarName,
@@ -55,6 +59,8 @@ import {
         "emitter.type": "发射器形状类型，决定点的分布。",
         "emission.mode": "发射模式：持续/爆发/一次性。",
         "emission.burstInterval": "爆发间隔（秒），必须为 0.05s 的倍数。",
+        "emission.startTick": "子发射器生效窗口起点（父生命周期 tick，含）。",
+        "emission.endTick": "子发射器生效窗口终点（父生命周期 tick，含；-1 表示不限制）。",
         "externalTemplate": "外放模板参数：生成 Kotlin 时将模板参数提升到 @CodecField 外层。",
         "externalData": "外放数据参数：生成 Kotlin 时将数据参数提升到 @CodecField 外层。",
         "vars.template": "模板变量名（留空自动 templateN）。外放同类型可同名（共享参数），但 template/data 不可重名。",
@@ -147,6 +153,8 @@ import {
         emission: {
             mode: "continuous",
             burstInterval: 0.5,
+            startTick: 0,
+            endTick: -1,
         },
         emitter: {
             type: "point",
@@ -196,7 +204,8 @@ import {
     }
 
     const state = {
-        commands: [],
+        commandQueues: [],
+        activeCommandQueueId: "",
         emitters: [makeDefaultEmitterCard()],
         playing: true,
         autoPaused: false,
@@ -206,6 +215,11 @@ import {
             varName: "command",
             kRefName: "emitter",
         },
+        rootLifecycle: {
+            mode: "interval", // once | interval | interval_n_tick
+            intervalTick: 1,
+            maxTick: 120,
+        },
         emitterBehavior: loadEmitterBehavior(),
     };
 
@@ -214,6 +228,7 @@ import {
     const EGPB_STATE_KEY = `${EGPB_PREFIX}pb_state_v1`;
     const EGPB_PROJECT_KEY = `${EGPB_PREFIX}pb_project_name_v1`;
     const EGPB_THEME_KEY = `${EGPB_PREFIX}pb_theme_v2`;
+    const EGPB_COMP_CONTEXT_KEY = "pb_comp_context_v1";
     const EGPB_RETURN_EMITTER_KEY = `${EGPB_PREFIX}return_emitter_v1`;
     const HISTORY_MAX = 80;
     const RAD_TO_DEG = 180 / Math.PI;
@@ -225,6 +240,7 @@ import {
     const commandCollapseScope = { active: false, manualOpen: new Set() };
     let focusedEmitterId = null;
     let focusedCommandId = null;
+    let commandWorkspace = "queue_list"; // queue_list | queue_editor
     const doTickEditorState = {
         editor: null,
         textarea: null,
@@ -233,20 +249,155 @@ import {
         compileOk: true,
         compileMessage: "",
     };
+    const curveEditorState = {
+        activeEditorId: "",
+        selectedByEditor: new Map(),
+        viewportByEditor: new Map(), // editorId -> {min,max}
+        clipboard: null, // { keyframes: [{time,value}] }
+        dragging: null, // { editorId, cmdId, curveKey, field, pointerId, pointIndex }
+        selectBox: null, // { editorId, startX, startY, endX, endY, additive }
+    };
+    const motionVec3EditorState = {
+        activeEditorId: "",
+        selectedByEditor: new Map(), // editorId -> Set(index)
+        planeByEditor: new Map(), // editorId -> XZ | XY | ZY
+    };
+    let curveDragEventsBound = false;
+    const curvePointMenuState = {
+        el: null,
+        editorId: "",
+        pointIndex: -1,
+    };
+    let curvePointMenuBound = false;
 
     function makeDefaultCommands() {
         return cloneDefaultCommands();
     }
 
-    function buildPersistPayload() {
+    function makeDefaultCommandQueue(seed = 1) {
         return {
-            version: 7,
+            id: uid(),
+            name: `command${Math.max(1, Math.trunc(Number(seed) || 1))}`,
+            signs: [],
+            commands: makeDefaultCommands(),
+        };
+    }
+
+    function normalizeCommandQueue(raw, index = 0) {
+        const queue = makeDefaultCommandQueue(index + 1);
+        if (raw && typeof raw === "object") {
+            if (typeof raw.id === "string" && raw.id.trim()) queue.id = raw.id.trim();
+            if (typeof raw.name === "string" && raw.name.trim()) queue.name = raw.name.trim();
+            queue.signs = normalizeSignList(raw.signs ?? raw.effectSigns ?? raw.applySigns);
+            const rawCommands = Array.isArray(raw.commands) ? raw.commands : [];
+            const normCommands = rawCommands.map(normalizeCommand).filter(Boolean);
+            queue.commands = normCommands.length ? normCommands : makeDefaultCommands();
+        }
+        if (!Array.isArray(queue.commands) || !queue.commands.length) queue.commands = makeDefaultCommands();
+        queue.commands.forEach((cmd) => sanitizeCommandLifeFilter(cmd));
+        return queue;
+    }
+
+    function extractCommandQueueArray(rawQueues) {
+        if (Array.isArray(rawQueues)) return rawQueues;
+        if (!rawQueues || typeof rawQueues !== "object") return [];
+        if (Array.isArray(rawQueues.queues)) return rawQueues.queues;
+        if (Array.isArray(rawQueues.list)) return rawQueues.list;
+
+        const entries = Object.entries(rawQueues)
+            .filter(([, value]) => value && typeof value === "object")
+            .sort(([a], [b]) => {
+                const na = Number(a);
+                const nb = Number(b);
+                const ia = Number.isFinite(na);
+                const ib = Number.isFinite(nb);
+                if (ia && ib) return na - nb;
+                if (ia) return -1;
+                if (ib) return 1;
+                return String(a).localeCompare(String(b));
+            });
+        return entries.map(([, value]) => value);
+    }
+
+    function ensureCommandQueuesState() {
+        if (!Array.isArray(state.commandQueues)) {
+            const recovered = extractCommandQueueArray(state.commandQueues);
+            state.commandQueues = recovered.length ? recovered : [];
+        }
+        if (!state.commandQueues.length) state.commandQueues.push(makeDefaultCommandQueue(1));
+
+        for (let i = 0; i < state.commandQueues.length; i++) {
+            state.commandQueues[i] = normalizeCommandQueue(state.commandQueues[i], i);
+        }
+
+        let activeId = String(state.activeCommandQueueId || "");
+        if (!activeId || !state.commandQueues.some((q) => q.id === activeId)) {
+            activeId = state.commandQueues[0].id;
+        }
+        state.activeCommandQueueId = activeId;
+        return state.commandQueues.find((q) => q.id === activeId) || state.commandQueues[0];
+    }
+
+    function getActiveCommandQueue() {
+        return ensureCommandQueuesState();
+    }
+
+    function getActiveCommandQueueName() {
+        const q = getActiveCommandQueue();
+        return String(q?.name || "command");
+    }
+
+    function setActiveCommandQueue(id) {
+        const queueId = String(id || "").trim();
+        ensureCommandQueuesState();
+        const queues = extractCommandQueueArray(state.commandQueues);
+        const found = queues.find((q) => q.id === queueId);
+        state.activeCommandQueueId = (found ? found.id : (queues[0] ? queues[0].id : ""));
+    }
+
+    function forEachAllCommands(visitor) {
+        ensureCommandQueuesState();
+        const queues = extractCommandQueueArray(state.commandQueues);
+        for (let qi = 0; qi < queues.length; qi++) {
+            const q = queues[qi];
+            if (!q || !Array.isArray(q.commands)) continue;
+            for (const cmd of q.commands) {
+                visitor(cmd, q);
+            }
+        }
+    }
+
+    Object.defineProperty(state, "commands", {
+        configurable: false,
+        enumerable: false,
+        get() {
+            const queue = getActiveCommandQueue();
+            if (!queue || !Array.isArray(queue.commands)) return [];
+            return queue.commands;
+        },
+        set(next) {
+            const queue = getActiveCommandQueue();
+            if (!queue) return;
+            queue.commands = Array.isArray(next) ? next : [];
+        },
+    });
+
+    ensureCommandQueuesState();
+
+    function buildPersistPayload() {
+        ensureCommandQueuesState();
+        return {
+            version: 9,
             savedAt: new Date().toISOString(),
             state: {
+                commandQueues: deepCopy(state.commandQueues),
+                activeCommandQueueId: state.activeCommandQueueId,
+                // legacy field (keep for backward compatibility)
                 commands: deepCopy(state.commands),
                 emitters: deepCopy(state.emitters),
                 ticksPerSecond: state.ticksPerSecond,
                 kotlin: deepCopy(state.kotlin),
+                rootLifecycle: deepCopy(state.rootLifecycle),
                 emitterBehavior: deepCopy(state.emitterBehavior),
             }
         };
@@ -302,6 +453,22 @@ import {
         return fallback;
     }
 
+    function normalizeRootLifecycleMode(rawMode) {
+        const modeRaw = String(rawMode || "interval").trim().toLowerCase();
+        if (modeRaw === "once") return "once";
+        if (modeRaw === "interval_n_tick" || modeRaw === "intervalntick") return "interval_n_tick";
+        // 兼容旧值（例如 continuous）与非法值，默认持续发射。
+        return "interval";
+    }
+
+    function normalizeRootLifecycle(raw) {
+        const src = (raw && typeof raw === "object") ? raw : {};
+        const mode = normalizeRootLifecycleMode(src.mode);
+        const intervalTick = normalizeNumExpr(src.intervalTick, 1, { int: true, min: 1 });
+        const maxTick = normalizeNumExpr(src.maxTick, 120, { int: true, min: 1 });
+        return { mode, intervalTick, maxTick };
+    }
+
     function sanitizeEmitterCard(card) {
         if (!card || typeof card !== "object") return;
 
@@ -321,6 +488,13 @@ import {
         const emission = card.emission || (card.emission = {});
         emission.mode = (emission.mode === "burst" || emission.mode === "once") ? emission.mode : "continuous";
         emission.burstInterval = normalizeNumExpr(emission.burstInterval, 0.5, { min: 0.05, step: 0.05, fixed: 4 });
+        emission.startTick = normalizeNumExpr(emission.startTick, 0, { int: true, min: 0 });
+        emission.endTick = normalizeNumExpr(emission.endTick, -1, { int: true, min: -1 });
+        const startN = maybeNumericLiteral(emission.startTick);
+        const endN = maybeNumericLiteral(emission.endTick);
+        if (startN != null && endN != null && endN >= 0 && endN < startN) {
+            emission.endTick = startN;
+        }
 
         const emitter = card.emitter || (card.emitter = {});
         emitter.type = EMITTER_TYPE_META[emitter.type] ? emitter.type : "point";
@@ -465,11 +639,12 @@ import {
         return card;
     }
 
-    function applyLoadedState(s) {
+    function applyLoadedState(s, opts = {}) {
         if (!s || typeof s !== "object") return false;
 
         if (typeof s.ticksPerSecond === "number") state.ticksPerSecond = s.ticksPerSecond;
         if (s.kotlin) deepAssign(state.kotlin, s.kotlin);
+        if (s.rootLifecycle) state.rootLifecycle = normalizeRootLifecycle(s.rootLifecycle);
         if (s.emitterBehavior) state.emitterBehavior = normalizeEmitterBehavior(s.emitterBehavior);
         if (Array.isArray(s.emitters) && s.emitters.length) {
             state.emitters = s.emitters.map((em, idx) => normalizeEmitterCard(em, `em_${idx}`));
@@ -485,14 +660,30 @@ import {
         }
         if (!state.emitters.length) state.emitters = [makeDefaultEmitterCard()];
 
-        const cmds = Array.isArray(s.commands) ? s.commands : [];
-        const norm = cmds.map(normalizeCommand).filter(Boolean);
-        state.commands = norm;
-        state.commands.forEach((cmd) => sanitizeCommandLifeFilter(cmd));
-
-        if (!state.commands.length) {
-            state.commands = makeDefaultCommands();
-            state.commands.forEach((cmd) => sanitizeCommandLifeFilter(cmd));
+        const loadedQueues = extractCommandQueueArray(s.commandQueues);
+        if (loadedQueues.length) {
+            state.commandQueues = loadedQueues.map((q, idx) => normalizeCommandQueue(q, idx));
+            state.activeCommandQueueId = String(s.activeCommandQueueId || "");
+        } else {
+            const cmds = Array.isArray(s.commands) ? s.commands : [];
+            const norm = cmds.map(normalizeCommand).filter(Boolean);
+            const legacyQueue = makeDefaultCommandQueue(1);
+            legacyQueue.commands = norm.length ? norm : makeDefaultCommands();
+            legacyQueue.signs = normalizeSignList(s.commandSigns);
+            if (typeof s.commandName === "string" && s.commandName.trim()) {
+                legacyQueue.name = s.commandName.trim();
+            }
+            state.commandQueues = [normalizeCommandQueue(legacyQueue, 0)];
+            state.activeCommandQueueId = state.commandQueues[0].id;
+        }
+        ensureCommandQueuesState();
+        state.rootLifecycle = normalizeRootLifecycle(state.rootLifecycle);
+        const payloadVersion = Number(opts?.payloadVersion);
+        const legacyDefaultRoot = state.rootLifecycle.mode === "interval_n_tick"
+            && Number(state.rootLifecycle.intervalTick) === 1
+            && Number(state.rootLifecycle.maxTick) === 120;
+        if (( !Number.isFinite(payloadVersion) || payloadVersion <= 8) && legacyDefaultRoot) {
+            state.rootLifecycle.mode = "interval";
         }
         return true;
     }
@@ -503,8 +694,9 @@ import {
             if (!raw) return false;
             const obj = JSON.parse(raw);
             if (obj && typeof obj === "object") {
-                if (obj.state) return applyLoadedState(obj.state);
-                return applyLoadedState(obj);
+                const payloadVersion = Number(obj.version);
+                if (obj.state) return applyLoadedState(obj.state, { payloadVersion });
+                return applyLoadedState(obj, { payloadVersion });
             }
         } catch (_) {
         }
@@ -543,6 +735,37 @@ import {
         }
     }
 
+    function buildEmitterBuilderVarContextPayload() {
+        ensureEmitterBehaviorState();
+        const vars = Array.isArray(state?.emitterBehavior?.emitterVars) ? state.emitterBehavior.emitterVars : [];
+        const globalVars = [];
+        const numericMap = { PI: Math.PI };
+        for (const item of vars) {
+            const name = String(item?.name || "").trim();
+            if (!name || !isValidEmitterVarName(name)) continue;
+            const type = normalizeEmitterVarType(item?.type);
+            const value = String(item?.defaultValue ?? "").trim();
+            globalVars.push({ name, type, value });
+            if (isNumericEmitterVarType(type)) {
+                const n = Number(item?.defaultValue);
+                if (Number.isFinite(n)) numericMap[name] = n;
+            }
+        }
+        return {
+            source: "emitter_generator",
+            ts: Date.now(),
+            globalVars,
+            globalConsts: [],
+            numericMap,
+        };
+    }
+
+    function syncEmitterBuilderVarContextStorage() {
+        try {
+            localStorage.setItem(EGPB_COMP_CONTEXT_KEY, JSON.stringify(buildEmitterBuilderVarContextPayload()));
+        } catch {}
+    }
+
     function seedEmitterBuilderSandbox(card) {
         if (!card) return;
         const idx = getEmitterIndexById(card.id);
@@ -555,6 +778,7 @@ import {
             }));
             localStorage.setItem(EGPB_PROJECT_KEY, projectName);
             localStorage.setItem(EGPB_THEME_KEY, theme);
+            syncEmitterBuilderVarContextStorage();
         } catch (err) {
             console.warn("seed emitter builder sandbox failed:", err);
         }
@@ -700,7 +924,7 @@ import {
         readBaseForm();
         ensureEmitterBehaviorState();
         state.emitters.forEach(sanitizeEmitterCard);
-        state.commands.forEach((cmd) => sanitizeCommandLifeFilter(cmd));
+        forEachAllCommands((cmd) => sanitizeCommandLifeFilter(cmd));
         const cmdText = genCommandKotlin(state);
         const emitterText = genEmitterKotlin(state);
         setKotlinOut("command", cmdText);
@@ -1000,8 +1224,9 @@ import {
             toast(`导入失败-格式错误(${e.message || e})`, "error");
             return;
         }
+        const payloadVersion = Number(obj && obj.version);
         const raw = (obj && typeof obj === "object" && obj.state) ? obj.state : obj;
-        if (!applyLoadedState(raw)) {
+        if (!applyLoadedState(raw, { payloadVersion })) {
             toast("导入失败-格式错误", "error");
             return;
         }
@@ -1017,10 +1242,14 @@ import {
 
     function resetAllToDefault() {
         if (!confirm("确定重置全部配置？")) return;
-        state.commands = makeDefaultCommands();
+        state.commandQueues = [makeDefaultCommandQueue(1)];
+        state.activeCommandQueueId = state.commandQueues[0].id;
+        ensureCommandQueuesState();
+        commandWorkspace = "queue_list";
         state.emitters = [makeDefaultEmitterCard()];
         state.ticksPerSecond = DEFAULT_BASE_STATE.ticksPerSecond;
         state.kotlin = deepCopy(DEFAULT_BASE_STATE.kotlin);
+        state.rootLifecycle = deepCopy(DEFAULT_BASE_STATE.rootLifecycle);
         state.emitterBehavior = normalizeEmitterBehavior(null);
         if (typeof clearEmitterSyncTargets === "function") clearEmitterSyncTargets();
         if (typeof clearCommandSyncTargets === "function") clearCommandSyncTargets();
@@ -1046,6 +1275,13 @@ import {
         const m = (mode === "burst") ? "burst" : (mode === "once" ? "once" : "continuous");
         $card.find(".emission-field").removeClass("active");
         $card.find(`.emission-field[data-emission="${m}"]`).addClass("active");
+    }
+
+    function setRootLifecycleSection(mode) {
+        const m = normalizeRootLifecycleMode(mode);
+        $(".root-life-field").removeClass("active");
+        $(".root-life-field[data-root-life='interval']").toggleClass("active", m === "interval" || m === "interval_n_tick");
+        $(".root-life-field[data-root-life='interval_n_tick']").toggleClass("active", m === "interval_n_tick");
     }
 
 
@@ -1161,7 +1397,8 @@ function setVelocitySection($card, mode) {
         ["tick", "tick"],
     ];
 
-    function getEmitterVarNames() {
+    function getEmitterVarNames(opts = {}) {
+        const numericOnly = opts.numericOnly !== false;
         ensureEmitterBehaviorState();
         const vars = Array.isArray(state.emitterBehavior?.emitterVars) ? state.emitterBehavior.emitterVars : [];
         const out = [];
@@ -1170,11 +1407,20 @@ function setVelocitySection($card, mode) {
             const name = String(it?.name || "").trim();
             if (!name) continue;
             if (!isValidEmitterVarName(name)) continue;
+            const type = normalizeEmitterVarType(it?.type);
+            if (numericOnly && !isNumericEmitterVarType(type)) continue;
             if (seen.has(name)) continue;
             seen.add(name);
             out.push(name);
         }
         return out;
+    }
+
+    function emitterVarTypeOptionsHtml(selectedType) {
+        const selected = normalizeEmitterVarType(selectedType);
+        return EMITTER_VAR_TYPES
+            .map((type) => `<option value="${escapeHtml(type)}"${type === selected ? " selected" : ""}>${escapeHtml(type)}</option>`)
+            .join("");
     }
 
     function buildDoTickApiDts(behavior) {
@@ -2002,21 +2248,24 @@ function setVelocitySection($card, mode) {
         if ($varList.length) {
             $varList.empty();
             if (!behavior.emitterVars.length) {
-                $varList.append(`<div class="small">暂无变量。可添加 <code>Int</code>/<code>Double</code> 并生成 <code>@CodecField var ...</code></div>`);
+                $varList.append(`<div class="small">暂无变量。类型支持与 Composition Builder 一致：<code>${escapeHtml(EMITTER_VAR_TYPES.join(" / "))}</code>。</div>`);
             } else {
                 behavior.emitterVars.forEach((v) => {
+                    const type = normalizeEmitterVarType(v.type);
+                    const numericType = isNumericEmitterVarType(type);
+                    const minDisabled = numericType ? "" : "disabled";
+                    const maxDisabled = numericType ? "" : "disabled";
                     const row = `
-<div class="kv-row kv-row-var" data-id="${escapeHtml(v.id)}">
+<div class="kv-row kv-row-var" data-id="${escapeHtml(v.id)}" data-var-type="${escapeHtml(type)}">
   <input class="input globalVarInput" data-key="name" type="text" value="${escapeHtml(v.name)}" placeholder="变量名（如 wavePhase）" />
   <select class="input globalVarInput" data-key="type">
-    <option value="double">Double</option>
-    <option value="int">Int</option>
+    ${emitterVarTypeOptionsHtml(type)}
   </select>
-  <input class="input globalVarInput" data-key="defaultValue" type="text" inputmode="decimal" value="${escapeHtml(String(v.defaultValue))}" placeholder="默认值" />
-  <label class="kv-flag kv-min-flag"><input class="globalVarInput" data-key="minEnabled" type="checkbox" ${v.minEnabled ? "checked" : ""}/>min</label>
-  <input class="input globalVarInput" data-key="minValue" type="text" inputmode="decimal" value="${escapeHtml(String(v.minValue))}" placeholder="最小值" />
-  <label class="kv-flag kv-max-flag"><input class="globalVarInput" data-key="maxEnabled" type="checkbox" ${v.maxEnabled ? "checked" : ""}/>max</label>
-  <input class="input globalVarInput" data-key="maxValue" type="text" inputmode="decimal" value="${escapeHtml(String(v.maxValue))}" placeholder="最大值" />
+  <input class="input globalVarInput" data-key="defaultValue" type="text" value="${escapeHtml(String(v.defaultValue))}" placeholder="默认值" />
+  <label class="kv-flag kv-min-flag"><input class="globalVarInput" data-key="minEnabled" type="checkbox" ${v.minEnabled ? "checked" : ""} ${minDisabled}/>min</label>
+  <input class="input globalVarInput" data-key="minValue" type="text" inputmode="decimal" value="${escapeHtml(String(v.minValue))}" placeholder="最小值" ${minDisabled}/>
+  <label class="kv-flag kv-max-flag"><input class="globalVarInput" data-key="maxEnabled" type="checkbox" ${v.maxEnabled ? "checked" : ""} ${maxDisabled}/>max</label>
+  <input class="input globalVarInput" data-key="maxValue" type="text" inputmode="decimal" value="${escapeHtml(String(v.maxValue))}" placeholder="最大值" ${maxDisabled}/>
   <button class="btn small kv-del btnDelGlobalVar" type="button">删除</button>
 </div>`;
                     $varList.append(row);
@@ -2024,7 +2273,7 @@ function setVelocitySection($card, mode) {
                 $varList.find('.globalVarInput[data-key="type"]').each((_, el) => {
                     const id = $(el).closest(".kv-row").data("id");
                     const target = behavior.emitterVars.find((it) => it.id === id);
-                    if (target) $(el).val(target.type);
+                    if (target) $(el).val(normalizeEmitterVarType(target.type));
                 });
             }
         }
@@ -2115,18 +2364,33 @@ function setVelocitySection($card, mode) {
     }
 
     function applyStateToForm() {
+        ensureCommandQueuesState();
         $("#ticksPerSecond").val(state.ticksPerSecond);
         $("#kVarName").val(state.kotlin.varName);
         $("#kRefName").val(state.kotlin.kRefName);
+        state.rootLifecycle = normalizeRootLifecycle(state.rootLifecycle);
+        $("#rootLifecycleMode").val(state.rootLifecycle.mode);
+        $("#rootLifecycleInterval").val(state.rootLifecycle.intervalTick);
+        $("#rootLifecycleMaxTick").val(state.rootLifecycle.maxTick);
+        setRootLifecycleSection(state.rootLifecycle.mode);
         renderEmitterBehaviorEditors();
         renderEmitterList();
-        renderCommandList();
+        renderCommandQueueList();
+        if (commandWorkspace === "queue_editor") {
+            renderCommandList();
+        }
+        setCommandWorkspace(commandWorkspace, { render: false });
     }
 
     function readBaseForm() {
         state.ticksPerSecond = Math.max(1, safeNum($("#ticksPerSecond").val(), 20));
         state.kotlin.varName = ($("#kVarName").val() || "command").trim() || "command";
         state.kotlin.kRefName = ($("#kRefName").val() || "emitter").trim() || "emitter";
+        state.rootLifecycle = normalizeRootLifecycle({
+            mode: $("#rootLifecycleMode").val(),
+            intervalTick: $("#rootLifecycleInterval").val(),
+            maxTick: $("#rootLifecycleMaxTick").val(),
+        });
     }
 
     function renderEmitterList() {
@@ -2175,11 +2439,21 @@ function setVelocitySection($card, mode) {
                 `        </select>`,
                 `      </div>`,
                 `    </div>`,
-                `    <div class="grid2">`,
+                `    <div class="grid3">`,
                 `      <div class="field emission-field" data-emission="burst">`,
                 `        <label>爆发间隔（秒）</label>`,
                 `        <input class="emitInput" data-key="emission.burstInterval" data-type="number" type="number" step="0.05" min="0.05" data-step-fixed="1" value="${esc(card.emission.burstInterval)}" />`,
                 `      </div>`,
+                `      <div class="field">`,
+                `        <label>startTick（父级窗口）</label>`,
+                `        <input class="emitInput" data-key="emission.startTick" data-type="number" type="number" step="1" min="0" data-step-fixed="1" value="${esc(card.emission.startTick)}" />`,
+                `      </div>`,
+                `      <div class="field">`,
+                `        <label>endTick（-1=不限）</label>`,
+                `        <input class="emitInput" data-key="emission.endTick" data-type="number" type="number" step="1" min="-1" data-step-fixed="1" value="${esc(card.emission.endTick)}" />`,
+                `      </div>`,
+                `    </div>`,
+                `    <div class="grid2">`,
                 `      <div class="field">`,
                 `        <label>是否外放模板参数</label>`,
                 `        <select class="emitInput" data-key="externalTemplate" data-type="bool">`,
@@ -2210,9 +2484,9 @@ function setVelocitySection($card, mode) {
                 `    <div class="vec3Row">`,
                 `      <div class="miniLabel">Offset Vec3</div>`,
                 `      <div class="vec3">`,
-                `        <input class="emitInput" data-key="emitter.offset.x" data-type="number" type="number" step="0.01" value="${esc(card.emitter.offset.x)}" />`,
-                `        <input class="emitInput" data-key="emitter.offset.y" data-type="number" type="number" step="0.01" value="${esc(card.emitter.offset.y)}" />`,
-                `        <input class="emitInput" data-key="emitter.offset.z" data-type="number" type="number" step="0.01" value="${esc(card.emitter.offset.z)}" />`,
+                `        <span class="vec3Cell"><input class="emitInput" data-key="emitter.offset.x" data-type="number" type="number" step="0.01" value="${esc(card.emitter.offset.x)}" /></span>`,
+                `        <span class="vec3Cell"><input class="emitInput" data-key="emitter.offset.y" data-type="number" type="number" step="0.01" value="${esc(card.emitter.offset.y)}" /></span>`,
+                `        <span class="vec3Cell"><input class="emitInput" data-key="emitter.offset.z" data-type="number" type="number" step="0.01" value="${esc(card.emitter.offset.z)}" /></span>`,
                 `      </div>`,
                 `    </div>`,
                 `    <div class="hint">偏移量用于预览：发射器整体位置平移（不改变形状参数）。</div>`,
@@ -2271,9 +2545,9 @@ function setVelocitySection($card, mode) {
                 `      <div class="vec3Row">`,
                 `        <div class="miniLabel">固定方向 Vec3</div>`,
                 `        <div class="vec3">`,
-                `          <input class="emitInput" data-key="particle.vel.x" data-type="number" type="number" step="0.01" value="${esc(card.particle.vel.x)}" />`,
-                `          <input class="emitInput" data-key="particle.vel.y" data-type="number" type="number" step="0.01" value="${esc(card.particle.vel.y)}" />`,
-                `          <input class="emitInput" data-key="particle.vel.z" data-type="number" type="number" step="0.01" value="${esc(card.particle.vel.z)}" />`,
+                `          <span class="vec3Cell"><input class="emitInput" data-key="particle.vel.x" data-type="number" type="number" step="0.01" value="${esc(card.particle.vel.x)}" /></span>`,
+                `          <span class="vec3Cell"><input class="emitInput" data-key="particle.vel.y" data-type="number" type="number" step="0.01" value="${esc(card.particle.vel.y)}" /></span>`,
+                `          <span class="vec3Cell"><input class="emitInput" data-key="particle.vel.z" data-type="number" type="number" step="0.01" value="${esc(card.particle.vel.z)}" /></span>`,
                 `        </div>`,
                 `      </div>`,
                 `    </div>`,
@@ -2526,9 +2800,9 @@ function setVelocitySection($card, mode) {
                 `      <div class="vec3Row">`,
                 `        <div class="miniLabel">轴 Axis Vec3</div>`,
                 `        <div class="vec3">`,
-                `          <input class="emitInput" data-key="emitter.spiral.axis.x" data-type="number" type="number" step="0.01" value="${esc(card.emitter.spiral.axis.x)}" />`,
-                `          <input class="emitInput" data-key="emitter.spiral.axis.y" data-type="number" type="number" step="0.01" value="${esc(card.emitter.spiral.axis.y)}" />`,
-                `          <input class="emitInput" data-key="emitter.spiral.axis.z" data-type="number" type="number" step="0.01" value="${esc(card.emitter.spiral.axis.z)}" />`,
+                `          <span class="vec3Cell"><input class="emitInput" data-key="emitter.spiral.axis.x" data-type="number" type="number" step="0.01" value="${esc(card.emitter.spiral.axis.x)}" /></span>`,
+                `          <span class="vec3Cell"><input class="emitInput" data-key="emitter.spiral.axis.y" data-type="number" type="number" step="0.01" value="${esc(card.emitter.spiral.axis.y)}" /></span>`,
+                `          <span class="vec3Cell"><input class="emitInput" data-key="emitter.spiral.axis.z" data-type="number" type="number" step="0.01" value="${esc(card.emitter.spiral.axis.z)}" /></span>`,
                 `        </div>`,
                 `      </div>`,
                 `      <div class="hint">螺旋发射：数量使用「粒子随机范围」里的数量区间。</div>`,
@@ -2963,6 +3237,15 @@ function setVelocitySection($card, mode) {
         return out;
     }
 
+    function parseSignInputValue(raw) {
+        const text = String(raw ?? "").trim();
+        if (!text) return null;
+        if (!/^[+-]?\d+$/.test(text)) return null;
+        const n = Number(text);
+        if (!Number.isFinite(n)) return null;
+        return Math.trunc(n);
+    }
+
     function mirrorEmitterInputValue(id, path, type, value) {
         if (!id || !path) return;
         const $card = $(`#emitList .emitCard[data-id="${id}"]`);
@@ -3167,6 +3450,63 @@ function setVelocitySection($card, mode) {
         }
     }
 
+    function applyCommandCurveInput(inputEl, opts = {}) {
+        const $input = $(inputEl);
+        const $card = $input.closest(".cmdCard");
+        const id = $card.data("id");
+        if (!id) return;
+        const cmd = state.commands.find((it) => it.id === id);
+        if (!cmd) return;
+        const curveKey = String($input.data("curveKey") || "");
+        const part = String($input.data("curvePart") || "");
+        if (!curveKey || !part) return;
+
+        const meta = COMMAND_META[cmd.type];
+        const field = meta && Array.isArray(meta.fields)
+            ? meta.fields.find((it) => it.k === curveKey)
+            : null;
+        if (!field || field.t !== "curve") return;
+
+        let curve = normalizeFloatCurve(cmd.params[curveKey], curveFallbackForField(field));
+        if (part === "kind") {
+            const kind = String($input.val() || "constant");
+            curve.kind = (kind === "linear" || kind === "keyframe") ? kind : "constant";
+        } else if (part === "value" || part === "from" || part === "to") {
+            curve[part] = parseNumOrExprInput($input.val(), curve[part]);
+        } else {
+            const m = /^keyframes\.(\d+)\.(time|value)$/.exec(part);
+            if (m) {
+                const idx = Math.max(0, Number(m[1]) || 0);
+                const prop = m[2];
+                if (!Array.isArray(curve.keyframes)) curve.keyframes = [];
+                while (curve.keyframes.length <= idx) {
+                    curve.keyframes.push({ time: 0, value: 0 });
+                }
+                if (prop === "time") {
+                    const t = clamp(safeNum($input.val(), curve.keyframes[idx].time), 0, 1);
+                    curve.keyframes[idx].time = t;
+                } else {
+                    curve.keyframes[idx].value = parseNumOrExprInput($input.val(), curve.keyframes[idx].value);
+                }
+            }
+        }
+
+        curve = normalizeFloatCurve(curve, curveFallbackForField(field));
+        cmd.params[curveKey] = curve;
+
+        const canSync = commandSync && commandSync.open && commandSync.selectedIds && commandSync.selectedIds.has(id);
+        const syncChanged = canSync ? syncCommandField(id, curveKey, deepCopy(curve)) : false;
+
+        scheduleHistoryPush();
+        scheduleSave();
+        autoGenKotlin();
+
+        if (opts.rerender || syncChanged) {
+            renderCommandList();
+            if (syncChanged) renderCommandSyncMenu();
+        }
+    }
+
     function isSyncSelectableEvent(ev) {
         if (!ev) return true;
         const t = ev.target;
@@ -3182,7 +3522,11 @@ function setVelocitySection($card, mode) {
             return deepCopy({
                 ticksPerSecond: state.ticksPerSecond,
                 kotlin: state.kotlin,
+                rootLifecycle: state.rootLifecycle,
                 emitters: state.emitters,
+                commandQueues: state.commandQueues,
+                activeCommandQueueId: state.activeCommandQueueId,
+                // legacy
                 commands: state.commands,
                 emitterBehavior: state.emitterBehavior,
             });
@@ -3192,11 +3536,21 @@ function setVelocitySection($card, mode) {
 
             state.ticksPerSecond = Math.max(1, safeNum(snap.ticksPerSecond, state.ticksPerSecond));
             state.kotlin = deepCopy(snap.kotlin || state.kotlin);
+            state.rootLifecycle = normalizeRootLifecycle(snap.rootLifecycle || state.rootLifecycle);
             state.emitters = Array.isArray(snap.emitters) ? snap.emitters.map(normalizeEmitterCard) : state.emitters;
-            state.commands = Array.isArray(snap.commands) ? snap.commands.map(normalizeCommand).filter(Boolean) : state.commands;
-            state.commands.forEach((cmd) => sanitizeCommandLifeFilter(cmd));
+            const snapQueues = extractCommandQueueArray(snap.commandQueues);
+            if (snapQueues.length) {
+                state.commandQueues = snapQueues.map((q, idx) => normalizeCommandQueue(q, idx));
+                state.activeCommandQueueId = String(snap.activeCommandQueueId || state.activeCommandQueueId || "");
+            } else if (Array.isArray(snap.commands)) {
+                const cmds = snap.commands.map(normalizeCommand).filter(Boolean);
+                const legacyQueue = makeDefaultCommandQueue(1);
+                legacyQueue.commands = cmds.length ? cmds : makeDefaultCommands();
+                state.commandQueues = [normalizeCommandQueue(legacyQueue, 0)];
+                state.activeCommandQueueId = state.commandQueues[0].id;
+            }
+            ensureCommandQueuesState();
             state.emitterBehavior = normalizeEmitterBehavior(snap.emitterBehavior || state.emitterBehavior);
-            if (!state.commands.length) state.commands = makeDefaultCommands();
 
             // 清理同步目标（避免撤回/重做后引用不存在的 id）
             if (emitterSync && emitterSync.selectedIds) {
@@ -3793,27 +4147,56 @@ function setVelocitySection($card, mode) {
 
         const handler = (e) => {
             const input = e.target && e.target.closest ? e.target.closest(".cmdInput") : null;
-            if (!input) return;
-            const sourceId = getSyncEditorSourceId(input);
+            if (input) {
+                const sourceId = getSyncEditorSourceId(input);
+                if (!sourceId) return;
+                handleCommandInputChange(input, sourceId);
+                return;
+            }
+            const curveInput = e.target && e.target.closest ? e.target.closest(".cmdCurveInput") : null;
+            if (!curveInput) return;
+            const sourceId = getSyncEditorSourceId(curveInput);
             if (!sourceId) return;
-            handleCommandInputChange(input, sourceId);
+            const part = String($(curveInput).data("curvePart") || "");
+            applyCommandCurveInput(curveInput, { rerender: part === "kind" });
+            renderCommandSyncMenu();
         };
         commandSync.editor.addEventListener("input", handler);
         commandSync.editor.addEventListener("change", handler);
 
         commandSync.editor.addEventListener("click", (e) => {
-            const btn = e.target && e.target.closest ? e.target.closest(".cmdSignAdd, .cmdSignClear, .cmdSignDel") : null;
+            const btn = e.target && e.target.closest
+                ? e.target.closest(".cmdSignAdd, .cmdSignClear, .cmdSignDel, .cmdCurveAddFrame, .cmdCurveDelSelected, .cmdCurveReset")
+                : null;
             if (!btn) return;
             const sourceId = getSyncEditorSourceId(btn);
             if (!sourceId) return;
+            if (btn.classList.contains("cmdCurveAddFrame")
+                || btn.classList.contains("cmdCurveDelSelected")
+                || btn.classList.contains("cmdCurveReset")) {
+                const curveKey = String(btn.getAttribute("data-curve-key") || "");
+                const sourceCard = document.querySelector(`#cmdList .cmdCard[data-id="${sourceId}"]`);
+                if (!sourceCard) return;
+                let selector = "";
+                if (btn.classList.contains("cmdCurveAddFrame")) {
+                    selector = `.cmdCurveAddFrame[data-curve-key="${curveKey}"]`;
+                } else if (btn.classList.contains("cmdCurveDelSelected")) {
+                    selector = `.cmdCurveDelSelected[data-curve-key="${curveKey}"]`;
+                } else {
+                    selector = `.cmdCurveReset[data-curve-key="${curveKey}"]`;
+                }
+                const sourceBtn = sourceCard.querySelector(selector);
+                if (sourceBtn) sourceBtn.click();
+                renderCommandSyncMenu();
+                return;
+            }
             const cmd = state.commands.find((it) => it.id === sourceId);
             if (!cmd) return;
 
             if (btn.classList.contains("cmdSignAdd")) {
                 const input = btn.closest(".signRow") ? btn.closest(".signRow").querySelector(".cmdSignInput") : null;
-                const n = input ? Number(input.value) : NaN;
-                if (!Number.isFinite(n)) return;
-                const s = Math.trunc(n);
+                const s = parseSignInputValue(input ? input.value : "");
+                if (s == null) return;
                 const arr = Array.isArray(cmd.signs) ? cmd.signs.slice() : [];
                 if (!arr.includes(s)) arr.push(s);
                 cmd.signs = normalizeSignList(arr);
@@ -4225,9 +4608,8 @@ function setVelocitySection($card, mode) {
         const cmd = state.commands.find((it) => it.id === id);
         if (!cmd) return;
         const vRaw = $card.find(".cmdSignInput").val();
-        const n = Number(vRaw);
-        if (!Number.isFinite(n)) return;
-        const s = Math.trunc(n);
+        const s = parseSignInputValue(vRaw);
+        if (s == null) return;
         const arr = Array.isArray(cmd.signs) ? cmd.signs.slice() : [];
         if (!arr.includes(s)) arr.push(s);
         cmd.signs = normalizeSignList(arr);
@@ -4236,6 +4618,7 @@ function setVelocitySection($card, mode) {
         renderCommandList();
         scheduleSave();
         autoGenKotlin();
+        $card.find(".cmdSignInput").val("");
         if (opts.keepFocus) {
             setTimeout(() => focusCmdSignInputById(id), 0);
         }
@@ -4257,11 +4640,22 @@ function setVelocitySection($card, mode) {
             .sort((a, b) => a.title.localeCompare(b.title, "zh-CN"));
     }
 
+    function refreshAddCommandTypeOptions() {
+        const $sel = $("#addCommandType");
+        if (!$sel.length) return;
+        const prev = String($sel.val() || "");
+        const entries = buildCommandFilterEntries();
+        const html = entries.map((it) => `<option value="${escapeHtml(it.kind)}">${escapeHtml(it.title)}</option>`).join("");
+        $sel.html(html);
+        if (prev && COMMAND_META[prev]) $sel.val(prev);
+    }
+
     function initPanelTools() {
         emitterSync = createSyncState();
         emitterSync.render = renderEmitterSyncMenu;
         commandSync = createSyncState();
         commandSync.render = renderCommandSyncMenu;
+        refreshAddCommandTypeOptions();
 
         const emitterTools = document.getElementById("emitterTools");
         if (emitterTools) {
@@ -4280,14 +4674,1129 @@ function setVelocitySection($card, mode) {
         }
     }
 
+    function updateActiveQueueBadge() {
+        const queue = getActiveCommandQueue();
+        const name = String(queue?.name || "command");
+        $("#activeQueueBadge").text(`编辑队列：${name}`);
+    }
+
+    function setCommandWorkspace(mode, opts = {}) {
+        const next = (mode === "queue_editor") ? "queue_editor" : "queue_list";
+        commandWorkspace = next;
+        const isEditor = next === "queue_editor";
+        $("#commandQueuePage").toggleClass("active", !isEditor);
+        $("#commandEditorPage").toggleClass("active", isEditor);
+        $("#commandPanelTitle").text(isEditor ? "命令队列编辑" : "命令队列");
+        if (isEditor) {
+            updateActiveQueueBadge();
+            if (opts.render !== false) renderCommandList();
+        } else if (opts.render !== false) {
+            renderCommandQueueList();
+        }
+    }
+
+    function openCommandQueueEditor(queueId) {
+        setActiveCommandQueue(queueId);
+        if (typeof clearCommandSyncTargets === "function") clearCommandSyncTargets();
+        setCommandWorkspace("queue_editor");
+    }
+
+    function backToCommandQueueList() {
+        setCommandWorkspace("queue_list");
+    }
+
+    function focusQueueSignInputById(id, selectAll = true) {
+        if (!id) return;
+        const target = document.querySelector(`#cmdQueueList .cmdQueueCard[data-id="${id}"] .queueSignInput`);
+        if (!target) return;
+        target.focus();
+        if (selectAll && typeof target.select === "function") target.select();
+    }
+
+    function applyQueueSignAdd($card, opts = {}) {
+        if (!$card || !$card.length) return;
+        ensureCommandQueuesState();
+        const id = String($card.data("id") || "");
+        if (!id) return;
+        const queue = state.commandQueues.find((it) => it.id === id);
+        if (!queue) return;
+        const raw = $card.find(".queueSignInput").val();
+        const v = parseSignInputValue(raw);
+        if (v == null) return;
+        const arr = Array.isArray(queue.signs) ? queue.signs.slice() : [];
+        if (!arr.includes(v)) arr.push(v);
+        queue.signs = normalizeSignList(arr);
+        cardHistory.push();
+        renderCommandQueueList();
+        scheduleSave();
+        autoGenKotlin();
+        $card.find(".queueSignInput").val("");
+        if (opts.keepFocus) {
+            setTimeout(() => focusQueueSignInputById(id), 0);
+        }
+    }
+
+    function renderCommandQueueList() {
+        ensureCommandQueuesState();
+        const $list = $("#cmdQueueList");
+        if (!$list.length) return;
+        $list.empty();
+        const esc = (v) => escapeHtml(String(v ?? ""));
+        const activeId = String(state.activeCommandQueueId || "");
+
+        state.commandQueues.forEach((queue, index) => {
+            const signs = Array.isArray(queue.signs) ? queue.signs : [];
+            const chipHtml = signs.length
+                ? signs.map((s) => (
+                    `<span class="chip" data-sign="${esc(s)}">${esc(s)}<button class="chipX queueSignDel" type="button" title="移除">×</button></span>`
+                )).join("")
+                : `<span class="chip chip-muted">(全部)</span>`;
+            const commandCount = Array.isArray(queue.commands) ? queue.commands.length : 0;
+            const isActive = String(queue.id) === activeId;
+
+            const row = [
+                `<div class="cmdQueueCard${isActive ? " active" : ""}" data-id="${esc(queue.id)}">`,
+                `  <div class="cmdQueueHead">`,
+                `    <div class="dragHandle">≡</div>`,
+                `    <div class="cmdQueueTitle">队列 #${index + 1}<span class="sub">${esc(queue.name || `command${index + 1}`)}</span></div>`,
+                `    <div class="cmdQueueBtns">`,
+                `      <button class="iconBtn btnOpenCmdQueue" type="button" title="编辑">✎</button>`,
+                `      <button class="iconBtn btnDelCmdQueue" type="button" title="删除">🗑</button>`,
+                `    </div>`,
+                `  </div>`,
+                `  <div class="cmdQueueBody">`,
+                `    <div class="field field-wide">`,
+                `      <label>command 名字</label>`,
+                `      <input class="queueNameInput" type="text" value="${esc(queue.name || "")}" placeholder="${esc(`command${index + 1}`)}"/>`,
+                `    </div>`,
+                `    <div class="field field-wide queueSignWrap">`,
+                `      <label>生效 sign 列表</label>`,
+                `      <div class="signChips">${chipHtml}</div>`,
+                `      <div class="signRow">`,
+                `        <input class="queueSignInput" type="text" inputmode="numeric" placeholder="sign (Int)"/>`,
+                `        <button class="btn small queueSignAdd" type="button">添加</button>`,
+                `        <button class="btn small queueSignClear" type="button">清空</button>`,
+                `      </div>`,
+                `      <div class="small">为空=对全部 sign 生效。</div>`,
+                `    </div>`,
+                `    <div class="small cmdQueueMeta">命令数：${commandCount}（双击卡片进入编辑）</div>`,
+                `  </div>`,
+                `</div>`,
+            ].join("\n");
+            $list.append($(row));
+        });
+
+        if (!renderCommandQueueList._sortable) {
+            const listEl = document.getElementById("cmdQueueList");
+            if (listEl) {
+                renderCommandQueueList._sortable = new Sortable(listEl, {
+                    handle: ".dragHandle",
+                    animation: 150,
+                    onEnd: () => {
+                        const ids = $("#cmdQueueList .cmdQueueCard").map((_, el) => $(el).data("id")).get();
+                        const byId = new Map(state.commandQueues.map((q) => [q.id, q]));
+                        const next = ids.map((id) => byId.get(id)).filter(Boolean);
+                        if (!next.length) return;
+                        state.commandQueues = next;
+                        ensureCommandQueuesState();
+                        cardHistory.push();
+                        renderCommandQueueList();
+                        scheduleSave();
+                        autoGenKotlin();
+                    },
+                });
+            }
+        }
+    }
+
     function refreshCommandLifeFilterVisibility($card) {
         if (!$card || !$card.length) return;
         const enabled = $card.find('.cmdInput[data-key="lifeFilter.enabled"]').val() === "true";
         $card.find(".cmdLifeWrap").toggleClass("is-disabled", !enabled);
     }
 
+    function matchCommandVec3Fields(fields, startIndex) {
+        const fx = fields[startIndex];
+        const fy = fields[startIndex + 1];
+        const fz = fields[startIndex + 2];
+        if (!fx || !fy || !fz) return null;
+        if (fx.t !== "number" || fy.t !== "number" || fz.t !== "number") return null;
+        const m = /^(.*?)([Xx])$/.exec(String(fx.k || ""));
+        if (!m) return null;
+        const base = m[1];
+        const yKey = `${base}Y`;
+        const zKey = `${base}Z`;
+        if (String(fy.k || "") !== yKey || String(fz.k || "") !== zKey) return null;
+        return { base, fx, fy, fz };
+    }
+
+    function curveEditorId(cmdId, curveKey) {
+        return `${String(cmdId || "")}::${String(curveKey || "")}`;
+    }
+
+    function curveFallbackForField(field) {
+        const n = Number(field?.def?.value);
+        return Number.isFinite(n) ? n : 0;
+    }
+
+    function curveNumericValue(raw, fallback = 0) {
+        const n = Number(raw);
+        return Number.isFinite(n) ? n : fallback;
+    }
+
+    function getCurveSelection(editorId) {
+        const key = String(editorId || "");
+        if (!key) return new Set();
+        let set = curveEditorState.selectedByEditor.get(key);
+        if (!set) {
+            set = new Set();
+            curveEditorState.selectedByEditor.set(key, set);
+        }
+        return set;
+    }
+
+    function setCurveSelection(editorId, values) {
+        const key = String(editorId || "");
+        if (!key) return;
+        const next = new Set();
+        if (values && typeof values[Symbol.iterator] === "function") {
+            for (const it of values) {
+                const idx = Number(it);
+                if (Number.isFinite(idx) && idx >= 0) next.add(Math.trunc(idx));
+            }
+        }
+        curveEditorState.selectedByEditor.set(key, next);
+    }
+
+    function trimCurveSelection(editorId, maxSize) {
+        const set = getCurveSelection(editorId);
+        const limit = Math.max(0, Math.trunc(Number(maxSize) || 0));
+        for (const idx of Array.from(set)) {
+            if (idx < 0 || idx >= limit) set.delete(idx);
+        }
+        return set;
+    }
+
+    function getCurveContextFromField($field) {
+        if (!$field || !$field.length) return null;
+        const $card = $field.closest(".cmdCard");
+        const cmdId = String($card.data("id") || "");
+        if (!cmdId) return null;
+        const cmd = state.commands.find((it) => it.id === cmdId);
+        if (!cmd) return null;
+        const curveKey = String($field.data("curveKey") || $field.data("key") || "");
+        if (!curveKey) return null;
+        const meta = COMMAND_META[cmd.type];
+        const field = meta && Array.isArray(meta.fields) ? meta.fields.find((it) => it.k === curveKey) : null;
+        if (!field || field.t !== "curve") return null;
+        const editorId = curveEditorId(cmdId, curveKey);
+        return { cmdId, cmd, curveKey, field, editorId };
+    }
+
+    function curveToPoints(curve, fallback) {
+        const kind = String(curve.kind || "constant");
+        if (kind === "linear") {
+            return [
+                { time: 0.0, value: curveNumericValue(curve.from, fallback), lockTime: true },
+                { time: 1.0, value: curveNumericValue(curve.to, fallback), lockTime: true },
+            ];
+        }
+        if (kind === "keyframe") {
+            const list = Array.isArray(curve.keyframes) ? curve.keyframes : [];
+            if (!list.length) return [{ time: 0.0, value: fallback }];
+            return list.map((it) => ({
+                time: clamp(Number(it.time) || 0, 0, 1),
+                value: curveNumericValue(it.value, fallback),
+            })).sort((a, b) => a.time - b.time);
+        }
+        return [{ time: 0.0, value: curveNumericValue(curve.value, fallback), lockTime: true }];
+    }
+
+    function pointsToCurve(curve, points, fallback) {
+        const kind = String(curve.kind || "constant");
+        if (kind === "linear") {
+            const a = points[0] || { value: fallback };
+            const b = points[1] || a;
+            curve.from = curveNumericValue(a.value, fallback);
+            curve.to = curveNumericValue(b.value, fallback);
+            return curve;
+        }
+        if (kind === "keyframe") {
+            const list = (Array.isArray(points) ? points : []).map((it) => ({
+                time: clamp(Number(it.time) || 0, 0, 1),
+                value: curveNumericValue(it.value, fallback),
+            })).sort((a, b) => a.time - b.time);
+            curve.keyframes = list.length ? list : [{ time: 0.0, value: fallback }];
+            return curve;
+        }
+        const p = points[0] || { value: fallback };
+        curve.value = curveNumericValue(p.value, fallback);
+        return curve;
+    }
+
+    function curveEnsureKeyframe(curve, fallback) {
+        if (String(curve.kind || "constant") === "keyframe") return curve;
+        const points = curveToPoints(curve, fallback);
+        curve.kind = "keyframe";
+        curve.keyframes = points.map((it) => ({
+            time: clamp(Number(it.time) || 0, 0, 1),
+            value: curveNumericValue(it.value, fallback),
+        }));
+        if (!curve.keyframes.length) curve.keyframes = [{ time: 0.0, value: fallback }];
+        return curve;
+    }
+
+    function calcCurveValueRange(points, fallback) {
+        const vals = [];
+        for (const p of (points || [])) {
+            const n = Number(p?.value);
+            if (Number.isFinite(n)) vals.push(n);
+        }
+        if (!vals.length) vals.push(Number(fallback) || 0);
+        let minV = Math.min(...vals);
+        let maxV = Math.max(...vals);
+        if (!Number.isFinite(minV) || !Number.isFinite(maxV)) {
+            minV = -1;
+            maxV = 1;
+        }
+        if (Math.abs(maxV - minV) < 1e-9) {
+            const pad = Math.max(0.5, Math.abs(minV) * 0.35 || 1);
+            minV -= pad;
+            maxV += pad;
+        } else {
+            const pad = (maxV - minV) * 0.12;
+            minV -= pad;
+            maxV += pad;
+        }
+        return { min: minV, max: maxV };
+    }
+
+    function getCurveViewport(editorId, points, fallback, opts = {}) {
+        const key = String(editorId || "");
+        if (!key) return calcCurveValueRange(points, fallback);
+        if (opts.reset === true || !curveEditorState.viewportByEditor.has(key)) {
+            curveEditorState.viewportByEditor.set(key, calcCurveValueRange(points, fallback));
+        }
+        let vp = curveEditorState.viewportByEditor.get(key);
+        if (!vp || !Number.isFinite(vp.min) || !Number.isFinite(vp.max) || Math.abs(vp.max - vp.min) < 1e-9) {
+            vp = calcCurveValueRange(points, fallback);
+            curveEditorState.viewportByEditor.set(key, vp);
+        }
+        return { min: Number(vp.min), max: Number(vp.max) };
+    }
+
+    function normalizeCurveViewport(minRaw, maxRaw, baseSpan = 1) {
+        let min = Number(minRaw);
+        let max = Number(maxRaw);
+        if (!Number.isFinite(min) || !Number.isFinite(max)) return null;
+        if (max < min) {
+            const t = max;
+            max = min;
+            min = t;
+        }
+        let span = max - min;
+        if (!Number.isFinite(span) || span <= 1e-9) {
+            const fallbackSpan = Math.max(0.001, Math.abs(Number(baseSpan) || 1) * 0.02);
+            const center = Number.isFinite(min) ? min : 0;
+            min = center - fallbackSpan * 0.5;
+            max = center + fallbackSpan * 0.5;
+            span = max - min;
+        }
+        return { min, max, span };
+    }
+
+    function setCurveViewport(editorId, minRaw, maxRaw, opts = {}) {
+        const key = String(editorId || "");
+        if (!key) return null;
+        const current = curveEditorState.viewportByEditor.get(key);
+        const baseSpan = Number(current?.max) - Number(current?.min);
+        const normalized = normalizeCurveViewport(minRaw, maxRaw, baseSpan);
+        if (!normalized) return null;
+
+        const minSpan = Math.max(0.001, Number(opts.minSpan) || 0);
+        if (normalized.max - normalized.min < minSpan) {
+            const center = (normalized.max + normalized.min) * 0.5;
+            normalized.min = center - minSpan * 0.5;
+            normalized.max = center + minSpan * 0.5;
+        }
+
+        const next = { min: Number(normalized.min), max: Number(normalized.max) };
+        curveEditorState.viewportByEditor.set(key, next);
+        return next;
+    }
+
+    function formatCurveAxisNumber(value) {
+        const n = Number(value);
+        if (!Number.isFinite(n)) return "0";
+        return Number(n.toFixed(6)).toString();
+    }
+
+    function formatCurveAxisLabel(value) {
+        const n = Number(value);
+        if (!Number.isFinite(n)) return "0.00";
+        return n.toFixed(2);
+    }
+
+    function curveGraphGeom() {
+        const w = 320;
+        const h = 170;
+        const pad = { l: 32, r: 10, t: 10, b: 24 };
+        const plotW = w - pad.l - pad.r;
+        const plotH = h - pad.t - pad.b;
+        return { w, h, pad, plotW, plotH };
+    }
+
+    function curvePointToCanvas(point, range, geom) {
+        const t = clamp(Number(point?.time) || 0, 0, 1);
+        const v = curveNumericValue(point?.value, 0);
+        const x = geom.pad.l + t * geom.plotW;
+        const yNorm = (range.max - v) / Math.max(1e-9, (range.max - range.min));
+        const y = geom.pad.t + clamp(yNorm, 0, 1) * geom.plotH;
+        return { x, y };
+    }
+
+    function curveCanvasToPoint(x, y, range, geom) {
+        const tx = clamp((x - geom.pad.l) / Math.max(1e-9, geom.plotW), 0, 1);
+        const ny = clamp((y - geom.pad.t) / Math.max(1e-9, geom.plotH), 0, 1);
+        const v = range.max - ny * (range.max - range.min);
+        return { time: tx, value: v };
+    }
+
+    function positionCurvePointMenu(menu, clientX, clientY) {
+        if (!menu) return;
+        const vw = window.innerWidth || document.documentElement.clientWidth || 0;
+        const vh = window.innerHeight || document.documentElement.clientHeight || 0;
+        menu.style.left = "-9999px";
+        menu.style.top = "-9999px";
+        const mRect = menu.getBoundingClientRect();
+        const gap = 8;
+        let left = Number(clientX) + gap;
+        let top = Number(clientY) + gap;
+        if (!Number.isFinite(left)) left = 8;
+        if (!Number.isFinite(top)) top = 8;
+        if (left + mRect.width > vw - 8) left = Math.max(8, vw - mRect.width - 8);
+        if (top + mRect.height > vh - 8) top = Math.max(8, vh - mRect.height - 8);
+        menu.style.left = `${Math.max(8, left)}px`;
+        menu.style.top = `${Math.max(8, top)}px`;
+    }
+
+    function hideCurvePointMenu() {
+        curvePointMenuState.editorId = "";
+        curvePointMenuState.pointIndex = -1;
+        const menu = curvePointMenuState.el;
+        if (!menu) return;
+        menu.classList.remove("open");
+        menu.classList.remove("is-invalid");
+        menu.style.display = "none";
+    }
+
+    function bindCurvePointMenuEvents() {
+        if (curvePointMenuBound) return;
+        curvePointMenuBound = true;
+        document.addEventListener("mousedown", (e) => {
+            const menu = curvePointMenuState.el;
+            if (!menu || !menu.classList.contains("open")) return;
+            if (menu.contains(e.target)) return;
+            hideCurvePointMenu();
+        });
+        document.addEventListener("keydown", (e) => {
+            if (!curvePointMenuState.el || !curvePointMenuState.el.classList.contains("open")) return;
+            if (e.key === "Escape") {
+                e.preventDefault();
+                hideCurvePointMenu();
+            }
+        });
+        window.addEventListener("resize", hideCurvePointMenu);
+        window.addEventListener("scroll", hideCurvePointMenu, true);
+    }
+
+    function ensureCurvePointMenuEl() {
+        if (curvePointMenuState.el) return curvePointMenuState.el;
+        const el = document.createElement("div");
+        el.className = "curve-point-menu";
+        el.innerHTML = [
+            `<div class="curve-point-menu-title">关键帧设置</div>`,
+            `<div class="curve-point-menu-meta"></div>`,
+            `<label class="curve-point-menu-label">Y 值</label>`,
+            `<input class="input curvePointMenuInput" type="text" inputmode="decimal" autocomplete="off"/>`,
+            `<div class="curve-point-menu-actions">`,
+            `  <button class="btn small curvePointMenuApply" type="button">应用</button>`,
+            `  <button class="btn small curvePointMenuCancel" type="button">取消</button>`,
+            `</div>`,
+        ].join("");
+        el.style.display = "none";
+        el.addEventListener("mousedown", (e) => e.stopPropagation());
+        el.addEventListener("click", (e) => e.stopPropagation());
+
+        const input = el.querySelector(".curvePointMenuInput");
+        const applyBtn = el.querySelector(".curvePointMenuApply");
+        const cancelBtn = el.querySelector(".curvePointMenuCancel");
+        const apply = () => applyCurvePointMenuValue();
+        if (input) {
+            input.addEventListener("keydown", (e) => {
+                if (e.key !== "Enter") return;
+                e.preventDefault();
+                apply();
+            });
+            input.addEventListener("input", () => {
+                el.classList.remove("is-invalid");
+            });
+        }
+        if (applyBtn) applyBtn.addEventListener("click", apply);
+        if (cancelBtn) cancelBtn.addEventListener("click", hideCurvePointMenu);
+
+        document.body.appendChild(el);
+        curvePointMenuState.el = el;
+        bindCurvePointMenuEvents();
+        return el;
+    }
+
+    function applyCurvePointMenuValue() {
+        const menu = curvePointMenuState.el;
+        if (!menu || !menu.classList.contains("open")) return false;
+        const input = menu.querySelector(".curvePointMenuInput");
+        if (!input) return false;
+        const text = String(input.value ?? "").trim();
+        const nextValue = Number(text);
+        if (!Number.isFinite(nextValue)) {
+            menu.classList.add("is-invalid");
+            toast("Y 值必须是数字", "error");
+            input.focus();
+            if (typeof input.select === "function") input.select();
+            return false;
+        }
+
+        const editorId = String(curvePointMenuState.editorId || "");
+        const idx = Math.max(0, Number(curvePointMenuState.pointIndex) || 0);
+        if (!editorId) {
+            hideCurvePointMenu();
+            return false;
+        }
+        const $field = getCurveFieldByEditor(editorId);
+        const ctx = getCurveContextFromField($field);
+        if (!ctx) {
+            hideCurvePointMenu();
+            return false;
+        }
+        const fallback = curveFallbackForField(ctx.field);
+        const curve = normalizeFloatCurve(ctx.cmd.params[ctx.curveKey], fallback);
+        if (String(curve.kind || "constant") !== "keyframe") {
+            hideCurvePointMenu();
+            return false;
+        }
+        const list = Array.isArray(curve.keyframes) ? curve.keyframes.slice() : [];
+        if (!list.length || idx >= list.length) {
+            hideCurvePointMenu();
+            return false;
+        }
+
+        list[idx].value = nextValue;
+        curve.keyframes = list.sort((a, b) => a.time - b.time);
+        const out = updateCurveFromField($field, curve, {
+            sync: true,
+            history: true,
+            save: true,
+            codegen: true,
+            renderOnSync: true,
+        });
+        if (!out || !out.rerendered) renderCurveGraph($field);
+        hideCurvePointMenu();
+        return true;
+    }
+
+    function openCurvePointMenu($field, pointIndex, clientX, clientY) {
+        const ctx = getCurveContextFromField($field);
+        if (!ctx) return false;
+        const fallback = curveFallbackForField(ctx.field);
+        const curve = normalizeFloatCurve(ctx.cmd.params[ctx.curveKey], fallback);
+        if (String(curve.kind || "constant") !== "keyframe") return false;
+        const list = Array.isArray(curve.keyframes) ? curve.keyframes : [];
+        const idx = Math.max(0, Number(pointIndex) || 0);
+        if (!list.length || idx >= list.length) return false;
+
+        const menu = ensureCurvePointMenuEl();
+        const input = menu.querySelector(".curvePointMenuInput");
+        const meta = menu.querySelector(".curve-point-menu-meta");
+        const frame = list[idx];
+        if (input) input.value = formatCurveAxisNumber(frame.value);
+        if (meta) meta.textContent = `t=${formatCurveAxisNumber(frame.time)}，右键点可修改 Y`;
+        menu.classList.remove("is-invalid");
+        menu.style.display = "block";
+        menu.classList.add("open");
+        positionCurvePointMenu(menu, clientX, clientY);
+
+        curvePointMenuState.editorId = ctx.editorId;
+        curvePointMenuState.pointIndex = idx;
+        requestAnimationFrame(() => {
+            if (!input) return;
+            input.focus();
+            if (typeof input.select === "function") input.select();
+        });
+        return true;
+    }
+
+    function activeCurveField() {
+        const id = String(curveEditorState.activeEditorId || "");
+        if (!id) return null;
+        const $field = getCurveFieldByEditor(id);
+        return $field.length ? $field : null;
+    }
+
+    function getCurveFieldByEditor(editorId) {
+        const id = String(editorId || "");
+        if (!id) return $();
+        const safeId = id.replace(/"/g, '\\"');
+        return $(`#cmdList .cmdCurveField[data-editor-id="${safeId}"]`).first();
+    }
+
+    function setActiveCurveEditor(editorId) {
+        const id = String(editorId || "");
+        curveEditorState.activeEditorId = id;
+        $("#cmdList .cmdCurveField").removeClass("is-active");
+        if (!id) return;
+        const safeId = id.replace(/"/g, '\\"');
+        $(`#cmdList .cmdCurveField[data-editor-id="${safeId}"]`).addClass("is-active");
+    }
+
+    function updateCurveFromField($field, nextCurve, opts = {}) {
+        const ctx = getCurveContextFromField($field);
+        if (!ctx) return { ok: false, syncChanged: false };
+        const fallback = curveFallbackForField(ctx.field);
+        const curve = normalizeFloatCurve(nextCurve, fallback);
+        ctx.cmd.params[ctx.curveKey] = curve;
+
+        let syncChanged = false;
+        const canSync = commandSync && commandSync.open && commandSync.selectedIds && commandSync.selectedIds.has(ctx.cmdId);
+        if (opts.sync !== false && canSync) {
+            syncChanged = !!syncCommandField(ctx.cmdId, ctx.curveKey, deepCopy(curve));
+        }
+
+        if (opts.history === true) cardHistory.push();
+        else if (opts.history === "schedule") scheduleHistoryPush();
+        if (opts.save !== false) scheduleSave();
+        if (opts.codegen !== false) autoGenKotlin();
+
+        if (syncChanged && opts.renderOnSync !== false) {
+            renderCommandList();
+            renderCommandSyncMenu();
+            return { ok: true, syncChanged, rerendered: true };
+        }
+        if (syncChanged) renderCommandSyncMenu();
+        return { ok: true, syncChanged, rerendered: false };
+    }
+
+    function renderCurveGraph($field, opts = {}) {
+        const ctx = getCurveContextFromField($field);
+        if (!ctx) return;
+        const geom = curveGraphGeom();
+        const fallback = curveFallbackForField(ctx.field);
+        const curve = normalizeFloatCurve(ctx.cmd.params[ctx.curveKey], fallback);
+        ctx.cmd.params[ctx.curveKey] = curve;
+        if (String(curve.kind || "constant") !== "keyframe") return;
+        const points = curveToPoints(curve, fallback);
+        const editorId = ctx.editorId;
+        trimCurveSelection(editorId, points.length);
+        const selected = getCurveSelection(editorId);
+        const range = getCurveViewport(editorId, points, fallback, { reset: opts.resetViewport === true });
+
+        $field.attr("data-editor-id", editorId);
+        $field.attr("tabindex", "0");
+        $field.data("curveRangeMin", range.min);
+        $field.data("curveRangeMax", range.max);
+        $field.data("curveGeomW", geom.w);
+        $field.data("curveGeomH", geom.h);
+        $field.data("curvePadL", geom.pad.l);
+        $field.data("curvePadR", geom.pad.r);
+        $field.data("curvePadT", geom.pad.t);
+        $field.data("curvePadB", geom.pad.b);
+
+        const pathPts = points.map((p) => curvePointToCanvas(p, range, geom));
+        const pathD = pathPts.map((p, idx) => `${idx ? "L" : "M"}${p.x.toFixed(2)} ${p.y.toFixed(2)}`).join(" ");
+        const y0 = curvePointToCanvas({ time: 0, value: 0 }, range, geom).y;
+
+        const grid = [];
+        for (let i = 0; i <= 4; i++) {
+            const x = geom.pad.l + (i / 4) * geom.plotW;
+            grid.push(`<line class="cmdCurveGrid" x1="${x}" y1="${geom.pad.t}" x2="${x}" y2="${geom.pad.t + geom.plotH}"></line>`);
+        }
+        for (let i = 0; i <= 4; i++) {
+            const y = geom.pad.t + (i / 4) * geom.plotH;
+            grid.push(`<line class="cmdCurveGrid" x1="${geom.pad.l}" y1="${y}" x2="${geom.pad.l + geom.plotW}" y2="${y}"></line>`);
+        }
+
+        const pointsSvg = pathPts.map((pt, idx) => {
+            const isSel = selected.has(idx);
+            const frame = points[idx] || { time: 0, value: 0 };
+            const timeText = formatCurveAxisNumber(frame.time);
+            const valueText = formatCurveAxisNumber(frame.value);
+            const titleText = escapeHtml(`t=${timeText}, y=${valueText}`);
+            return `<circle class="cmdCurvePoint${isSel ? " is-selected" : ""}" data-point-index="${idx}" data-tip="${titleText}" cx="${pt.x.toFixed(2)}" cy="${pt.y.toFixed(2)}" r="${isSel ? 5.2 : 4.2}"></circle>`;
+        }).join("");
+
+        let selectRectSvg = "";
+        const box = curveEditorState.selectBox;
+        if (box && String(box.editorId || "") === editorId) {
+            const minX = Math.min(Number(box.startX) || 0, Number(box.endX) || 0);
+            const maxX = Math.max(Number(box.startX) || 0, Number(box.endX) || 0);
+            const minY = Math.min(Number(box.startY) || 0, Number(box.endY) || 0);
+            const maxY = Math.max(Number(box.startY) || 0, Number(box.endY) || 0);
+            selectRectSvg = `<rect class="cmdCurveSelectBox" x="${minX.toFixed(2)}" y="${minY.toFixed(2)}" width="${Math.max(0, maxX - minX).toFixed(2)}" height="${Math.max(0, maxY - minY).toFixed(2)}"></rect>`;
+        }
+
+        const topHandleY = geom.pad.t - 4;
+        const bottomHandleY = geom.pad.t + geom.plotH - 4;
+        const svg = [
+            `<svg class="cmdCurveGraph" viewBox="0 0 ${geom.w} ${geom.h}" preserveAspectRatio="xMidYMid meet">`,
+            `<rect class="cmdCurvePlotBg" x="${geom.pad.l}" y="${geom.pad.t}" width="${geom.plotW}" height="${geom.plotH}" rx="8"></rect>`,
+            `<rect class="cmdCurveRangeHandle cmdCurveRangeHandle-max" data-range-part="max" x="${geom.pad.l}" y="${topHandleY.toFixed(2)}" width="${geom.plotW}" height="8"></rect>`,
+            `<rect class="cmdCurveRangeHandle cmdCurveRangeHandle-min" data-range-part="min" x="${geom.pad.l}" y="${bottomHandleY.toFixed(2)}" width="${geom.plotW}" height="8"></rect>`,
+            grid.join(""),
+            `<line class="cmdCurveAxisZero" x1="${geom.pad.l}" y1="${y0.toFixed(2)}" x2="${geom.pad.l + geom.plotW}" y2="${y0.toFixed(2)}"></line>`,
+            `<path class="cmdCurveLine" d="${pathD || ""}"></path>`,
+            selectRectSvg,
+            pointsSvg,
+            `<text class="cmdCurveAxisText" x="${geom.pad.l}" y="${geom.h - 7}">0</text>`,
+            `<text class="cmdCurveAxisText" x="${geom.pad.l + geom.plotW - 6}" y="${geom.h - 7}" text-anchor="end">1</text>`,
+            `<text class="cmdCurveAxisText" x="${geom.pad.l - 4}" y="${geom.pad.t + 2}" text-anchor="end">${formatCurveAxisLabel(range.max)}</text>`,
+            `<text class="cmdCurveAxisText" x="${geom.pad.l - 4}" y="${geom.pad.t + geom.plotH}" text-anchor="end">${formatCurveAxisLabel(range.min)}</text>`,
+            `</svg>`,
+        ].join("");
+        $field.find(".cmdCurveGraphWrap").html(svg);
+        const $maxInput = $field.find('.cmdCurveRangeInput[data-range-part="max"]');
+        const $minInput = $field.find('.cmdCurveRangeInput[data-range-part="min"]');
+        if ($maxInput.length) $maxInput.val(formatCurveAxisNumber(range.max));
+        if ($minInput.length) $minInput.val(formatCurveAxisNumber(range.min));
+
+        const $btnDel = $field.find(".cmdCurveDelSelected");
+        if ($btnDel.length) $btnDel.prop("disabled", !selected.size);
+        const hint = "X=生命周期进度(0~1)，Y=数值。左键框选，Alt+左键新增。拖动上下边框或直接修改Y上限/下限；右键点可直接改Y值。Ctrl+A/C/V 支持全选复制粘贴。";
+        $field.find(".cmdCurveHintText").text(hint);
+        if (ctx.field.tip) {
+            $field.find(".cmdCurveHintText").attr("data-tip", ctx.field.tip);
+            $field.find(".cmdCurveGraph").attr("data-tip", ctx.field.tip);
+        }
+    }
+
+    function renderCurveFieldBody($field, opts = {}) {
+        const ctx = getCurveContextFromField($field);
+        if (!ctx) return;
+        const fallback = curveFallbackForField(ctx.field);
+        const curve = normalizeFloatCurve(ctx.cmd.params[ctx.curveKey], fallback);
+        const kind = String(curve.kind || "constant");
+        const prevKind = String($field.data("curveRenderKind") || "");
+        const switchedKind = prevKind !== kind;
+
+        const $kind = $field.find(".cmdCurveKind");
+        if ($kind.length) $kind.val(kind);
+
+        const $body = $field.find(".cmdCurveBody");
+        if (kind === "keyframe") {
+            $body.html([
+                `<div class="cmdCurveGraphWrap"></div>`,
+                `<div class="cmdCurveToolbar">`,
+                `  <button class="btn small cmdCurveAddFrame" type="button" data-curve-key="${ctx.curveKey}">添加关键帧</button>`,
+                `  <button class="btn small cmdCurveDelSelected" type="button" data-curve-key="${ctx.curveKey}">删除选中</button>`,
+                `  <button class="btn small cmdCurveReset" type="button" data-curve-key="${ctx.curveKey}">重置</button>`,
+                `</div>`,
+                `<div class="cmdCurveRangeRow">`,
+                `  <div class="field"><label>Y 上限</label><input class="cmdCurveRangeInput" data-range-part="max" type="text" inputmode="decimal"/></div>`,
+                `  <div class="field"><label>Y 下限</label><input class="cmdCurveRangeInput" data-range-part="min" type="text" inputmode="decimal"/></div>`,
+                `  <button class="btn small cmdCurveFitRange" type="button">适配关键帧</button>`,
+                `</div>`,
+            ].join(""));
+            renderCurveGraph($field, { resetViewport: switchedKind || opts.resetViewport === true });
+        } else if (kind === "linear") {
+            if (curveEditorState.selectBox && String(curveEditorState.selectBox.editorId || "") === ctx.editorId) {
+                curveEditorState.selectBox = null;
+            }
+            $body.html([
+                `<div class="cmdCurveValueRow">`,
+                `  <div class="field"><label>起点值（t=0）</label><input class="cmdCurveInput" data-curve-key="${ctx.curveKey}" data-curve-part="from" data-type="number" type="text" inputmode="decimal" value="${escapeHtml(String(curve.from ?? fallback))}"/></div>`,
+                `  <div class="field"><label>终点值（t=1）</label><input class="cmdCurveInput" data-curve-key="${ctx.curveKey}" data-curve-part="to" data-type="number" type="text" inputmode="decimal" value="${escapeHtml(String(curve.to ?? fallback))}"/></div>`,
+                `</div>`,
+            ].join(""));
+            $field.find(".cmdCurveHintText").text("线性模式：起点值在生命周期开始(t=0)生效，终点值在生命周期结束(t=1)生效。");
+        } else {
+            if (curveEditorState.selectBox && String(curveEditorState.selectBox.editorId || "") === ctx.editorId) {
+                curveEditorState.selectBox = null;
+            }
+            $body.html([
+                `<div class="cmdCurveValueRow cmdCurveValueRow-single">`,
+                `  <div class="field"><label>常量值</label><input class="cmdCurveInput" data-curve-key="${ctx.curveKey}" data-curve-part="value" data-type="number" type="text" inputmode="decimal" value="${escapeHtml(String(curve.value ?? fallback))}"/></div>`,
+                `</div>`,
+            ].join(""));
+            $field.find(".cmdCurveHintText").text("常量模式：整个生命周期都使用同一个值。");
+        }
+
+        if (ctx.field.tip) {
+            $field.find(".cmdCurveHintText").attr("data-tip", ctx.field.tip);
+            $field.find(".cmdCurveInput").attr("data-tip", ctx.field.tip);
+            $field.find(".cmdCurveRangeInput").attr("data-tip", ctx.field.tip);
+        }
+        $field.data("curveRenderKind", kind);
+    }
+
+    function renderCurveField($grid, cmd, field) {
+        const key = field.k;
+        const curve = normalizeFloatCurve(cmd?.params?.[key], curveFallbackForField(field));
+        cmd.params[key] = curve;
+        const $field = $(
+            `<div class="field field-wide cmdCurveField" data-key="${key}" data-curve-key="${key}" tabindex="0">
+                <label>${humanFieldName(key)}</label>
+                <div class="cmdCurveHead">
+                    <select class="cmdCurveInput cmdCurveKind" data-curve-key="${key}" data-curve-part="kind">
+                        <option value="constant">constant</option>
+                        <option value="linear">linear</option>
+                        <option value="keyframe">keyframe</option>
+                    </select>
+                    <div class="small cmdCurveAxisHint">仅 keyframe 使用图形编辑</div>
+                </div>
+                <div class="cmdCurveBody"></div>
+                <div class="small cmdCurveHintText"></div>
+            </div>`
+        );
+        if (field.tip) $field.attr("data-tip", field.tip);
+        $grid.append($field);
+        renderCurveFieldBody($field);
+    }
+
+    function curveGraphCanvasFromEvent($field, ev) {
+        if (!$field || !$field.length || !ev) return null;
+        const svg = $field.find(".cmdCurveGraph").get(0);
+        if (!svg) return null;
+        const rect = svg.getBoundingClientRect();
+        if (!rect || !(rect.width > 1) || !(rect.height > 1)) return null;
+        const w = Number($field.data("curveGeomW")) || 320;
+        const h = Number($field.data("curveGeomH")) || 170;
+        const x = (ev.clientX - rect.left) * (w / rect.width);
+        const y = (ev.clientY - rect.top) * (h / rect.height);
+        const geom = {
+            w,
+            h,
+            pad: {
+                l: Number($field.data("curvePadL")) || 32,
+                r: Number($field.data("curvePadR")) || 10,
+                t: Number($field.data("curvePadT")) || 10,
+                b: Number($field.data("curvePadB")) || 24,
+            },
+        };
+        geom.plotW = geom.w - geom.pad.l - geom.pad.r;
+        geom.plotH = geom.h - geom.pad.t - geom.pad.b;
+        const range = {
+            min: Number($field.data("curveRangeMin")),
+            max: Number($field.data("curveRangeMax")),
+        };
+        if (!Number.isFinite(range.min) || !Number.isFinite(range.max) || Math.abs(range.max - range.min) < 1e-9) {
+            range.min = -1;
+            range.max = 1;
+        }
+        return { x, y, range, geom };
+    }
+
+    function curveGraphPointFromEvent($field, ev) {
+        const info = curveGraphCanvasFromEvent($field, ev);
+        if (!info) return null;
+        return curveCanvasToPoint(info.x, info.y, info.range, info.geom);
+    }
+
+    function applyCurveViewportInput($field, part, rawValue) {
+        const ctx = getCurveContextFromField($field);
+        if (!ctx) return false;
+        const fallback = curveFallbackForField(ctx.field);
+        const curve = normalizeFloatCurve(ctx.cmd.params[ctx.curveKey], fallback);
+        if (String(curve.kind || "constant") !== "keyframe") return false;
+        const points = curveToPoints(curve, fallback);
+        const current = getCurveViewport(ctx.editorId, points, fallback, { reset: false });
+        const inputNum = Number(String(rawValue ?? "").trim());
+        if (!Number.isFinite(inputNum)) return false;
+
+        const span = Math.max(0.001, Number(current.max) - Number(current.min));
+        const minSpan = Math.max(0.001, span * 0.02);
+        let min = Number(current.min);
+        let max = Number(current.max);
+        if (part === "max") {
+            max = inputNum;
+            if (max - min < minSpan) min = max - minSpan;
+        } else {
+            min = inputNum;
+            if (max - min < minSpan) max = min + minSpan;
+        }
+        setCurveViewport(ctx.editorId, min, max, { minSpan });
+        renderCurveGraph($field);
+        return true;
+    }
+
+    function fitCurveViewportToPoints($field) {
+        const ctx = getCurveContextFromField($field);
+        if (!ctx) return false;
+        const fallback = curveFallbackForField(ctx.field);
+        const curve = normalizeFloatCurve(ctx.cmd.params[ctx.curveKey], fallback);
+        if (String(curve.kind || "constant") !== "keyframe") return false;
+        const points = curveToPoints(curve, fallback);
+        const next = calcCurveValueRange(points, fallback);
+        setCurveViewport(ctx.editorId, next.min, next.max);
+        renderCurveGraph($field);
+        return true;
+    }
+
+    function addCurveKeyframeAtField($field, point, opts = {}) {
+        const ctx = getCurveContextFromField($field);
+        if (!ctx) return;
+        const fallback = curveFallbackForField(ctx.field);
+        let curve = normalizeFloatCurve(ctx.cmd.params[ctx.curveKey], fallback);
+        curve = curveEnsureKeyframe(curve, fallback);
+        const p = point || { time: 0.5, value: fallback };
+        const t = clamp(Number(p.time) || 0.5, 0, 1);
+        const v = curveNumericValue(p.value, fallback);
+        const list = Array.isArray(curve.keyframes) ? curve.keyframes.slice() : [];
+        list.push({ time: t, value: v });
+        curve.keyframes = list.sort((a, b) => a.time - b.time);
+        const out = updateCurveFromField($field, curve, {
+            sync: true,
+            history: opts.history === false ? false : true,
+            save: true,
+            codegen: true,
+            renderOnSync: true,
+        });
+        if (out && out.rerendered) return;
+        const fresh = normalizeFloatCurve(ctx.cmd.params[ctx.curveKey], fallback);
+        const idx = (fresh.keyframes || []).findIndex((it) => Math.abs(Number(it.time) - t) < 1e-6 && Math.abs(Number(it.value) - v) < 1e-6);
+        setCurveSelection(ctx.editorId, idx >= 0 ? [idx] : []);
+        renderCurveGraph($field);
+    }
+
+    function deleteSelectedCurveKeyframes($field, opts = {}) {
+        const ctx = getCurveContextFromField($field);
+        if (!ctx) return false;
+        const fallback = curveFallbackForField(ctx.field);
+        const curve = normalizeFloatCurve(ctx.cmd.params[ctx.curveKey], fallback);
+        if (String(curve.kind || "constant") !== "keyframe") return false;
+        const selected = trimCurveSelection(ctx.editorId, (curve.keyframes || []).length);
+        if (!selected.size) return false;
+        const list = (curve.keyframes || []).filter((_, idx) => !selected.has(idx));
+        curve.keyframes = list.length ? list : [{ time: 0.0, value: fallback }];
+        setCurveSelection(ctx.editorId, []);
+        const out = updateCurveFromField($field, curve, {
+            sync: true,
+            history: opts.history === false ? false : true,
+            save: true,
+            codegen: true,
+            renderOnSync: true,
+        });
+        if (out && out.rerendered) return true;
+        renderCurveGraph($field);
+        return true;
+    }
+
+    function resetCurveField($field) {
+        const ctx = getCurveContextFromField($field);
+        if (!ctx) return;
+        const fallback = curveFallbackForField(ctx.field);
+        const curve = normalizeFloatCurve(ctx.cmd.params[ctx.curveKey], fallback);
+        const kind = String(curve.kind || "constant");
+        let next;
+        if (kind === "linear") next = { ...curve, from: fallback, to: fallback };
+        else if (kind === "keyframe") next = { ...curve, keyframes: [{ time: 0.0, value: fallback }] };
+        else next = { ...curve, value: fallback };
+        setCurveSelection(ctx.editorId, []);
+        const out = updateCurveFromField($field, next, {
+            sync: true,
+            history: true,
+            save: true,
+            codegen: true,
+            renderOnSync: true,
+        });
+        if (out && out.rerendered) return;
+        renderCurveFieldBody($field, { resetViewport: true });
+    }
+
+    function copyCurveKeyframes($field) {
+        const ctx = getCurveContextFromField($field);
+        if (!ctx) return false;
+        const fallback = curveFallbackForField(ctx.field);
+        const curve = normalizeFloatCurve(ctx.cmd.params[ctx.curveKey], fallback);
+        if (String(curve.kind || "constant") !== "keyframe") return false;
+        const list = Array.isArray(curve.keyframes) ? curve.keyframes : [];
+        const selected = trimCurveSelection(ctx.editorId, list.length);
+        const source = selected.size ? list.filter((_, idx) => selected.has(idx)) : list;
+        if (!source.length) return false;
+        curveEditorState.clipboard = {
+            keyframes: source.map((it) => ({
+                time: clamp(Number(it.time) || 0, 0, 1),
+                value: curveNumericValue(it.value, fallback),
+            })),
+        };
+        toast(`已复制 ${source.length} 个关键帧`, "success");
+        return true;
+    }
+
+    function pasteCurveKeyframes($field) {
+        const clip = curveEditorState.clipboard;
+        if (!clip || !Array.isArray(clip.keyframes) || !clip.keyframes.length) return false;
+        const ctx = getCurveContextFromField($field);
+        if (!ctx) return false;
+        const fallback = curveFallbackForField(ctx.field);
+        const curve = normalizeFloatCurve(ctx.cmd.params[ctx.curveKey], fallback);
+        curve.kind = "keyframe";
+        curve.keyframes = clip.keyframes.map((it) => ({
+            time: clamp(Number(it.time) || 0, 0, 1),
+            value: curveNumericValue(it.value, fallback),
+        })).sort((a, b) => a.time - b.time);
+        setCurveSelection(ctx.editorId, curve.keyframes.map((_, idx) => idx));
+        const out = updateCurveFromField($field, curve, {
+            sync: true,
+            history: true,
+            save: true,
+            codegen: true,
+            renderOnSync: true,
+        });
+        if (out && out.rerendered) return true;
+        renderCurveGraph($field);
+        toast(`已粘贴 ${curve.keyframes.length} 个关键帧`, "success");
+        return true;
+    }
+
+    function selectAllCurveKeyframes($field) {
+        const ctx = getCurveContextFromField($field);
+        if (!ctx) return false;
+        const fallback = curveFallbackForField(ctx.field);
+        const curve = normalizeFloatCurve(ctx.cmd.params[ctx.curveKey], fallback);
+        if (String(curve.kind || "constant") !== "keyframe") return false;
+        const list = Array.isArray(curve.keyframes) ? curve.keyframes : [];
+        if (!list.length) return false;
+        setCurveSelection(ctx.editorId, list.map((_, idx) => idx));
+        renderCurveGraph($field);
+        return true;
+    }
+
+    function bindCurveDragEvents() {
+        if (curveDragEventsBound) return;
+        curveDragEventsBound = true;
+        document.addEventListener("pointermove", (ev) => {
+            const selectBox = curveEditorState.selectBox;
+            if (selectBox) {
+                const $field = getCurveFieldByEditor(selectBox.editorId);
+                if (!$field.length) return;
+                const info = curveGraphCanvasFromEvent($field, ev);
+                if (!info) return;
+                selectBox.endX = info.x;
+                selectBox.endY = info.y;
+                renderCurveGraph($field);
+                ev.preventDefault();
+                return;
+            }
+            const drag = curveEditorState.dragging;
+            if (!drag) return;
+            const $field = getCurveFieldByEditor(drag.editorId);
+            if (!$field.length) return;
+            if (drag.kind === "range") {
+                const info = curveGraphCanvasFromEvent($field, ev);
+                if (!info) return;
+                const startSpan = Math.max(0.001, Number(drag.startMax) - Number(drag.startMin));
+                const dy = Number(info.y) - Number(drag.startY || 0);
+                const valueDelta = -dy * (startSpan / Math.max(1e-9, Number(info.geom?.plotH) || 1));
+                const minSpan = Math.max(0.001, startSpan * 0.02);
+                let nextMin = Number(drag.startMin);
+                let nextMax = Number(drag.startMax);
+                if (drag.part === "max") {
+                    nextMax = Number(drag.startMax) + valueDelta;
+                    if (nextMax - nextMin < minSpan) nextMax = nextMin + minSpan;
+                } else {
+                    nextMin = Number(drag.startMin) + valueDelta;
+                    if (nextMax - nextMin < minSpan) nextMin = nextMax - minSpan;
+                }
+                setCurveViewport(drag.editorId, nextMin, nextMax, { minSpan });
+                renderCurveGraph($field);
+                ev.preventDefault();
+                return;
+            }
+            const ctx = getCurveContextFromField($field);
+            if (!ctx) return;
+            const fallback = curveFallbackForField(ctx.field);
+            const curve = normalizeFloatCurve(ctx.cmd.params[ctx.curveKey], fallback);
+            const kind = String(curve.kind || "constant");
+            const points = curveToPoints(curve, fallback);
+            const idx = Math.max(0, Math.min(points.length - 1, Number(drag.pointIndex) || 0));
+            const p = curveGraphPointFromEvent($field, ev);
+            if (!p) return;
+            if (kind === "keyframe") {
+                let minT = 0.0;
+                let maxT = 1.0;
+                if (idx > 0) minT = Number(points[idx - 1].time) + 0.001;
+                if (idx < points.length - 1) maxT = Number(points[idx + 1].time) - 0.001;
+                points[idx].time = clamp(Number(p.time) || points[idx].time, minT, maxT);
+            }
+            points[idx].value = Number(p.value) || 0;
+            const next = pointsToCurve(curve, points, fallback);
+            updateCurveFromField($field, next, {
+                sync: false,
+                history: false,
+                save: false,
+                codegen: false,
+                renderOnSync: false,
+            });
+            renderCurveGraph($field);
+            ev.preventDefault();
+        });
+        document.addEventListener("pointerup", () => {
+            const selectBox = curveEditorState.selectBox;
+            if (selectBox) {
+                const $field = getCurveFieldByEditor(selectBox.editorId);
+                curveEditorState.selectBox = null;
+                if ($field.length) {
+                    const ctx = getCurveContextFromField($field);
+                    if (ctx) {
+                        const fallback = curveFallbackForField(ctx.field);
+                        const curve = normalizeFloatCurve(ctx.cmd.params[ctx.curveKey], fallback);
+                        if (String(curve.kind || "constant") === "keyframe") {
+                            const points = curveToPoints(curve, fallback);
+                            const editorId = ctx.editorId;
+                            const range = getCurveViewport(editorId, points, fallback, { reset: false });
+                            const geom = curveGraphGeom();
+                            const pathPts = points.map((p) => curvePointToCanvas(p, range, geom));
+                            const minX = Math.min(Number(selectBox.startX) || 0, Number(selectBox.endX) || 0);
+                            const maxX = Math.max(Number(selectBox.startX) || 0, Number(selectBox.endX) || 0);
+                            const minY = Math.min(Number(selectBox.startY) || 0, Number(selectBox.endY) || 0);
+                            const maxY = Math.max(Number(selectBox.startY) || 0, Number(selectBox.endY) || 0);
+                            const next = selectBox.additive ? getCurveSelection(editorId) : new Set();
+                            pathPts.forEach((pt, idx) => {
+                                if (pt.x >= minX && pt.x <= maxX && pt.y >= minY && pt.y <= maxY) next.add(idx);
+                            });
+                            setCurveSelection(editorId, next);
+                        }
+                    }
+                    renderCurveGraph($field);
+                }
+                return;
+            }
+            const drag = curveEditorState.dragging;
+            if (!drag) return;
+            const $field = getCurveFieldByEditor(drag.editorId);
+            curveEditorState.dragging = null;
+            if (!$field.length) return;
+            if (drag.kind === "range") {
+                renderCurveGraph($field);
+                return;
+            }
+            const ctx = getCurveContextFromField($field);
+            if (!ctx) return;
+            const fallback = curveFallbackForField(ctx.field);
+            const curve = normalizeFloatCurve(ctx.cmd.params[ctx.curveKey], fallback);
+            updateCurveFromField($field, curve, {
+                sync: true,
+                history: true,
+                save: true,
+                codegen: true,
+                renderOnSync: true,
+            });
+        });
+    }
+
     function renderCommandList() {
         hideCmdTip();
+        hideCurvePointMenu();
+        ensureCommandQueuesState();
+        updateActiveQueueBadge();
         const $list = $("#cmdList");
         $list.empty();
 
@@ -4317,8 +5826,45 @@ function setVelocitySection($card, mode) {
       `);
 
             const $grid = $card.find(".cmdGrid");
-            meta.fields.forEach(f => {
+            const fields = Array.isArray(meta.fields) ? meta.fields : [];
+            for (let fi = 0; fi < fields.length; fi++) {
+                const f = fields[fi];
                 const val = c.params[f.k];
+
+                const vec3 = matchCommandVec3Fields(fields, fi);
+                if (vec3) {
+                    const keyX = vec3.fx.k;
+                    const keyY = vec3.fy.k;
+                    const keyZ = vec3.fz.k;
+                    const labelBase = humanFieldName(vec3.base);
+                    const label = `${labelBase}（X / Y / Z）`;
+                    const stepX = (vec3.fx.step != null) ? `step="${vec3.fx.step}"` : "";
+                    const stepY = (vec3.fy.step != null) ? `step="${vec3.fy.step}"` : "";
+                    const stepZ = (vec3.fz.step != null) ? `step="${vec3.fz.step}"` : "";
+                    const $f = $(`
+            <div class="field field-wide cmdVec3Field">
+              <label>${escapeHtml(label)}</label>
+              <div class="vec3Row cmdVec3Row">
+                <div class="vec3">
+                  <span class="vec3Cell"><input class="cmdInput" data-key="${keyX}" data-type="number" type="text" inputmode="decimal" ${stepX} value="${escapeHtml(String(c.params[keyX] ?? 0))}" placeholder="X"/></span>
+                  <span class="vec3Cell"><input class="cmdInput" data-key="${keyY}" data-type="number" type="text" inputmode="decimal" ${stepY} value="${escapeHtml(String(c.params[keyY] ?? 0))}" placeholder="Y"/></span>
+                  <span class="vec3Cell"><input class="cmdInput" data-key="${keyZ}" data-type="number" type="text" inputmode="decimal" ${stepZ} value="${escapeHtml(String(c.params[keyZ] ?? 0))}" placeholder="Z"/></span>
+                </div>
+              </div>
+            </div>
+          `);
+                    if (vec3.fx.tip) $f.find(`.cmdInput[data-key="${keyX}"]`).attr("data-tip", vec3.fx.tip);
+                    if (vec3.fy.tip) $f.find(`.cmdInput[data-key="${keyY}"]`).attr("data-tip", vec3.fy.tip);
+                    if (vec3.fz.tip) $f.find(`.cmdInput[data-key="${keyZ}"]`).attr("data-tip", vec3.fz.tip);
+                    $grid.append($f);
+                    fi += 2;
+                    continue;
+                }
+
+                if (f.t === "curve") {
+                    renderCurveField($grid, c, f);
+                    continue;
+                }
 
                 if (f.t === "bool") {
                     const $f = $(`
@@ -4364,7 +5910,12 @@ function setVelocitySection($card, mode) {
                     if (f.tip) $f.find(".cmdInput").attr("data-tip", f.tip);
                     $grid.append($f);
                 }
-            });
+            }
+
+            if (meta.notice) {
+                const $notice = $(`<div class="hint cmdNotice">${escapeHtml(String(meta.notice))}</div>`);
+                $card.find('.cmdBody').append($notice);
+            }
 
             // 生效标识：如果 data.sign 在列表中，则应用该 command；为空则对所有粒子生效
             if (!Array.isArray(c.signs)) c.signs = [];
@@ -4501,7 +6052,7 @@ function setVelocitySection($card, mode) {
         if (renderCommandList._eventsBound) return;
         renderCommandList._eventsBound = true;
 
-        $("#cmdList").on("focusin", ".cmdInput, .cmdSignInput, .cmdLifeRule .exprInput", function () {
+        $("#cmdList").on("focusin", ".cmdInput, .cmdCurveInput, .cmdCurveField, .cmdSignInput, .cmdLifeRule .exprInput", function () {
             const id = $(this).closest(".cmdCard").data("id");
             if (!id) return;
             if (focusedCommandId !== id) {
@@ -4510,7 +6061,7 @@ function setVelocitySection($card, mode) {
             }
         });
 
-        $("#cmdList").on("focusout", ".cmdInput, .cmdSignInput, .cmdLifeRule .exprInput", function (e) {
+        $("#cmdList").on("focusout", ".cmdInput, .cmdCurveInput, .cmdCurveField, .cmdSignInput, .cmdLifeRule .exprInput", function (e) {
             const to = e.relatedTarget;
             if (to && $(to).closest("#cmdList .cmdCard").length) return;
             if (!focusedCommandId) return;
@@ -4530,7 +6081,7 @@ function setVelocitySection($card, mode) {
                 cmd.ui.collapsed = false;
                 applyCommandCollapseUI($card, false);
                 scheduleSave();
-                const $first = $card.find(".cmdInput, .cmdSignInput, .exprInput").first();
+                const $first = $card.find(".cmdInput, .cmdCurveInput, .cmdCurveField, .cmdSignInput, .exprInput").first();
                 if ($first.length) $first.trigger("focus");
             }
         });
@@ -4592,13 +6143,13 @@ function setVelocitySection($card, mode) {
             applyCommandSignAdd($card, { keepFocus: true });
         });
 
-        $(document).on("mouseenter", ".emitInput, .cmdInput, .cmdSignInput, .exprInput", function () {
+        $(document).on("mouseenter", ".emitInput, .cmdInput, .cmdCurveInput, .cmdCurveField, .cmdCurvePoint, .cmdSignInput, .exprInput", function () {
             scheduleCmdTip(this);
         });
-        $(document).on("mouseleave", ".emitInput, .cmdInput, .cmdSignInput, .exprInput", function () {
+        $(document).on("mouseleave", ".emitInput, .cmdInput, .cmdCurveInput, .cmdCurveField, .cmdCurvePoint, .cmdSignInput, .exprInput", function () {
             hideCmdTip();
         });
-        $(document).on("mousedown", ".emitInput, .cmdInput, .cmdSignInput, .exprInput", function () {
+        $(document).on("mousedown", ".emitInput, .cmdInput, .cmdCurveInput, .cmdCurveField, .cmdCurvePoint, .cmdSignInput, .exprInput", function () {
             hideCmdTip();
         });
         window.addEventListener("scroll", hideCmdTip, true);
@@ -4688,6 +6239,240 @@ function setVelocitySection($card, mode) {
             if ($row.length) refreshConditionRowVisibility($row);
             const $card = $(this).closest(".cmdCard");
             applyCommandLifeFilterFromCard($card);
+        });
+
+        $("#cmdList").on("input", ".cmdCurveInput", function () {
+            const part = String($(this).data("curvePart") || "");
+            if (part === "kind") return;
+            applyCommandCurveInput(this, { rerender: false });
+        });
+
+        $("#cmdList").on("change", ".cmdCurveInput", function () {
+            const part = String($(this).data("curvePart") || "");
+            if (part === "kind") {
+                const $field = $(this).closest(".cmdCurveField");
+                const ctx = getCurveContextFromField($field);
+                if (ctx) {
+                    setCurveSelection(ctx.editorId, []);
+                    curveEditorState.viewportByEditor.delete(ctx.editorId);
+                    if (curveEditorState.selectBox && String(curveEditorState.selectBox.editorId || "") === ctx.editorId) {
+                        curveEditorState.selectBox = null;
+                    }
+                }
+            }
+            applyCommandCurveInput(this, { rerender: false });
+            if (part === "kind") {
+                renderCurveFieldBody($(this).closest(".cmdCurveField"), { resetViewport: true });
+            }
+        });
+
+        $("#cmdList").on("focusin", ".cmdCurveField", function () {
+            const $field = $(this);
+            const ctx = getCurveContextFromField($field);
+            if (!ctx) return;
+            setActiveCurveEditor(ctx.editorId);
+        });
+
+        $("#cmdList").on("click", ".cmdCurveField", function (e) {
+            if ($(e.target).closest(".cmdCurveKind, .cmdCurveToolbar, .cmdCurvePoint, .cmdCurveGraph").length) return;
+            const $field = $(this);
+            const ctx = getCurveContextFromField($field);
+            if (!ctx) return;
+            setActiveCurveEditor(ctx.editorId);
+            if (typeof this.focus === "function") this.focus();
+        });
+
+        $("#cmdList").on("pointerdown", ".cmdCurveGraph", function (e) {
+            if ($(e.target).closest(".cmdCurvePoint, .cmdCurveRangeHandle").length) return;
+            hideCurvePointMenu();
+            const rawEv = e.originalEvent || e;
+            if (Number(rawEv.button) !== 0) return;
+            const $field = $(this).closest(".cmdCurveField");
+            const ctx = getCurveContextFromField($field);
+            if (!ctx) return;
+            setActiveCurveEditor(ctx.editorId);
+            const node = $field.get(0);
+            if (node && typeof node.focus === "function") node.focus();
+            const fallback = curveFallbackForField(ctx.field);
+            const curve = normalizeFloatCurve(ctx.cmd.params[ctx.curveKey], fallback);
+            if (String(curve.kind || "constant") !== "keyframe") return;
+
+            if (rawEv.altKey) {
+                const p = curveGraphPointFromEvent($field, rawEv);
+                addCurveKeyframeAtField($field, p, { history: true });
+                e.preventDefault();
+                e.stopPropagation();
+                return;
+            }
+
+            const info = curveGraphCanvasFromEvent($field, rawEv);
+            if (!info) return;
+            const additive = !!(rawEv.ctrlKey || rawEv.metaKey);
+            if (!additive) setCurveSelection(ctx.editorId, []);
+            curveEditorState.selectBox = {
+                editorId: ctx.editorId,
+                startX: info.x,
+                startY: info.y,
+                endX: info.x,
+                endY: info.y,
+                additive,
+            };
+            bindCurveDragEvents();
+            renderCurveGraph($field);
+            e.preventDefault();
+            e.stopPropagation();
+        });
+
+        $("#cmdList").on("pointerdown", ".cmdCurveRangeHandle", function (e) {
+            const rawEv = e.originalEvent || e;
+            if (Number(rawEv.button) !== 0) return;
+            const $handle = $(this);
+            const part = String($handle.data("rangePart") || "max");
+            const $field = $handle.closest(".cmdCurveField");
+            const ctx = getCurveContextFromField($field);
+            if (!ctx) return;
+            const fallback = curveFallbackForField(ctx.field);
+            const curve = normalizeFloatCurve(ctx.cmd.params[ctx.curveKey], fallback);
+            if (String(curve.kind || "constant") !== "keyframe") return;
+            const points = curveToPoints(curve, fallback);
+            const info = curveGraphCanvasFromEvent($field, rawEv);
+            if (!info) return;
+            const range = getCurveViewport(ctx.editorId, points, fallback, { reset: false });
+            setActiveCurveEditor(ctx.editorId);
+            curveEditorState.dragging = {
+                kind: "range",
+                editorId: ctx.editorId,
+                part: (part === "min") ? "min" : "max",
+                startY: info.y,
+                startMin: Number(range.min),
+                startMax: Number(range.max),
+            };
+            bindCurveDragEvents();
+            e.preventDefault();
+            e.stopPropagation();
+        });
+
+        $("#cmdList").on("pointerdown", ".cmdCurvePoint", function (e) {
+            const rawEv = e.originalEvent || e;
+            if (Number(rawEv.button) !== 0) return;
+            hideCurvePointMenu();
+            const $point = $(this);
+            const $field = $point.closest(".cmdCurveField");
+            const ctx = getCurveContextFromField($field);
+            if (!ctx) return;
+            const idx = Math.max(0, Number($point.data("pointIndex")) || 0);
+            const multi = !!(rawEv.ctrlKey || rawEv.metaKey);
+            const sel = getCurveSelection(ctx.editorId);
+            if (multi) {
+                if (sel.has(idx)) sel.delete(idx);
+                else sel.add(idx);
+            } else {
+                setCurveSelection(ctx.editorId, [idx]);
+            }
+            setActiveCurveEditor(ctx.editorId);
+            renderCurveGraph($field);
+            curveEditorState.dragging = {
+                editorId: ctx.editorId,
+                pointIndex: idx,
+            };
+            bindCurveDragEvents();
+            e.preventDefault();
+            e.stopPropagation();
+        });
+
+        $("#cmdList").on("contextmenu", ".cmdCurvePoint", function (e) {
+            e.preventDefault();
+            e.stopPropagation();
+            hideCmdTip();
+            const $point = $(this);
+            const $field = $point.closest(".cmdCurveField");
+            const ctx = getCurveContextFromField($field);
+            if (!ctx) return;
+            const fallback = curveFallbackForField(ctx.field);
+            const curve = normalizeFloatCurve(ctx.cmd.params[ctx.curveKey], fallback);
+            if (String(curve.kind || "constant") !== "keyframe") return;
+            const idx = Math.max(0, Number($point.data("pointIndex")) || 0);
+            const list = Array.isArray(curve.keyframes) ? curve.keyframes.slice() : [];
+            if (!list.length || idx >= list.length) return;
+            setCurveSelection(ctx.editorId, [idx]);
+            setActiveCurveEditor(ctx.editorId);
+            renderCurveGraph($field);
+            const rawEv = e.originalEvent || e;
+            openCurvePointMenu($field, idx, rawEv.clientX, rawEv.clientY);
+        });
+
+        $("#cmdList").on("keydown", ".cmdCurveField", function (e) {
+            const $field = $(this);
+            const isAccel = !!(e.ctrlKey || e.metaKey);
+            const key = String(e.key || "");
+            if (isAccel && (key === "a" || key === "A")) {
+                if (selectAllCurveKeyframes($field)) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                }
+                return;
+            }
+            if (isAccel && (key === "c" || key === "C")) {
+                if (copyCurveKeyframes($field)) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                }
+                return;
+            }
+            if (isAccel && (key === "v" || key === "V")) {
+                if (pasteCurveKeyframes($field)) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                }
+                return;
+            }
+            if (key === "Delete" || key === "Backspace") {
+                if (deleteSelectedCurveKeyframes($field, { history: true })) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                }
+            }
+        });
+
+        $("#cmdList").on("click", ".cmdCurveAddFrame", function (e) {
+            e.stopPropagation();
+            const $field = $(this).closest(".cmdCurveField");
+            addCurveKeyframeAtField($field, null, { history: true });
+        });
+
+        $("#cmdList").on("click", ".cmdCurveDelSelected", function (e) {
+            e.stopPropagation();
+            const $field = $(this).closest(".cmdCurveField");
+            deleteSelectedCurveKeyframes($field, { history: true });
+        });
+
+        $("#cmdList").on("click", ".cmdCurveReset", function (e) {
+            e.stopPropagation();
+            const $field = $(this).closest(".cmdCurveField");
+            resetCurveField($field);
+        });
+
+        $("#cmdList").on("keydown", ".cmdCurveRangeInput", function (e) {
+            if (e.key !== "Enter") return;
+            e.preventDefault();
+            $(this).trigger("change");
+        });
+
+        $("#cmdList").on("change", ".cmdCurveRangeInput", function () {
+            const $input = $(this);
+            const $field = $input.closest(".cmdCurveField");
+            const part = String($input.data("rangePart") || "max");
+            if (!applyCurveViewportInput($field, part, $input.val())) {
+                toast("Y 轴范围请输入数字", "error");
+                renderCurveGraph($field);
+            }
+        });
+
+        $("#cmdList").on("click", ".cmdCurveFitRange", function (e) {
+            e.preventDefault();
+            e.stopPropagation();
+            const $field = $(this).closest(".cmdCurveField");
+            fitCurveViewportToPoints($field);
         });
 
         $("#emitList").on("input change", ".emitInput", function () {
@@ -4825,6 +6610,125 @@ function setVelocitySection($card, mode) {
             toggleCommandSyncTarget(cmd);
         });
 
+        $("#cmdQueueList").on("click", ".cmdQueueCard", function (e) {
+            if ($(e.target).closest(".btnOpenCmdQueue, .btnDelCmdQueue, .queueSignAdd, .queueSignClear, .queueSignDel, .queueNameInput, .queueSignInput, .dragHandle").length) {
+                return;
+            }
+            ensureCommandQueuesState();
+            const id = String($(this).data("id") || "");
+            if (!id) return;
+            setActiveCommandQueue(id);
+            renderCommandQueueList();
+            scheduleSave();
+        });
+
+        $("#cmdQueueList").on("pointerdown", ".queueNameInput, .queueSignInput", function (e) {
+            e.stopPropagation();
+        });
+
+        $("#cmdQueueList").on("dblclick", ".cmdQueueCard", function (e) {
+            if ($(e.target).closest(".queueNameInput, .queueSignInput").length) return;
+            ensureCommandQueuesState();
+            const id = String($(this).data("id") || "");
+            if (!id) return;
+            openCommandQueueEditor(id);
+            scheduleSave();
+        });
+
+        $("#cmdQueueList").on("click", ".btnOpenCmdQueue", function (e) {
+            e.stopPropagation();
+            ensureCommandQueuesState();
+            const id = String($(this).closest(".cmdQueueCard").data("id") || "");
+            if (!id) return;
+            openCommandQueueEditor(id);
+            scheduleSave();
+        });
+
+        $("#cmdQueueList").on("click", ".btnDelCmdQueue", function (e) {
+            e.stopPropagation();
+            ensureCommandQueuesState();
+            if (state.commandQueues.length <= 1) {
+                toast("至少保留一个命令队列", "info");
+                return;
+            }
+            const id = String($(this).closest(".cmdQueueCard").data("id") || "");
+            if (!id) return;
+            state.commandQueues = state.commandQueues.filter((q) => q.id !== id);
+            ensureCommandQueuesState();
+            if (typeof clearCommandSyncTargets === "function") clearCommandSyncTargets();
+            cardHistory.push();
+            if (commandWorkspace === "queue_editor") renderCommandList();
+            renderCommandQueueList();
+            scheduleSave();
+            autoGenKotlin();
+        });
+
+        $("#cmdQueueList").on("input", ".queueNameInput", function () {
+            ensureCommandQueuesState();
+            const id = String($(this).closest(".cmdQueueCard").data("id") || "");
+            const queue = state.commandQueues.find((q) => q.id === id);
+            if (!queue) return;
+            queue.name = String($(this).val() || "").trim();
+            updateActiveQueueBadge();
+            scheduleHistoryPush();
+            scheduleSave();
+            autoGenKotlin();
+        });
+
+        $("#cmdQueueList").on("change", ".queueNameInput", function () {
+            ensureCommandQueuesState();
+            const id = String($(this).closest(".cmdQueueCard").data("id") || "");
+            const queue = state.commandQueues.find((q) => q.id === id);
+            if (!queue) return;
+            queue.name = String($(this).val() || "").trim();
+            cardHistory.push();
+            renderCommandQueueList();
+            updateActiveQueueBadge();
+            scheduleSave();
+            autoGenKotlin();
+        });
+
+        $("#cmdQueueList").on("keydown", ".queueSignInput", function (e) {
+            if (e.key !== "Enter") return;
+            e.preventDefault();
+            const $card = $(this).closest(".cmdQueueCard");
+            applyQueueSignAdd($card, { keepFocus: true });
+        });
+
+        $("#cmdQueueList").on("click", ".queueSignAdd", function (e) {
+            e.stopPropagation();
+            const $card = $(this).closest(".cmdQueueCard");
+            applyQueueSignAdd($card);
+        });
+
+        $("#cmdQueueList").on("click", ".queueSignClear", function (e) {
+            e.stopPropagation();
+            ensureCommandQueuesState();
+            const id = String($(this).closest(".cmdQueueCard").data("id") || "");
+            const queue = state.commandQueues.find((q) => q.id === id);
+            if (!queue) return;
+            queue.signs = [];
+            cardHistory.push();
+            renderCommandQueueList();
+            scheduleSave();
+            autoGenKotlin();
+        });
+
+        $("#cmdQueueList").on("click", ".queueSignDel", function (e) {
+            e.stopPropagation();
+            ensureCommandQueuesState();
+            const $card = $(this).closest(".cmdQueueCard");
+            const id = String($card.data("id") || "");
+            const queue = state.commandQueues.find((q) => q.id === id);
+            if (!queue) return;
+            const sign = Math.trunc(Number($(this).closest(".chip").data("sign")));
+            queue.signs = normalizeSignList((Array.isArray(queue.signs) ? queue.signs : []).filter((v) => Math.trunc(Number(v)) !== sign));
+            cardHistory.push();
+            renderCommandQueueList();
+            scheduleSave();
+            autoGenKotlin();
+        });
+
         $("#btnPlay").on("click", () => {
             state.playing = true;
             state.autoPaused = false;
@@ -4853,6 +6757,16 @@ function setVelocitySection($card, mode) {
         $("#btnCollapseEmitters").on("click", () => setAllEmittersCollapsed(true));
         $("#btnExpandCommands").on("click", () => setAllCommandsCollapsed(false));
         $("#btnCollapseCommands").on("click", () => setAllCommandsCollapsed(true));
+        $("#btnBackCmdQueues").on("click", () => backToCommandQueueList());
+        $("#btnAddCmdQueue").on("click", () => {
+            const next = makeDefaultCommandQueue(state.commandQueues.length + 1);
+            state.commandQueues.push(next);
+            setActiveCommandQueue(next.id);
+            cardHistory.push();
+            renderCommandQueueList();
+            scheduleSave();
+            autoGenKotlin();
+        });
 
         $("#btnAddCmd").on("click", () => {
             const type = $("#addCommandType").val();
@@ -4866,6 +6780,7 @@ function setVelocitySection($card, mode) {
         $("#btnAddGlobalVar").on("click", () => {
             ensureEmitterBehaviorState();
             state.emitterBehavior.emitterVars.push(createEmitterVar());
+            syncEmitterBuilderVarContextStorage();
             cardHistory.push();
             renderEmitterBehaviorEditors();
             refreshAllVarBindings();
@@ -4900,31 +6815,69 @@ function setVelocitySection($card, mode) {
                     toast("变量名不合法（仅支持 [A-Za-z_][A-Za-z0-9_]* ）", "error");
                 }
             } else if (key === "type") {
-                item.type = ($(this).val() === "int") ? "int" : "double";
-                item.defaultValue = item.type === "int"
-                    ? Math.trunc(safeNum(item.defaultValue, 0))
-                    : safeNum(item.defaultValue, 0);
-                item.minValue = item.type === "int"
-                    ? Math.trunc(safeNum(item.minValue, 0))
-                    : safeNum(item.minValue, 0);
-                item.maxValue = item.type === "int"
-                    ? Math.trunc(safeNum(item.maxValue, 0))
-                    : safeNum(item.maxValue, 0);
+                item.type = normalizeEmitterVarType($(this).val());
+                if (isNumericEmitterVarType(item.type)) {
+                    let dv = safeNum(item.defaultValue, 0);
+                    let minV = safeNum(item.minValue, 0);
+                    let maxV = safeNum(item.maxValue, 0);
+                    if (item.type === "Int" || item.type === "Long") {
+                        dv = Math.trunc(dv);
+                        minV = Math.trunc(minV);
+                        maxV = Math.trunc(maxV);
+                    }
+                    item.defaultValue = dv;
+                    item.minValue = minV;
+                    item.maxValue = maxV;
+                } else {
+                    item.minEnabled = false;
+                    item.maxEnabled = false;
+                    if (item.type === "Boolean") {
+                        const s = String(item.defaultValue ?? "").trim().toLowerCase();
+                        item.defaultValue = (s === "true");
+                    } else if (item.type === "String") {
+                        item.defaultValue = String(item.defaultValue ?? "");
+                    } else if (item.type === "Vec3") {
+                        item.defaultValue = String(item.defaultValue || "Vec3(0.0, 0.0, 0.0)");
+                    } else if (item.type === "RelativeLocation") {
+                        item.defaultValue = String(item.defaultValue || "RelativeLocation(0.0, 0.0, 0.0)");
+                    } else if (item.type === "Vector3f") {
+                        item.defaultValue = String(item.defaultValue || "Vector3f(0.0f, 0.0f, 0.0f)");
+                    }
+                }
             } else if (key === "defaultValue") {
-                item.defaultValue = safeNum($(this).val(), item.defaultValue);
-                if (item.type === "int") item.defaultValue = Math.trunc(item.defaultValue);
+                if (isNumericEmitterVarType(item.type)) {
+                    item.defaultValue = safeNum($(this).val(), item.defaultValue);
+                    if (item.type === "Int" || item.type === "Long") item.defaultValue = Math.trunc(item.defaultValue);
+                } else if (item.type === "Boolean") {
+                    const raw = String($(this).val() || "").trim().toLowerCase();
+                    item.defaultValue = (raw === "true");
+                } else {
+                    item.defaultValue = String($(this).val() ?? "");
+                }
             } else if (key === "minEnabled") {
+                if (!isNumericEmitterVarType(item.type)) {
+                    item.minEnabled = false;
+                    $(this).prop("checked", false);
+                    return;
+                }
                 item.minEnabled = $(this).is(":checked");
             } else if (key === "maxEnabled") {
+                if (!isNumericEmitterVarType(item.type)) {
+                    item.maxEnabled = false;
+                    $(this).prop("checked", false);
+                    return;
+                }
                 item.maxEnabled = $(this).is(":checked");
             } else if (key === "minValue") {
+                if (!isNumericEmitterVarType(item.type)) return;
                 item.minValue = safeNum($(this).val(), item.minValue);
-                if (item.type === "int") item.minValue = Math.trunc(item.minValue);
+                if (item.type === "Int" || item.type === "Long") item.minValue = Math.trunc(item.minValue);
             } else if (key === "maxValue") {
+                if (!isNumericEmitterVarType(item.type)) return;
                 item.maxValue = safeNum($(this).val(), item.maxValue);
-                if (item.type === "int") item.maxValue = Math.trunc(item.maxValue);
+                if (item.type === "Int" || item.type === "Long") item.maxValue = Math.trunc(item.maxValue);
             }
-            if (item.minEnabled && item.maxEnabled && item.minValue > item.maxValue) {
+            if (isNumericEmitterVarType(item.type) && item.minEnabled && item.maxEnabled && item.minValue > item.maxValue) {
                 const t = item.minValue;
                 item.minValue = item.maxValue;
                 item.maxValue = t;
@@ -4936,6 +6889,7 @@ function setVelocitySection($card, mode) {
             if (varSchemaChanged) {
                 refreshAllVarBindings();
             }
+            syncEmitterBuilderVarContextStorage();
             scheduleHistoryPush();
             scheduleSave();
             autoGenKotlin();
@@ -4945,6 +6899,7 @@ function setVelocitySection($card, mode) {
             ensureEmitterBehaviorState();
             const id = $(this).closest(".kv-row").data("id");
             state.emitterBehavior.emitterVars = state.emitterBehavior.emitterVars.filter((it) => it.id !== id);
+            syncEmitterBuilderVarContextStorage();
             cardHistory.push();
             renderEmitterBehaviorEditors();
             refreshAllVarBindings();
@@ -5349,6 +7304,21 @@ function setVelocitySection($card, mode) {
             scheduleSave();
             autoGenKotlin();
         });
+
+        $("#rootLifecycleMode, #rootLifecycleInterval, #rootLifecycleMaxTick").on("input change", function () {
+            const prev = JSON.stringify(state.rootLifecycle || {});
+            state.rootLifecycle = normalizeRootLifecycle({
+                mode: $("#rootLifecycleMode").val(),
+                intervalTick: $("#rootLifecycleInterval").val(),
+                maxTick: $("#rootLifecycleMaxTick").val(),
+            });
+            setRootLifecycleSection(state.rootLifecycle.mode);
+            if (JSON.stringify(state.rootLifecycle) === prev) return;
+            scheduleHistoryPush();
+            scheduleSave();
+            autoGenKotlin();
+            if (preview) preview.resetEmission();
+        });
     }
 
     let preview = null;
@@ -5358,12 +7328,24 @@ function setVelocitySection($card, mode) {
 
     function boot() {
         const loaded = loadPersisted();
-        if (!loaded) state.commands = makeDefaultCommands();
+        if (!loaded) {
+            state.commandQueues = [makeDefaultCommandQueue(1)];
+            state.activeCommandQueueId = state.commandQueues[0].id;
+        }
+        ensureCommandQueuesState();
+        syncEmitterBuilderVarContextStorage();
         const returnedEmitterId = consumeEmitterBuilderReturnState();
 
         initPanelTools();
         applyStateToForm();
-        renderCommandList();
+        // Queue list page can be the default workspace. Render once to bind
+        // delegated command/queue handlers that are initialized in renderCommandList.
+        if (!renderCommandList._eventsBound) {
+            renderCommandList();
+            if (commandWorkspace === "queue_list") {
+                setCommandWorkspace("queue_list", { render: false });
+            }
+        }
         autoGenKotlin();
         cardHistory.init();
         scheduleSave();

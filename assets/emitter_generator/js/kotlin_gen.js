@@ -70,11 +70,34 @@ function fmtHex(hex) {
   return "#ffffff";
 }
 
+function normalizeRootLifecycleMode(rawMode) {
+  const modeRaw = String(rawMode || "interval").trim().toLowerCase();
+  if (modeRaw === "once") return "once";
+  if (modeRaw === "interval_n_tick" || modeRaw === "intervalntick") return "interval_n_tick";
+  return "interval";
+}
+
+function normalizeRootLifecycle(raw) {
+  const src = (raw && typeof raw === "object") ? raw : {};
+  const mode = normalizeRootLifecycleMode(src.mode);
+
+  const intervalNum = Number(src.intervalTick);
+  const maxTickNum = Number(src.maxTick);
+  const intervalTick = Number.isFinite(intervalNum)
+    ? Math.max(1, Math.trunc(intervalNum))
+    : 1;
+  const maxTick = Number.isFinite(maxTickNum)
+    ? Math.max(1, Math.trunc(maxTickNum))
+    : 120;
+
+  return { mode, intervalTick, maxTick };
+}
+
 function buildEmitterDataApplyLines(card) {
   const p = card?.particle || {};
   const lines = [];
 
-  // 字段名尽量贴近 UI；如果你的 API 不同，请改成对应 setter。
+  // Keep field names aligned with UI defaults.
   lines.push(`lifeMin = ${fmtI(p.lifeMin)}`);
   lines.push(`lifeMax = ${fmtI(p.lifeMax)}`);
   lines.push(`sizeMin = ${fmtF(p.sizeMin)}`);
@@ -291,8 +314,7 @@ function buildEmitterLocationsBlock(card, dataName) {
 }
 
 export function genCommandKotlin(state) {
-  const cmds = (state?.commands || []).filter((c) => !!c);
-  const varName = safeIdent(state?.kotlin?.varName, "command");
+  const legacyVarName = safeIdent(state?.kotlin?.varName, "command");
   const kRefName = safeIdent(state?.kotlin?.kRefName, "emitter");
 
   const uniqSigns = (arr) => {
@@ -335,37 +357,111 @@ export function genCommandKotlin(state) {
     return `run { val age = particle.currentAge; val maxAge = particle.lifetime; (${expr}) }`;
   };
 
-  const lines = [];
-  lines.push(`val ${varName} = ParticleCommandQueue()`);
-  for (const c of cmds) {
-    const meta = COMMAND_META[c.type];
-    if (!meta || typeof meta.toKotlin !== "function") continue;
-    const kotlin = meta.toKotlin(c, { kRefName });
-    const predicates = [];
-    const signPred = signPredicate(c.signs);
-    const lifePred = lifePredicate(c.lifeFilter);
-    if (signPred) predicates.push(`(${signPred})`);
-    if (lifePred) predicates.push(`(${lifePred})`);
-    const pred = predicates.join(" && ");
-    let block = `.add(\n${indent(kotlin, 4)}\n)`;
-    if (pred) {
-      block += ` { data, particle ->\n${indent(pred, 4)}\n}`;
+  const queueSources = (() => {
+    let rawQueues = [];
+    if (Array.isArray(state?.commandQueues)) {
+      rawQueues = state.commandQueues;
+    } else if (state?.commandQueues && typeof state.commandQueues === "object") {
+      rawQueues = Object.values(state.commandQueues).filter((it) => it && typeof it === "object");
     }
-    lines.push(indent(block, 4));
+    if (rawQueues.length) {
+      return rawQueues.map((q, idx) => ({
+        id: String(q?.id ?? idx),
+        name: String(q?.name || "").trim() || `command${idx + 1}`,
+        signs: uniqSigns(q?.signs),
+        commands: Array.isArray(q?.commands) ? q.commands : [],
+      }));
+    }
+    return [{
+      id: "legacy_queue",
+      name: legacyVarName,
+      signs: [],
+      commands: Array.isArray(state?.commands) ? state.commands : [],
+    }];
+  })();
+
+  const usedQueueVars = new Set();
+  const queueInfos = queueSources.map((queue, idx) => {
+    const base = safeIdent(queue.name, idx === 0 ? legacyVarName : `command${idx + 1}`);
+    let varName = base || `command${idx + 1}`;
+    let suffix = 2;
+    while (usedQueueVars.has(varName)) {
+      varName = `${base}_${suffix}`;
+      suffix += 1;
+    }
+    usedQueueVars.add(varName);
+    return {
+      ...queue,
+      varName,
+      commands: queue.commands.filter((c) => !!c && c.enabled !== false),
+    };
+  });
+
+  const lines = [];
+  lines.push(`// file-level imports:`);
+  lines.push(`// import cn.coostack.cooparticlesapi.network.particle.emitters.command.*`);
+  lines.push(`// import cn.coostack.cooparticlesapi.network.particle.emitters.command.curve.*`);
+  lines.push("");
+  for (const queue of queueInfos) {
+    lines.push(`val ${queue.varName} = ParticleCommandQueue()`);
+    for (const c of queue.commands) {
+      const meta = COMMAND_META[c.type];
+      if (!meta || typeof meta.toKotlin !== "function") continue;
+      const kotlin = meta.toKotlin(c, { kRefName });
+      const predicates = [];
+      const signPred = signPredicate(c.signs);
+      const lifePred = lifePredicate(c.lifeFilter);
+      if (signPred) predicates.push(`(${signPred})`);
+      if (lifePred) predicates.push(`(${lifePred})`);
+      const pred = predicates.join(" && ");
+      let block = `.add(\n${indent(kotlin, 4)}\n)`;
+      if (pred) {
+        block += ` { data, particle ->\n${indent(pred, 4)}\n}`;
+      }
+      lines.push(indent(block, 4));
+    }
+    if (!queue.commands.length) {
+      lines.push(`    // no enabled commands in this queue`);
+    }
+    lines.push("");
   }
+  lines.push(`override fun singleParticleAction(`);
+  lines.push(`    controler: ParticleControler,`);
+  lines.push(`    data: ControlableParticleData,`);
+  lines.push(`    spawnPos: RelativeLocation,`);
+  lines.push(`    spawnWorld: Level,`);
+  lines.push(`    particleLerpProgress: Float,`);
+  lines.push(`    posLerpProgress: Float`);
+  lines.push(`) {`);
+  lines.push(`    controler.addPreTickAction {`);
+  if (!queueInfos.length) {
+    lines.push(`        // no command queues`);
+  } else {
+    for (const queue of queueInfos) {
+      const pred = signPredicate(queue.signs);
+      if (!pred) {
+        lines.push(`        ${queue.varName}.applyVelocity(data, this)`);
+      } else {
+        lines.push(`        if (${pred}) {`);
+        lines.push(`            ${queue.varName}.applyVelocity(data, this)`);
+        lines.push(`        }`);
+      }
+    }
+  }
+  lines.push(`    }`);
+  lines.push(`}`);
   return lines.join("\n");
 }
-
 export function genEmitterKotlin(state, settings = {}) {
   const rawEmitters = Array.isArray(state?.emitters) ? state.emitters : [];
   const emitters = rawEmitters.filter(c => c && c.enabled !== false);
 
   if (!emitters.length) return "";
 
-  // Kotlin 变量命名：
-  // - 每个发射器卡片可通过 vars.template / vars.data 指定
-  // - 留空时自动命名为 templateN / dataN
-  // - externalTemplate/externalData 会提升到类作用域，这里会额外做去重
+  // Kotlin variable naming:
+  // - Per emitter card: vars.template / vars.data
+  // - Empty -> auto templateN / dataN
+  // - externalTemplate/externalData are lifted to class scope, then deduplicated
   const varCache = new Map();
 
   function baseVar(card, index, kind) {
@@ -426,8 +522,7 @@ export function genEmitterKotlin(state, settings = {}) {
   }
 
   const modeOf = (c) => String(c?.emission?.mode || "continuous");
-  const hasPersistent = emitters.some(c => modeOf(c) !== "once");
-  const allOnce = emitters.every(c => modeOf(c) === "once");
+  const rootLifecycle = normalizeRootLifecycle(state?.rootLifecycle);
   const anyBurst = emitters.some(c => modeOf(c) === "burst");
 
   const fmtRel = (x, y, z) => `RelativeLocation(${fmtD(x)}, ${fmtD(y)}, ${fmtD(z)})`;
@@ -452,7 +547,7 @@ function buildBaseTemplateAssignLines(card) {
   const vz = numOrExpr(v.z, 0);
 
   const lines = [];
-  // 基础模板参数（外放模板时不在局部重复写入）
+  // Velocity initialization: fixed uses configured vector, expression mode starts from zero.
   const velMode = String(p.velMode || "fixed");
   if (velMode === "fixed") {
     lines.push(`velocity = ${kVec3(vx, vy, vz)}`);
@@ -463,7 +558,7 @@ function buildBaseTemplateAssignLines(card) {
   const { r, g, b } = hexToRgb01(p.colorStart);
   lines.push(`color = Vector3f(${fmtF(r)}, ${fmtF(g)}, ${fmtF(b)})`);
 
-  // 进阶模板参数
+  // Template scalar fields.
   lines.push(`alpha = ${fmtF(t.alpha ?? 1.0)}`);
   lines.push(`light = ${fmtI(t.light ?? 15)}`);
   const face = (t.faceToCamera !== false);
@@ -481,7 +576,7 @@ function buildBaseTemplateAssignLines(card) {
 function buildLocalDataApplyLines(card) {
   const p = card?.particle || {};
   const lines = [];
-  // 对应 SimpleRandomParticleData 的字段映射
+  // SimpleRandomParticleData mapping
   lines.push(`minAge = ${fmtI(p.lifeMin)}`);
   lines.push(`maxAge = ${fmtI(p.lifeMax)}`);
   lines.push(`minCount = ${fmtI(p.countMin)}`);
@@ -558,7 +653,7 @@ function buildLocalDataApplyLines(card) {
       lines.push(pad(chainIndent + 4) + `}`);
       lines.push(pad(chainIndent + 4) + `locs`);
       lines.push(pad(chainIndent) + `}`);
-      // point 已直接写入 offset，不再重复 pointsOnEach
+      // point 瀹歌尙娲块幒銉ュ晸閸?offset閿涘奔绗夐崘宥櫢?pointsOnEach
     } else if (type === "line") {
       const l = e.line || {};
       const d = l.dir || { x: 0, y: 1, z: 0 };
@@ -673,7 +768,7 @@ function buildLocalDataApplyLines(card) {
       lines.push(pad(chainIndent + 4) + `}`);
       lines.push(pad(chainIndent + 4) + `locs`);
       lines.push(pad(chainIndent) + `}`);
-      // sphere 已直接写入 offset，不再重复 pointsOnEach
+      // sphere 瀹歌尙娲块幒銉ュ晸閸?offset閿涘奔绗夐崘宥櫢?pointsOnEach
     } else if (type === "box") {
       const b = e.box || {};
       const bx = numOrExpr(b.x, 2);
@@ -716,7 +811,7 @@ function buildLocalDataApplyLines(card) {
   const out = [];
   const push = (s = "") => out.push(s);
 
-  // 外放变量参数（启用 externalTemplate / externalData 时输出）
+  // Deduplicate externalTemplate/externalData declarations at class scope.
   const declaredTemplate = new Set();
   const declaredData = new Set();
   emitters.forEach((card, i) => {
@@ -741,13 +836,19 @@ function buildLocalDataApplyLines(card) {
     }
   });
 
-  // 全部发射器均为 once 模式时，maxTick = 1
-  if (allOnce) {
-    push("init {");
+  push("init {");
+  if (rootLifecycle.mode === "once") {
+    push("    delay = 1");
     push("    maxTick = 1");
-    push("}");
-    push("");
+  } else if (rootLifecycle.mode === "interval") {
+    push(`    delay = ${fmtI(rootLifecycle.intervalTick)}`);
+    push("    maxTick = -1");
+  } else {
+    push(`    delay = ${fmtI(rootLifecycle.intervalTick)}`);
+    push(`    maxTick = ${fmtI(rootLifecycle.maxTick)}`);
   }
+  push("}");
+  push("");
 
   push("override fun genParticles(lerpProgress: Float): List<Pair<ControlableParticleData, RelativeLocation>> {");
   push("    val res = mutableListOf<Pair<ControlableParticleData, RelativeLocation>>()");
@@ -770,24 +871,38 @@ function buildLocalDataApplyLines(card) {
     const fixedVY = numOrExpr(card?.particle?.vel?.y, 0);
     const fixedVZ = numOrExpr(card?.particle?.vel?.z, 0);
 
-    push(`    // 发射器 ${n}: ${label}`);
+    push(`    // 发射器 #${n}: ${label}`);
 
-    // wrapper
     let openLines = [];
     let closeLines = [];
     let innerIndent = 4;
+    const pushWrap = (openLineRaw, closeLineRaw = "}") => {
+      const pad = " ".repeat(innerIndent);
+      openLines.push(`${pad}${openLineRaw}`);
+      closeLines.unshift(`${pad}${closeLineRaw}`);
+      innerIndent += 4;
+    };
 
-    if (mode === "once" && hasPersistent) {
-      openLines.push(`    if (tick == 1) {`);
-      closeLines.push(`    }`);
-      innerIndent = 8;
+    const startTick = numOrExpr(card?.emission?.startTick, 0);
+    const endTick = numOrExpr(card?.emission?.endTick, -1);
+    const endNum = Number(endTick);
+    let activeExpr = `tick >= ${fmtI(startTick)}`;
+    if (!(Number.isFinite(endNum) && endNum < 0)) {
+      activeExpr += ` && tick <= ${fmtI(endTick)}`;
+    }
+    pushWrap(`if (${activeExpr}) {`);
+
+    if (mode === "once") {
+      const startNum = Number(startTick);
+      const onceExpr = Number.isFinite(startNum)
+        ? String(Math.max(1, Math.trunc(startNum)))
+        : `(${fmtI(startTick)}).coerceAtLeast(1)`;
+      pushWrap(`if (tick == ${onceExpr}) {`);
     } else if (mode === "burst") {
       const interval = numOrExpr(card?.emission?.burstInterval, 0.5);
       const intervalVar = `intervalTicks${n}`;
-      openLines.push(`    val ${intervalVar} = Math.round(${fmtD(interval)} / tickSec).toInt().coerceAtLeast(1)`);
-      openLines.push(`    if ((tick - 1) % ${intervalVar} == 0) {`);
-      closeLines.push(`    }`);
-      innerIndent = 8;
+      openLines.push(`${" ".repeat(innerIndent)}val ${intervalVar} = Math.round(${fmtD(interval)} / tickSec).toInt().coerceAtLeast(1)`);
+      pushWrap(`if ((tick - 1) % ${intervalVar} == 0) {`);
     }
 
     openLines.forEach(l => push(l));
@@ -795,7 +910,7 @@ function buildLocalDataApplyLines(card) {
     const pad = " ".repeat(innerIndent);
     const pad2 = " ".repeat(innerIndent + 4);
 
-    // 每个卡片用 run { } 做作用域隔离，避免局部变量重名
+    // ÿʹö run 򣬱ֲͻ
     push(`${pad}run {`);
 
     // local data
@@ -863,3 +978,4 @@ function buildLocalDataApplyLines(card) {
 
   return out.join("\n");
 }
+
