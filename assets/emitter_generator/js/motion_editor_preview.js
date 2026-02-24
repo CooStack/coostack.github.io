@@ -212,6 +212,7 @@ export function createMotionEditorRuntime(ctx = {}) {
 
     function worldToClient(v3) {
         const rect = renderer.domElement.getBoundingClientRect();
+        camera.updateMatrixWorld();
         tmpVec.copy(v3).project(camera);
         return {
             x: (tmpVec.x * 0.5 + 0.5) * rect.width + rect.left,
@@ -577,9 +578,14 @@ export function createMotionEditorRuntime(ctx = {}) {
         const minY = Math.min(box.startY, box.endY);
         const maxY = Math.max(box.startY, box.endY);
         const ids = [];
+        camera.updateMatrixWorld();
+        const rect = renderer.domElement.getBoundingClientRect();
         for (const p of runtime.points) {
-            const screen = worldToClient(new THREE.Vector3(p.x, p.y, p.z));
-            if (screen.x >= minX && screen.x <= maxX && screen.y >= minY && screen.y <= maxY) {
+            tmpVec.set(p.x, p.y, p.z).project(camera);
+            if (tmpVec.z > 1) continue;
+            const sx = (tmpVec.x * 0.5 + 0.5) * rect.width + rect.left;
+            const sy = (-tmpVec.y * 0.5 + 0.5) * rect.height + rect.top;
+            if (sx >= minX && sx <= maxX && sy >= minY && sy <= maxY) {
                 ids.push(p.id);
             }
         }
@@ -831,7 +837,7 @@ export function createMotionEditorRuntime(ctx = {}) {
             applyPlane(plane, false);
         }
 
-        if (!runtime.drag) {
+        if (!runtime.drag && !runtime.box) {
             syncExternalPoints(external);
         } else {
             refreshMeshes();
