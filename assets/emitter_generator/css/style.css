@@ -1494,6 +1494,163 @@
         justify-content: flex-end;
         gap: 8px;
       }
+      .cmdMotionField {
+        position: relative;
+        grid-column: 1 / -1;
+      }
+      .cmdMotionField.is-active {
+        border-color: color-mix(in srgb, var(--accent) 42%, var(--line2));
+        box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 30%, transparent);
+      }
+      .cmdMotionBody {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+      }
+      .cmdMotionHint {
+        margin-top: 6px;
+        color: var(--muted);
+        line-height: 1.45;
+      }
+      .cmdMotionVec3 {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 8px;
+      }
+      .cmdMotionVec3 input {
+        font-family: var(--mono);
+        text-align: center;
+      }
+      .cmdMotionLinearRows {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr);
+        gap: 8px;
+      }
+      .cmdMotionLinearRows .field,
+      .cmdMotionConstRow .field {
+        margin: 0;
+      }
+      .cmdMotionTimelineWrap {
+        width: 100%;
+        border: 1px solid var(--line2);
+        border-radius: 10px;
+        background: color-mix(in srgb, var(--input-bg) 75%, transparent);
+        overflow: hidden;
+      }
+      .cmdMotionTimeline {
+        width: 100%;
+        height: auto;
+        aspect-ratio: 320 / 58;
+        display: block;
+        cursor: crosshair;
+      }
+      .cmdMotionTimelineBg {
+        fill: color-mix(in srgb, var(--panel-soft) 82%, transparent);
+      }
+      .cmdMotionAxis {
+        stroke: color-mix(in srgb, var(--accent) 45%, var(--line2));
+        stroke-width: 1.2;
+      }
+      .cmdMotionTick {
+        stroke: color-mix(in srgb, var(--line2) 90%, transparent);
+        stroke-width: 1;
+      }
+      .cmdMotionPath {
+        fill: none;
+        stroke: color-mix(in srgb, var(--accent) 72%, #8ec5ff);
+        stroke-width: 1.8;
+      }
+      .cmdMotionAxisText {
+        fill: color-mix(in srgb, var(--text) 78%, transparent);
+        font-size: 10px;
+      }
+      .cmdMotionPoint {
+        fill: color-mix(in srgb, var(--accent) 88%, #8ec5ff);
+        stroke: #ffffff;
+        stroke-width: 1.2;
+        cursor: pointer;
+      }
+      .cmdMotionPoint.is-selected {
+        fill: #ffd166;
+        stroke: #1b1f2b;
+      }
+      .cmdMotionSelectBox {
+        fill: color-mix(in srgb, var(--accent) 20%, transparent);
+        stroke: color-mix(in srgb, var(--accent) 70%, #8ec5ff);
+        stroke-width: 1.1;
+        stroke-dasharray: 4 2;
+      }
+      .cmdMotionToolbar {
+        margin-top: 8px;
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+      }
+      .cmdMotionDelSelected:disabled {
+        opacity: 0.45;
+      }
+      .motion-select-box {
+        position: absolute;
+        left: 0;
+        top: 0;
+        width: 0;
+        height: 0;
+        border: 1px dashed color-mix(in srgb, var(--accent) 75%, #8ec5ff);
+        background: color-mix(in srgb, var(--accent) 20%, transparent);
+        z-index: 100150;
+        pointer-events: none;
+      }
+      .motion-point-menu {
+        position: fixed;
+        left: 0;
+        top: 0;
+        min-width: 250px;
+        max-width: 320px;
+        padding: 10px;
+        border: 1px solid var(--line2);
+        border-radius: 12px;
+        background: linear-gradient(
+          180deg,
+          color-mix(in srgb, var(--panel) 92%, transparent),
+          color-mix(in srgb, var(--panel-soft) 90%, transparent)
+        );
+        box-shadow: var(--shadow);
+        z-index: 100220;
+        display: none;
+        pointer-events: auto;
+        backdrop-filter: blur(12px);
+        -webkit-backdrop-filter: blur(12px);
+      }
+      .motion-point-menu.open {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+      }
+      .motion-point-inputs {
+        display: grid;
+        grid-template-columns: auto 1fr;
+        gap: 6px 8px;
+        align-items: center;
+      }
+      .motion-point-menu .input {
+        width: 100%;
+        min-width: 0;
+        padding: 8px 10px;
+        border-radius: 10px;
+        border: 1px solid var(--line2);
+        background: var(--input-bg);
+        color: var(--text);
+        font-family: var(--mono);
+      }
+      .motion-point-menu .input:focus {
+        border-color: color-mix(in srgb, var(--accent) 60%, var(--line2));
+        box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 18%, transparent);
+        background: var(--input-bg-focus);
+      }
+      .motion-point-menu.is-invalid .input {
+        border-color: var(--danger);
+        box-shadow: 0 0 0 2px color-mix(in srgb, var(--danger) 24%, transparent);
+      }
       .cmdVec3Field .vec3Row {
         padding: 0;
       }

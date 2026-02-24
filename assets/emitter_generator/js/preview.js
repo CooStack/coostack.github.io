@@ -5,6 +5,7 @@ import { normalizeEmitterBehavior } from "./emitter_behavior.js";
 import { normalizeBuilderState, evaluateBuilderState } from "./points_builder_bridge.js";
 import { createDoTickRuntimeScope } from "./do_tick_expression.js";
 import { sampleFloatCurve } from "./command_curve.js";
+import { createMotionEditorRuntime } from "./motion_editor_preview.js";
 import {
     normalizeConditionFilter,
 } from "./expression_cards.js";
@@ -15,11 +16,19 @@ export function initPreview(ctx = {}) {
         viewportEl,
         statEl,
         fpsEl,
+        getMotionEditorState,
+        onMotionEditorSelectionChange,
+        onMotionEditorMoveCommit,
+        onMotionEditorOffsetModeChange,
+        onMotionEditorAddPoint,
+        onMotionEditorContextMenu,
+        onMotionEditorStatus,
     } = ctx;
 
     let renderer, scene, camera, controls;
     let points, pointsGeo, pointsMat;
     let axesHelper, gridHelper;
+    let motionEditorRuntime = null;
     let pointScale = 1.0;
 
     const MAX_POINTS = 65536;
@@ -241,6 +250,21 @@ export function initPreview(ctx = {}) {
         axesHelper = new THREE.AxesHelper(64);
         scene.add(axesHelper);
 
+        motionEditorRuntime = createMotionEditorRuntime({
+            scene,
+            camera,
+            renderer,
+            viewportEl: el,
+            gridHelper,
+            getMotionEditorState,
+            onMotionEditorSelectionChange,
+            onMotionEditorMoveCommit,
+            onMotionEditorOffsetModeChange,
+            onMotionEditorAddPoint,
+            onMotionEditorContextMenu,
+            onMotionEditorStatus,
+        });
+
         pointsGeo = new THREE.BufferGeometry();
         const pos = new Float32Array(MAX_POINTS * 3);
         const col = new Float32Array(MAX_POINTS * 3);
@@ -358,6 +382,7 @@ export function initPreview(ctx = {}) {
         applyArrowPan();
         if (controls) controls.update();
         updatePointsBuffer();
+        if (motionEditorRuntime) motionEditorRuntime.syncFromState();
         renderer.render(scene, camera);
     }
 

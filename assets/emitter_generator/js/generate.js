@@ -6,7 +6,7 @@ import { initSettingsSystem } from "./settings.js";
 import { initHotkeysSystem } from "./hotkeys.js";
 import { initLayoutSystem } from "./layout.js";
 import { clamp, safeNum, escapeHtml, deepCopy, deepAssign } from "./utils.js";
-import { normalizeFloatCurve } from "./command_curve.js";
+import { normalizeFloatCurve, sampleFloatCurve } from "./command_curve.js";
 import { InlineCodeEditor, mergeCompletionGroups } from "../../composition_builder/js/code_editor.js?v=20260220_5";
 import {
     createDefaultBuilderState,
@@ -261,6 +261,15 @@ import {
         activeEditorId: "",
         selectedByEditor: new Map(), // editorId -> Set(index)
         planeByEditor: new Map(), // editorId -> XZ | XY | ZY
+        defaultPlane: "XZ",
+        snapGrid: false,
+        snapStep: 0.5,
+        snapRadius: 0.35,
+        lockVertical: false,
+        offsetMode: false,
+        timelineBox: null, // { editorId, startX, endX }
+        timelineDrag: null, // { editorId, indices:number[], startX:number, minDelta:number, maxDelta:number, startTimes:Map, moved:boolean }
+        timelineBoxBound: false,
     };
     let curveDragEventsBound = false;
     const curvePointMenuState = {
@@ -269,6 +278,12 @@ import {
         pointIndex: -1,
     };
     let curvePointMenuBound = false;
+    const motionPointMenuState = {
+        el: null,
+        editorId: "",
+        pointId: "",
+    };
+    let motionPointMenuBound = false;
 
     function makeDefaultCommands() {
         return cloneDefaultCommands();
@@ -762,7 +777,9 @@ import {
 
     function syncEmitterBuilderVarContextStorage() {
         try {
-            localStorage.setItem(EGPB_COMP_CONTEXT_KEY, JSON.stringify(buildEmitterBuilderVarContextPayload()));
+            const payload = JSON.stringify(buildEmitterBuilderVarContextPayload());
+            localStorage.setItem(EGPB_COMP_CONTEXT_KEY, payload);
+            localStorage.setItem(`${EGPB_PREFIX}${EGPB_COMP_CONTEXT_KEY}`, payload);
         } catch {}
     }
 
@@ -3512,6 +3529,7 @@ function setVelocitySection($card, mode) {
         const t = ev.target;
         if (!t) return true;
         if (t.closest && t.closest(".dragHandle")) return false;
+        if (t.closest && t.closest(".cmdCurveGraph, .cmdCurvePoint, .cmdMotionTimeline, .cmdMotionPoint")) return false;
         if (t.closest && t.closest("button, input, select, textarea, .iconBtn")) return false;
         return true;
     }
@@ -4691,6 +4709,8 @@ function setVelocitySection($card, mode) {
             updateActiveQueueBadge();
             if (opts.render !== false) renderCommandList();
         } else if (opts.render !== false) {
+            setActiveMotionEditor("");
+            hideMotionPointMenu();
             renderCommandQueueList();
         }
     }
@@ -4828,6 +4848,1227 @@ function setVelocitySection($card, mode) {
         const zKey = `${base}Z`;
         if (String(fy.k || "") !== yKey || String(fz.k || "") !== zKey) return null;
         return { base, fx, fy, fz };
+    }
+
+    const LIFETIME_MOTION_TYPE = "ParticleLifetimeMotionCommand";
+    const MOTION_VEC3_BASE_SET = new Set(["force", "velocity"]);
+    const MOTION_PLANE_SET = new Set(["XZ", "XY", "ZY"]);
+
+    function normalizeMotionPlane(raw) {
+        const s = String(raw || "XZ").toUpperCase();
+        return MOTION_PLANE_SET.has(s) ? s : "XZ";
+    }
+
+    function motionCurveKeys(base) {
+        const b = String(base || "");
+        return {
+            x: `${b}X`,
+            y: `${b}Y`,
+            z: `${b}Z`,
+        };
+    }
+
+    function matchMotionVec3CurveFields(fields, startIndex) {
+        const fx = fields[startIndex];
+        const fy = fields[startIndex + 1];
+        const fz = fields[startIndex + 2];
+        if (!fx || !fy || !fz) return null;
+        if (fx.t !== "curve" || fy.t !== "curve" || fz.t !== "curve") return null;
+        const m = /^(force|velocity)X$/.exec(String(fx.k || ""));
+        if (!m) return null;
+        const base = m[1];
+        if (String(fy.k || "") !== `${base}Y`) return null;
+        if (String(fz.k || "") !== `${base}Z`) return null;
+        return { base, fx, fy, fz };
+    }
+
+    function motionEditorId(cmdId, base) {
+        return `${String(cmdId || "")}::motion::${String(base || "")}`;
+    }
+
+    function parseMotionEditorId(editorId) {
+        const m = /^(.*)::motion::(force|velocity)$/.exec(String(editorId || ""));
+        if (!m) return null;
+        return { cmdId: m[1], base: m[2] };
+    }
+
+    function motionPointIdByIndex(idx) {
+        return String(Math.max(0, Math.trunc(Number(idx) || 0)));
+    }
+
+    function motionPointIndexFromId(id) {
+        const n = Number(id);
+        return Number.isFinite(n) ? Math.max(0, Math.trunc(n)) : -1;
+    }
+
+    function normalizeMotionKind(raw) {
+        const s = String(raw || "constant");
+        if (s === "linear" || s === "keyframe") return s;
+        return "constant";
+    }
+
+    function inferMotionKind(curves) {
+        const kx = normalizeMotionKind(curves.x?.kind);
+        const ky = normalizeMotionKind(curves.y?.kind);
+        const kz = normalizeMotionKind(curves.z?.kind);
+        if (kx === ky && ky === kz) return kx;
+        if (kx === "keyframe" || ky === "keyframe" || kz === "keyframe") return "keyframe";
+        if (kx === "linear" || ky === "linear" || kz === "linear") return "linear";
+        return "constant";
+    }
+
+    function readMotionCurveTriplet(cmd, base, fallback = 0) {
+        const keys = motionCurveKeys(base);
+        return {
+            keys,
+            x: normalizeFloatCurve(cmd?.params?.[keys.x], fallback),
+            y: normalizeFloatCurve(cmd?.params?.[keys.y], fallback),
+            z: normalizeFloatCurve(cmd?.params?.[keys.z], fallback),
+        };
+    }
+
+    function writeMotionCurveTriplet(cmd, base, triplet, fallback = 0) {
+        if (!cmd || !cmd.params) return;
+        const keys = motionCurveKeys(base);
+        cmd.params[keys.x] = normalizeFloatCurve(triplet?.x, fallback);
+        cmd.params[keys.y] = normalizeFloatCurve(triplet?.y, fallback);
+        cmd.params[keys.z] = normalizeFloatCurve(triplet?.z, fallback);
+    }
+
+    function motionCollectTimes(curve) {
+        const kind = normalizeMotionKind(curve?.kind);
+        if (kind === "keyframe") {
+            const out = [];
+            for (const frame of (curve?.keyframes || [])) {
+                const t = clamp(Number(frame?.time) || 0, 0, 1);
+                out.push(t);
+            }
+            return out;
+        }
+        if (kind === "linear") return [0, 1];
+        return [0];
+    }
+
+    function normalizeMotionTimes(times) {
+        const list = (Array.isArray(times) ? times : [])
+            .map((it) => clamp(Number(it) || 0, 0, 1))
+            .filter((it) => Number.isFinite(it))
+            .sort((a, b) => a - b);
+        if (!list.length) return [0];
+        const out = [];
+        for (const t of list) {
+            if (!out.length || Math.abs(out[out.length - 1] - t) > 1e-6) out.push(t);
+        }
+        return out;
+    }
+
+    function motionPointsFromTriplet(triplet, fallback = 0) {
+        const times = normalizeMotionTimes([
+            ...motionCollectTimes(triplet.x),
+            ...motionCollectTimes(triplet.y),
+            ...motionCollectTimes(triplet.z),
+        ]);
+        return times.map((time, idx) => ({
+            id: motionPointIdByIndex(idx),
+            time,
+            x: Number(sampleFloatCurve(triplet.x, time, null, fallback)) || 0,
+            y: Number(sampleFloatCurve(triplet.y, time, null, fallback)) || 0,
+            z: Number(sampleFloatCurve(triplet.z, time, null, fallback)) || 0,
+        }));
+    }
+
+    function normalizeMotionKeyframePoints(points, fallback = 0) {
+        const list = (Array.isArray(points) ? points : []).map((it) => ({
+            time: clamp(Number(it?.time) || 0, 0, 1),
+            x: curveNumericValue(it?.x, fallback),
+            y: curveNumericValue(it?.y, fallback),
+            z: curveNumericValue(it?.z, fallback),
+        })).sort((a, b) => a.time - b.time);
+        if (!list.length) return [{ time: 0, x: fallback, y: fallback, z: fallback }];
+
+        const out = [];
+        for (const p of list) {
+            const last = out[out.length - 1];
+            if (last && Math.abs(last.time - p.time) <= 1e-6) {
+                last.x = p.x;
+                last.y = p.y;
+                last.z = p.z;
+            } else {
+                out.push(p);
+            }
+        }
+        if (!out.length) out.push({ time: 0, x: fallback, y: fallback, z: fallback });
+        return out;
+    }
+
+    function buildMotionKeyframeTripletFromPoints(points, fallback = 0) {
+        const list = normalizeMotionKeyframePoints(points, fallback);
+        return {
+            x: {
+                kind: "keyframe",
+                keyframes: list.map((it) => ({ time: it.time, value: it.x })),
+            },
+            y: {
+                kind: "keyframe",
+                keyframes: list.map((it) => ({ time: it.time, value: it.y })),
+            },
+            z: {
+                kind: "keyframe",
+                keyframes: list.map((it) => ({ time: it.time, value: it.z })),
+            },
+        };
+    }
+
+    function convertCurveKind(curve, kind, fallback = 0) {
+        const c = normalizeFloatCurve(curve, fallback);
+        const toKind = normalizeMotionKind(kind);
+        if (toKind === "keyframe") {
+            if (String(c.kind || "constant") === "keyframe") return c;
+            if (String(c.kind || "constant") === "linear") {
+                c.kind = "keyframe";
+                c.keyframes = [
+                    { time: 0, value: curveNumericValue(c.from, fallback) },
+                    { time: 1, value: curveNumericValue(c.to, fallback) },
+                ];
+                return c;
+            }
+            c.kind = "keyframe";
+            c.keyframes = [{ time: 0, value: curveNumericValue(c.value, fallback) }];
+            return c;
+        }
+
+        if (toKind === "linear") {
+            const from = sampleFloatCurve(c, 0, null, fallback);
+            const to = sampleFloatCurve(c, 1, null, fallback);
+            c.kind = "linear";
+            c.from = curveNumericValue(from, fallback);
+            c.to = curveNumericValue(to, fallback);
+            return c;
+        }
+
+        const value = sampleFloatCurve(c, 0, null, fallback);
+        c.kind = "constant";
+        c.value = curveNumericValue(value, fallback);
+        return c;
+    }
+
+    function motionSyncTriplet(cmdId, base, triplet, fallback = 0) {
+        const keys = motionCurveKeys(base);
+        let changed = false;
+        changed = !!syncCommandField(cmdId, keys.x, deepCopy(normalizeFloatCurve(triplet.x, fallback))) || changed;
+        changed = !!syncCommandField(cmdId, keys.y, deepCopy(normalizeFloatCurve(triplet.y, fallback))) || changed;
+        changed = !!syncCommandField(cmdId, keys.z, deepCopy(normalizeFloatCurve(triplet.z, fallback))) || changed;
+        return changed;
+    }
+
+    function commitMotionTriplet(ctx, triplet, opts = {}) {
+        if (!ctx || !ctx.cmd) return { ok: false, rerendered: false, syncChanged: false };
+        writeMotionCurveTriplet(ctx.cmd, ctx.base, triplet, 0);
+        let syncChanged = false;
+        const canSync = commandSync && commandSync.open && commandSync.selectedIds && commandSync.selectedIds.has(ctx.cmdId);
+        if (opts.sync !== false && canSync) {
+            syncChanged = motionSyncTriplet(ctx.cmdId, ctx.base, triplet, 0);
+        }
+        if (opts.history === true) cardHistory.push();
+        else if (opts.history === "schedule") scheduleHistoryPush();
+        if (opts.save !== false) scheduleSave();
+        if (opts.codegen !== false) autoGenKotlin();
+
+        if (syncChanged && opts.renderOnSync !== false) {
+            renderCommandList();
+            renderCommandSyncMenu();
+            return { ok: true, rerendered: true, syncChanged: true };
+        }
+        if (syncChanged) renderCommandSyncMenu();
+        return { ok: true, rerendered: false, syncChanged };
+    }
+
+    function getMotionContextByEditor(editorId) {
+        const parsed = parseMotionEditorId(editorId);
+        if (!parsed) return null;
+        const cmd = state.commands.find((it) => it.id === parsed.cmdId);
+        if (!cmd || cmd.type !== LIFETIME_MOTION_TYPE) return null;
+        if (!MOTION_VEC3_BASE_SET.has(parsed.base)) return null;
+        const id = motionEditorId(parsed.cmdId, parsed.base);
+        return {
+            cmdId: parsed.cmdId,
+            cmd,
+            base: parsed.base,
+            editorId: id,
+        };
+    }
+
+    function getMotionContextFromField($field) {
+        if (!$field || !$field.length) return null;
+        const $card = $field.closest(".cmdCard");
+        const cmdId = String($card.data("id") || "");
+        if (!cmdId) return null;
+        const cmd = state.commands.find((it) => it.id === cmdId);
+        if (!cmd || cmd.type !== LIFETIME_MOTION_TYPE) return null;
+        const base = String($field.data("motionBase") || "");
+        if (!MOTION_VEC3_BASE_SET.has(base)) return null;
+        return {
+            cmdId,
+            cmd,
+            base,
+            editorId: motionEditorId(cmdId, base),
+        };
+    }
+
+    function getMotionFieldByEditor(editorId) {
+        const id = String(editorId || "");
+        if (!id) return $();
+        const safeId = id.replace(/"/g, '\\"');
+        return $(`#cmdList .cmdMotionField[data-editor-id="${safeId}"]`).first();
+    }
+
+    function getMotionSelection(editorId) {
+        const key = String(editorId || "");
+        if (!key) return new Set();
+        let set = motionVec3EditorState.selectedByEditor.get(key);
+        if (!set) {
+            set = new Set();
+            motionVec3EditorState.selectedByEditor.set(key, set);
+        }
+        return set;
+    }
+
+    function setMotionSelection(editorId, values) {
+        const key = String(editorId || "");
+        if (!key) return;
+        const next = new Set();
+        if (values && typeof values[Symbol.iterator] === "function") {
+            for (const it of values) {
+                const idx = Math.trunc(Number(it));
+                if (Number.isFinite(idx) && idx >= 0) next.add(idx);
+            }
+        }
+        motionVec3EditorState.selectedByEditor.set(key, next);
+    }
+
+    function trimMotionSelection(editorId, maxSize) {
+        const set = getMotionSelection(editorId);
+        const n = Math.max(0, Math.trunc(Number(maxSize) || 0));
+        for (const idx of Array.from(set)) {
+            if (idx < 0 || idx >= n) set.delete(idx);
+        }
+        return set;
+    }
+
+    function getMotionPlane(editorId) {
+        const key = String(editorId || "");
+        const fromMap = key ? motionVec3EditorState.planeByEditor.get(key) : "";
+        if (fromMap) return normalizeMotionPlane(fromMap);
+        return normalizeMotionPlane(motionVec3EditorState.defaultPlane);
+    }
+
+    function setMotionPlane(plane, editorId = null) {
+        const p = normalizeMotionPlane(plane);
+        motionVec3EditorState.defaultPlane = p;
+        const key = String(editorId || motionVec3EditorState.activeEditorId || "");
+        if (key) motionVec3EditorState.planeByEditor.set(key, p);
+        return p;
+    }
+
+    function motionPreviewPointsForContext(ctx) {
+        if (!ctx) return [];
+        const triplet = readMotionCurveTriplet(ctx.cmd, ctx.base, 0);
+        const points = motionPointsFromTriplet(triplet, 0);
+        const selected = trimMotionSelection(ctx.editorId, points.length);
+        return points.map((it, idx) => ({
+            id: motionPointIdByIndex(idx),
+            time: it.time,
+            x: it.x,
+            y: it.y,
+            z: it.z,
+            selected: selected.has(idx),
+        }));
+    }
+
+    function setActiveMotionEditor(editorId) {
+        const id = String(editorId || "");
+        const prev = String(motionVec3EditorState.activeEditorId || "");
+        if (prev && id && prev !== id) {
+            motionVec3EditorState.offsetMode = false;
+        }
+        if (!id) motionVec3EditorState.offsetMode = false;
+        motionVec3EditorState.activeEditorId = id;
+        $("#cmdList .cmdMotionField").removeClass("is-active");
+        if (!id) return;
+        const safeId = id.replace(/"/g, '\\"');
+        $(`#cmdList .cmdMotionField[data-editor-id="${safeId}"]`).addClass("is-active");
+    }
+
+    function motionTimelineGeom() {
+        const w = 320;
+        const h = 58;
+        const pad = { l: 14, r: 14, t: 16, b: 16 };
+        const plotW = w - pad.l - pad.r;
+        return { w, h, pad, plotW };
+    }
+
+    function motionTimeToX(time, geom) {
+        return geom.pad.l + clamp(Number(time) || 0, 0, 1) * geom.plotW;
+    }
+
+    function motionXToTime(x, geom) {
+        return clamp((Number(x) - geom.pad.l) / Math.max(1e-9, geom.plotW), 0, 1);
+    }
+
+    function isContiguousIndices(indices) {
+        const list = (Array.isArray(indices) ? indices : [])
+            .map((it) => Math.max(0, Math.trunc(Number(it) || 0)))
+            .sort((a, b) => a - b);
+        if (list.length <= 1) return true;
+        for (let i = 1; i < list.length; i++) {
+            if (list[i] !== list[i - 1] + 1) return false;
+        }
+        return true;
+    }
+
+    function beginMotionTimelinePointDrag($field, pointIndex, rawEv) {
+        const ctx = getMotionContextFromField($field);
+        if (!ctx) return false;
+        const triplet = readMotionCurveTriplet(ctx.cmd, ctx.base, 0);
+        if (inferMotionKind(triplet) !== "keyframe") return false;
+        const points = motionPointsFromTriplet(triplet, 0);
+        if (pointIndex < 0 || pointIndex >= points.length) return false;
+        const info = motionTimelineInfoFromEvent($field, rawEv);
+        if (!info) return false;
+
+        let indices = Array.from(trimMotionSelection(ctx.editorId, points.length)).sort((a, b) => a - b);
+        if (!indices.includes(pointIndex)) indices = [pointIndex];
+        if (!isContiguousIndices(indices)) indices = [pointIndex];
+
+        const startTimes = new Map();
+        indices.forEach((idx) => {
+            startTimes.set(idx, Number(points[idx]?.time) || 0);
+        });
+
+        const first = indices[0];
+        const last = indices[indices.length - 1];
+        const leftNeighbor = first - 1;
+        const rightNeighbor = last + 1;
+        const leftBound = leftNeighbor >= 0 ? (Number(points[leftNeighbor]?.time) + 1e-4) : 0;
+        const rightBound = rightNeighbor < points.length ? (Number(points[rightNeighbor]?.time) - 1e-4) : 1;
+        const startMin = Number(points[first]?.time) || 0;
+        const startMax = Number(points[last]?.time) || startMin;
+        let minDelta = leftBound - startMin;
+        let maxDelta = rightBound - startMax;
+        if (maxDelta < minDelta) {
+            const mid = (minDelta + maxDelta) * 0.5;
+            minDelta = mid;
+            maxDelta = mid;
+        }
+
+        motionVec3EditorState.timelineDrag = {
+            editorId: ctx.editorId,
+            indices,
+            startX: info.x,
+            minDelta: Number.isFinite(minDelta) ? minDelta : 0,
+            maxDelta: Number.isFinite(maxDelta) ? maxDelta : 0,
+            startTimes,
+            moved: false,
+        };
+        bindMotionTimelineBoxEvents();
+        return true;
+    }
+
+    function findMotionInsertTime(points, target) {
+        const desired = clamp(Number(target) || 0, 0, 1);
+        const times = new Set((Array.isArray(points) ? points : []).map((it) => Number(it?.time).toFixed(6)));
+        if (!times.has(desired.toFixed(6))) return desired;
+        const STEP = 0.02;
+        for (let i = 1; i < 80; i++) {
+            const a = clamp(desired + i * STEP, 0, 1);
+            const b = clamp(desired - i * STEP, 0, 1);
+            if (!times.has(a.toFixed(6))) return a;
+            if (!times.has(b.toFixed(6))) return b;
+        }
+        return desired;
+    }
+
+    function renderMotionTimeline($field) {
+        const ctx = getMotionContextFromField($field);
+        if (!ctx) return;
+        const triplet = readMotionCurveTriplet(ctx.cmd, ctx.base, 0);
+        if (inferMotionKind(triplet) !== "keyframe") return;
+        const geom = motionTimelineGeom();
+        const points = motionPointsFromTriplet(triplet, 0);
+        const selected = trimMotionSelection(ctx.editorId, points.length);
+        $field.attr("data-editor-id", ctx.editorId);
+        $field.data("motionTimelineW", geom.w);
+        $field.data("motionTimelineH", geom.h);
+        $field.data("motionTimelinePadL", geom.pad.l);
+        $field.data("motionTimelinePadR", geom.pad.r);
+
+        const axisY = geom.h - geom.pad.b - 8;
+        const topY = geom.pad.t;
+        const pointsSvg = points.map((p, idx) => {
+            const x = motionTimeToX(p.time, geom);
+            const y = topY + 8;
+            const isSel = selected.has(idx);
+            const tip = escapeHtml(`t=${formatCurveAxisNumber(p.time)} / (${formatCurveAxisNumber(p.x)}, ${formatCurveAxisNumber(p.y)}, ${formatCurveAxisNumber(p.z)})`);
+            return `<circle class="cmdMotionPoint${isSel ? " is-selected" : ""}" data-point-id="${motionPointIdByIndex(idx)}" data-tip="${tip}" cx="${x.toFixed(2)}" cy="${y.toFixed(2)}" r="${isSel ? 5.4 : 4.6}"></circle>`;
+        }).join("");
+        const pathD = points.map((p, idx) => {
+            const x = motionTimeToX(p.time, geom);
+            const y = topY + 8;
+            return `${idx ? "L" : "M"}${x.toFixed(2)} ${y.toFixed(2)}`;
+        }).join(" ");
+
+        let selectBoxSvg = "";
+        const box = motionVec3EditorState.timelineBox;
+        if (box && String(box.editorId || "") === ctx.editorId) {
+            const minX = Math.min(Number(box.startX) || 0, Number(box.endX) || 0);
+            const maxX = Math.max(Number(box.startX) || 0, Number(box.endX) || 0);
+            selectBoxSvg = `<rect class="cmdMotionSelectBox" x="${minX.toFixed(2)}" y="${topY.toFixed(2)}" width="${Math.max(0, maxX - minX).toFixed(2)}" height="${Math.max(0, axisY - topY + 10).toFixed(2)}"></rect>`;
+        }
+
+        const ticks = [];
+        for (let i = 0; i <= 4; i++) {
+            const x = geom.pad.l + (i / 4) * geom.plotW;
+            ticks.push(`<line class="cmdMotionTick" x1="${x.toFixed(2)}" y1="${(axisY - 4).toFixed(2)}" x2="${x.toFixed(2)}" y2="${(axisY + 4).toFixed(2)}"></line>`);
+        }
+
+        const svg = [
+            `<svg class="cmdMotionTimeline" viewBox="0 0 ${geom.w} ${geom.h}" preserveAspectRatio="xMidYMid meet">`,
+            `<rect class="cmdMotionTimelineBg" x="0" y="0" width="${geom.w}" height="${geom.h}" rx="8"></rect>`,
+            `<line class="cmdMotionAxis" x1="${geom.pad.l}" y1="${axisY}" x2="${geom.pad.l + geom.plotW}" y2="${axisY}"></line>`,
+            ticks.join(""),
+            `<path class="cmdMotionPath" d="${pathD || ""}"></path>`,
+            selectBoxSvg,
+            pointsSvg,
+            `<text class="cmdMotionAxisText" x="${geom.pad.l}" y="${geom.h - 4}">0</text>`,
+            `<text class="cmdMotionAxisText" x="${geom.pad.l + geom.plotW - 2}" y="${geom.h - 4}" text-anchor="end">1</text>`,
+            `</svg>`,
+        ].join("");
+        $field.find(".cmdMotionTimelineWrap").html(svg);
+        const $btnDel = $field.find(".cmdMotionDelSelected");
+        if ($btnDel.length) $btnDel.prop("disabled", !selected.size);
+    }
+
+    function renderMotionFieldBody($field) {
+        const ctx = getMotionContextFromField($field);
+        if (!ctx) return;
+        const triplet = readMotionCurveTriplet(ctx.cmd, ctx.base, 0);
+        const kind = inferMotionKind(triplet);
+        const title = ctx.base === "force" ? "force：生命周期叠加加速度" : "velocity：生命周期目标速度";
+        const hint = "Alt+左键新增关键帧；左键拖拽框选关键帧；Del 删除选中关键帧；右键关键帧可改坐标。预览中可拖拽点并支持平面/网格吸附。V=按中心跟随鼠标，左键确认。";
+        const $kind = $field.find(".cmdMotionKind");
+        if ($kind.length) $kind.val(kind);
+        $field.find(".cmdMotionHint").text(hint).attr("data-tip", title);
+
+        const $body = $field.find(".cmdMotionBody");
+        if (kind === "keyframe") {
+            $body.html([
+                `<div class="cmdMotionTimelineWrap"></div>`,
+                `<div class="cmdMotionToolbar">`,
+                `  <button class="btn small cmdMotionAddFrame" type="button">添加关键帧</button>`,
+                `  <button class="btn small cmdMotionDelSelected" type="button">删除选中</button>`,
+                `  <button class="btn small cmdMotionReset" type="button">重置</button>`,
+                `</div>`,
+            ].join(""));
+            renderMotionTimeline($field);
+        } else if (kind === "linear") {
+            $body.html([
+                `<div class="cmdMotionLinearRows">`,
+                `  <div class="field"><label>起点（t=0）</label><div class="cmdMotionVec3">`,
+                `    <input class="cmdMotionInput" data-axis="x" data-part="from" type="text" inputmode="decimal" value="${escapeHtml(String(triplet.x.from ?? 0))}" placeholder="X"/>`,
+                `    <input class="cmdMotionInput" data-axis="y" data-part="from" type="text" inputmode="decimal" value="${escapeHtml(String(triplet.y.from ?? 0))}" placeholder="Y"/>`,
+                `    <input class="cmdMotionInput" data-axis="z" data-part="from" type="text" inputmode="decimal" value="${escapeHtml(String(triplet.z.from ?? 0))}" placeholder="Z"/>`,
+                `  </div></div>`,
+                `  <div class="field"><label>终点（t=1）</label><div class="cmdMotionVec3">`,
+                `    <input class="cmdMotionInput" data-axis="x" data-part="to" type="text" inputmode="decimal" value="${escapeHtml(String(triplet.x.to ?? 0))}" placeholder="X"/>`,
+                `    <input class="cmdMotionInput" data-axis="y" data-part="to" type="text" inputmode="decimal" value="${escapeHtml(String(triplet.y.to ?? 0))}" placeholder="Y"/>`,
+                `    <input class="cmdMotionInput" data-axis="z" data-part="to" type="text" inputmode="decimal" value="${escapeHtml(String(triplet.z.to ?? 0))}" placeholder="Z"/>`,
+                `  </div></div>`,
+                `</div>`,
+            ].join(""));
+        } else {
+            $body.html([
+                `<div class="cmdMotionConstRow">`,
+                `  <div class="field"><label>常量值</label><div class="cmdMotionVec3">`,
+                `    <input class="cmdMotionInput" data-axis="x" data-part="value" type="text" inputmode="decimal" value="${escapeHtml(String(triplet.x.value ?? 0))}" placeholder="X"/>`,
+                `    <input class="cmdMotionInput" data-axis="y" data-part="value" type="text" inputmode="decimal" value="${escapeHtml(String(triplet.y.value ?? 0))}" placeholder="Y"/>`,
+                `    <input class="cmdMotionInput" data-axis="z" data-part="value" type="text" inputmode="decimal" value="${escapeHtml(String(triplet.z.value ?? 0))}" placeholder="Z"/>`,
+                `  </div></div>`,
+                `</div>`,
+            ].join(""));
+        }
+
+        if (motionVec3EditorState.activeEditorId === ctx.editorId) {
+            $field.addClass("is-active");
+        } else {
+            $field.removeClass("is-active");
+        }
+    }
+
+    function renderMotionField($grid, cmd, group) {
+        const base = String(group?.base || "");
+        const label = base === "force" ? "force（Force 曲线）" : "velocity（Velocity 曲线）";
+        const $field = $(
+            `<div class="field field-wide cmdMotionField" data-motion-base="${base}" tabindex="0">
+                <label>${label}</label>
+                <div class="cmdCurveHead">
+                    <select class="cmdMotionKind">
+                        <option value="constant">constant</option>
+                        <option value="linear">linear</option>
+                        <option value="keyframe">keyframe</option>
+                    </select>
+                    <div class="small cmdCurveAxisHint">关键帧为时间数轴，点坐标在预览中编辑</div>
+                </div>
+                <div class="cmdMotionBody"></div>
+                <div class="small cmdMotionHint"></div>
+            </div>`
+        );
+        const editorId = motionEditorId(cmd.id, base);
+        $field.attr("data-editor-id", editorId);
+        if (group.fx?.tip) $field.attr("data-tip", group.fx.tip);
+        $grid.append($field);
+        renderMotionFieldBody($field);
+    }
+
+    function motionTimelineInfoFromEvent($field, ev) {
+        if (!$field || !$field.length || !ev) return null;
+        const svg = $field.find(".cmdMotionTimeline").get(0);
+        if (!svg) return null;
+        const rect = svg.getBoundingClientRect();
+        if (!rect || !(rect.width > 1) || !(rect.height > 1)) return null;
+        const w = Number($field.data("motionTimelineW")) || 320;
+        const h = Number($field.data("motionTimelineH")) || 58;
+        const padL = Number($field.data("motionTimelinePadL")) || 14;
+        const padR = Number($field.data("motionTimelinePadR")) || 14;
+        const plotW = w - padL - padR;
+        const x = (ev.clientX - rect.left) * (w / rect.width);
+        const t = motionXToTime(x, { w, h, pad: { l: padL, r: padR }, plotW });
+        return {
+            x,
+            time: t,
+            geom: { w, h, pad: { l: padL, r: padR }, plotW },
+        };
+    }
+
+    function deleteSelectedMotionKeyframesByEditor(editorId, opts = {}) {
+        const ctx = getMotionContextByEditor(editorId);
+        if (!ctx) return false;
+        const triplet = readMotionCurveTriplet(ctx.cmd, ctx.base, 0);
+        if (inferMotionKind(triplet) !== "keyframe") return false;
+        const points = motionPointsFromTriplet(triplet, 0);
+        const selected = trimMotionSelection(ctx.editorId, points.length);
+        if (!selected.size) return false;
+        let next = points.filter((_, idx) => !selected.has(idx));
+        if (!next.length) {
+            const seed = points[0] || { x: 0, y: 0, z: 0 };
+            next = [{ time: 0, x: seed.x, y: seed.y, z: seed.z }];
+        }
+        const out = commitMotionTriplet(ctx, buildMotionKeyframeTripletFromPoints(next, 0), {
+            sync: true,
+            history: opts.history === false ? false : true,
+            save: true,
+            codegen: true,
+            renderOnSync: true,
+        });
+        setMotionSelection(ctx.editorId, []);
+        if (motionVec3EditorState.offsetMode && String(motionVec3EditorState.activeEditorId || "") === ctx.editorId) {
+            motionVec3EditorState.offsetMode = false;
+        }
+        if (!out.rerendered) {
+            const $field = getMotionFieldByEditor(ctx.editorId);
+            if ($field.length) renderMotionTimeline($field);
+        }
+        return true;
+    }
+
+    function updateMotionPointByEditor(editorId, pointId, patch, opts = {}) {
+        const ctx = getMotionContextByEditor(editorId);
+        if (!ctx) return false;
+        const triplet = readMotionCurveTriplet(ctx.cmd, ctx.base, 0);
+        if (inferMotionKind(triplet) !== "keyframe") return false;
+        const points = motionPointsFromTriplet(triplet, 0);
+        const idx = motionPointIndexFromId(pointId);
+        if (idx < 0 || idx >= points.length) return false;
+        points[idx] = {
+            ...points[idx],
+            x: (patch && patch.x != null) ? curveNumericValue(patch.x, points[idx].x) : points[idx].x,
+            y: (patch && patch.y != null) ? curveNumericValue(patch.y, points[idx].y) : points[idx].y,
+            z: (patch && patch.z != null) ? curveNumericValue(patch.z, points[idx].z) : points[idx].z,
+        };
+        const out = commitMotionTriplet(ctx, buildMotionKeyframeTripletFromPoints(points, 0), {
+            sync: true,
+            history: opts.history === false ? false : true,
+            save: true,
+            codegen: true,
+            renderOnSync: true,
+        });
+        if (!out.rerendered) {
+            const $field = getMotionFieldByEditor(ctx.editorId);
+            if ($field.length) renderMotionTimeline($field);
+        }
+        return true;
+    }
+
+    function addMotionKeyframeAtField($field, time, coords, opts = {}) {
+        const ctx = getMotionContextFromField($field);
+        if (!ctx) return false;
+        const triplet = readMotionCurveTriplet(ctx.cmd, ctx.base, 0);
+        const kx = convertCurveKind(triplet.x, "keyframe", 0);
+        const ky = convertCurveKind(triplet.y, "keyframe", 0);
+        const kz = convertCurveKind(triplet.z, "keyframe", 0);
+        const baseTriplet = { x: kx, y: ky, z: kz };
+        const points = motionPointsFromTriplet(baseTriplet, 0);
+        let desiredTime = (time != null) ? time : 0.5;
+        if (time == null) {
+            const selected = trimMotionSelection(ctx.editorId, points.length);
+            if (selected.size) {
+                const anchorIdx = Math.max(...Array.from(selected));
+                desiredTime = clamp(Number(points[anchorIdx]?.time) + 0.05, 0, 1);
+            } else if (points.length) {
+                desiredTime = clamp(Number(points[points.length - 1]?.time) + 0.05, 0, 1);
+            }
+        }
+        const t = findMotionInsertTime(points, desiredTime);
+        const x = (coords && coords.x != null) ? curveNumericValue(coords.x, 0) : Number(sampleFloatCurve(baseTriplet.x, t, null, 0));
+        const y = (coords && coords.y != null) ? curveNumericValue(coords.y, 0) : Number(sampleFloatCurve(baseTriplet.y, t, null, 0));
+        const z = (coords && coords.z != null) ? curveNumericValue(coords.z, 0) : Number(sampleFloatCurve(baseTriplet.z, t, null, 0));
+        points.push({ time: t, x, y, z });
+
+        const out = commitMotionTriplet(ctx, buildMotionKeyframeTripletFromPoints(points, 0), {
+            sync: true,
+            history: opts.history === false ? false : true,
+            save: true,
+            codegen: true,
+            renderOnSync: true,
+        });
+        if (!out.rerendered) {
+            renderMotionFieldBody($field);
+            const refreshed = motionPointsFromTriplet(readMotionCurveTriplet(ctx.cmd, ctx.base, 0), 0);
+            let best = 0;
+            let bestDist = Infinity;
+            refreshed.forEach((p, idx) => {
+                const d = Math.abs(Number(p.time) - t);
+                if (d < bestDist) {
+                    bestDist = d;
+                    best = idx;
+                }
+            });
+            setMotionSelection(ctx.editorId, [best]);
+            renderMotionTimeline($field);
+        }
+        setActiveMotionEditor(ctx.editorId);
+        return true;
+    }
+
+    function applyMotionSelection(editorId, ids = [], additive = false) {
+        const ctx = getMotionContextByEditor(editorId);
+        if (!ctx) return;
+        const triplet = readMotionCurveTriplet(ctx.cmd, ctx.base, 0);
+        const points = motionPointsFromTriplet(triplet, 0);
+        const incoming = new Set();
+        for (const id of (Array.isArray(ids) ? ids : [])) {
+            const idx = motionPointIndexFromId(id);
+            if (idx >= 0 && idx < points.length) incoming.add(idx);
+        }
+        const prev = getMotionSelection(ctx.editorId);
+        const next = additive ? new Set([...prev, ...incoming]) : incoming;
+        setMotionSelection(ctx.editorId, next);
+        if (!next.size && motionVec3EditorState.offsetMode && String(motionVec3EditorState.activeEditorId || "") === ctx.editorId) {
+            motionVec3EditorState.offsetMode = false;
+        }
+        const $field = getMotionFieldByEditor(ctx.editorId);
+        if ($field.length) renderMotionTimeline($field);
+    }
+
+    function applyMotionMoveCommit(payload) {
+        const editorId = String(payload?.editorId || "");
+        const ctx = getMotionContextByEditor(editorId);
+        if (!ctx) return;
+        const triplet = readMotionCurveTriplet(ctx.cmd, ctx.base, 0);
+        if (inferMotionKind(triplet) !== "keyframe") return;
+        const points = motionPointsFromTriplet(triplet, 0);
+        const moved = Array.isArray(payload?.points) ? payload.points : [];
+        let changed = false;
+        for (const p of moved) {
+            const idx = motionPointIndexFromId(p?.id);
+            if (idx < 0 || idx >= points.length) continue;
+            const nx = curveNumericValue(p?.x, points[idx].x);
+            const ny = curveNumericValue(p?.y, points[idx].y);
+            const nz = curveNumericValue(p?.z, points[idx].z);
+            if (Math.abs(points[idx].x - nx) > 1e-9 || Math.abs(points[idx].y - ny) > 1e-9 || Math.abs(points[idx].z - nz) > 1e-9) {
+                points[idx].x = nx;
+                points[idx].y = ny;
+                points[idx].z = nz;
+                changed = true;
+            }
+        }
+        if (!changed) return;
+        const out = commitMotionTriplet(ctx, buildMotionKeyframeTripletFromPoints(points, 0), {
+            sync: true,
+            history: true,
+            save: true,
+            codegen: true,
+            renderOnSync: true,
+        });
+        if (!out.rerendered) {
+            const $field = getMotionFieldByEditor(ctx.editorId);
+            if ($field.length) renderMotionTimeline($field);
+        }
+    }
+
+    function applyMotionKindChange($field, kind) {
+        const ctx = getMotionContextFromField($field);
+        if (!ctx) return false;
+        const triplet = readMotionCurveTriplet(ctx.cmd, ctx.base, 0);
+        const nextKind = normalizeMotionKind(kind);
+        const next = {
+            x: convertCurveKind(triplet.x, nextKind, 0),
+            y: convertCurveKind(triplet.y, nextKind, 0),
+            z: convertCurveKind(triplet.z, nextKind, 0),
+        };
+        if (nextKind !== "keyframe") {
+            setMotionSelection(ctx.editorId, []);
+            if (motionVec3EditorState.offsetMode && String(motionVec3EditorState.activeEditorId || "") === ctx.editorId) {
+                motionVec3EditorState.offsetMode = false;
+            }
+            if (motionVec3EditorState.timelineBox && motionVec3EditorState.timelineBox.editorId === ctx.editorId) {
+                motionVec3EditorState.timelineBox = null;
+            }
+        }
+        const out = commitMotionTriplet(ctx, next, {
+            sync: true,
+            history: true,
+            save: true,
+            codegen: true,
+            renderOnSync: true,
+        });
+        if (!out.rerendered) renderMotionFieldBody($field);
+        return true;
+    }
+
+    function applyMotionValueInput(inputEl, commitHistory = false) {
+        const $input = $(inputEl);
+        const $field = $input.closest(".cmdMotionField");
+        const ctx = getMotionContextFromField($field);
+        if (!ctx) return false;
+        const axis = String($input.data("axis") || "").toLowerCase();
+        const part = String($input.data("part") || "");
+        if (!(axis === "x" || axis === "y" || axis === "z")) return false;
+        if (!(part === "value" || part === "from" || part === "to")) return false;
+
+        const triplet = readMotionCurveTriplet(ctx.cmd, ctx.base, 0);
+        const curve = normalizeFloatCurve(triplet[axis], 0);
+        if (part === "value") curve.kind = "constant";
+        if (part === "from" || part === "to") curve.kind = "linear";
+        curve[part] = parseNumOrExprInput($input.val(), curve[part]);
+        triplet[axis] = normalizeFloatCurve(curve, 0);
+        const out = commitMotionTriplet(ctx, triplet, {
+            sync: true,
+            history: commitHistory ? true : "schedule",
+            save: true,
+            codegen: true,
+            renderOnSync: true,
+        });
+        if (!out.rerendered && commitHistory) renderMotionFieldBody($field);
+        return true;
+    }
+
+    function getMotionEditorStateForPreview() {
+        const editorId = String(motionVec3EditorState.activeEditorId || "");
+        const ctx = getMotionContextByEditor(editorId);
+        if (!ctx) {
+            motionVec3EditorState.offsetMode = false;
+            return { active: false };
+        }
+        const triplet = readMotionCurveTriplet(ctx.cmd, ctx.base, 0);
+        if (inferMotionKind(triplet) !== "keyframe") {
+            motionVec3EditorState.offsetMode = false;
+            return { active: false };
+        }
+        const selectedIds = getMotionSelectedPointIds(ctx.editorId);
+        const offsetMode = !!motionVec3EditorState.offsetMode && selectedIds.length > 0;
+        if (!offsetMode && motionVec3EditorState.offsetMode) motionVec3EditorState.offsetMode = false;
+        return {
+            active: true,
+            editorId: ctx.editorId,
+            plane: getMotionPlane(ctx.editorId),
+            snapGrid: !!motionVec3EditorState.snapGrid,
+            snapStep: Number(motionVec3EditorState.snapStep) || 0.5,
+            snapRadius: Number(motionVec3EditorState.snapRadius) || 0.35,
+            lockVertical: !!motionVec3EditorState.lockVertical,
+            offsetMode,
+            points: motionPreviewPointsForContext(ctx),
+        };
+    }
+
+    function onPreviewMotionSelectionChange(payload) {
+        const editorId = String(payload?.editorId || "");
+        if (!editorId) return;
+        applyMotionSelection(editorId, payload?.ids, !!payload?.additive);
+    }
+
+    function onPreviewMotionMoveCommit(payload) {
+        applyMotionMoveCommit(payload);
+    }
+
+    function onPreviewMotionOffsetModeChange(payload) {
+        const editorId = String(payload?.editorId || "");
+        if (editorId && editorId !== String(motionVec3EditorState.activeEditorId || "")) return;
+        const nextActive = !!payload?.active;
+        setMotionOffsetMode(nextActive, editorId || motionVec3EditorState.activeEditorId);
+    }
+
+    function onPreviewMotionAddPoint(payload) {
+        const editorId = String(payload?.editorId || "");
+        const $field = getMotionFieldByEditor(editorId);
+        if (!$field.length) return;
+        addMotionKeyframeAtField($field, null, {
+            x: payload?.x,
+            y: payload?.y,
+            z: payload?.z,
+        }, { history: true });
+    }
+
+    function hideMotionPointMenu() {
+        motionPointMenuState.editorId = "";
+        motionPointMenuState.pointId = "";
+        const menu = motionPointMenuState.el;
+        if (!menu) return;
+        menu.classList.remove("open");
+        menu.classList.remove("is-invalid");
+        menu.style.display = "none";
+    }
+
+    function applyMotionPointMenuValue() {
+        const menu = motionPointMenuState.el;
+        if (!menu || !menu.classList.contains("open")) return false;
+        const xInput = menu.querySelector(".motionPointMenuInputX");
+        const yInput = menu.querySelector(".motionPointMenuInputY");
+        const zInput = menu.querySelector(".motionPointMenuInputZ");
+        if (!xInput || !yInput || !zInput) return false;
+        const x = Number(String(xInput.value ?? "").trim());
+        const y = Number(String(yInput.value ?? "").trim());
+        const z = Number(String(zInput.value ?? "").trim());
+        if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) {
+            menu.classList.add("is-invalid");
+            toast("坐标必须是数字", "error");
+            return false;
+        }
+        const ok = updateMotionPointByEditor(motionPointMenuState.editorId, motionPointMenuState.pointId, { x, y, z }, { history: true });
+        if (ok) hideMotionPointMenu();
+        return ok;
+    }
+
+    function bindMotionPointMenuEvents() {
+        if (motionPointMenuBound) return;
+        motionPointMenuBound = true;
+        document.addEventListener("mousedown", (e) => {
+            const menu = motionPointMenuState.el;
+            if (!menu || !menu.classList.contains("open")) return;
+            if (menu.contains(e.target)) return;
+            hideMotionPointMenu();
+        });
+        document.addEventListener("keydown", (e) => {
+            const menu = motionPointMenuState.el;
+            if (!menu || !menu.classList.contains("open")) return;
+            if (e.key === "Escape") {
+                e.preventDefault();
+                hideMotionPointMenu();
+                return;
+            }
+            if (e.key === "Enter") {
+                e.preventDefault();
+                applyMotionPointMenuValue();
+            }
+        });
+        window.addEventListener("resize", hideMotionPointMenu);
+        window.addEventListener("scroll", hideMotionPointMenu, true);
+    }
+
+    function ensureMotionPointMenuEl() {
+        if (motionPointMenuState.el) return motionPointMenuState.el;
+        const el = document.createElement("div");
+        el.className = "motion-point-menu";
+        el.innerHTML = [
+            `<div class="curve-point-menu-title">关键帧坐标</div>`,
+            `<div class="curve-point-menu-meta"></div>`,
+            `<div class="motion-point-inputs">`,
+            `  <label class="curve-point-menu-label">X</label>`,
+            `  <input class="input motionPointMenuInputX" type="text" inputmode="decimal" autocomplete="off"/>`,
+            `  <label class="curve-point-menu-label">Y</label>`,
+            `  <input class="input motionPointMenuInputY" type="text" inputmode="decimal" autocomplete="off"/>`,
+            `  <label class="curve-point-menu-label">Z</label>`,
+            `  <input class="input motionPointMenuInputZ" type="text" inputmode="decimal" autocomplete="off"/>`,
+            `</div>`,
+            `<div class="curve-point-menu-actions">`,
+            `  <button class="btn small motionPointMenuApply" type="button">应用</button>`,
+            `  <button class="btn small motionPointMenuCancel" type="button">取消</button>`,
+            `</div>`,
+        ].join("");
+        el.style.display = "none";
+        el.addEventListener("mousedown", (e) => e.stopPropagation());
+        el.addEventListener("click", (e) => e.stopPropagation());
+        const applyBtn = el.querySelector(".motionPointMenuApply");
+        const cancelBtn = el.querySelector(".motionPointMenuCancel");
+        if (applyBtn) applyBtn.addEventListener("click", () => applyMotionPointMenuValue());
+        if (cancelBtn) cancelBtn.addEventListener("click", hideMotionPointMenu);
+        document.body.appendChild(el);
+        motionPointMenuState.el = el;
+        bindMotionPointMenuEvents();
+        return el;
+    }
+
+    function openMotionPointMenu(editorId, pointId, clientX, clientY) {
+        const ctx = getMotionContextByEditor(editorId);
+        if (!ctx) return false;
+        const points = motionPointsFromTriplet(readMotionCurveTriplet(ctx.cmd, ctx.base, 0), 0);
+        const idx = motionPointIndexFromId(pointId);
+        if (idx < 0 || idx >= points.length) return false;
+        const p = points[idx];
+        const menu = ensureMotionPointMenuEl();
+        const meta = menu.querySelector(".curve-point-menu-meta");
+        const xInput = menu.querySelector(".motionPointMenuInputX");
+        const yInput = menu.querySelector(".motionPointMenuInputY");
+        const zInput = menu.querySelector(".motionPointMenuInputZ");
+        if (meta) meta.textContent = `t=${formatCurveAxisNumber(p.time)}`;
+        if (xInput) xInput.value = formatCurveAxisNumber(p.x);
+        if (yInput) yInput.value = formatCurveAxisNumber(p.y);
+        if (zInput) zInput.value = formatCurveAxisNumber(p.z);
+        menu.classList.remove("is-invalid");
+        menu.style.display = "block";
+        menu.classList.add("open");
+        positionCurvePointMenu(menu, clientX, clientY);
+
+        motionPointMenuState.editorId = ctx.editorId;
+        motionPointMenuState.pointId = motionPointIdByIndex(idx);
+        requestAnimationFrame(() => {
+            if (xInput) {
+                xInput.focus();
+                if (typeof xInput.select === "function") xInput.select();
+            }
+        });
+        return true;
+    }
+
+    function onPreviewMotionContextMenu(payload) {
+        const editorId = String(payload?.editorId || "");
+        const pointId = String(payload?.id || "");
+        if (!editorId || pointId === "") return;
+        const idx = motionPointIndexFromId(pointId);
+        if (idx < 0) return;
+        setMotionSelection(editorId, [idx]);
+        setActiveMotionEditor(editorId);
+        const $field = getMotionFieldByEditor(editorId);
+        if ($field.length) renderMotionTimeline($field);
+        openMotionPointMenu(editorId, pointId, Number(payload?.clientX) || 0, Number(payload?.clientY) || 0);
+    }
+
+    function onPreviewMotionStatus(payload) {
+        const chip = document.getElementById("statusSnapMode");
+        if (!chip) return;
+        const text = String(payload?.text || "");
+        const show = !!payload?.show && !!text;
+        chip.textContent = text;
+        chip.classList.toggle("hidden", !show);
+    }
+
+    function applyMotionSnapSettings(next = {}) {
+        const editorId = String(motionVec3EditorState.activeEditorId || "");
+        if (Object.prototype.hasOwnProperty.call(next, "plane")) {
+            setMotionPlane(next.plane, editorId);
+        }
+        if (Object.prototype.hasOwnProperty.call(next, "snapGrid")) {
+            motionVec3EditorState.snapGrid = !!next.snapGrid;
+        }
+        if (Object.prototype.hasOwnProperty.call(next, "snapStep")) {
+            const step = safeNum(next.snapStep, motionVec3EditorState.snapStep);
+            motionVec3EditorState.snapStep = Math.max(0.0001, step);
+        }
+        if (Object.prototype.hasOwnProperty.call(next, "snapRadius")) {
+            const radius = safeNum(next.snapRadius, motionVec3EditorState.snapRadius);
+            motionVec3EditorState.snapRadius = Math.max(0, radius);
+        }
+    }
+
+    function isEditableElementTarget(target) {
+        const el = target || document.activeElement;
+        if (!el) return false;
+        const tag = String(el.tagName || "").toUpperCase();
+        if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return true;
+        return !!el.isContentEditable;
+    }
+
+    function setMotionPlaneFromHotkey(plane) {
+        const p = normalizeMotionPlane(plane);
+        if (settingsSystem && typeof settingsSystem.setMotionSnapSettings === "function") {
+            settingsSystem.setMotionSnapSettings({ plane: p });
+            return;
+        }
+        applyMotionSnapSettings({ plane: p });
+    }
+
+    function getMotionSelectedPointIds(editorId) {
+        const ctx = getMotionContextByEditor(editorId);
+        if (!ctx) return [];
+        const triplet = readMotionCurveTriplet(ctx.cmd, ctx.base, 0);
+        if (inferMotionKind(triplet) !== "keyframe") return [];
+        const points = motionPointsFromTriplet(triplet, 0);
+        const selected = trimMotionSelection(ctx.editorId, points.length);
+        return Array.from(selected).map((idx) => motionPointIdByIndex(idx));
+    }
+
+    function setMotionOffsetMode(active, editorId = null) {
+        const targetEditorId = String(editorId || motionVec3EditorState.activeEditorId || "");
+        if (!active) {
+            motionVec3EditorState.offsetMode = false;
+            return false;
+        }
+        if (!targetEditorId) return false;
+        const selectedIds = getMotionSelectedPointIds(targetEditorId);
+        if (!selectedIds.length) return false;
+        motionVec3EditorState.offsetMode = true;
+        return true;
+    }
+
+    function handleMotionHotkeyKeydown(e) {
+        const editorId = String(motionVec3EditorState.activeEditorId || "");
+        if (!editorId) return false;
+        const ctx = getMotionContextByEditor(editorId);
+        if (!ctx) return false;
+        const key = String(e.key || "").toUpperCase();
+        if (!e.altKey && !e.shiftKey && key === "ESCAPE" && motionVec3EditorState.offsetMode) {
+            setMotionOffsetMode(false, editorId);
+            e.preventDefault();
+            return true;
+        }
+        if (isEditableElementTarget(e.target)) return false;
+        if (e.ctrlKey || e.metaKey) return false;
+
+        if (!e.altKey && (key === "A" || key === "S" || key === "D")) {
+            const plane = (key === "A") ? "XZ" : (key === "S" ? "XY" : "ZY");
+            setMotionPlaneFromHotkey(plane);
+            e.preventDefault();
+            return true;
+        }
+
+        if (!e.altKey && !e.shiftKey && key === "V") {
+            const nextOn = !motionVec3EditorState.offsetMode;
+            if (setMotionOffsetMode(nextOn, editorId) || !nextOn) {
+                e.preventDefault();
+                return true;
+            }
+        }
+
+        if (!e.altKey && !e.shiftKey && key === "X") {
+            if (!motionVec3EditorState.lockVertical) motionVec3EditorState.lockVertical = true;
+            e.preventDefault();
+            return true;
+        }
+
+        if (!e.altKey && !e.shiftKey && (key === "DELETE" || key === "BACKSPACE")) {
+            if (deleteSelectedMotionKeyframesByEditor(editorId, { history: true })) {
+                e.preventDefault();
+                return true;
+            }
+        }
+        return false;
+    }
+
+    function handleMotionHotkeyKeyup(e) {
+        const key = String(e.key || "").toUpperCase();
+        if (key !== "X") return false;
+        if (!motionVec3EditorState.lockVertical) return false;
+        motionVec3EditorState.lockVertical = false;
+        return true;
+    }
+
+    function bindMotionTimelineBoxEvents() {
+        if (motionVec3EditorState.timelineBoxBound) return;
+        motionVec3EditorState.timelineBoxBound = true;
+        document.addEventListener("pointermove", (ev) => {
+            const drag = motionVec3EditorState.timelineDrag;
+            if (drag) {
+                const $field = getMotionFieldByEditor(drag.editorId);
+                if (!$field.length) return;
+                const info = motionTimelineInfoFromEvent($field, ev);
+                if (!info) return;
+                const ctx = getMotionContextFromField($field);
+                if (!ctx) return;
+                const triplet = readMotionCurveTriplet(ctx.cmd, ctx.base, 0);
+                if (inferMotionKind(triplet) !== "keyframe") return;
+                const points = motionPointsFromTriplet(triplet, 0);
+                const deltaRaw = (Number(info.x) - Number(drag.startX)) / Math.max(1e-9, Number(info.geom?.plotW) || 1);
+                const delta = clamp(deltaRaw, Number(drag.minDelta) || 0, Number(drag.maxDelta) || 0);
+                if (Math.abs(delta) > 1e-6) drag.moved = true;
+                for (const idx of (drag.indices || [])) {
+                    if (idx < 0 || idx >= points.length) continue;
+                    const startT = Number(drag.startTimes?.get(idx));
+                    points[idx].time = clamp((Number.isFinite(startT) ? startT : points[idx].time) + delta, 0, 1);
+                }
+                commitMotionTriplet(ctx, buildMotionKeyframeTripletFromPoints(points, 0), {
+                    sync: false,
+                    history: false,
+                    save: false,
+                    codegen: false,
+                    renderOnSync: false,
+                });
+                renderMotionTimeline($field);
+                ev.preventDefault();
+                return;
+            }
+
+            const box = motionVec3EditorState.timelineBox;
+            if (!box) return;
+            const $field = getMotionFieldByEditor(box.editorId);
+            if (!$field.length) return;
+            const info = motionTimelineInfoFromEvent($field, ev);
+            if (!info) return;
+            box.endX = info.x;
+            renderMotionTimeline($field);
+            ev.preventDefault();
+        });
+        document.addEventListener("pointerup", () => {
+            const drag = motionVec3EditorState.timelineDrag;
+            if (drag) {
+                motionVec3EditorState.timelineDrag = null;
+                const $field = getMotionFieldByEditor(drag.editorId);
+                if (!$field.length) return;
+                const ctx = getMotionContextFromField($field);
+                if (!ctx) return;
+                if (drag.moved) {
+                    const triplet = readMotionCurveTriplet(ctx.cmd, ctx.base, 0);
+                    const out = commitMotionTriplet(ctx, triplet, {
+                        sync: true,
+                        history: true,
+                        save: true,
+                        codegen: true,
+                        renderOnSync: true,
+                    });
+                    if (!out.rerendered) renderMotionTimeline($field);
+                } else {
+                    renderMotionTimeline($field);
+                }
+                return;
+            }
+
+            const box = motionVec3EditorState.timelineBox;
+            if (!box) return;
+            motionVec3EditorState.timelineBox = null;
+            const $field = getMotionFieldByEditor(box.editorId);
+            if (!$field.length) return;
+            const ctx = getMotionContextFromField($field);
+            if (!ctx) return;
+            const points = motionPointsFromTriplet(readMotionCurveTriplet(ctx.cmd, ctx.base, 0), 0);
+            const minX = Math.min(Number(box.startX) || 0, Number(box.endX) || 0);
+            const maxX = Math.max(Number(box.startX) || 0, Number(box.endX) || 0);
+            const geom = motionTimelineGeom();
+            const next = new Set();
+            points.forEach((p, idx) => {
+                const x = motionTimeToX(p.time, geom);
+                if (x >= minX && x <= maxX) next.add(idx);
+            });
+            setMotionSelection(ctx.editorId, next);
+            renderMotionTimeline($field);
+        });
     }
 
     function curveEditorId(cmdId, curveKey) {
@@ -5795,6 +7036,7 @@ function setVelocitySection($card, mode) {
     function renderCommandList() {
         hideCmdTip();
         hideCurvePointMenu();
+        hideMotionPointMenu();
         ensureCommandQueuesState();
         updateActiveQueueBadge();
         const $list = $("#cmdList");
@@ -5830,6 +7072,15 @@ function setVelocitySection($card, mode) {
             for (let fi = 0; fi < fields.length; fi++) {
                 const f = fields[fi];
                 const val = c.params[f.k];
+
+                const motionGroup = (c.type === LIFETIME_MOTION_TYPE)
+                    ? matchMotionVec3CurveFields(fields, fi)
+                    : null;
+                if (motionGroup) {
+                    renderMotionField($grid, c, motionGroup);
+                    fi += 2;
+                    continue;
+                }
 
                 const vec3 = matchCommandVec3Fields(fields, fi);
                 if (vec3) {
@@ -6010,6 +7261,10 @@ function setVelocitySection($card, mode) {
             $list.append($card);
         }
 
+        if (!getMotionContextByEditor(motionVec3EditorState.activeEditorId)) {
+            setActiveMotionEditor("");
+        }
+
         if (!renderCommandList._sortable) {
             const listEl = document.getElementById("cmdList");
             if (listEl) {
@@ -6052,7 +7307,7 @@ function setVelocitySection($card, mode) {
         if (renderCommandList._eventsBound) return;
         renderCommandList._eventsBound = true;
 
-        $("#cmdList").on("focusin", ".cmdInput, .cmdCurveInput, .cmdCurveField, .cmdSignInput, .cmdLifeRule .exprInput", function () {
+        $("#cmdList").on("focusin", ".cmdInput, .cmdCurveInput, .cmdCurveField, .cmdMotionKind, .cmdMotionInput, .cmdMotionField, .cmdSignInput, .cmdLifeRule .exprInput", function () {
             const id = $(this).closest(".cmdCard").data("id");
             if (!id) return;
             if (focusedCommandId !== id) {
@@ -6061,7 +7316,7 @@ function setVelocitySection($card, mode) {
             }
         });
 
-        $("#cmdList").on("focusout", ".cmdInput, .cmdCurveInput, .cmdCurveField, .cmdSignInput, .cmdLifeRule .exprInput", function (e) {
+        $("#cmdList").on("focusout", ".cmdInput, .cmdCurveInput, .cmdCurveField, .cmdMotionKind, .cmdMotionInput, .cmdMotionField, .cmdSignInput, .cmdLifeRule .exprInput", function (e) {
             const to = e.relatedTarget;
             if (to && $(to).closest("#cmdList .cmdCard").length) return;
             if (!focusedCommandId) return;
@@ -6081,7 +7336,7 @@ function setVelocitySection($card, mode) {
                 cmd.ui.collapsed = false;
                 applyCommandCollapseUI($card, false);
                 scheduleSave();
-                const $first = $card.find(".cmdInput, .cmdCurveInput, .cmdCurveField, .cmdSignInput, .exprInput").first();
+                const $first = $card.find(".cmdInput, .cmdCurveInput, .cmdCurveField, .cmdMotionKind, .cmdMotionInput, .cmdMotionField, .cmdSignInput, .exprInput").first();
                 if ($first.length) $first.trigger("focus");
             }
         });
@@ -6143,13 +7398,13 @@ function setVelocitySection($card, mode) {
             applyCommandSignAdd($card, { keepFocus: true });
         });
 
-        $(document).on("mouseenter", ".emitInput, .cmdInput, .cmdCurveInput, .cmdCurveField, .cmdCurvePoint, .cmdSignInput, .exprInput", function () {
+        $(document).on("mouseenter", ".emitInput, .cmdInput, .cmdCurveInput, .cmdCurveField, .cmdCurvePoint, .cmdMotionField, .cmdMotionInput, .cmdMotionPoint, .cmdSignInput, .exprInput", function () {
             scheduleCmdTip(this);
         });
-        $(document).on("mouseleave", ".emitInput, .cmdInput, .cmdCurveInput, .cmdCurveField, .cmdCurvePoint, .cmdSignInput, .exprInput", function () {
+        $(document).on("mouseleave", ".emitInput, .cmdInput, .cmdCurveInput, .cmdCurveField, .cmdCurvePoint, .cmdMotionField, .cmdMotionInput, .cmdMotionPoint, .cmdSignInput, .exprInput", function () {
             hideCmdTip();
         });
-        $(document).on("mousedown", ".emitInput, .cmdInput, .cmdCurveInput, .cmdCurveField, .cmdCurvePoint, .cmdSignInput, .exprInput", function () {
+        $(document).on("mousedown", ".emitInput, .cmdInput, .cmdCurveInput, .cmdCurveField, .cmdCurvePoint, .cmdMotionField, .cmdMotionInput, .cmdMotionPoint, .cmdSignInput, .exprInput", function () {
             hideCmdTip();
         });
         window.addEventListener("scroll", hideCmdTip, true);
@@ -6473,6 +7728,153 @@ function setVelocitySection($card, mode) {
             e.stopPropagation();
             const $field = $(this).closest(".cmdCurveField");
             fitCurveViewportToPoints($field);
+        });
+
+        $("#cmdList").on("focusin", ".cmdMotionField", function () {
+            const ctx = getMotionContextFromField($(this));
+            if (!ctx) return;
+            setActiveMotionEditor(ctx.editorId);
+        });
+
+        $("#cmdList").on("click", ".cmdMotionField", function (e) {
+            if ($(e.target).closest(".cmdMotionInput, .cmdMotionKind, .cmdMotionTimeline, .cmdMotionPoint, .cmdMotionToolbar, button, input, select").length) return;
+            const ctx = getMotionContextFromField($(this));
+            if (!ctx) return;
+            setActiveMotionEditor(ctx.editorId);
+            if (typeof this.focus === "function") this.focus();
+        });
+
+        $("#cmdList").on("change", ".cmdMotionKind", function () {
+            const $field = $(this).closest(".cmdMotionField");
+            applyMotionKindChange($field, $(this).val());
+        });
+
+        $("#cmdList").on("input", ".cmdMotionInput", function () {
+            applyMotionValueInput(this, false);
+        });
+
+        $("#cmdList").on("change", ".cmdMotionInput", function () {
+            applyMotionValueInput(this, true);
+        });
+
+        $("#cmdList").on("pointerdown", ".cmdMotionTimeline", function (e) {
+            const rawEv = e.originalEvent || e;
+            if (Number(rawEv.button) !== 0) return;
+            if ($(e.target).closest(".cmdMotionPoint").length) return;
+            const $field = $(this).closest(".cmdMotionField");
+            const ctx = getMotionContextFromField($field);
+            if (!ctx) return;
+            setActiveMotionEditor(ctx.editorId);
+            const node = $field.get(0);
+            if (node && typeof node.focus === "function") node.focus();
+
+            const info = motionTimelineInfoFromEvent($field, rawEv);
+            if (!info) return;
+
+            if (rawEv.altKey) {
+                addMotionKeyframeAtField($field, info.time, null, { history: true });
+                e.preventDefault();
+                e.stopPropagation();
+                return;
+            }
+
+            setMotionSelection(ctx.editorId, []);
+            motionVec3EditorState.timelineBox = {
+                editorId: ctx.editorId,
+                startX: info.x,
+                endX: info.x,
+            };
+            bindMotionTimelineBoxEvents();
+            renderMotionTimeline($field);
+            e.preventDefault();
+            e.stopPropagation();
+        });
+
+        $("#cmdList").on("pointerdown", ".cmdMotionPoint", function (e) {
+            const rawEv = e.originalEvent || e;
+            if (Number(rawEv.button) !== 0) return;
+            const $point = $(this);
+            const $field = $point.closest(".cmdMotionField");
+            const ctx = getMotionContextFromField($field);
+            if (!ctx) return;
+            const idx = motionPointIndexFromId($point.data("pointId"));
+            if (idx < 0) return;
+            const additive = !!(rawEv.ctrlKey || rawEv.metaKey);
+            const selected = getMotionSelection(ctx.editorId);
+            if (additive) {
+                if (selected.has(idx)) selected.delete(idx);
+                else selected.add(idx);
+            } else {
+                setMotionSelection(ctx.editorId, [idx]);
+            }
+            setActiveMotionEditor(ctx.editorId);
+            renderMotionTimeline($field);
+            beginMotionTimelinePointDrag($field, idx, rawEv);
+            e.preventDefault();
+            e.stopPropagation();
+        });
+
+        $("#cmdList").on("contextmenu", ".cmdMotionPoint", function (e) {
+            e.preventDefault();
+            e.stopPropagation();
+            const rawEv = e.originalEvent || e;
+            const $point = $(this);
+            const $field = $point.closest(".cmdMotionField");
+            const ctx = getMotionContextFromField($field);
+            if (!ctx) return;
+            const idx = motionPointIndexFromId($point.data("pointId"));
+            if (idx < 0) return;
+            setMotionSelection(ctx.editorId, [idx]);
+            setActiveMotionEditor(ctx.editorId);
+            renderMotionTimeline($field);
+            openMotionPointMenu(ctx.editorId, motionPointIdByIndex(idx), rawEv.clientX, rawEv.clientY);
+        });
+
+        $("#cmdList").on("keydown", ".cmdMotionField", function (e) {
+            const key = String(e.key || "");
+            if (key !== "Delete" && key !== "Backspace") return;
+            const ctx = getMotionContextFromField($(this));
+            if (!ctx) return;
+            if (deleteSelectedMotionKeyframesByEditor(ctx.editorId, { history: true })) {
+                e.preventDefault();
+                e.stopPropagation();
+            }
+        });
+
+        $("#cmdList").on("click", ".cmdMotionAddFrame", function (e) {
+            e.preventDefault();
+            e.stopPropagation();
+            const $field = $(this).closest(".cmdMotionField");
+            addMotionKeyframeAtField($field, 0.5, null, { history: true });
+        });
+
+        $("#cmdList").on("click", ".cmdMotionDelSelected", function (e) {
+            e.preventDefault();
+            e.stopPropagation();
+            const ctx = getMotionContextFromField($(this).closest(".cmdMotionField"));
+            if (!ctx) return;
+            deleteSelectedMotionKeyframesByEditor(ctx.editorId, { history: true });
+        });
+
+        $("#cmdList").on("click", ".cmdMotionReset", function (e) {
+            e.preventDefault();
+            e.stopPropagation();
+            const $field = $(this).closest(".cmdMotionField");
+            const ctx = getMotionContextFromField($field);
+            if (!ctx) return;
+            const out = commitMotionTriplet(ctx, {
+                x: { kind: "keyframe", keyframes: [{ time: 0, value: 0 }] },
+                y: { kind: "keyframe", keyframes: [{ time: 0, value: 0 }] },
+                z: { kind: "keyframe", keyframes: [{ time: 0, value: 0 }] },
+            }, {
+                sync: true,
+                history: true,
+                save: true,
+                codegen: true,
+                renderOnSync: true,
+            });
+            setMotionSelection(ctx.editorId, [0]);
+            if (!out.rerendered) renderMotionFieldBody($field);
         });
 
         $("#emitList").on("input change", ".emitInput", function () {
@@ -7184,12 +8586,21 @@ function setVelocitySection($card, mode) {
 
         window.addEventListener("keydown", (e) => {
             if (hotkeysSystem && hotkeysSystem.handleHotkeyCaptureKeydown(e)) return;
+            if (handleMotionHotkeyKeydown(e)) return;
 
             if (e.key === "Escape") {
                 const hadSyncMenu = (emitterSync && emitterSync.menuOpen) || (commandSync && commandSync.menuOpen);
                 if (hadSyncMenu) {
                     if (emitterSync && emitterSync.menuOpen) hideSyncMenu(emitterSync);
                     if (commandSync && commandSync.menuOpen) hideSyncMenu(commandSync);
+                    return;
+                }
+                if (curvePointMenuState.el && curvePointMenuState.el.classList.contains("open")) {
+                    hideCurvePointMenu();
+                    return;
+                }
+                if (motionPointMenuState.el && motionPointMenuState.el.classList.contains("open")) {
+                    hideMotionPointMenu();
                     return;
                 }
             }
@@ -7260,6 +8671,13 @@ function setVelocitySection($card, mode) {
                 e.preventDefault();
                 if (settingsSystem) settingsSystem.showSettingsModal();
             }
+        });
+        window.addEventListener("keyup", (e) => {
+            handleMotionHotkeyKeyup(e);
+        });
+        window.addEventListener("blur", () => {
+            motionVec3EditorState.lockVertical = false;
+            motionVec3EditorState.offsetMode = false;
         });
 
         const autoPause = () => {
@@ -7358,6 +8776,13 @@ function setVelocitySection($card, mode) {
             viewportEl: document.getElementById("viewport"),
             statEl: document.getElementById("statChip"),
             fpsEl: document.getElementById("fpsChip"),
+            getMotionEditorState: getMotionEditorStateForPreview,
+            onMotionEditorSelectionChange: onPreviewMotionSelectionChange,
+            onMotionEditorMoveCommit: onPreviewMotionMoveCommit,
+            onMotionEditorOffsetModeChange: onPreviewMotionOffsetModeChange,
+            onMotionEditorAddPoint: onPreviewMotionAddPoint,
+            onMotionEditorContextMenu: onPreviewMotionContextMenu,
+            onMotionEditorStatus: onPreviewMotionStatus,
             shouldIgnoreArrowPan,
         });
         compileDoTickExpressionFromState({ showToast: false });
@@ -7372,10 +8797,16 @@ function setVelocitySection($card, mode) {
             chkGrid: document.getElementById("chkGrid"),
             inpPointSize: document.getElementById("inpPointSize"),
             inpParamStep: document.getElementById("inpParamStep"),
+            selMotionSnapPlane: document.getElementById("selMotionSnapPlane"),
+            chkMotionSnapGrid: document.getElementById("chkMotionSnapGrid"),
+            inpMotionSnapStep: document.getElementById("inpMotionSnapStep"),
+            inpMotionSnapRadius: document.getElementById("inpMotionSnapRadius"),
             onShowAxes: (on) => preview && preview.setShowAxes(on),
             onShowGrid: (on) => preview && preview.setShowGrid(on),
             onPointSize: (val) => preview && preview.setPointScale(val),
+            onMotionSnapSettingsChange: (snap) => applyMotionSnapSettings(snap),
         });
+        applyMotionSnapSettings(settingsSystem.getMotionSnapSettings());
         settingsSystem.loadSettingsFromStorage();
         settingsSystem.bindThemeHotkeys();
         settingsSystem.applyParamStepToInputs();
