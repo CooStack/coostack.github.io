@@ -36,17 +36,52 @@ export function createExpressionRuntime(options = {}) {
         };
     };
     const runtimeVector3f = (x = 0, y = 0, z = 0) => ({ x: toNum(x), y: toNum(y), z: toNum(z) });
+    const runtimeRandom = {
+        nextInt(fromOrUntil, until) {
+            if (until === undefined) {
+                const u = Math.floor(toNum(fromOrUntil, 1));
+                if (u <= 0) return 0;
+                return Math.floor(Math.random() * u);
+            }
+            const f = Math.floor(toNum(fromOrUntil, 0));
+            const u = Math.floor(toNum(until, 1));
+            if (u <= f) return f;
+            return f + Math.floor(Math.random() * (u - f));
+        },
+        nextDouble(fromOrUntil, until) {
+            if (until === undefined) {
+                const u = toNum(fromOrUntil, 1.0);
+                if (u <= 0) return 0;
+                return Math.random() * u;
+            }
+            const f = toNum(fromOrUntil, 0);
+            const u = toNum(until, 1.0);
+            if (u <= f) return f;
+            return f + Math.random() * (u - f);
+        },
+        nextFloat(fromOrUntil, until) {
+            return runtimeRandom.nextDouble(fromOrUntil, until);
+        },
+        nextBoolean() {
+            return Math.random() < 0.5;
+        },
+        nextLong(fromOrUntil, until) {
+            return runtimeRandom.nextInt(fromOrUntil, until);
+        }
+    };
     let baseVarsNoVector = Object.freeze({
         PI: Math.PI,
         RelativeLocation: runtimeRelativeLocation,
         Vec3: runtimeVec3,
-        Vector3f: runtimeVector3f
+        Vector3f: runtimeVector3f,
+        Random: runtimeRandom
     });
     let baseVarsWithVector = Object.freeze({
         PI: Math.PI,
         RelativeLocation: runtimeRelativeLocation,
         Vec3: runtimeVec3,
-        Vector3f: runtimeVector3f
+        Vector3f: runtimeVector3f,
+        Random: runtimeRandom
     });
 
     const toIdentifier = (rawName) => {
@@ -103,7 +138,8 @@ export function createExpressionRuntime(options = {}) {
             PI: Math.PI,
             RelativeLocation: runtimeRelativeLocation,
             Vec3: runtimeVec3,
-            Vector3f: runtimeVector3f
+            Vector3f: runtimeVector3f,
+            Random: runtimeRandom
         };
         const vecMap = new Map();
 

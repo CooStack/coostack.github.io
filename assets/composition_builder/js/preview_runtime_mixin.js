@@ -19,13 +19,30 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
         srgbRgbToLinearArray,
         CONTROLLER_SCOPE_RESERVED,
         normalizeAngleUnit,
-        normalizeAngleOffsetEaseName
+        normalizeAngleOffsetEaseName,
+        textureEffectWhitelist
     } = deps;
 
     if (!CompositionBuilderApp || !CompositionBuilderApp.prototype) {
         throw new Error("installPreviewRuntimeMethods requires CompositionBuilderApp");
     }
     if (!U) throw new Error("installPreviewRuntimeMethods requires Utils dependency");
+
+    const DEFAULT_TEXTURE_EFFECT_WHITELIST = [
+        "ControlableEndRodEffect",
+        "ControlableEnchantmentEffect",
+        "ControlableCloudEffect",
+        "ControlableFallingDustEffect",
+        "ControlableSplashEffect",
+        "ControlableFlashEffect",
+        "ControlableFireworkEffect",
+    ];
+    const TEXTURE_EFFECT_NAME_SET = new Set(
+        (Array.isArray(textureEffectWhitelist) && textureEffectWhitelist.length
+            ? textureEffectWhitelist
+            : DEFAULT_TEXTURE_EFFECT_WHITELIST
+        ).map((it) => String(it || "").trim()).filter(Boolean)
+    );
 
     class PreviewRuntimeMixin {
     rebuildPreview() {
@@ -460,6 +477,10 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
         if (!alphaAttr || alphaAttr.array.length !== count) {
             this.pointsGeom.setAttribute("aAlpha", new THREE.BufferAttribute(new Float32Array(count), 1));
         }
+        const frameAttr = this.pointsGeom.getAttribute("aFrameIndex");
+        if (!frameAttr || frameAttr.array.length !== count) {
+            this.pointsGeom.setAttribute("aFrameIndex", new THREE.BufferAttribute(new Float32Array(count), 1));
+        }
         const positions = this.pointsGeom.getAttribute("position").array;
         const colors = this.pointsGeom.getAttribute("color").array;
         const sizes = this.pointsGeom.getAttribute("aSize").array;
@@ -497,6 +518,13 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
         this.pointsGeom.attributes.color.needsUpdate = true;
         this.pointsGeom.attributes.aSize.needsUpdate = true;
         this.pointsGeom.attributes.aAlpha.needsUpdate = true;
+        const frameIndices = this.pointsGeom.getAttribute("aFrameIndex")?.array;
+        if (frameIndices) {
+            frameIndices.fill(0);
+            this.pointsGeom.attributes.aFrameIndex.needsUpdate = true;
+        }
+        this.previewPersistentCurrentAges = new Float32Array(count);
+        this.syncTextureUniforms();
         this.pointsGeom.computeBoundingSphere();
         if (this.pointsMat) this.pointsMat.size = this.state.settings.pointSize;
         const statusText = `点数: ${count}/${this.previewBasePoints.length || count}`;
@@ -526,6 +554,31 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
         const sizes = this.pointsGeom.getAttribute("aSize")?.array;
         const alphas = this.pointsGeom.getAttribute("aAlpha")?.array;
         if (!positions || !colors || !sizes || !alphas) return;
+        let resolvedCurrentAges = this.previewFrameCurrentAges;
+        if (!(resolvedCurrentAges instanceof Float32Array) || resolvedCurrentAges.length !== totalCount) {
+            resolvedCurrentAges = new Float32Array(totalCount);
+            this.previewFrameCurrentAges = resolvedCurrentAges;
+        } else {
+            resolvedCurrentAges.fill(0);
+        }
+        let resolvedLifetimes = this.previewFrameLifetimes;
+        if (!(resolvedLifetimes instanceof Float32Array) || resolvedLifetimes.length !== totalCount) {
+            resolvedLifetimes = new Float32Array(totalCount);
+            resolvedLifetimes.fill(100);
+            this.previewFrameLifetimes = resolvedLifetimes;
+        } else {
+            resolvedLifetimes.fill(100);
+        }
+        let persistentCurrentAges = this.previewPersistentCurrentAges;
+        if (!(persistentCurrentAges instanceof Float32Array) || persistentCurrentAges.length !== totalCount) {
+            persistentCurrentAges = new Float32Array(totalCount);
+            this.previewPersistentCurrentAges = persistentCurrentAges;
+        }
+        let manualAgeFlags = this.previewManualCurrentAgeFlags;
+        if (!(manualAgeFlags instanceof Uint8Array) || manualAgeFlags.length !== totalCount) {
+            manualAgeFlags = new Uint8Array(totalCount);
+            this.previewManualCurrentAgeFlags = manualAgeFlags;
+        }
         const skipExprPerPoint = totalCount >= 50000;
         const runtimeActions = this.buildPreviewRuntimeActions(elapsedTick, this.state.displayActions || [], {
             skipExpression: skipExprPerPoint,
@@ -536,6 +589,8 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
         if (!this.previewRuntimeGlobals || tickStep < this.previewRuntimeAppliedTick) {
             this.previewRuntimeGlobals = this.buildPreviewRuntimeGlobals(0, 0, 0);
             this.previewRuntimeAppliedTick = -1;
+            persistentCurrentAges.fill(0);
+            manualAgeFlags.fill(0);
         }
         const frameRuntimeGlobals = this.previewRuntimeGlobals;
         for (let t = this.previewRuntimeAppliedTick + 1; t <= tickStep; t++) {
@@ -811,6 +866,9 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
                 colors[i * 3 + 2] = 0;
                 sizes[i] = 0.01;
                 alphas[i] = 0;
+                resolvedCurrentAges[i] = 0;
+                persistentCurrentAges[i] = 0;
+                manualAgeFlags[i] = 0;
                 continue;
             }
 
@@ -959,9 +1017,16 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
                 colors[i * 3 + 2] = 0;
                 sizes[i] = 0.01;
                 alphas[i] = 0;
+                resolvedCurrentAges[i] = 0;
+                persistentCurrentAges[i] = 0;
+                manualAgeFlags[i] = 0;
                 continue;
             }
 
+            const persistedCurrentAgeRaw = persistentCurrentAges[i];
+            const persistedCurrentAge = Number.isFinite(Number(persistedCurrentAgeRaw))
+                ? Math.max(0, num(persistedCurrentAgeRaw))
+                : 0;
             let pointVisual = null;
             if (!skipExprPerPoint && cached.cardVisualAgeDependent) {
                 let byLocal = groupId >= 0 ? pointVisualCache[groupId] : null;
@@ -975,6 +1040,7 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
                         runtimeVars: frameRuntimeGlobals,
                         elapsedTick: pointElapsedTick,
                         ageTick: pointAgeTick,
+                        currentAge: persistedCurrentAge,
                         pointIndex: localIndex
                     });
                     byLocal[localIndex] = pointVisual;
@@ -986,10 +1052,26 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
                         runtimeVars: frameRuntimeGlobals,
                         elapsedTick: cached.elapsedTick,
                         ageTick: cached.age,
+                        currentAge: 0,
                         pointIndex: 0
                     });
                     if (groupId >= 0) ownerVisualCache[groupId] = pointVisual;
                 }
+            }
+
+            const hasManualCurrentAge = pointVisual?.__manualCurrentAge === true;
+            const resolvedCurrentAgeRaw = Number(pointVisual?.__resolvedCurrentAge);
+            let resolvedCurrentAge;
+            if (hasManualCurrentAge && Number.isFinite(resolvedCurrentAgeRaw)) {
+                resolvedCurrentAge = Math.max(0, resolvedCurrentAgeRaw);
+            } else {
+                resolvedCurrentAge = 0;
+            }
+            resolvedCurrentAges[i] = resolvedCurrentAge;
+            persistentCurrentAges[i] = resolvedCurrentAge;
+            const resolvedLifetimeRaw = Number(pointVisual?.__resolvedLifetime);
+            if (Number.isFinite(resolvedLifetimeRaw) && resolvedLifetimeRaw >= 1) {
+                resolvedLifetimes[i] = resolvedLifetimeRaw;
             }
 
             let rgb = pointVisual.__linearColor;
@@ -1010,11 +1092,179 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
         this.pointsGeom.attributes.color.needsUpdate = true;
         this.pointsGeom.attributes.aSize.needsUpdate = true;
         this.pointsGeom.attributes.aAlpha.needsUpdate = true;
+        this.updatePreviewFrameIndices(elapsedTick, cycleCfg, groupRuntimeCache, pointGroupIndex, totalCount);
+        this.syncTextureUniforms();
         const statusText = `点数: ${visible}/${this.previewBasePoints.length}`;
         if (this.lastPointsStatusText !== statusText) {
             this.lastPointsStatusText = statusText;
             this.dom.statusPoints.textContent = statusText;
         }
+    }
+
+    isParticleTextureRenderable(pData) {
+        if (!pData || !pData.atlasReady || !pData.atlas) return false;
+        if (!(Number(pData.frames) > 0)) return false;
+        if (pData.textureLoadOk === false) return false;
+        return true;
+    }
+
+    isTextureEffectAllowed(effectClass) {
+        const name = String(effectClass || "").trim();
+        if (!name) return false;
+        return TEXTURE_EFFECT_NAME_SET.has(name);
+    }
+
+    resolvePreviewLeafTextureConfig(card) {
+        if (!card) return { effectClass: "", useTexture: false };
+        if (String(card.dataType || "single") === "single") {
+            return {
+                effectClass: String(card.singleEffectClass || ""),
+                useTexture: card.singleUseTexture !== false,
+            };
+        }
+        let effectClass = String(card.shapeChildEffectClass || card.singleEffectClass || "");
+        let useTexture = card.shapeChildUseTexture !== false;
+        const chain = this.getShapeChildChain(card);
+        for (const raw of chain) {
+            const level = normalizeShapeNestedLevel(raw);
+            if (String(level.type || "single") !== "single") continue;
+            effectClass = String(level.effectClass || effectClass || "");
+            useTexture = level.useTexture !== false;
+            break;
+        }
+        return { effectClass, useTexture };
+    }
+
+    updatePreviewFrameIndices(elapsedTick, cycleCfg, groupRuntimeCache, pointGroupIndex, totalCount) {
+        const frameAttr = this.pointsGeom?.getAttribute("aFrameIndex");
+        if (!frameAttr) return;
+        const frameIndices = frameAttr.array;
+        const { calcTextureFrame, getParticleDataByName } = this._particleDataFns || {};
+        if (!calcTextureFrame || !getParticleDataByName) return;
+        const resolvedCurrentAges = this.previewFrameCurrentAges;
+        const resolvedLifetimes = this.previewFrameLifetimes;
+        const ownerIds = this.previewOwners;
+        const cardById = this.previewCardById;
+        const mergedOffsets = this._mergedAtlasOffsets;
+        const textureConfigCache = new Map();
+        const resolveTextureConfig = (owner) => {
+            let cfg = textureConfigCache.get(owner);
+            if (cfg !== undefined) return cfg;
+            const card = cardById?.get(owner);
+            cfg = this.resolvePreviewLeafTextureConfig(card);
+            textureConfigCache.set(owner, cfg);
+            return cfg;
+        };
+        const fallbackLifetime = Math.max(1, int(cycleCfg?.play || cycleCfg?.total || 1));
+        for (let i = 0; i < totalCount; i++) {
+            if (!this.previewVisibleMask[i]) { frameIndices[i] = 0; continue; }
+            const groupId = (pointGroupIndex && i < pointGroupIndex.length) ? pointGroupIndex[i] : -1;
+            const owner = groupId >= 0 ? (this.previewGroupOwner[groupId] || ownerIds[i]) : ownerIds[i];
+            const textureCfg = resolveTextureConfig(owner);
+            if (!textureCfg?.useTexture || !textureCfg?.effectClass) { frameIndices[i] = 0; continue; }
+            if (!this.isTextureEffectAllowed(textureCfg.effectClass)) { frameIndices[i] = 0; continue; }
+            const pData = getParticleDataByName(textureCfg.effectClass);
+            if (!this.isParticleTextureRenderable(pData)) { frameIndices[i] = 0; continue; }
+            const cached = groupId >= 0 ? groupRuntimeCache[groupId] : null;
+            const resolvedAgeRaw = resolvedCurrentAges?.[i];
+            const age = Number.isFinite(Number(resolvedAgeRaw))
+                ? Math.max(0, num(resolvedAgeRaw))
+                : 0;
+            const perPointLifetime = (resolvedLifetimes && Number.isFinite(resolvedLifetimes[i]) && resolvedLifetimes[i] >= 1)
+                ? resolvedLifetimes[i]
+                : fallbackLifetime;
+            const baseFrame = calcTextureFrame(age, perPointLifetime, pData.frames);
+            const atlasOffset = (mergedOffsets && mergedOffsets.has(textureCfg.effectClass))
+                ? mergedOffsets.get(textureCfg.effectClass)
+                : 0;
+            frameIndices[i] = baseFrame + atlasOffset;
+        }
+        frameAttr.needsUpdate = true;
+    }
+
+    syncTextureUniforms() {
+        const shader = this._pointsShaderRef;
+        if (!shader) return;
+        const { getParticleDataByName } = this._particleDataFns || {};
+        if (!getParticleDataByName) {
+            shader.uniforms.uUseTexture.value = 0;
+            return;
+        }
+        const cards = Array.isArray(this.state?.cards) ? this.state.cards : [];
+        const effectEntries = [];
+        const seen = new Set();
+        for (const card of cards) {
+            const cfg = this.resolvePreviewLeafTextureConfig(card);
+            if (!cfg?.useTexture || !cfg?.effectClass) continue;
+            if (!this.isTextureEffectAllowed(cfg.effectClass)) continue;
+            const pData = getParticleDataByName(cfg.effectClass);
+            if (!this.isParticleTextureRenderable(pData)) continue;
+            if (seen.has(cfg.effectClass)) continue;
+            seen.add(cfg.effectClass);
+            effectEntries.push({ effectClass: cfg.effectClass, pData });
+        }
+        if (!effectEntries.length) {
+            shader.uniforms.uAtlas.value = null;
+            shader.uniforms.uUseTexture.value = 0;
+            shader.uniforms.uFrameCount.value = 0;
+            this._mergedAtlasOffsets = null;
+            return;
+        }
+        if (effectEntries.length === 1) {
+            const { pData, effectClass } = effectEntries[0];
+            if (!pData._threeTexture) {
+                pData._threeTexture = new THREE.CanvasTexture(pData.atlas);
+                pData._threeTexture.minFilter = THREE.NearestFilter;
+                pData._threeTexture.magFilter = THREE.NearestFilter;
+                pData._threeTexture.generateMipmaps = false;
+            }
+            shader.uniforms.uAtlas.value = pData._threeTexture;
+            shader.uniforms.uFrameCount.value = pData.frames;
+            shader.uniforms.uUseTexture.value = 1;
+            const offsets = new Map();
+            offsets.set(effectClass, 0);
+            this._mergedAtlasOffsets = offsets;
+            return;
+        }
+        const cacheKey = effectEntries.map((e) => e.effectClass).sort().join("|");
+        if (this._mergedAtlasKey === cacheKey && this._mergedAtlasTexture && this._mergedAtlasOffsets) {
+            shader.uniforms.uAtlas.value = this._mergedAtlasTexture;
+            shader.uniforms.uFrameCount.value = this._mergedAtlasTotalFrames;
+            shader.uniforms.uUseTexture.value = 1;
+            return;
+        }
+        const FRAME_SIZE = 64;
+        let totalFrames = 0;
+        const offsets = new Map();
+        for (const { effectClass, pData } of effectEntries) {
+            offsets.set(effectClass, totalFrames);
+            totalFrames += pData.frames;
+        }
+        const canvas = document.createElement("canvas");
+        canvas.width = FRAME_SIZE * totalFrames;
+        canvas.height = FRAME_SIZE;
+        const ctx = canvas.getContext("2d");
+        ctx.imageSmoothingEnabled = false;
+        for (const { effectClass, pData } of effectEntries) {
+            const offset = offsets.get(effectClass);
+            if (pData.atlas) {
+                ctx.drawImage(pData.atlas, offset * FRAME_SIZE, 0);
+            }
+        }
+        if (this._mergedAtlasTexture) {
+            this._mergedAtlasTexture.dispose();
+        }
+        const tex = new THREE.CanvasTexture(canvas);
+        tex.minFilter = THREE.NearestFilter;
+        tex.magFilter = THREE.NearestFilter;
+        tex.generateMipmaps = false;
+        this._mergedAtlasKey = cacheKey;
+        this._mergedAtlasTexture = tex;
+        this._mergedAtlasTotalFrames = totalFrames;
+        this._mergedAtlasOffsets = offsets;
+        shader.uniforms.uAtlas.value = tex;
+        shader.uniforms.uFrameCount.value = totalFrames;
+        shader.uniforms.uUseTexture.value = 1;
     }
 
     getPreviewCycleConfig() {
@@ -1902,7 +2152,12 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
             get particleAlpha() { return this._ctx.particleAlpha; },
             set particleAlpha(v) { this._ctx.setAlpha(v); },
             get currentAge() { return this._ctx.currentAge; },
-            set currentAge(v) { this._ctx.currentAge = int(v); },
+            set currentAge(v) {
+                this._ctx.currentAge = int(v);
+                this._ctx.__manualCurrentAge = true;
+            },
+            get lifetime() { return this._ctx.lifetime; },
+            set lifetime(v) { this._ctx.lifetime = Math.max(1, int(v)); },
             get textureSheet() { return this._ctx.textureSheet; },
             set textureSheet(v) { this._ctx.textureSheet = int(v); },
             get status() { return this._ctx.status; },
@@ -1920,7 +2175,12 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
             get particleAlpha() { return this._ctx.particleAlpha; },
             set particleAlpha(v) { this._ctx.setAlpha(v); },
             get currentAge() { return this._ctx.currentAge; },
-            set currentAge(v) { this._ctx.currentAge = int(v); },
+            set currentAge(v) {
+                this._ctx.currentAge = int(v);
+                this._ctx.__manualCurrentAge = true;
+            },
+            get lifetime() { return this._ctx.lifetime; },
+            set lifetime(v) { this._ctx.lifetime = Math.max(1, int(v)); },
             get textureSheet() { return this._ctx.textureSheet; },
             set textureSheet(v) { this._ctx.textureSheet = int(v); }
         };
@@ -1980,7 +2240,12 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
         ));
         setSize(visual.size);
         setAlpha(visual.alpha);
-        runtimeCtx.currentAge = num(runtimeCtx.currentAge || 0);
+        const initialCurrentAge = Number.isFinite(Number(opts.currentAge))
+            ? num(opts.currentAge)
+            : 0;
+        runtimeCtx.currentAge = Math.max(0, num(initialCurrentAge));
+        runtimeCtx.__manualCurrentAge = false;
+        runtimeCtx.lifetime = 100;
         runtimeCtx.textureSheet = num(runtimeCtx.textureSheet || 0);
         runtimeCtx.setColor = setColor;
         runtimeCtx.setSize = setSize;
@@ -2000,7 +2265,21 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
             if (CONTROLLER_SCOPE_RESERVED.has(k)) continue;
             vars[k] = v;
         }
-        vars.age = num(baseVars.age);
+        Object.defineProperty(vars, "age", {
+            configurable: true,
+            enumerable: true,
+            get() { return num(runtimeCtx.currentAge); },
+            set(v) {
+                runtimeCtx.currentAge = int(v);
+                runtimeCtx.__manualCurrentAge = true;
+            }
+        });
+        Object.defineProperty(vars, "lifetime", {
+            configurable: true,
+            enumerable: true,
+            get() { return num(runtimeCtx.lifetime); },
+            set(v) { runtimeCtx.lifetime = Math.max(1, int(v)); }
+        });
         vars.tick = num(baseVars.tick);
         vars.index = int(baseVars.index);
         vars.thisAt = thisAtVars;
@@ -2047,6 +2326,9 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
         ];
         visual.size = Math.max(0.05, num(runtimeCtx.size));
         visual.alpha = clamp(num(runtimeCtx.alpha), 0, 1);
+        visual.__resolvedCurrentAge = Math.max(0, num(runtimeCtx.currentAge));
+        visual.__manualCurrentAge = runtimeCtx.__manualCurrentAge === true;
+        visual.__resolvedLifetime = Math.max(1, num(runtimeCtx.lifetime));
     }
 
     resolveCardPreviewVisual(cardId, opts = {}) {
@@ -2061,6 +2343,10 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
             || (card.dataType !== "single" && this.getShapeLeafType(card) === "single");
         if (!useSingleInit) return fallback;
         const visual = { color: [...fallback.color], size: 0.2, alpha: 1 };
+        let resolvedCurrentAge = Number.isFinite(Number(opts.currentAge))
+            ? Math.max(0, num(opts.currentAge))
+            : 0;
+        let manualCurrentAge = false;
         for (const it of (card.particleInit || [])) {
             const target = String(it.target || "").trim().toLowerCase();
             const expr = String(it.expr || "").trim();
@@ -2075,6 +2361,13 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
             if (target === "alpha" || target === "particlealpha" || target === "particle.particlealpha") {
                 visual.alpha = clamp(num(this.evaluateNumericExpressionWithRuntime(expr, runtimeVars, { elapsedTick, ageTick, pointIndex })), 0, 1);
             }
+            if (target === "lifetime" || target === "particle.lifetime") {
+                visual.__resolvedLifetime = Math.max(1, int(this.evaluateNumericExpressionWithRuntime(expr, runtimeVars, { elapsedTick, ageTick, pointIndex })));
+            }
+            if (target === "currentage" || target === "age" || target === "particle.currentage") {
+                resolvedCurrentAge = Math.max(0, int(this.evaluateNumericExpressionWithRuntime(expr, runtimeVars, { elapsedTick, ageTick, pointIndex })));
+                manualCurrentAge = true;
+            }
         }
         const controllerActions = Array.isArray(card.controllerActions) ? card.controllerActions : [];
         for (let actionIdx = 0; actionIdx < controllerActions.length; actionIdx++) {
@@ -2085,15 +2378,28 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
                 elapsedTick,
                 ageTick,
                 pointIndex,
+                currentAge: resolvedCurrentAge,
                 compileKey
             });
+            const nextCurrentAge = Number(visual.__resolvedCurrentAge);
+            if (Number.isFinite(nextCurrentAge)) {
+                resolvedCurrentAge = Math.max(0, nextCurrentAge);
+            }
+            if (visual.__manualCurrentAge === true) {
+                manualCurrentAge = true;
+            }
+        }
+        visual.__resolvedCurrentAge = resolvedCurrentAge;
+        visual.__manualCurrentAge = manualCurrentAge;
+        if (!visual.hasOwnProperty("__resolvedLifetime")) {
+            visual.__resolvedLifetime = 100;
         }
         return visual;
     }
 
     isScriptAgeDependent(scriptRaw = "") {
         const src = stripJsForLint(transpileKotlinThisQualifierToJs(scriptRaw));
-        return /\bage\b/.test(src);
+        return /\b(?:age|currentAge|index|textureSheet|lifetime)\b/.test(src);
     }
 
     isCardVisualAgeDependent(card) {

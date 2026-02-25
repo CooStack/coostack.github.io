@@ -24,12 +24,19 @@ import {
     normalizeAngleOffsetFieldName,
     formatAngleValue
 } from "./angle_offset_utils.js";
-import { installPreviewRuntimeMethods } from "./preview_runtime_mixin.js?v=20260221_15";
+import { installPreviewRuntimeMethods } from "./preview_runtime_mixin.js?v=20260221_17";
 import { installKotlinCodegenMethods } from "./kotlin_codegen_mixin.js?v=20260222_1";
 import { installCodeOutputMethods } from "./code_output_mixin.js";
 import { installExpressionEditorMethods } from "./expression_editor_mixin.js?v=20260221_7";
 import { installCodeCompileMethods } from "./code_compile_mixin.js?v=20260220_1";
 import { installTargetPresetMethods } from "./target_preset_mixin.js";
+import {
+    loadAllParticleData,
+    getParticleDataByName,
+    getParticleEffectNames,
+    calcTextureFrame,
+    setBasePath
+} from "../../particles/particle_data_loader.js";
 
 const U = globalThis.Utils;
 if (!U) throw new Error("Utils 未加载：请先加载 points_builder/utils.js");
@@ -378,13 +385,13 @@ const JS_LINT_GLOBALS = new Set([
     "rotateToPoint", "rotateAsAxis", "rotateToWithAngle", "addSingle", "addMultiple", "addPreTickAction",
     "setReversedScaleOnCompositionStatus", "particle",
     "thisAt", "status",
-    "color", "size", "alpha", "particleColor", "particleSize", "particleAlpha", "currentAge", "textureSheet",
+    "color", "size", "alpha", "particleColor", "particleSize", "particleAlpha", "currentAge", "lifetime", "textureSheet",
     "RelativeLocation", "Vec3", "Vector3f"
 ]);
 
 const CONTROLLER_SCOPE_RESERVED = new Set([
     "color", "particleColor", "size", "particleSize", "alpha", "particleAlpha",
-    "currentAge", "textureSheet", "status", "particle", "thisAt"
+    "currentAge", "lifetime", "textureSheet", "status", "particle", "thisAt"
 ]);
 
 function stripJsForLint(raw) {
@@ -594,6 +601,7 @@ function normalizeShapeNestedLevel(raw, index = 0) {
     x.collapsed = !!x.collapsed;
     x.type = ["single", "particle_shape", "sequenced_shape"].includes(String(x.type || "")) ? String(x.type) : "single";
     x.effectClass = String(x.effectClass || DEFAULT_EFFECT_CLASS);
+    x.useTexture = x.useTexture !== false;
     x.bindMode = x.bindMode === "builder" ? "builder" : "point";
     x.point = x.point && typeof x.point === "object" ? x.point : { x: 0, y: 0, z: 0 };
     x.point.x = num(x.point.x);
@@ -638,6 +646,7 @@ function normalizeCard(card, index = 0) {
     x.builderKotlinOverride = String(x.builderKotlinOverride || "");
     x.dataType = ["single", "particle_shape", "sequenced_shape"].includes(x.dataType) ? x.dataType : "single";
     x.singleEffectClass = String(x.singleEffectClass || DEFAULT_EFFECT_CLASS);
+    x.singleUseTexture = x.singleUseTexture !== false;
     x.particleInit = Array.isArray(x.particleInit) ? x.particleInit : [];
     x.controllerVars = Array.isArray(x.controllerVars) ? x.controllerVars : [];
     x.particleInit = x.particleInit.map((it) => {
@@ -701,6 +710,7 @@ function normalizeCard(card, index = 0) {
         ? String(x.shapeChildType)
         : "single";
     x.shapeChildEffectClass = String(x.shapeChildEffectClass || x.singleEffectClass || DEFAULT_EFFECT_CLASS);
+    x.shapeChildUseTexture = x.shapeChildUseTexture !== false;
     x.shapeChildCollapsed = !!x.shapeChildCollapsed;
     x.shapeChildBindMode = x.shapeChildBindMode === "builder" ? "builder" : "point";
     x.shapeChildPoint = x.shapeChildPoint && typeof x.shapeChildPoint === "object" ? x.shapeChildPoint : { x: 0, y: 0, z: 0 };
@@ -741,6 +751,7 @@ function createDefaultCard(index = 0) {
         builderState: createDefaultBuilderState(),
         dataType: "single",
         singleEffectClass: DEFAULT_EFFECT_CLASS,
+        singleUseTexture: true,
         particleInit: [],
         controllerVars: [],
         controllerActions: [],
@@ -780,6 +791,7 @@ function createDefaultCard(index = 0) {
         shapeBuilderState: createDefaultBuilderState(),
         shapeChildType: "single",
         shapeChildEffectClass: DEFAULT_EFFECT_CLASS,
+        shapeChildUseTexture: true,
         shapeChildCollapsed: false,
         shapeChildBindMode: "point",
         shapeChildPoint: { x: 0, y: 0, z: 0 },
@@ -1222,6 +1234,12 @@ class CompositionBuilderApp {
         this.generateCodeAndRender(true);
         this.writeBuilderCompositionContext();
         this.bindEvents();
+        this._particleDataFns = { calcTextureFrame, getParticleDataByName };
+        setBasePath("./");
+        loadAllParticleData().then(() => {
+            this.renderCards();
+            this.syncTextureUniforms();
+        });
     }
 
     bindDom() {
@@ -1502,21 +1520,56 @@ class CompositionBuilderApp {
             size: this.state.settings.pointSize,
             sizeAttenuation: true,
             vertexColors: true,
-            transparent: true
+            transparent: true,
+            depthWrite: false
         });
         this.pointsMat.onBeforeCompile = (shader) => {
-            shader.vertexShader = `attribute float aSize;\nattribute float aAlpha;\nvarying float vAlpha;\n${shader.vertexShader}`;
+            shader.uniforms.uAtlas = { value: null };
+            shader.uniforms.uFrameCount = { value: 0 };
+            shader.uniforms.uUseTexture = { value: 0 };
+            this._pointsShaderRef = shader;
+            shader.vertexShader = [
+                "attribute float aSize;",
+                "attribute float aAlpha;",
+                "attribute float aFrameIndex;",
+                "varying float vAlpha;",
+                "varying float vFrameIndex;",
+                ""
+            ].join("\n") + shader.vertexShader;
             shader.vertexShader = shader.vertexShader.replace(
                 /gl_PointSize\s*=\s*size\s*;/g,
-                "gl_PointSize = size * max(aSize, 0.05);\n    vAlpha = clamp(aAlpha, 0.0, 1.0);"
+                "gl_PointSize = size * max(aSize, 0.05);\n    vAlpha = clamp(aAlpha, 0.0, 1.0);\n    vFrameIndex = aFrameIndex;"
             );
-            shader.fragmentShader = `varying float vAlpha;\n${shader.fragmentShader}`;
+            shader.fragmentShader = [
+                "uniform sampler2D uAtlas;",
+                "uniform int uFrameCount;",
+                "uniform int uUseTexture;",
+                "varying float vAlpha;",
+                "varying float vFrameIndex;",
+                ""
+            ].join("\n") + shader.fragmentShader;
             shader.fragmentShader = shader.fragmentShader.replace(
                 /vec4\s+diffuseColor\s*=\s*vec4\(\s*diffuse\s*,\s*opacity\s*\)\s*;/g,
-                "vec4 diffuseColor = vec4( diffuse, opacity * clamp(vAlpha, 0.0, 1.0) );"
+                [
+                    "vec4 diffuseColor;",
+                    "if (uUseTexture == 1 && uFrameCount > 0) {",
+                    "  float fc = float(uFrameCount);",
+                    "  float fi = clamp(floor(vFrameIndex + 0.5), 0.0, fc - 1.0);",
+                    "  vec2 uv = gl_PointCoord;",
+                    "  float pad = 0.5 / (fc * 64.0);",
+                    "  uv.x = (fi + clamp(uv.x, 0.01, 0.99)) / fc;",
+                    "  uv.x = clamp(uv.x, fi / fc + pad, (fi + 1.0) / fc - pad);",
+                    "  vec4 texel = texture2D(uAtlas, uv);",
+                    "  if (texel.a < 0.02) discard;",
+                    "  vec3 texColor = clamp(texel.rgb / max(texel.a, 0.0001), 0.0, 1.0);",
+                    "  diffuseColor = vec4(diffuse * texColor, opacity * clamp(vAlpha, 0.0, 1.0) * texel.a);",
+                    "} else {",
+                    "  diffuseColor = vec4( diffuse, opacity * clamp(vAlpha, 0.0, 1.0) );",
+                    "}"
+                ].join("\n")
             );
         };
-        this.pointsMat.customProgramCacheKey = () => "cb_points_size_alpha_v4";
+        this.pointsMat.customProgramCacheKey = () => "cb_points_size_alpha_tex_v7";
         this.pointsMesh = new THREE.Points(this.pointsGeom, this.pointsMat);
         this.pointsMesh.frustumCulled = false;
         this.scene.add(this.pointsMesh);
@@ -2421,6 +2474,7 @@ class CompositionBuilderApp {
             collapsed: !!card.shapeChildCollapsed,
             type: card.shapeChildType,
             effectClass: card.shapeChildEffectClass,
+            useTexture: card.shapeChildUseTexture,
             bindMode: card.shapeChildBindMode,
             point: card.shapeChildPoint,
             builderState: card.shapeChildBuilderState,
@@ -2452,6 +2506,7 @@ class CompositionBuilderApp {
         card.shapeChildCollapsed = !!level.collapsed;
         card.shapeChildType = level.type;
         card.shapeChildEffectClass = level.effectClass;
+        card.shapeChildUseTexture = level.useTexture !== false;
         card.shapeChildBindMode = level.bindMode;
         card.shapeChildPoint = { x: num(level.point?.x), y: num(level.point?.y), z: num(level.point?.z) };
         card.shapeChildBuilderState = normalizeBuilderState(level.builderState);
@@ -3075,6 +3130,11 @@ class CompositionBuilderApp {
                 this.afterValueMutate({ rebuildPreview: true });
                 return;
             }
+            if (field === "shapeChildUseTexture") {
+                card.shapeChildUseTexture = !!t.checked;
+                this.afterValueMutate({ rebuildPreview: true });
+                return;
+            }
         }
 
         if (t.dataset.shapeLevelIdx !== undefined) {
@@ -3114,6 +3174,12 @@ class CompositionBuilderApp {
             }
             if (field === "effectClass") {
                 level.effectClass = String(t.value || DEFAULT_EFFECT_CLASS);
+                this.setNestedShapeLevel(card, levelIdx, level);
+                this.afterValueMutate({ rebuildPreview: true });
+                return;
+            }
+            if (field === "useTexture") {
+                level.useTexture = !!t.checked;
                 this.setNestedShapeLevel(card, levelIdx, level);
                 this.afterValueMutate({ rebuildPreview: true });
                 return;
@@ -3860,6 +3926,10 @@ class CompositionBuilderApp {
         this.generateCodeAndRender(this.state.settings.realtimeCode);
         this.writeBuilderCompositionContext();
         this.scheduleSave();
+        if (this.previewPaused && this.renderer) {
+            this.updatePreviewAnimation();
+            this.renderer.render(this.scene, this.camera);
+        }
     }
 
     afterValueMutate(opts = {}) {
@@ -3871,6 +3941,10 @@ class CompositionBuilderApp {
         this.generateCodeAndRender(this.state.settings.realtimeCode);
         this.writeBuilderCompositionContext();
         this.scheduleSave();
+        if (this.previewPaused && this.renderer) {
+            this.updatePreviewAnimation();
+            this.renderer.render(this.scene, this.camera);
+        }
     }
 
     mergeMutateOptions(base = null, next = {}) {
@@ -4602,6 +4676,10 @@ class CompositionBuilderApp {
                             ? `<label class="field">
                                 <span>子点 Effect</span>
                                 <select class="input" data-card-id="${card.id}" data-shape-level-idx="${levelIdx}" data-shape-level-field="effectClass">${effectHtml}</select>
+                            </label>
+                            <label class="field">
+                                <span>Texture Preview</span>
+                                <span class="chk"><input type="checkbox" data-card-id="${card.id}" data-shape-level-idx="${levelIdx}" data-shape-level-field="useTexture" ${level.useTexture === false ? "" : "checked"}/>Use Texture</span>
                             </label>`
                             : `<div class="mini-note">非 single 可继续嵌套</div>`}
                     </div>
@@ -5372,6 +5450,10 @@ class CompositionBuilderApp {
                                 ${card.dataType === "single" ? `<label class="field">
                                     <span>Effect</span>
                                     <select class="input" data-card-id="${card.id}" data-card-field="singleEffectClass">${effectOptions}</select>
+                                </label>
+                                <label class="field">
+                                    <span>Texture Preview</span>
+                                    <span class="chk"><input type="checkbox" data-card-id="${card.id}" data-card-field="singleUseTexture" ${card.singleUseTexture === false ? "" : "checked"}/>Use Texture</span>
                                 </label>` : ""}
                             </div>
                         </div>
@@ -5552,6 +5634,10 @@ class CompositionBuilderApp {
                     ? `<label class="field">
                         <span>子点 Effect</span>
                         <select class="input" data-card-id="${card.id}" data-card-shape-child-field="shapeChildEffectClass">${this.getEffectOptionsHtml(card.shapeChildEffectClass || card.singleEffectClass)}</select>
+                    </label>
+                    <label class="field">
+                        <span>Texture Preview</span>
+                        <span class="chk"><input type="checkbox" data-card-id="${card.id}" data-card-shape-child-field="shapeChildUseTexture" ${card.shapeChildUseTexture === false ? "" : "checked"}/>Use Texture</span>
                     </label>`
                     : `<div class="mini-note">非 single 子点可继续配置子点来源与子点行为</div>`}
             </div>
@@ -5755,8 +5841,13 @@ class CompositionBuilderApp {
     }
 
     getEffectOptionsHtml(selected) {
-        const opts = Array.from(new Set([...EFFECT_CLASS_OPTIONS, String(selected || "").trim()].filter(Boolean)));
-        return opts.map((it) => `<option value="${esc(it)}" ${it === selected ? "selected" : ""}>${esc(it)}</option>`).join("");
+        const dynamicNames = getParticleEffectNames();
+        const opts = Array.from(new Set([...EFFECT_CLASS_OPTIONS, ...dynamicNames, String(selected || "").trim()].filter(Boolean)));
+        return opts.map((it) => {
+            const pData = getParticleDataByName(it);
+            const label = pData && pData.displayName ? `${it} (${pData.displayName})` : it;
+            return `<option value="${esc(it)}" ${it === selected ? "selected" : ""}>${esc(label)}</option>`;
+        }).join("");
     }
 
     rebuildPreview() {
@@ -5864,7 +5955,9 @@ class CompositionBuilderApp {
         this.previewLevelBases = levelBases;
         this.previewLevelRefs = levelRefs;
         this.previewUseLocalOps = useLocalOpsList;
-        this.previewAnimStart = performance.now();
+        if (!this.previewPaused) {
+            this.previewAnimStart = performance.now();
+        }
         this.updatePreviewGeometry(points, owners);
     }
 
@@ -8179,7 +8272,13 @@ class CompositionBuilderApp {
                 { label: "Math.cos(x)", insertText: "Math.cos($0)", detail: "数学函数", priority: 180 },
                 { label: "Math.abs(x)", insertText: "Math.abs($0)", detail: "数学函数", priority: 180 },
                 { label: "Math.min(a, b)", insertText: "Math.min($0, )", cursorOffset: 11, detail: "数学函数", priority: 180 },
-                { label: "Math.max(a, b)", insertText: "Math.max($0, )", cursorOffset: 11, detail: "数学函数", priority: 180 }
+                { label: "Math.max(a, b)", insertText: "Math.max($0, )", cursorOffset: 11, detail: "数学函数", priority: 180 },
+                { label: "Random.nextInt(until)", insertText: "Random.nextInt($0)", detail: "随机整数 [0, until)", priority: 200 },
+                { label: "Random.nextInt(from, until)", insertText: "Random.nextInt($0, )", detail: "随机整数 [from, until)", priority: 199 },
+                { label: "Random.nextDouble(until)", insertText: "Random.nextDouble($0)", detail: "随机浮点 [0, until)", priority: 198 },
+                { label: "Random.nextDouble(from, until)", insertText: "Random.nextDouble($0, )", detail: "随机浮点 [from, until)", priority: 197 },
+                { label: "Random.nextFloat(until)", insertText: "Random.nextFloat($0)", detail: "随机浮点 [0, until)", priority: 196 },
+                { label: "Random.nextBoolean()", insertText: "Random.nextBoolean()", detail: "随机布尔", priority: 195 }
             ]
             : [
                 { label: "if (...) { ... }", insertText: "if ($0) {\\n    \\n}", detail: "条件分支", priority: 140 },
@@ -8207,7 +8306,13 @@ class CompositionBuilderApp {
                 { label: "Math.cos(x)", insertText: "Math.cos($0)", detail: "数学函数", priority: 180 },
                 { label: "Math.abs(x)", insertText: "Math.abs($0)", detail: "数学函数", priority: 180 },
                 { label: "Math.min(a, b)", insertText: "Math.min($0, )", cursorOffset: 11, detail: "数学函数", priority: 180 },
-                { label: "Math.max(a, b)", insertText: "Math.max($0, )", cursorOffset: 11, detail: "数学函数", priority: 180 }
+                { label: "Math.max(a, b)", insertText: "Math.max($0, )", cursorOffset: 11, detail: "数学函数", priority: 180 },
+                { label: "Random.nextInt(until)", insertText: "Random.nextInt($0)", detail: "随机整数 [0, until)", priority: 200 },
+                { label: "Random.nextInt(from, until)", insertText: "Random.nextInt($0, )", detail: "随机整数 [from, until)", priority: 199 },
+                { label: "Random.nextDouble(until)", insertText: "Random.nextDouble($0)", detail: "随机浮点 [0, until)", priority: 198 },
+                { label: "Random.nextDouble(from, until)", insertText: "Random.nextDouble($0, )", detail: "随机浮点 [from, until)", priority: 197 },
+                { label: "Random.nextFloat(until)", insertText: "Random.nextFloat($0)", detail: "随机浮点 [0, until)", priority: 196 },
+                { label: "Random.nextBoolean()", insertText: "Random.nextBoolean()", detail: "随机布尔", priority: 195 }
             ];
         const scopeMaxDepthRaw = Number(scopeInfo.maxShapeDepth);
         const hasScopedShapeVars = scopeInfo.allowRel
@@ -9685,10 +9790,9 @@ installPreviewRuntimeMethods(CompositionBuilderApp, {
     srgbRgbToLinearArray,
     CONTROLLER_SCOPE_RESERVED,
     normalizeAngleUnit,
-    normalizeAngleOffsetEaseName
+    normalizeAngleOffsetEaseName,
+    textureEffectWhitelist: EFFECT_CLASS_OPTIONS
 });
 
 const app = new CompositionBuilderApp();
 app.init();
-
-

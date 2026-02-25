@@ -9,6 +9,10 @@ import { createMotionEditorRuntime } from "./motion_editor_preview.js";
 import {
     normalizeConditionFilter,
 } from "./expression_cards.js";
+import {
+    getParticleDataByName,
+    calcTextureFrame,
+} from "../../particles/particle_data_loader.js";
 
 export function initPreview(ctx = {}) {
     const {
@@ -175,20 +179,26 @@ export function initPreview(ctx = {}) {
 
     function makePointShaderMaterial() {
         return new THREE.ShaderMaterial({
-            transparent: false,
-            depthWrite: true,
+            transparent: true,
+            depthWrite: false,
             depthTest: true,
             uniforms: {
                 uViewportY: {value: 600.0},
+                uAtlas: {value: null},
+                uFrameCount: {value: 0},
+                uUseTexture: {value: 0},
             },
             vertexShader: `
         attribute float size;
         attribute vec3 aColor;
+        attribute float aFrameIndex;
         varying vec3 vColor;
+        varying float vFrameIndex;
         uniform float uViewportY;
 
         void main() {
           vColor = aColor;
+          vFrameIndex = aFrameIndex;
 
           vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
           float perspFlag = step(0.5, abs(projectionMatrix[2][3]));
@@ -199,18 +209,34 @@ export function initPreview(ctx = {}) {
 
           float s = size * pxPerWorldAtZ1 * atten;
 
-          gl_PointSize = clamp(s, 1.0, 64.0);
+          gl_PointSize = clamp(s, 1.0, 512.0);
           gl_Position = projectionMatrix * mvPosition;
         }
       `,
             fragmentShader: `
             varying vec3 vColor;
+            varying float vFrameIndex;
+            uniform sampler2D uAtlas;
+            uniform int uFrameCount;
+            uniform int uUseTexture;
 
             void main() {
-              vec2 uv = gl_PointCoord - vec2(0.5);
-              float d = length(uv);
-              if (d > 0.5) discard;
-              gl_FragColor = vec4(vColor, 1.0);
+              if (uUseTexture == 1 && uFrameCount > 0) {
+                float fc = float(uFrameCount);
+                float fi = clamp(floor(vFrameIndex + 0.5), 0.0, fc - 1.0);
+                vec2 uv = gl_PointCoord;
+                float pad = 0.5 / (fc * 64.0);
+                uv.x = (fi + clamp(uv.x, 0.01, 0.99)) / fc;
+                uv.x = clamp(uv.x, fi / fc + pad, (fi + 1.0) / fc - pad);
+                vec4 texel = texture2D(uAtlas, uv);
+                if (texel.a < 0.01) discard;
+                gl_FragColor = vec4(vColor * texel.rgb, texel.a);
+              } else {
+                vec2 uv = gl_PointCoord - vec2(0.5);
+                float d = length(uv);
+                if (d > 0.5) discard;
+                gl_FragColor = vec4(vColor, 1.0);
+              }
             }
           `
         });
@@ -269,9 +295,11 @@ export function initPreview(ctx = {}) {
         const pos = new Float32Array(MAX_POINTS * 3);
         const col = new Float32Array(MAX_POINTS * 3);
         const siz = new Float32Array(MAX_POINTS);
+        const fri = new Float32Array(MAX_POINTS);
         pointsGeo.setAttribute("position", new THREE.BufferAttribute(pos, 3));
         pointsGeo.setAttribute("aColor", new THREE.BufferAttribute(col, 3));
         pointsGeo.setAttribute("size", new THREE.BufferAttribute(siz, 1));
+        pointsGeo.setAttribute("aFrameIndex", new THREE.BufferAttribute(fri, 1));
         pointsGeo.setDrawRange(0, 0);
 
         pointsMat = makePointShaderMaterial();
@@ -305,14 +333,129 @@ export function initPreview(ctx = {}) {
         return {r, g, b};
     }
 
+    function isParticleTextureUsable(pData) {
+        if (!pData || !pData.atlasReady || !pData.atlas) return false;
+        if (!(Number(pData.frames) > 0)) return false;
+        if (pData.textureLoadOk === false) return false;
+        return true;
+    }
+
+    function resolvePreviewTextureConfig(state) {
+        const emitters = Array.isArray(state?.emitters) ? state.emitters : [];
+        if (!emitters.length) return {effectClass: "", useTexture: false};
+        const focusedId = String(state?.focusedEmitterId || "").trim();
+        let card = null;
+        if (focusedId) {
+            card = emitters.find((it) => String(it?.id || "") === focusedId) || null;
+        }
+        if (!card) card = emitters[0] || null;
+        const template = card?.template || {};
+        return {
+            effectClass: String(template.effectClass || "").trim(),
+            useTexture: template.useTexture !== false,
+        };
+    }
+
+    let _mergedAtlasKey = "";
+    let _mergedAtlasTexture = null;
+    let _mergedAtlasTotalFrames = 0;
+    let _mergedAtlasOffsets = null;
+
+    function collectActiveEffects(state) {
+        const emitters = Array.isArray(state?.emitters) ? state.emitters : [];
+        const entries = [];
+        const seen = new Set();
+        for (const card of emitters) {
+            const template = card?.template || {};
+            const effectClass = String(template.effectClass || "").trim();
+            const useTexture = template.useTexture !== false;
+            if (!useTexture || !effectClass) continue;
+            const pData = getParticleDataByName(effectClass);
+            if (!isParticleTextureUsable(pData)) continue;
+            if (seen.has(effectClass)) continue;
+            seen.add(effectClass);
+            entries.push({ effectClass, pData });
+        }
+        return entries;
+    }
+
+    function syncGeneratorTextureUniforms(state) {
+        if (!pointsMat || !pointsMat.uniforms) return;
+        const effectEntries = collectActiveEffects(state);
+        if (!effectEntries.length) {
+            pointsMat.uniforms.uAtlas.value = null;
+            pointsMat.uniforms.uUseTexture.value = 0;
+            pointsMat.uniforms.uFrameCount.value = 0;
+            _mergedAtlasOffsets = null;
+            return;
+        }
+        if (effectEntries.length === 1) {
+            const { pData, effectClass } = effectEntries[0];
+            if (!pData._threeTexture) {
+                pData._threeTexture = new THREE.CanvasTexture(pData.atlas);
+                pData._threeTexture.minFilter = THREE.NearestFilter;
+                pData._threeTexture.magFilter = THREE.NearestFilter;
+                pData._threeTexture.generateMipmaps = false;
+            }
+            pointsMat.uniforms.uAtlas.value = pData._threeTexture;
+            pointsMat.uniforms.uFrameCount.value = pData.frames;
+            pointsMat.uniforms.uUseTexture.value = 1;
+            const offsets = new Map();
+            offsets.set(effectClass, 0);
+            _mergedAtlasOffsets = offsets;
+            return;
+        }
+        const cacheKey = effectEntries.map((e) => e.effectClass).sort().join("|");
+        if (_mergedAtlasKey === cacheKey && _mergedAtlasTexture && _mergedAtlasOffsets) {
+            pointsMat.uniforms.uAtlas.value = _mergedAtlasTexture;
+            pointsMat.uniforms.uFrameCount.value = _mergedAtlasTotalFrames;
+            pointsMat.uniforms.uUseTexture.value = 1;
+            return;
+        }
+        const FRAME_SIZE = 64;
+        let totalFrames = 0;
+        const offsets = new Map();
+        for (const { effectClass, pData } of effectEntries) {
+            offsets.set(effectClass, totalFrames);
+            totalFrames += pData.frames;
+        }
+        const canvas = document.createElement("canvas");
+        canvas.width = FRAME_SIZE * totalFrames;
+        canvas.height = FRAME_SIZE;
+        const ctx = canvas.getContext("2d");
+        ctx.imageSmoothingEnabled = false;
+        for (const { effectClass, pData } of effectEntries) {
+            const offset = offsets.get(effectClass);
+            if (pData.atlas) {
+                ctx.drawImage(pData.atlas, offset * FRAME_SIZE, 0);
+            }
+        }
+        if (_mergedAtlasTexture) {
+            _mergedAtlasTexture.dispose();
+        }
+        const tex = new THREE.CanvasTexture(canvas);
+        tex.minFilter = THREE.NearestFilter;
+        tex.magFilter = THREE.NearestFilter;
+        tex.generateMipmaps = false;
+        _mergedAtlasKey = cacheKey;
+        _mergedAtlasTexture = tex;
+        _mergedAtlasTotalFrames = totalFrames;
+        _mergedAtlasOffsets = offsets;
+        pointsMat.uniforms.uAtlas.value = tex;
+        pointsMat.uniforms.uFrameCount.value = totalFrames;
+        pointsMat.uniforms.uUseTexture.value = 1;
+    }
+
     function updatePointsBuffer() {
         const pArr = sim.particles;
         const posAttr = pointsGeo.getAttribute("position");
         const colAttr = pointsGeo.getAttribute("aColor");
         const sizeAttr = pointsGeo.getAttribute("size");
+        const frameAttr = pointsGeo.getAttribute("aFrameIndex");
         const alpha = clamp(sim.tickAcc, 0, 1);
 
         const n = Math.min(pArr.length, MAX_POINTS);
+        const state = getState();
 
         for (let i = 0; i < n; i++) {
             const p = pArr[i];
@@ -333,12 +476,25 @@ export function initPreview(ctx = {}) {
             colAttr.array[i * 3 + 2] = lerp(c0.b, c1.b, t);
 
             sizeAttr.array[i] = p.size * pointScale;
+            if (frameAttr) {
+                const ec = p.effectClass || "";
+                const pData = ec ? getParticleDataByName(ec) : null;
+                if (p.useTexture && pData && isParticleTextureUsable(pData) && _mergedAtlasOffsets) {
+                    const baseFrame = calcTextureFrame(p.age, p.life, pData.frames);
+                    const offset = _mergedAtlasOffsets.has(ec) ? _mergedAtlasOffsets.get(ec) : 0;
+                    frameAttr.array[i] = baseFrame + offset;
+                } else {
+                    frameAttr.array[i] = 0;
+                }
+            }
         }
 
         pointsGeo.setDrawRange(0, n);
         posAttr.needsUpdate = true;
         colAttr.needsUpdate = true;
         sizeAttr.needsUpdate = true;
+        if (frameAttr) frameAttr.needsUpdate = true;
+        syncGeneratorTextureUniforms(state);
 
         if (statEl) statEl.textContent = `Particles: ${pArr.length}`;
         else {
@@ -1061,6 +1217,8 @@ export function initPreview(ctx = {}) {
             c0,
             c1,
             sign: intNum(card?.template?.sign, 0),
+            effectClass: String(card?.template?.effectClass || "").trim(),
+            useTexture: card?.template?.useTexture !== false,
             respawnCount: 0,
             seed: (Math.random() * 1e9) | 0,
             pitch,

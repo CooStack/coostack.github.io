@@ -38,6 +38,12 @@ import {
 	validateDoTickExpressionSource,
 	normalizeDoTickExpression,
 } from "./do_tick_expression.js";
+import {
+    loadAllParticleData,
+    getParticleDataByName,
+    getParticleEffectNames,
+    setBasePath,
+} from "../../particles/particle_data_loader.js";
 
 (() => {
     const EMITTER_TYPE_META = {
@@ -86,6 +92,7 @@ import {
         "particle.velSpeedMax": "速度倍率上限。",
         "particle.visibleRange": "可见范围（作用于游戏渲染距离）。",
 
+        "template.effectClass": "粒子效果类（决定粒子纹理和渲染方式）。",
         "template.alpha": "透明度（0~1）。",
         "template.light": "亮度（0~15）。",
         "template.sign": "粒子 sign 标识（用于 Command 过滤）。",
@@ -137,6 +144,7 @@ import {
         "emitter.spiral.axis.x": "螺旋轴 X（会 normalize）。",
         "emitter.spiral.axis.y": "螺旋轴 Y（会 normalize）。",
         "emitter.spiral.axis.z": "螺旋轴 Z（会 normalize）。",
+        "template.useTexture": "预览是否使用纹理渲染；关闭后始终使用纯色点渲染。",
     };
 
     const uid = () => (Math.random().toString(16).slice(2) + Date.now().toString(16)).slice(0, 12);
@@ -186,6 +194,8 @@ import {
             colorEnd: "#d04dff",
         },
         template: {
+            effectClass: "ControlableEndRodEffect",
+            useTexture: true,
             alpha: 1.0,
             light: 15,
             faceToCamera: true,
@@ -209,6 +219,7 @@ import {
         emitters: [makeDefaultEmitterCard()],
         playing: true,
         autoPaused: false,
+        focusedEmitterId: "",
         ticksPerSecond: 20,
         fullscreen: false,
         kotlin: {
@@ -614,6 +625,8 @@ import {
 
 
         const template = card.template || (card.template = {});
+        template.effectClass = String(template.effectClass || "ControlableEndRodEffect").trim();
+        template.useTexture = (template.useTexture !== false);
         template.alpha = normalizeNumExpr(template.alpha, 1.0, { min: 0, max: 1 });
         template.light = normalizeNumExpr(template.light, 15, { int: true, min: 0, max: 15 });
         template.faceToCamera = (template.faceToCamera !== false);
@@ -2410,6 +2423,17 @@ function setVelocitySection($card, mode) {
         });
     }
 
+    function buildEffectClassOptionsHtml(selected) {
+        const dynamicNames = getParticleEffectNames();
+        const base = ["ControlableEndRodEffect", "ControlableCloudEffect"];
+        const all = Array.from(new Set([...base, ...dynamicNames, String(selected || "").trim()].filter(Boolean)));
+        return all.map((name) => {
+            const pData = getParticleDataByName(name);
+            const label = pData && pData.displayName ? `${name} (${pData.displayName})` : name;
+            return `<option value="${escapeHtml(name)}" ${name === selected ? "selected" : ""}>${escapeHtml(label)}</option>`;
+        }).join("");
+    }
+
     function renderEmitterList() {
         const $list = $("#emitList");
         $list.empty();
@@ -2589,6 +2613,19 @@ function setVelocitySection($card, mode) {
                 `    </div>`,
                 
 `    <div class="panel-subtitle">模板参数（高级）</div>`,
+`    <div class="field" style="margin-bottom:6px">`,
+`      <label>粒子效果类</label>`,
+`      <select class="emitInput" data-key="template.effectClass" data-type="string">`,
+`        ${buildEffectClassOptionsHtml(card.template && card.template.effectClass)}`,
+`      </select>`,
+`    </div>`,
+`    <div class="field" style="margin-bottom:6px">`,
+`      <label>预览纹理渲染</label>`,
+`      <select class="emitInput" data-key="template.useTexture" data-type="bool">`,
+`        <option value="1" ${(card.template && card.template.useTexture === false) ? "" : "selected"}>启用</option>`,
+`        <option value="0" ${(card.template && card.template.useTexture === false) ? "selected" : ""}>关闭</option>`,
+`      </select>`,
+`    </div>`,
 `    <div class="grid3">`,
 `      <div class="field">`,
 `        <label>alpha（0~1）</label>`,
@@ -2836,6 +2873,7 @@ function setVelocitySection($card, mode) {
             $card.find('[data-key="externalTemplate"]').val(card.externalTemplate ? "1" : "0");
             $card.find('[data-key="externalData"]').val(card.externalData ? "1" : "0");
             $card.find('[data-key="particle.velMode"]').val(card.particle && card.particle.velMode ? card.particle.velMode : "fixed");
+            $card.find('[data-key="template.useTexture"]').val((card.template && card.template.useTexture === false) ? "0" : "1");
             $card.find('[data-key="template.faceToCamera"]').val((card.template && card.template.faceToCamera === false) ? "0" : "1");
             $card.find('[data-key="emitter.box.surface"]').val(card.emitter.box.surface ? "1" : "0");
 
@@ -3071,6 +3109,8 @@ function setVelocitySection($card, mode) {
     }
 
     const EXTERNAL_TEMPLATE_SYNC_FIELDS = [
+        "template.effectClass",
+        "template.useTexture",
         "template.alpha",
         "template.light",
         "template.faceToCamera",
@@ -7887,6 +7927,7 @@ function setVelocitySection($card, mode) {
             if (focusedEmitterId !== id) {
                 handleEmitterCollapseFocusChange(focusedEmitterId, id);
                 focusedEmitterId = id;
+                state.focusedEmitterId = id;
             }
         });
 
@@ -7896,6 +7937,7 @@ function setVelocitySection($card, mode) {
             if (!focusedEmitterId) return;
             handleEmitterCollapseFocusChange(focusedEmitterId, null);
             focusedEmitterId = null;
+            state.focusedEmitterId = "";
         });
 
         $("#emitList").on("click", ".emitHead", function (e) {
@@ -7943,6 +7985,7 @@ function setVelocitySection($card, mode) {
                 return;
             }
             state.emitters = state.emitters.filter((it) => it.id !== id);
+            if (state.focusedEmitterId === id) state.focusedEmitterId = "";
             if (emitterSync) removeEmitterSyncTarget(id);
             cardHistory.push();
             renderEmitterList();
@@ -8753,6 +8796,11 @@ function setVelocitySection($card, mode) {
         ensureCommandQueuesState();
         syncEmitterBuilderVarContextStorage();
         const returnedEmitterId = consumeEmitterBuilderReturnState();
+
+        setBasePath("./");
+        loadAllParticleData().then(() => {
+            renderEmitterList();
+        });
 
         initPanelTools();
         applyStateToForm();

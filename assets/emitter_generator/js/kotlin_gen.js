@@ -929,6 +929,14 @@ function buildLocalDataApplyLines(card) {
       push("");
     }
 
+    const effectClass = String(card?.template?.effectClass || "ControlableEndRodEffect").trim();
+    if (effectClass) {
+      push(`${pad2}${tVar}.apply {`);
+      push(`${pad2}    effect = ${safeIdent(effectClass, "ControlableEndRodEffect")}(uuid)`);
+      push(`${pad2}}`);
+      push("");
+    }
+
     // res.addAll block
     push(`${pad2}res.addAll(`);
 
@@ -978,4 +986,3 @@ function buildLocalDataApplyLines(card) {
 
   return out.join("\n");
 }
-
