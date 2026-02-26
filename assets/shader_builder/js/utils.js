@@ -1,3 +1,9 @@
+import { debounce as sharedDebounce } from "../../src/js/shared/function.js";
+import { downloadTextFile, readTextFile } from "../../src/js/shared/file.js";
+import { clamp as sharedClamp, safeNum } from "../../src/js/shared/number.js";
+import { deepClone as sharedDeepClone } from "../../src/js/shared/object.js";
+import { escapeHtml as sharedEscapeHtml } from "../../src/js/shared/string.js";
+
 export function uid(prefix = "id") {
     if (globalThis.crypto && typeof globalThis.crypto.randomUUID === "function") {
         return `${prefix}_${globalThis.crypto.randomUUID().replace(/-/g, "").slice(0, 12)}`;
@@ -5,47 +11,23 @@ export function uid(prefix = "id") {
     return `${prefix}_${Math.random().toString(16).slice(2, 10)}${Date.now().toString(16).slice(-6)}`;
 }
 
-export function deepClone(value) {
-    if (typeof structuredClone === "function") return structuredClone(value);
-    return JSON.parse(JSON.stringify(value));
-}
+export const deepClone = sharedDeepClone;
 
 export function clamp(value, min, max) {
-    const n = Number(value);
-    if (!Number.isFinite(n)) return min;
-    return Math.max(min, Math.min(max, n));
+    return sharedClamp(safeNum(value, min), min, max);
 }
 
-export function debounce(fn, delay = 200) {
-    let timer = 0;
-    return (...args) => {
-        clearTimeout(timer);
-        timer = setTimeout(() => fn(...args), delay);
-    };
-}
+export const debounce = sharedDebounce;
 
 export async function readFileAsText(file) {
-    return await file.text();
+    return await readTextFile(file);
 }
 
 export function downloadText(filename, text) {
-    const blob = new Blob([text], { type: "text/plain;charset=utf-8" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = filename;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    URL.revokeObjectURL(url);
+    downloadTextFile(filename, text, "text/plain;charset=utf-8");
 }
 
-export function escapeHtml(text) {
-    return String(text)
-        .replaceAll("&", "&amp;")
-        .replaceAll("<", "&lt;")
-        .replaceAll(">", "&gt;");
-}
+export const escapeHtml = sharedEscapeHtml;
 
 export function sanitizeProjectName(name) {
     const n = (name || "shader-workbench").trim();

@@ -3,7 +3,7 @@ import { createBuilderTools } from "../../points_builder/js/builder.js";
 
 const U = globalThis.Utils;
 if (!U) {
-    throw new Error("Utils not found: load assets/points_builder/js/utils.js before using points builder bridge");
+    throw new Error("Utils not found: load assets/src/js/compat/install-legacy-globals.js before using points builder bridge");
 }
 
 function deepClone(value) {

@@ -259,62 +259,6 @@
 
 </div>
 
-<script>
-    window.__PB_STORAGE_PREFIX = "egpb_";
-    (() => {
-        const prefix = String(window.__PB_STORAGE_PREFIX || "");
-        const mapKey = (key) => {
-            const raw = String(key ?? "");
-            return raw.startsWith("pb_") ? `${prefix}${raw}` : raw;
-        };
-
-        const proto = Storage.prototype;
-        if (!proto.__egpbPatched) {
-            const rawGet = proto.getItem;
-            const rawSet = proto.setItem;
-            const rawRemove = proto.removeItem;
-            proto.getItem = function (key) {
-                return rawGet.call(this, mapKey(key));
-            };
-            proto.setItem = function (key, value) {
-                return rawSet.call(this, mapKey(key), value);
-            };
-            proto.removeItem = function (key) {
-                return rawRemove.call(this, mapKey(key));
-            };
-            Object.defineProperty(proto, "__egpbPatched", { value: true, configurable: false, enumerable: false });
-        }
-
-        window.addEventListener("DOMContentLoaded", () => {
-            document.querySelector(".layout")?.classList.add("kotlin-hidden");
-            const realtimeKotlin = document.getElementById("chkRealtimeKotlin");
-            const realtimeLabel = realtimeKotlin?.closest("label");
-            if (realtimeLabel) realtimeLabel.style.display = "none";
-            if (realtimeKotlin) {
-                realtimeKotlin.checked = false;
-                realtimeKotlin.disabled = true;
-            }
-            const back = document.getElementById("btnBackEmitterGenerator");
-            if (!back) return;
-            const params = new URLSearchParams(window.location.search);
-            const returnPage = params.get("return") || "../../generator.html";
-            const emitterId = params.get("emit") || "";
-            back.addEventListener("click", (ev) => {
-                ev.preventDefault();
-                if (window.parent && window.parent !== window) {
-                    window.parent.postMessage({ type: "egpb-builder-return" }, "*");
-                } else {
-                    try {
-                        if (emitterId) localStorage.setItem("egpb_return_emitter_v1", emitterId);
-                    } catch {
-                    }
-                    window.location.href = `./${returnPage}`;
-                }
-            });
-        });
-    })();
-</script>
-
 <script type="importmap">
     {
       "imports": {
@@ -323,8 +267,6 @@
       }
     }
 </script>
-<script src="../points_builder/js/utils.js"></script>
-<script src="../blog/js/codehighlight.js"></script>
-<script type="module" src="../points_builder/js/main.js"></script>
+<script type="module" src="../src/js/pages/emitter-pointsbuilder.page.js"></script>
 </body>
 </html>

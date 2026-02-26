@@ -275,65 +275,6 @@
 
 </div>
 
-<script>
-    window.__PB_STORAGE_PREFIX = "cpb_";
-    (() => {
-        const prefix = String(window.__PB_STORAGE_PREFIX || "");
-        const mapKey = (key) => {
-            const raw = String(key ?? "");
-            return raw.startsWith("pb_") ? `${prefix}${raw}` : raw;
-        };
-
-        const proto = Storage.prototype;
-        if (!proto.__cpbPatched) {
-            const rawGet = proto.getItem;
-            const rawSet = proto.setItem;
-            const rawRemove = proto.removeItem;
-            proto.getItem = function (key) {
-                return rawGet.call(this, mapKey(key));
-            };
-            proto.setItem = function (key, value) {
-                return rawSet.call(this, mapKey(key), value);
-            };
-            proto.removeItem = function (key) {
-                return rawRemove.call(this, mapKey(key));
-            };
-            Object.defineProperty(proto, "__cpbPatched", { value: true, configurable: false, enumerable: false });
-        }
-
-        window.addEventListener("DOMContentLoaded", () => {
-            document.querySelector(".layout")?.classList.add("kotlin-hidden");
-            const realtimeKotlin = document.getElementById("chkRealtimeKotlin");
-            const realtimeLabel = realtimeKotlin?.closest("label");
-            if (realtimeLabel) realtimeLabel.style.display = "none";
-            if (realtimeKotlin) {
-                realtimeKotlin.checked = false;
-                realtimeKotlin.disabled = true;
-            }
-            const back = document.getElementById("btnBackComposition");
-            if (!back) return;
-            const params = new URLSearchParams(window.location.search);
-            const returnPage = params.get("return") || "composition_builder.html";
-            const cardId = params.get("card") || "";
-            const rawTarget = String(params.get("target") || "").trim();
-            const target = (/^shape_level:\d+$/.test(rawTarget) || rawTarget === "shape" || rawTarget === "shape_child") ? rawTarget : "root";
-            back.addEventListener("click", (ev) => {
-                ev.preventDefault();
-                if (window.parent && window.parent !== window) {
-                    window.parent.postMessage({ type: "cpb-builder-return" }, "*");
-                } else {
-                    try {
-                        if (cardId) localStorage.setItem("cpb_return_card_v1", cardId);
-                        localStorage.setItem("cpb_return_target_v1", target);
-                    } catch {
-                    }
-                    window.location.href = `./${returnPage}`;
-                }
-            });
-        });
-    })();
-</script>
-
 <script type="importmap">
     {
       "imports": {
@@ -342,9 +283,7 @@
       }
     }
 </script>
-<script src="./assets/points_builder/js/utils.js"></script>
-<script src="./assets/blog/js/codehighlight.js"></script>
-<script type="module" src="./assets/points_builder/js/main.js"></script>
+<script type="module" src="./assets/src/js/pages/composition-pointsbuilder.page.js"></script>
 </body>
 </html>
 

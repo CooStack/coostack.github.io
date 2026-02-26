@@ -1,12 +1,12 @@
-export const clamp = (v, a, b) => Math.min(Math.max(v, a), b);
+import { clamp as sharedClamp, safeNum as sharedSafeNum } from "../../src/js/shared/number.js";
+import { escapeHtml as sharedEscapeHtml } from "../../src/js/shared/string.js";
+import { deepAssign as sharedDeepAssign, deepCopy as sharedDeepCopy } from "../../src/js/shared/object.js";
+
+export const clamp = sharedClamp;
 export const lerp = (a, b, t) => a + (b - a) * t;
 export const rand = (a, b) => a + Math.random() * (b - a);
 export const randInt = (a, b) => Math.floor(rand(a, b + 1));
-
-export const safeNum = (v, def = 0) => {
-    const n = Number(v);
-    return Number.isFinite(n) ? n : def;
-};
+export const safeNum = sharedSafeNum;
 
 export function isNumericLiteral(v) {
     const s = String(v ?? "").trim();
@@ -60,30 +60,9 @@ export function indent(s, spaces) {
     return s.split("\n").map((line, i) => (i === 0 ? line : pad + line)).join("\n");
 }
 
-export function escapeHtml(s) {
-    return String(s ?? "").replace(/[&<>"']/g, (m) => ({
-        "&": "&amp;",
-        "<": "&lt;",
-        ">": "&gt;",
-        '"': "&quot;",
-        "'": "&#39;",
-    })[m]);
-}
-
-export const deepCopy = (o) => JSON.parse(JSON.stringify(o));
-
-export function deepAssign(dst, src) {
-    if (!src || typeof src !== "object") return;
-    for (const k of Object.keys(src)) {
-        const v = src[k];
-        if (v && typeof v === "object" && !Array.isArray(v)) {
-            if (!dst[k] || typeof dst[k] !== "object") dst[k] = {};
-            deepAssign(dst[k], v);
-        } else {
-            dst[k] = v;
-        }
-    }
-}
+export const escapeHtml = sharedEscapeHtml;
+export const deepCopy = sharedDeepCopy;
+export const deepAssign = sharedDeepAssign;
 
 export function countDecimalsFromString(value) {
     const text = String(value ?? "").trim().toLowerCase();
