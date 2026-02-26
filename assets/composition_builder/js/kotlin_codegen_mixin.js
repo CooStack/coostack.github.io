@@ -641,36 +641,27 @@ export function installKotlinCodegenMethods(CompositionBuilderApp, deps = {}) {
             targetLines.push(`${callIndent}    timeline.doTick()`);
             targetLines.push(`${callIndent}}`);
         };
-        if (displayActions.length) {
+        if (displayActions.length || useAngleOffsetAnimator || needReverseScale) {
+            const blockLines = [];
+            if (useAngleOffsetAnimator) appendOffsetAnimator(blockLines);
             for (let i = 0; i < displayActions.length; i++) {
                 const act = displayActions[i];
                 const toExpr = this.rewriteRelativeTargetExpr(String(act.toExpr || act.toPreset || "RelativeLocation.yAxis()"), className);
                 const angleExpr = act.angleMode === "expr"
                     ? this.rewriteCodeExpr(String(act.angleExpr || "0.0"), className)
                     : U.angleToKotlinRadExpr(num(act.angleValue), normalizeAngleUnit(act.angleUnit));
-                const blockLines = [];
-                if (useAngleOffsetAnimator && i === 0) appendOffsetAnimator(blockLines);
-                const usePreTickWrapper = act.type === "expression"
-                    || act.type === "rotateToWithAngle"
-                    || (act.type === "rotateAsAxis" && act.angleMode === "expr");
                 if (act.type === "rotateToPoint") {
-                    blockLines.push(`${innerIndent}    rotateToPoint(${toExpr})`);
+                    blockLines.push(`${innerIndent}    addPreTickAction {`);
+                    blockLines.push(`${innerIndent}        rotateToPoint(${toExpr})`);
+                    blockLines.push(`${innerIndent}    }`);
                 } else if (act.type === "rotateAsAxis") {
-                    if (usePreTickWrapper) {
-                        blockLines.push(`${innerIndent}    addPreTickAction {`);
-                        blockLines.push(`${innerIndent}        rotateAsAxis(${angleExpr})`);
-                        blockLines.push(`${innerIndent}    }`);
-                    } else {
-                        blockLines.push(`${innerIndent}    rotateAsAxis(${angleExpr})`);
-                    }
+                    blockLines.push(`${innerIndent}    addPreTickAction {`);
+                    blockLines.push(`${innerIndent}        rotateAsAxis(${angleExpr})`);
+                    blockLines.push(`${innerIndent}    }`);
                 } else if (act.type === "rotateToWithAngle") {
-                    if (usePreTickWrapper) {
-                        blockLines.push(`${innerIndent}    addPreTickAction {`);
-                        blockLines.push(`${innerIndent}        rotateToWithAngle(${toExpr}, ${angleExpr})`);
-                        blockLines.push(`${innerIndent}    }`);
-                    } else {
-                        blockLines.push(`${innerIndent}    rotateToWithAngle(${toExpr}, ${angleExpr})`);
-                    }
+                    blockLines.push(`${innerIndent}    addPreTickAction {`);
+                    blockLines.push(`${innerIndent}        rotateToWithAngle(${toExpr}, ${angleExpr})`);
+                    blockLines.push(`${innerIndent}    }`);
                 } else if (act.type === "expression") {
                     const rawExpr = String(act.expression || "").trim();
                     const check = this.validateJsExpressionSource(rawExpr, { cardId: card.id, scope: scopeInfo || undefined });
@@ -681,23 +672,16 @@ export function installKotlinCodegenMethods(CompositionBuilderApp, deps = {}) {
                         blockLines.push(`${innerIndent}    }`);
                     }
                 }
-                if (needReverseScale && i === displayActions.length - 1) {
-                    const cls = sanitizeKotlinClassName(className);
-                    blockLines.push(`${innerIndent}    setReversedScaleOnCompositionStatus(this@${cls})`);
-                }
-                if (!blockLines.length) continue;
+            }
+            if (needReverseScale) {
+                const cls = sanitizeKotlinClassName(className);
+                blockLines.push(`${innerIndent}    setReversedScaleOnCompositionStatus(this@${cls})`);
+            }
+            if (blockLines.length) {
                 lines.push(`${innerIndent}applyDisplayAction {`);
                 lines.push(...blockLines);
                 lines.push(`${innerIndent}}`);
             }
-        } else if (useAngleOffsetAnimator || needReverseScale) {
-            lines.push(`${innerIndent}applyDisplayAction {`);
-            if (useAngleOffsetAnimator) appendOffsetAnimator(lines);
-            if (needReverseScale) {
-                const cls = sanitizeKotlinClassName(className);
-                lines.push(`${innerIndent}    setReversedScaleOnCompositionStatus(this@${cls})`);
-            }
-            lines.push(`${innerIndent}}`);
         }
         if (supportsAnimate && card.growthAnimates?.length) {
             const arr = card.growthAnimates.map((a) => normalizeAnimate(a));

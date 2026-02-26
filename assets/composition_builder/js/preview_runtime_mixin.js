@@ -1041,6 +1041,7 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
                         elapsedTick: pointElapsedTick,
                         ageTick: pointAgeTick,
                         currentAge: persistedCurrentAge,
+                        keepInitializedCurrentAge: manualAgeFlags[i] === 1,
                         pointIndex: localIndex
                     });
                     byLocal[localIndex] = pointVisual;
@@ -1052,7 +1053,8 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
                         runtimeVars: frameRuntimeGlobals,
                         elapsedTick: cached.elapsedTick,
                         ageTick: cached.age,
-                        currentAge: 0,
+                        currentAge: persistedCurrentAge,
+                        keepInitializedCurrentAge: manualAgeFlags[i] === 1,
                         pointIndex: 0
                     });
                     if (groupId >= 0) ownerVisualCache[groupId] = pointVisual;
@@ -1069,6 +1071,7 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
             }
             resolvedCurrentAges[i] = resolvedCurrentAge;
             persistentCurrentAges[i] = resolvedCurrentAge;
+            manualAgeFlags[i] = hasManualCurrentAge ? 1 : 0;
             const resolvedLifetimeRaw = Number(pointVisual?.__resolvedLifetime);
             if (Number.isFinite(resolvedLifetimeRaw) && resolvedLifetimeRaw >= 1) {
                 resolvedLifetimes[i] = resolvedLifetimeRaw;
@@ -2336,6 +2339,7 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
         const elapsedTick = num(opts.elapsedTick);
         const ageTick = num(opts.ageTick);
         const pointIndex = int(opts.pointIndex || 0);
+        const keepInitializedCurrentAge = opts.keepInitializedCurrentAge === true;
         const fallback = { color: this.getCardColorRgb(cardId), size: 0.2, alpha: 1 };
         const card = this.getCardById(cardId);
         if (!card) return fallback;
@@ -2347,26 +2351,42 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
             ? Math.max(0, num(opts.currentAge))
             : 0;
         let manualCurrentAge = false;
+        const evalRuntimeVars = runtimeVars ? Object.create(runtimeVars) : {};
+        evalRuntimeVars.currentAge = resolvedCurrentAge;
+        evalRuntimeVars.lifetime = Number.isFinite(Number(runtimeVars?.lifetime))
+            ? Math.max(1, int(runtimeVars.lifetime))
+            : 100;
+        evalRuntimeVars.textureSheet = Number.isFinite(Number(runtimeVars?.textureSheet))
+            ? int(runtimeVars.textureSheet)
+            : 0;
         for (const it of (card.particleInit || [])) {
             const target = String(it.target || "").trim().toLowerCase();
             const expr = String(it.expr || "").trim();
             if (!expr) continue;
             if (target === "color" || target === "particlecolor" || target === "particle.particlecolor") {
-                const vec = this.parseVecLikeValueWithRuntime(expr, runtimeVars, { elapsedTick, ageTick, pointIndex });
+                const vec = this.parseVecLikeValueWithRuntime(expr, evalRuntimeVars, { elapsedTick, ageTick, pointIndex });
                 visual.color = [clamp(num(vec.x), 0, 1), clamp(num(vec.y), 0, 1), clamp(num(vec.z), 0, 1)];
             }
             if (target === "size" || target === "particlesize" || target === "particle.particlesize") {
-                visual.size = Math.max(0.05, num(this.evaluateNumericExpressionWithRuntime(expr, runtimeVars, { elapsedTick, ageTick, pointIndex })));
+                visual.size = Math.max(0.05, num(this.evaluateNumericExpressionWithRuntime(expr, evalRuntimeVars, { elapsedTick, ageTick, pointIndex })));
             }
             if (target === "alpha" || target === "particlealpha" || target === "particle.particlealpha") {
-                visual.alpha = clamp(num(this.evaluateNumericExpressionWithRuntime(expr, runtimeVars, { elapsedTick, ageTick, pointIndex })), 0, 1);
+                visual.alpha = clamp(num(this.evaluateNumericExpressionWithRuntime(expr, evalRuntimeVars, { elapsedTick, ageTick, pointIndex })), 0, 1);
             }
             if (target === "lifetime" || target === "particle.lifetime") {
-                visual.__resolvedLifetime = Math.max(1, int(this.evaluateNumericExpressionWithRuntime(expr, runtimeVars, { elapsedTick, ageTick, pointIndex })));
+                const nextLifetime = Math.max(1, int(this.evaluateNumericExpressionWithRuntime(expr, evalRuntimeVars, { elapsedTick, ageTick, pointIndex })));
+                visual.__resolvedLifetime = nextLifetime;
+                evalRuntimeVars.lifetime = nextLifetime;
             }
             if (target === "currentage" || target === "age" || target === "particle.currentage") {
-                resolvedCurrentAge = Math.max(0, int(this.evaluateNumericExpressionWithRuntime(expr, runtimeVars, { elapsedTick, ageTick, pointIndex })));
-                manualCurrentAge = true;
+                if (keepInitializedCurrentAge) {
+                    resolvedCurrentAge = Math.max(0, num(resolvedCurrentAge));
+                    manualCurrentAge = true;
+                } else {
+                    resolvedCurrentAge = Math.max(0, int(this.evaluateNumericExpressionWithRuntime(expr, evalRuntimeVars, { elapsedTick, ageTick, pointIndex })));
+                    manualCurrentAge = true;
+                }
+                evalRuntimeVars.currentAge = resolvedCurrentAge;
             }
         }
         const controllerActions = Array.isArray(card.controllerActions) ? card.controllerActions : [];
@@ -2408,10 +2428,17 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
             const target = String(it?.target || "").trim().toLowerCase();
             if (target !== "color" && target !== "particlecolor" && target !== "particle.particlecolor"
                 && target !== "size" && target !== "particlesize" && target !== "particle.particlesize"
-                && target !== "alpha" && target !== "particlealpha" && target !== "particle.particlealpha") {
+                && target !== "alpha" && target !== "particlealpha" && target !== "particle.particlealpha"
+                && target !== "currentage" && target !== "age" && target !== "particle.currentage"
+                && target !== "lifetime" && target !== "particle.lifetime"
+                && target !== "texturesheet" && target !== "particle.texturesheet") {
                 continue;
             }
-            if (this.isScriptAgeDependent(String(it?.expr || ""))) return true;
+            const expr = String(it?.expr || "").trim();
+            if (!expr) continue;
+            if (target === "currentage" || target === "age" || target === "particle.currentage") return true;
+            if (this.isScriptAgeDependent(expr)) return true;
+            if (/\bRandom\b/.test(stripJsForLint(transpileKotlinThisQualifierToJs(expr)))) return true;
         }
         for (const action of (card.controllerActions || [])) {
             if (this.isScriptAgeDependent(String(action?.script || ""))) return true;
