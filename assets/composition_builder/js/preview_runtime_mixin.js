@@ -1941,7 +1941,32 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
         const chain = this.getShapeChildChain(card);
         for (const levelRaw of chain) {
             const level = normalizeShapeNestedLevel(levelRaw);
-            if (String(level.type || "single") === "single") break;
+            if (String(level.type || "single") === "single") {
+                const levelOffsetCfg = this.resolvePreviewAngleOffsetConfig(level);
+                const levelRepeatCount = levelOffsetCfg ? Math.max(1, int(levelOffsetCfg.count || 1)) : 1;
+                if (levelRepeatCount > 1) {
+                    const repeated = [];
+                    for (const tuple of tuples) {
+                        const baseLevels = Array.isArray(tuple?.levels) ? tuple.levels : [];
+                        for (let repeatIndex = 0; repeatIndex < levelRepeatCount; repeatIndex++) {
+                            const levels = baseLevels.map((lv) => ({
+                                vec: U.v(num(lv?.vec?.x), num(lv?.vec?.y), num(lv?.vec?.z)),
+                                ref: int(lv?.ref || 0),
+                                offsetIndex: int(lv?.offsetIndex ?? 0)
+                            }));
+                            if (levels.length) {
+                                levels[levels.length - 1].offsetIndex = repeatIndex;
+                            }
+                            repeated.push({
+                                sum: U.v(num(tuple?.sum?.x), num(tuple?.sum?.y), num(tuple?.sum?.z)),
+                                levels
+                            });
+                        }
+                    }
+                    tuples = repeated;
+                }
+                break;
+            }
             const src = this.resolveShapeSourcePoints(level.bindMode, level.point, level.builderState);
             if (!src.length) return [];
             const levelOffsetCfg = this.resolvePreviewAngleOffsetConfig(level);
@@ -2029,7 +2054,7 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
         const chain = this.getShapeChildChain(card);
         for (let i = 0; i < chain.length; i++) {
             const lv = normalizeShapeNestedLevel(chain[i], i);
-            if (lv.type === "single") break;
+            if (lv.type === "single" && i > 0) break;
             const scope = this.getShapeScopeInfoByRuntimeLevel(card, i + 1);
             const actions = this.buildPreviewRuntimeActions(elapsedTick, lv.displayActions || [], {
                 skipExpression,
@@ -2283,6 +2308,12 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
             get() { return num(runtimeCtx.lifetime); },
             set(v) { runtimeCtx.lifetime = Math.max(1, int(v)); }
         });
+        Object.defineProperty(vars, "lifeTime", {
+            configurable: true,
+            enumerable: true,
+            get() { return num(runtimeCtx.lifetime); },
+            set(v) { runtimeCtx.lifetime = Math.max(1, int(v)); }
+        });
         vars.tick = num(baseVars.tick);
         vars.index = int(baseVars.index);
         vars.thisAt = thisAtVars;
@@ -2356,6 +2387,7 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
         evalRuntimeVars.lifetime = Number.isFinite(Number(runtimeVars?.lifetime))
             ? Math.max(1, int(runtimeVars.lifetime))
             : 100;
+        evalRuntimeVars.lifeTime = evalRuntimeVars.lifetime;
         evalRuntimeVars.textureSheet = Number.isFinite(Number(runtimeVars?.textureSheet))
             ? int(runtimeVars.textureSheet)
             : 0;
@@ -2377,6 +2409,7 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
                 const nextLifetime = Math.max(1, int(this.evaluateNumericExpressionWithRuntime(expr, evalRuntimeVars, { elapsedTick, ageTick, pointIndex })));
                 visual.__resolvedLifetime = nextLifetime;
                 evalRuntimeVars.lifetime = nextLifetime;
+                evalRuntimeVars.lifeTime = nextLifetime;
             }
             if (target === "currentage" || target === "age" || target === "particle.currentage") {
                 if (keepInitializedCurrentAge) {
