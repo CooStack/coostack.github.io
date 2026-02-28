@@ -72,6 +72,7 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
         const useLocalOpsList = [];
         const rootOffsetIndexList = [];
         const rootVirtualIndexList = [];
+        const leafTextureConfigs = [];
         const getRootRepeatCount = (card) => {
             if (!card || card.dataType === "single") return 1;
             const cfg = this.resolvePreviewAngleOffsetConfig(card);
@@ -89,6 +90,7 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
             const src = Array.isArray(pointList) ? pointList : [];
             const len = Math.max(1, src.length);
             const rootStart = int(rootVirtualStarts.get(card?.id) || 0);
+            const cardTextureCfg = this.resolvePreviewTextureConfigForCard(card);
             for (let idx = 0; idx < src.length; idx++) {
                 const p = src[idx];
                 const v = U.v(num(p?.x), num(p?.y), num(p?.z));
@@ -107,6 +109,7 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
                 useLocalOpsList.push(false);
                 rootOffsetIndexList.push(0);
                 rootVirtualIndexList.push(rootStart);
+                leafTextureConfigs.push(cardTextureCfg);
             }
         };
         const appendShapePoints = (card, anchors, locals) => {
@@ -125,6 +128,7 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
                         const tupleSum = tuple.sum || tuple.local || tuple;
                         const l = U.v(num(tupleSum?.x), num(tupleSum?.y), num(tupleSum?.z));
                         const tupleLevels = Array.isArray(tuple.levels) ? tuple.levels : [];
+                        const tupleTextureCfg = tuple.textureCfg || this.resolvePreviewTextureConfigForCard(card);
                         points.push(U.v(a.x + l.x, a.y + l.y, a.z + l.z));
                         owners.push(card.id);
                         birthOffsets.push(0);
@@ -140,6 +144,7 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
                         useLocalOpsList.push(true);
                         rootOffsetIndexList.push(repeatIndex);
                         rootVirtualIndexList.push(rootStart + repeatIndex);
+                        leafTextureConfigs.push(tupleTextureCfg);
                     }
                 }
             }
@@ -184,6 +189,7 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
         this.previewRootOffsetIndex = rootOffsetIndexList;
         this.previewRootVirtualIndex = rootVirtualIndexList;
         this.previewRootVirtualTotal = rootVirtualTotal;
+        this.previewLeafTextureConfigs = leafTextureConfigs;
         this.rebuildPreviewRuntimeIndex();
         this.previewAnimStart = performance.now();
         this.updatePreviewGeometry(points, owners);
@@ -1122,13 +1128,36 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
         return TEXTURE_EFFECT_NAME_SET.has(name);
     }
 
+    normalizePreviewTextureConfig(raw, fallback = null) {
+        const base = (fallback && typeof fallback === "object")
+            ? fallback
+            : { effectClass: "", useTexture: false };
+        const effectClass = String(raw?.effectClass ?? base.effectClass ?? "").trim();
+        const useTexture = raw?.useTexture !== undefined
+            ? raw.useTexture !== false
+            : base.useTexture !== false;
+        return { effectClass, useTexture };
+    }
+
+    resolvePreviewTextureConfigForCard(card) {
+        return this.normalizePreviewTextureConfig({
+            effectClass: String(card?.singleEffectClass || ""),
+            useTexture: card?.singleUseTexture !== false
+        });
+    }
+
+    resolvePreviewTextureConfigForShapeLeaf(node, card) {
+        const cardCfg = this.resolvePreviewTextureConfigForCard(card);
+        return this.normalizePreviewTextureConfig({
+            effectClass: String(node?.effectClass || cardCfg.effectClass || ""),
+            useTexture: node?.useTexture !== false
+        }, cardCfg);
+    }
+
     resolvePreviewLeafTextureConfig(card) {
         if (!card) return { effectClass: "", useTexture: false };
         if (String(card.dataType || "single") === "single") {
-            return {
-                effectClass: String(card.singleEffectClass || ""),
-                useTexture: card.singleUseTexture !== false,
-            };
+            return this.resolvePreviewTextureConfigForCard(card);
         }
         // traverse tree to find first single leaf
         const findLeaf = (children) => {
@@ -1136,17 +1165,14 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
             for (const child of children) {
                 if (!child) continue;
                 if (String(child.type || "single") === "single") {
-                    return {
-                        effectClass: String(child.effectClass || card.singleEffectClass || ""),
-                        useTexture: child.useTexture !== false,
-                    };
+                    return this.resolvePreviewTextureConfigForShapeLeaf(child, card);
                 }
                 const found = findLeaf(child.children);
                 if (found) return found;
             }
             return null;
         };
-        return findLeaf(card.shapeChildren || []) || { effectClass: String(card.singleEffectClass || ""), useTexture: true };
+        return findLeaf(card.shapeChildren || []) || this.resolvePreviewTextureConfigForCard(card);
     }
 
     updatePreviewFrameIndices(elapsedTick, cycleCfg, groupRuntimeCache, pointGroupIndex, totalCount) {
@@ -1159,6 +1185,7 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
         const resolvedLifetimes = this.previewFrameLifetimes;
         const ownerIds = this.previewOwners;
         const cardById = this.previewCardById;
+        const pointTextureCfgs = Array.isArray(this.previewLeafTextureConfigs) ? this.previewLeafTextureConfigs : [];
         const mergedOffsets = this._mergedAtlasOffsets;
         const textureConfigCache = new Map();
         const resolveTextureConfig = (owner) => {
@@ -1174,7 +1201,7 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
             if (!this.previewVisibleMask[i]) { frameIndices[i] = 0; continue; }
             const groupId = (pointGroupIndex && i < pointGroupIndex.length) ? pointGroupIndex[i] : -1;
             const owner = groupId >= 0 ? (this.previewGroupOwner[groupId] || ownerIds[i]) : ownerIds[i];
-            const textureCfg = resolveTextureConfig(owner);
+            const textureCfg = pointTextureCfgs[i] || resolveTextureConfig(owner);
             if (!textureCfg?.useTexture || !textureCfg?.effectClass) { frameIndices[i] = 0; continue; }
             if (!this.isTextureEffectAllowed(textureCfg.effectClass)) { frameIndices[i] = 0; continue; }
             const pData = getParticleDataByName(textureCfg.effectClass);
@@ -1207,15 +1234,25 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
         const cards = Array.isArray(this.state?.cards) ? this.state.cards : [];
         const effectEntries = [];
         const seen = new Set();
-        for (const card of cards) {
-            const cfg = this.resolvePreviewLeafTextureConfig(card);
-            if (!cfg?.useTexture || !cfg?.effectClass) continue;
-            if (!this.isTextureEffectAllowed(cfg.effectClass)) continue;
+        const pointTextureCfgs = Array.isArray(this.previewLeafTextureConfigs) ? this.previewLeafTextureConfigs : [];
+        const pushTextureCfg = (cfg) => {
+            if (!cfg?.useTexture || !cfg?.effectClass) return;
+            if (!this.isTextureEffectAllowed(cfg.effectClass)) return;
             const pData = getParticleDataByName(cfg.effectClass);
-            if (!this.isParticleTextureRenderable(pData)) continue;
-            if (seen.has(cfg.effectClass)) continue;
+            if (!this.isParticleTextureRenderable(pData)) return;
+            if (seen.has(cfg.effectClass)) return;
             seen.add(cfg.effectClass);
             effectEntries.push({ effectClass: cfg.effectClass, pData });
+        };
+        if (pointTextureCfgs.length) {
+            for (const cfg of pointTextureCfgs) {
+                pushTextureCfg(cfg);
+            }
+        } else {
+            for (const card of cards) {
+                const cfg = this.resolvePreviewLeafTextureConfig(card);
+                pushTextureCfg(cfg);
+            }
         }
         if (!effectEntries.length) {
             shader.uniforms.uAtlas.value = null;
@@ -1936,42 +1973,52 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
         if (!children.length) return [];
         let allTuples = [];
         for (const child of children) {
-            const childTuples = this._buildTreeNodeTuplesForPreview(child, U.v(0, 0, 0), []);
+            const childTuples = this._buildTreeNodeTuplesForPreview(child, U.v(0, 0, 0), [], card);
             allTuples = allTuples.concat(childTuples);
         }
         return allTuples;
     }
 
-    _buildTreeNodeTuplesForPreview(node, parentSum, parentLevels) {
+    _buildTreeNodeTuplesForPreview(node, parentSum, parentLevels, rootCard = null) {
         if (!node) return [];
         const src = this.resolveShapeSourcePoints(node.bindMode, node.point, node.builderState);
         if (!src.length) return [];
         const nodeType = String(node.type || "single");
         const offsetCfg = this.resolvePreviewAngleOffsetConfig(node);
         const repeatCount = offsetCfg ? Math.max(1, int(offsetCfg.count || 1)) : 1;
-        if (nodeType === "single") {
+        const leafTextureCfg = this.resolvePreviewTextureConfigForShapeLeaf(node, rootCard);
+        const emitLeafTuples = (points, sumBase, levelsBase) => {
             const results = [];
-            for (const p of src) {
+            for (let si = 0; si < points.length; si++) {
+                const p = points[si];
                 const sv = U.v(num(p?.x), num(p?.y), num(p?.z));
                 for (let ri = 0; ri < repeatCount; ri++) {
-                    const levels = parentLevels.map((lv) => ({
+                    const levels = levelsBase.map((lv) => ({
                         vec: U.v(num(lv?.vec?.x), num(lv?.vec?.y), num(lv?.vec?.z)),
                         ref: int(lv?.ref || 0),
                         offsetIndex: int(lv?.offsetIndex ?? 0)
                     }));
-                    levels.push({ vec: U.clone(sv), ref: 0, offsetIndex: ri });
+                    levels.push({ vec: U.clone(sv), ref: si, offsetIndex: ri });
                     results.push({
-                        sum: U.v(num(parentSum?.x) + sv.x, num(parentSum?.y) + sv.y, num(parentSum?.z) + sv.z),
-                        levels
+                        sum: U.v(num(sumBase?.x) + sv.x, num(sumBase?.y) + sv.y, num(sumBase?.z) + sv.z),
+                        levels,
+                        textureCfg: leafTextureCfg
                     });
                 }
             }
             return results;
+        };
+        if (nodeType === "single") {
+            return emitLeafTuples(src, parentSum, parentLevels);
         }
         const nodeChildren = node.children || [];
-        if (!nodeChildren.length) return [];
+        // 非 single 节点若未配置 children，仍然按叶子节点产出点，避免并列分支丢失。
+        if (!nodeChildren.length) {
+            return emitLeafTuples(src, parentSum, parentLevels);
+        }
         let allTuples = [];
-        for (const p of src) {
+        for (let si = 0; si < src.length; si++) {
+            const p = src[si];
             const sv = U.v(num(p?.x), num(p?.y), num(p?.z));
             const newSum = U.v(num(parentSum?.x) + sv.x, num(parentSum?.y) + sv.y, num(parentSum?.z) + sv.z);
             for (let ri = 0; ri < repeatCount; ri++) {
@@ -1980,9 +2027,9 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
                     ref: int(lv?.ref || 0),
                     offsetIndex: int(lv?.offsetIndex ?? 0)
                 }));
-                newLevels.push({ vec: U.clone(sv), ref: 0, offsetIndex: ri });
+                newLevels.push({ vec: U.clone(sv), ref: si, offsetIndex: ri });
                 for (const child of nodeChildren) {
-                    const childTuples = this._buildTreeNodeTuplesForPreview(child, newSum, newLevels);
+                    const childTuples = this._buildTreeNodeTuplesForPreview(child, newSum, newLevels, rootCard);
                     allTuples = allTuples.concat(childTuples);
                 }
             }

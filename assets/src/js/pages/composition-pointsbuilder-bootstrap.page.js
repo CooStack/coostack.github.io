@@ -20,7 +20,11 @@ initStandaloneOrEmbeddedReturn({
   writeStorage(params, storage) {
     const cardId = params.get("card") || "";
     const rawTarget = String(params.get("target") || "").trim();
-    const target = /^shape_level:\d+$/.test(rawTarget) || rawTarget === "shape" || rawTarget === "shape_child"
+    const target = /^tree_node:/.test(rawTarget)
+      || /^shape_level:\d+$/.test(rawTarget)
+      || rawTarget === "shape"
+      || rawTarget === "shape_child"
+      || rawTarget === "root"
       ? rawTarget
       : "root";
 
