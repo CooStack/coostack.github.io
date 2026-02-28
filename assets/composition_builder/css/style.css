@@ -1766,3 +1766,78 @@ body[data-theme^="light"] select.input option {
         grid-template-columns: 1fr;
     }
 }
+
+/* ── Tree breadcrumb & children list ── */
+.tree-breadcrumb {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 6px 8px;
+    margin-bottom: 8px;
+    background: var(--panel2);
+    border-radius: var(--radius2);
+    font-size: 13px;
+    flex-wrap: wrap;
+}
+.tree-breadcrumb .crumb {
+    color: var(--muted);
+    padding: 2px 6px;
+    border-radius: 4px;
+    background: none;
+    border: none;
+    font: inherit;
+    font-size: inherit;
+    outline: none;
+}
+.tree-breadcrumb .crumb.active {
+    color: var(--accent);
+    font-weight: 600;
+}
+.tree-breadcrumb .crumb.clickable {
+    cursor: pointer;
+    transition: background .15s;
+}
+.tree-breadcrumb .crumb.clickable:hover {
+    background: var(--line2);
+    color: var(--text);
+}
+.tree-breadcrumb .crumb-sep {
+    color: var(--muted2);
+    font-size: 11px;
+}
+.children-list {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    margin-bottom: 8px;
+}
+.child-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 10px;
+    background: var(--panel);
+    border-radius: var(--radius2);
+    border: 1px solid var(--line);
+    transition: border-color .15s;
+}
+.child-row:hover {
+    border-color: var(--line2);
+}
+.child-row .child-name {
+    flex: 1;
+    font-size: 13px;
+    color: var(--text);
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.child-row .child-type.badge {
+    font-size: 11px;
+    padding: 1px 6px;
+    border-radius: 4px;
+    background: var(--line2);
+    color: var(--muted);
+    white-space: nowrap;
+}

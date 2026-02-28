@@ -631,6 +631,59 @@ function normalizeShapeNestedLevel(raw, index = 0) {
     return x;
 }
 
+function normalizeShapeTreeNode(raw = {}, index = 0) {
+    const x = Object.assign({}, raw || {});
+    x.id = x.id || uid();
+    x.name = String(x.name || `子节点 ${index + 1}`);
+    x.type = ["single", "particle_shape", "sequenced_shape"].includes(String(x.type || "")) ? String(x.type) : "single";
+    x.bindMode = x.bindMode === "builder" ? "builder" : "point";
+    x.point = x.point && typeof x.point === "object" ? x.point : { x: 0, y: 0, z: 0 };
+    x.point.x = num(x.point.x);
+    x.point.y = num(x.point.y);
+    x.point.z = num(x.point.z);
+    x.builderState = normalizeBuilderState(x.builderState);
+    x.axisPreset = String(x.axisPreset || "RelativeLocation.yAxis()");
+    x.axisExpr = String(x.axisExpr || x.axisPreset || "RelativeLocation.yAxis()");
+    x.axisManualCtor = normalizeVectorCtor(x.axisManualCtor || parseCtorInLiteral(x.axisExpr, "RelativeLocation"));
+    x.axisManualX = Number.isFinite(Number(x.axisManualX)) ? num(x.axisManualX) : 0;
+    x.axisManualY = Number.isFinite(Number(x.axisManualY)) ? num(x.axisManualY) : 1;
+    x.axisManualZ = Number.isFinite(Number(x.axisManualZ)) ? num(x.axisManualZ) : 0;
+    x.displayActions = Array.isArray(x.displayActions) ? x.displayActions.map((a) => normalizeDisplayAction(a)) : [];
+    x.angleOffsetEnabled = x.angleOffsetEnabled === true;
+    x.angleOffsetCount = Math.max(1, int(x.angleOffsetCount || 1));
+    x.angleOffsetGlowTick = Math.max(1, int(x.angleOffsetGlowTick || 20));
+    x.angleOffsetEase = normalizeAngleOffsetEaseName(x.angleOffsetEase || "outCubic");
+    x.angleOffsetReverseOnDisable = x.angleOffsetReverseOnDisable === true;
+    x.angleOffsetAngleMode = x.angleOffsetAngleMode === "expr" ? "expr" : "numeric";
+    x.angleOffsetAngleValue = Number.isFinite(Number(x.angleOffsetAngleValue)) ? num(x.angleOffsetAngleValue) : 360;
+    x.angleOffsetAngleUnit = normalizeAngleUnit(x.angleOffsetAngleUnit || "deg");
+    x.angleOffsetAngleExpr = String(x.angleOffsetAngleExpr || "PI * 2");
+    x.angleOffsetAnglePreset = String(x.angleOffsetAnglePreset || x.angleOffsetAngleExpr || "PI * 2");
+    x.scale = normalizeScaleHelperConfig(x.scale, { type: "none" });
+    x.growthAnimates = Array.isArray(x.growthAnimates) ? x.growthAnimates.map((it) => normalizeAnimate(it)) : [];
+    x.effectClass = String(x.effectClass || DEFAULT_EFFECT_CLASS);
+    x.useTexture = x.useTexture !== false;
+    x.particleInit = Array.isArray(x.particleInit) ? x.particleInit.map((it) => ({
+        id: it?.id || uid(),
+        target: String(it?.target || "size"),
+        expr: String(it?.expr || ""),
+        exprPreset: String(it?.exprPreset || "")
+    })) : [];
+    x.controllerVars = Array.isArray(x.controllerVars) ? x.controllerVars.map((it) => ({
+        id: it?.id || uid(),
+        name: String(it?.name || "tick"),
+        type: String(it?.type || "Boolean"),
+        expr: String(it?.expr || "true")
+    })) : [];
+    x.controllerActions = Array.isArray(x.controllerActions) ? x.controllerActions.map((it) => normalizeControllerAction(it)) : [];
+    if (x.type !== "single") {
+        x.children = Array.isArray(x.children) ? x.children.map((c, i) => normalizeShapeTreeNode(c, i)) : [];
+    } else {
+        x.children = [];
+    }
+    return x;
+}
+
 function normalizeCard(card, index = 0) {
     const x = Object.assign({}, card || {});
     x.id = x.id || uid();
@@ -700,46 +753,10 @@ function normalizeCard(card, index = 0) {
     x.shapeAxisManualZ = Number.isFinite(Number(x.shapeAxisManualZ)) ? num(x.shapeAxisManualZ) : 0;
     x.shapeDisplayActions = Array.isArray(x.shapeDisplayActions) ? x.shapeDisplayActions.map((a) => normalizeDisplayAction(a)) : [];
     x.shapeScale = normalizeScaleHelperConfig(x.shapeScale, { type: "none" });
-    x.shapeBindMode = x.shapeBindMode === "builder" ? "builder" : "point";
-    x.shapePoint = x.shapePoint && typeof x.shapePoint === "object" ? x.shapePoint : { x: 0, y: 0, z: 0 };
-    x.shapePoint.x = num(x.shapePoint.x);
-    x.shapePoint.y = num(x.shapePoint.y);
-    x.shapePoint.z = num(x.shapePoint.z);
-    x.shapeBuilderState = normalizeBuilderState(x.shapeBuilderState);
-    x.shapeChildType = ["single", "particle_shape", "sequenced_shape"].includes(String(x.shapeChildType || ""))
-        ? String(x.shapeChildType)
-        : "single";
-    x.shapeChildEffectClass = String(x.shapeChildEffectClass || x.singleEffectClass || DEFAULT_EFFECT_CLASS);
-    x.shapeChildUseTexture = x.shapeChildUseTexture !== false;
-    x.shapeChildCollapsed = !!x.shapeChildCollapsed;
-    x.shapeChildBindMode = x.shapeChildBindMode === "builder" ? "builder" : "point";
-    x.shapeChildPoint = x.shapeChildPoint && typeof x.shapeChildPoint === "object" ? x.shapeChildPoint : { x: 0, y: 0, z: 0 };
-    x.shapeChildPoint.x = num(x.shapeChildPoint.x);
-    x.shapeChildPoint.y = num(x.shapeChildPoint.y);
-    x.shapeChildPoint.z = num(x.shapeChildPoint.z);
-    x.shapeChildBuilderState = normalizeBuilderState(x.shapeChildBuilderState);
-    x.shapeChildAxisPreset = String(x.shapeChildAxisPreset || "RelativeLocation.yAxis()");
-    x.shapeChildAxisExpr = String(x.shapeChildAxisExpr || x.shapeChildAxisPreset || "RelativeLocation.yAxis()");
-    x.shapeChildAxisManualCtor = normalizeVectorCtor(x.shapeChildAxisManualCtor || parseCtorInLiteral(x.shapeChildAxisExpr, "RelativeLocation"));
-    x.shapeChildAxisManualX = Number.isFinite(Number(x.shapeChildAxisManualX)) ? num(x.shapeChildAxisManualX) : 0;
-    x.shapeChildAxisManualY = Number.isFinite(Number(x.shapeChildAxisManualY)) ? num(x.shapeChildAxisManualY) : 1;
-    x.shapeChildAxisManualZ = Number.isFinite(Number(x.shapeChildAxisManualZ)) ? num(x.shapeChildAxisManualZ) : 0;
-    x.shapeChildDisplayActions = Array.isArray(x.shapeChildDisplayActions) ? x.shapeChildDisplayActions.map((a) => normalizeDisplayAction(a)) : [];
-    x.shapeChildAngleOffsetEnabled = x.shapeChildAngleOffsetEnabled === true;
-    x.shapeChildAngleOffsetCount = Math.max(1, int(x.shapeChildAngleOffsetCount || 1));
-    x.shapeChildAngleOffsetGlowTick = Math.max(1, int(x.shapeChildAngleOffsetGlowTick || 20));
-    x.shapeChildAngleOffsetEase = normalizeAngleOffsetEaseName(x.shapeChildAngleOffsetEase || "outCubic");
-    x.shapeChildAngleOffsetReverseOnDisable = x.shapeChildAngleOffsetReverseOnDisable === true;
-    x.shapeChildAngleOffsetAngleMode = x.shapeChildAngleOffsetAngleMode === "expr" ? "expr" : "numeric";
-    x.shapeChildAngleOffsetAngleValue = Number.isFinite(Number(x.shapeChildAngleOffsetAngleValue)) ? num(x.shapeChildAngleOffsetAngleValue) : 360;
-    x.shapeChildAngleOffsetAngleUnit = normalizeAngleUnit(x.shapeChildAngleOffsetAngleUnit || "deg");
-    x.shapeChildAngleOffsetAngleExpr = String(x.shapeChildAngleOffsetAngleExpr || "PI * 2");
-    x.shapeChildAngleOffsetAnglePreset = String(x.shapeChildAngleOffsetAnglePreset || x.shapeChildAngleOffsetAngleExpr || "PI * 2");
-    x.shapeChildScale = normalizeScaleHelperConfig(x.shapeChildScale, { type: "none" });
-    x.shapeChildGrowthAnimates = Array.isArray(x.shapeChildGrowthAnimates) ? x.shapeChildGrowthAnimates.map((it) => normalizeAnimate(it)) : [];
-    x.shapeChildLevels = Array.isArray(x.shapeChildLevels)
-        ? x.shapeChildLevels.map((it, i) => normalizeShapeNestedLevel(it, i))
+    x.shapeChildren = Array.isArray(x.shapeChildren)
+        ? x.shapeChildren.map((c, i) => normalizeShapeTreeNode(c, i))
         : [];
+    x.viewPath = Array.isArray(x.viewPath) ? x.viewPath.map(v => int(v)) : [];
     return x;
 }
 
@@ -786,36 +803,7 @@ function createDefaultCard(index = 0) {
         shapeAxisManualZ: 0,
         shapeDisplayActions: [],
         shapeScale: { type: "none" },
-        shapeBindMode: "point",
-        shapePoint: { x: 0, y: 0, z: 0 },
-        shapeBuilderState: createDefaultBuilderState(),
-        shapeChildType: "single",
-        shapeChildEffectClass: DEFAULT_EFFECT_CLASS,
-        shapeChildUseTexture: true,
-        shapeChildCollapsed: false,
-        shapeChildBindMode: "point",
-        shapeChildPoint: { x: 0, y: 0, z: 0 },
-        shapeChildBuilderState: createDefaultBuilderState(),
-        shapeChildAxisPreset: "RelativeLocation.yAxis()",
-        shapeChildAxisExpr: "RelativeLocation.yAxis()",
-        shapeChildAxisManualCtor: "RelativeLocation",
-        shapeChildAxisManualX: 0,
-        shapeChildAxisManualY: 1,
-        shapeChildAxisManualZ: 0,
-        shapeChildDisplayActions: [],
-        shapeChildAngleOffsetEnabled: false,
-        shapeChildAngleOffsetCount: 1,
-        shapeChildAngleOffsetGlowTick: 20,
-        shapeChildAngleOffsetEase: "outCubic",
-        shapeChildAngleOffsetReverseOnDisable: false,
-        shapeChildAngleOffsetAngleMode: "numeric",
-        shapeChildAngleOffsetAngleValue: 360,
-        shapeChildAngleOffsetAngleUnit: "deg",
-        shapeChildAngleOffsetAnglePreset: "PI * 2",
-        shapeChildAngleOffsetAngleExpr: "PI * 2",
-        shapeChildScale: { type: "none" },
-        shapeChildGrowthAnimates: [],
-        shapeChildLevels: [],
+        shapeChildren: [],
         sectionCollapse: createDefaultCardSectionCollapse()
     }, index);
 }
@@ -944,8 +932,8 @@ function createDefaultState() {
 
 function normalizeBuilderTarget(targetRaw) {
     const target = String(targetRaw || "").trim();
-    if (/^shape_level:\d+$/.test(target)) return target;
-    if (target === "shape" || target === "shape_child") return target;
+    if (/^tree_node:/.test(target)) return target;
+    if (target === "shape") return target;
     return "root";
 }
 
@@ -2373,54 +2361,54 @@ class CompositionBuilderApp {
         }
     }
 
-    syncCardShapeChildAxisManualFromExpr(card) {
-        if (!card) return;
-        const expr = String(card.shapeChildAxisExpr || card.shapeChildAxisPreset || "RelativeLocation.yAxis()");
+    syncNodeAxisManualFromExpr(node) {
+        if (!node) return;
+        const expr = String(node.axisExpr || node.axisPreset || "RelativeLocation.yAxis()");
         const vec = this.exprRuntime.parseVecLikeValue(expr);
-        card.shapeChildAxisManualCtor = normalizeVectorCtor(parseCtorInLiteral(expr, card.shapeChildAxisManualCtor || "RelativeLocation"));
-        card.shapeChildAxisManualX = num(vec.x);
-        card.shapeChildAxisManualY = num(vec.y);
-        card.shapeChildAxisManualZ = num(vec.z);
+        node.axisManualCtor = normalizeVectorCtor(parseCtorInLiteral(expr, node.axisManualCtor || "RelativeLocation"));
+        node.axisManualX = num(vec.x);
+        node.axisManualY = num(vec.y);
+        node.axisManualZ = num(vec.z);
     }
 
-    applyCardShapeChildAxisField(card, field, target) {
-        if (!card) return;
+    applyNodeAxisField(node, field, target) {
+        if (!node) return;
         if (field === "axisPreset") {
-            card.shapeChildAxisPreset = String(target.value || "");
-            if (card.shapeChildAxisPreset) {
-                card.shapeChildAxisExpr = card.shapeChildAxisPreset;
-                this.syncCardShapeChildAxisManualFromExpr(card);
+            node.axisPreset = String(target.value || "");
+            if (node.axisPreset) {
+                node.axisExpr = node.axisPreset;
+                this.syncNodeAxisManualFromExpr(node);
             }
             return;
         }
         if (field === "axisExpr") {
-            card.shapeChildAxisExpr = String(target.value || "");
-            card.shapeChildAxisPreset = "";
-            this.syncCardShapeChildAxisManualFromExpr(card);
+            node.axisExpr = String(target.value || "");
+            node.axisPreset = "";
+            this.syncNodeAxisManualFromExpr(node);
             return;
         }
         if (field === "axisManualCtor") {
-            card.shapeChildAxisManualCtor = normalizeVectorCtor(target.value || "RelativeLocation");
-            card.shapeChildAxisExpr = formatVectorLiteral(
-                card.shapeChildAxisManualCtor,
-                card.shapeChildAxisManualX,
-                card.shapeChildAxisManualY,
-                card.shapeChildAxisManualZ
+            node.axisManualCtor = normalizeVectorCtor(target.value || "RelativeLocation");
+            node.axisExpr = formatVectorLiteral(
+                node.axisManualCtor,
+                node.axisManualX,
+                node.axisManualY,
+                node.axisManualZ
             );
-            card.shapeChildAxisPreset = "";
+            node.axisPreset = "";
             return;
         }
         if (field === "axisManualX" || field === "axisManualY" || field === "axisManualZ") {
-            if (field === "axisManualX") card.shapeChildAxisManualX = num(target.value);
-            else if (field === "axisManualY") card.shapeChildAxisManualY = num(target.value);
-            else card.shapeChildAxisManualZ = num(target.value);
-            card.shapeChildAxisExpr = formatVectorLiteral(
-                card.shapeChildAxisManualCtor,
-                card.shapeChildAxisManualX,
-                card.shapeChildAxisManualY,
-                card.shapeChildAxisManualZ
+            if (field === "axisManualX") node.axisManualX = num(target.value);
+            else if (field === "axisManualY") node.axisManualY = num(target.value);
+            else node.axisManualZ = num(target.value);
+            node.axisExpr = formatVectorLiteral(
+                node.axisManualCtor,
+                node.axisManualX,
+                node.axisManualY,
+                node.axisManualZ
             );
-            card.shapeChildAxisPreset = "";
+            node.axisPreset = "";
         }
     }
 
@@ -2446,10 +2434,10 @@ class CompositionBuilderApp {
         }
     }
 
-    applyCardShapeChildScaleField(card, field, target) {
-        if (!card) return;
-        const scale = Object.assign({}, normalizeScaleHelperConfig(card.shapeChildScale, { type: "none" }));
-        card.shapeChildScale = scale;
+    applyNodeScaleField(node, field, target) {
+        if (!node) return;
+        const scale = Object.assign({}, normalizeScaleHelperConfig(node.scale, { type: "none" }));
+        node.scale = scale;
         if (field === "type") {
             const next = String(target.value || "none");
             scale.type = SCALE_HELPER_TYPES.includes(next) ? next : "none";
@@ -2468,140 +2456,87 @@ class CompositionBuilderApp {
         }
     }
 
-    getRootShapeChildLevel(card) {
-        if (!card) return normalizeShapeNestedLevel({});
-        return normalizeShapeNestedLevel({
-            collapsed: !!card.shapeChildCollapsed,
-            type: card.shapeChildType,
-            effectClass: card.shapeChildEffectClass,
-            useTexture: card.shapeChildUseTexture,
-            bindMode: card.shapeChildBindMode,
-            point: card.shapeChildPoint,
-            builderState: card.shapeChildBuilderState,
-            axisPreset: card.shapeChildAxisPreset,
-            axisExpr: card.shapeChildAxisExpr,
-            axisManualCtor: card.shapeChildAxisManualCtor,
-            axisManualX: card.shapeChildAxisManualX,
-            axisManualY: card.shapeChildAxisManualY,
-            axisManualZ: card.shapeChildAxisManualZ,
-            displayActions: card.shapeChildDisplayActions,
-            angleOffsetEnabled: card.shapeChildAngleOffsetEnabled,
-            angleOffsetCount: card.shapeChildAngleOffsetCount,
-            angleOffsetGlowTick: card.shapeChildAngleOffsetGlowTick,
-            angleOffsetEase: card.shapeChildAngleOffsetEase,
-            angleOffsetReverseOnDisable: card.shapeChildAngleOffsetReverseOnDisable,
-            angleOffsetAngleMode: card.shapeChildAngleOffsetAngleMode,
-            angleOffsetAngleValue: card.shapeChildAngleOffsetAngleValue,
-            angleOffsetAngleUnit: card.shapeChildAngleOffsetAngleUnit,
-            angleOffsetAngleExpr: card.shapeChildAngleOffsetAngleExpr,
-            angleOffsetAnglePreset: card.shapeChildAngleOffsetAnglePreset,
-            scale: card.shapeChildScale,
-            growthAnimates: card.shapeChildGrowthAnimates
-        }, 0);
+    getShapeNodeByPath(card, path) {
+        if (!card || !Array.isArray(card.shapeChildren)) return null;
+        let children = card.shapeChildren;
+        let node = null;
+        for (let i = 0; i < path.length; i++) {
+            const idx = path[i];
+            if (!children || idx < 0 || idx >= children.length) return null;
+            node = children[idx];
+            children = node.children;
+        }
+        return node;
     }
 
-    setRootShapeChildLevel(card, levelRaw) {
+    getCurrentViewNode(card) {
+        if (!card || !card.viewPath || !card.viewPath.length) return null;
+        return this.getShapeNodeByPath(card, card.viewPath);
+    }
+
+    getViewParentNode(card) {
+        if (!card || !card.viewPath || card.viewPath.length <= 1) return null;
+        return this.getShapeNodeByPath(card, card.viewPath.slice(0, -1));
+    }
+
+    addChildToNode(node) {
+        if (!node || node.type === "single") return;
+        if (!Array.isArray(node.children)) node.children = [];
+        node.children.push(normalizeShapeTreeNode({}, node.children.length));
+    }
+
+    addChildToCard(card) {
         if (!card) return;
-        const level = normalizeShapeNestedLevel(levelRaw, 0);
-        card.shapeChildCollapsed = !!level.collapsed;
-        card.shapeChildType = level.type;
-        card.shapeChildEffectClass = level.effectClass;
-        card.shapeChildUseTexture = level.useTexture !== false;
-        card.shapeChildBindMode = level.bindMode;
-        card.shapeChildPoint = { x: num(level.point?.x), y: num(level.point?.y), z: num(level.point?.z) };
-        card.shapeChildBuilderState = normalizeBuilderState(level.builderState);
-        card.shapeChildAxisPreset = String(level.axisPreset || "");
-        card.shapeChildAxisExpr = String(level.axisExpr || "");
-        card.shapeChildAxisManualCtor = normalizeVectorCtor(level.axisManualCtor || "RelativeLocation");
-        card.shapeChildAxisManualX = num(level.axisManualX);
-        card.shapeChildAxisManualY = num(level.axisManualY);
-        card.shapeChildAxisManualZ = num(level.axisManualZ);
-        card.shapeChildDisplayActions = (level.displayActions || []).map((a) => normalizeDisplayAction(a));
-        card.shapeChildAngleOffsetEnabled = level.angleOffsetEnabled === true;
-        card.shapeChildAngleOffsetCount = Math.max(1, int(level.angleOffsetCount || 1));
-        card.shapeChildAngleOffsetGlowTick = Math.max(1, int(level.angleOffsetGlowTick || 20));
-        card.shapeChildAngleOffsetEase = normalizeAngleOffsetEaseName(level.angleOffsetEase || "outCubic");
-        card.shapeChildAngleOffsetReverseOnDisable = level.angleOffsetReverseOnDisable === true;
-        card.shapeChildAngleOffsetAngleMode = level.angleOffsetAngleMode === "expr" ? "expr" : "numeric";
-        card.shapeChildAngleOffsetAngleValue = Number.isFinite(Number(level.angleOffsetAngleValue)) ? num(level.angleOffsetAngleValue) : 360;
-        card.shapeChildAngleOffsetAngleUnit = normalizeAngleUnit(level.angleOffsetAngleUnit || "deg");
-        card.shapeChildAngleOffsetAngleExpr = String(level.angleOffsetAngleExpr || "PI * 2");
-        card.shapeChildAngleOffsetAnglePreset = String(level.angleOffsetAnglePreset || card.shapeChildAngleOffsetAngleExpr || "PI * 2");
-        card.shapeChildScale = normalizeScaleHelperConfig(level.scale, { type: "none" });
-        card.shapeChildGrowthAnimates = (level.growthAnimates || []).map((a) => normalizeAnimate(a));
+        if (!Array.isArray(card.shapeChildren)) card.shapeChildren = [];
+        card.shapeChildren.push(normalizeShapeTreeNode({}, card.shapeChildren.length));
     }
 
-    getNestedShapeLevel(card, levelIdx, create = false) {
-        if (!card) return null;
-        const idx = int(levelIdx);
-        if (idx <= 0) return this.getRootShapeChildLevel(card);
-        if (!Array.isArray(card.shapeChildLevels)) card.shapeChildLevels = [];
-        if (create) {
-            while (card.shapeChildLevels.length < idx) {
-                card.shapeChildLevels.push(normalizeShapeNestedLevel({}, card.shapeChildLevels.length));
-            }
+    removeChildFromCard(card, idx) {
+        if (!card || !Array.isArray(card.shapeChildren)) return;
+        if (idx >= 0 && idx < card.shapeChildren.length) {
+            card.shapeChildren.splice(idx, 1);
         }
-        const hit = card.shapeChildLevels[idx - 1];
-        return hit ? normalizeShapeNestedLevel(hit, idx - 1) : null;
     }
 
-    setNestedShapeLevel(card, levelIdx, levelRaw) {
+    removeChildFromNode(node, idx) {
+        if (!node || !Array.isArray(node.children)) return;
+        if (idx >= 0 && idx < node.children.length) {
+            node.children.splice(idx, 1);
+        }
+    }
+
+    buildBreadcrumb(card) {
+        if (!card || !card.viewPath || !card.viewPath.length) return [];
+        const crumbs = [{ label: card.name || "卡片", path: [] }];
+        let children = card.shapeChildren;
+        for (let i = 0; i < card.viewPath.length; i++) {
+            const idx = card.viewPath[i];
+            if (!children || idx < 0 || idx >= children.length) break;
+            const node = children[idx];
+            crumbs.push({ label: node.name || `子节点 ${idx + 1}`, path: card.viewPath.slice(0, i + 1) });
+            children = node.children;
+        }
+        return crumbs;
+    }
+
+    drillIntoChild(card, childIdx) {
         if (!card) return;
-        const idx = int(levelIdx);
-        if (idx <= 0) {
-            this.setRootShapeChildLevel(card, levelRaw);
-            return;
-        }
-        if (!Array.isArray(card.shapeChildLevels)) card.shapeChildLevels = [];
-        while (card.shapeChildLevels.length < idx) {
-            card.shapeChildLevels.push(normalizeShapeNestedLevel({}, card.shapeChildLevels.length));
-        }
-        card.shapeChildLevels[idx - 1] = normalizeShapeNestedLevel(levelRaw, idx - 1);
+        if (!Array.isArray(card.viewPath)) card.viewPath = [];
+        card.viewPath.push(childIdx);
     }
 
-    addNestedShapeLevel(card, parentLevelIdx = 0) {
+    navigateBreadcrumb(card, path) {
         if (!card) return;
-        const parentIdx = Math.max(0, int(parentLevelIdx));
-        const keep = Math.max(0, parentIdx);
-        if (!Array.isArray(card.shapeChildLevels)) card.shapeChildLevels = [];
-        card.shapeChildLevels = card.shapeChildLevels.slice(0, keep);
-        card.shapeChildLevels.push(normalizeShapeNestedLevel({}, keep));
+        card.viewPath = Array.isArray(path) ? path.slice() : [];
     }
 
-    removeNestedShapeLevel(card, levelIdx = 1) {
-        if (!card) return;
-        const idx = int(levelIdx);
-        if (idx <= 0) return;
-        if (!Array.isArray(card.shapeChildLevels)) card.shapeChildLevels = [];
-        if (idx - 1 < card.shapeChildLevels.length) {
-            card.shapeChildLevels = card.shapeChildLevels.slice(0, Math.max(0, idx - 1));
-        }
-    }
-
-    pruneNestedShapeLevels(card) {
-        if (!card || !Array.isArray(card.shapeChildLevels)) return;
-        const kept = [];
-        let parentType = String(card.shapeChildType || "single");
-        for (let i = 0; i < card.shapeChildLevels.length; i++) {
-            if (parentType === "single") break;
-            const lv = normalizeShapeNestedLevel(card.shapeChildLevels[i], i);
-            kept.push(lv);
-            parentType = lv.type;
-        }
-        card.shapeChildLevels = kept;
-    }
-
-    getShapeChildChain(card) {
+    getCurrentChildrenList(card) {
         if (!card) return [];
-        this.pruneNestedShapeLevels(card);
-        const root = this.getRootShapeChildLevel(card);
-        const out = [root];
-        for (let i = 0; i < (card.shapeChildLevels || []).length; i++) {
-            const lv = normalizeShapeNestedLevel(card.shapeChildLevels[i], i);
-            out.push(lv);
-            if (lv.type === "single") break;
+        if (!card.viewPath || !card.viewPath.length) {
+            return card.shapeChildren || [];
         }
-        return out;
+        const node = this.getCurrentViewNode(card);
+        return node ? (node.children || []) : [];
     }
 
     syncNestedLevelAxisManualFromExpr(level) {
@@ -2690,23 +2625,75 @@ class CompositionBuilderApp {
                 this.scheduleSave();
                 return;
             }
-            if (act === "toggle-shape-child-fold") {
+            if (act === "drill-into-child") {
                 const card = this.getCardById(cardId);
                 if (!card) return;
-                card.shapeChildCollapsed = !card.shapeChildCollapsed;
+                const childIdx = int(btn.dataset.childIdx);
+                this.drillIntoChild(card, childIdx);
                 this.renderCards();
-                this.scheduleSave();
                 return;
             }
-            if (act === "toggle-shape-level-fold") {
+            if (act === "navigate-breadcrumb") {
                 const card = this.getCardById(cardId);
                 if (!card) return;
-                const level = this.getNestedShapeLevel(card, levelIdx, true);
-                if (!level) return;
-                level.collapsed = !level.collapsed;
-                this.setNestedShapeLevel(card, levelIdx, level);
+                const path = JSON.parse(btn.dataset.breadcrumbPath || "[]");
+                this.navigateBreadcrumb(card, path);
                 this.renderCards();
-                this.scheduleSave();
+                return;
+            }
+            if (act === "add-parallel-child") {
+                const card = this.getCardById(cardId);
+                if (!card) return;
+                this.pushHistory();
+                if (!card.viewPath || !card.viewPath.length) {
+                    this.addChildToCard(card);
+                } else {
+                    const node = this.getCurrentViewNode(card);
+                    if (node) this.addChildToNode(node);
+                }
+                this.afterValueMutate({ rerenderCards: true, rebuildPreview: true });
+                return;
+            }
+            if (act === "remove-child") {
+                const card = this.getCardById(cardId);
+                if (!card) return;
+                this.pushHistory();
+                const childIdx = int(btn.dataset.childIdx);
+                if (!card.viewPath || !card.viewPath.length) {
+                    this.removeChildFromCard(card, childIdx);
+                } else {
+                    const node = this.getCurrentViewNode(card);
+                    if (node) this.removeChildFromNode(node, childIdx);
+                }
+                this.afterValueMutate({ rerenderCards: true, rebuildPreview: true });
+                return;
+            }
+            if (act === "move-child-up" || act === "move-child-down") {
+                const card = this.getCardById(cardId);
+                if (!card) return;
+                this.pushHistory();
+                const childIdx = int(btn.dataset.childIdx);
+                const list = (!card.viewPath || !card.viewPath.length) ? card.shapeChildren : (this.getCurrentViewNode(card)?.children || []);
+                const swapIdx = act === "move-child-up" ? childIdx - 1 : childIdx + 1;
+                if (swapIdx >= 0 && swapIdx < list.length) {
+                    [list[childIdx], list[swapIdx]] = [list[swapIdx], list[childIdx]];
+                }
+                this.afterValueMutate({ rerenderCards: true, rebuildPreview: true });
+                return;
+            }
+            if (act === "rename-child") {
+                const card = this.getCardById(cardId);
+                if (!card) return;
+                const childIdx = int(btn.dataset.childIdx);
+                const list = (!card.viewPath || !card.viewPath.length) ? card.shapeChildren : (this.getCurrentViewNode(card)?.children || []);
+                const child = list[childIdx];
+                if (!child) return;
+                const newName = prompt("输入子节点名称:", child.name || "");
+                if (newName !== null && newName.trim()) {
+                    this.pushHistory();
+                    child.name = newName.trim();
+                    this.afterValueMutate({ rerenderCards: true });
+                }
                 return;
             }
             if (act === "collapse-all-sections") {
@@ -2750,54 +2737,29 @@ class CompositionBuilderApp {
                 this.afterValueMutate({ rerenderCards: true, rebuildPreview: true });
                 return;
             }
-            if (act === "apply-shape-child-axis-manual") {
+            if (act === "apply-node-axis-manual") {
                 const card = this.getCardById(cardId);
                 if (!card) return;
+                const treePath = btn.dataset.treePath ? JSON.parse(btn.dataset.treePath) : null;
+                const node = treePath ? this.getShapeNodeByPath(card, treePath) : null;
+                if (!node) return;
                 this.pushHistory();
-                card.shapeChildAxisExpr = formatVectorLiteral(
-                    card.shapeChildAxisManualCtor,
-                    card.shapeChildAxisManualX,
-                    card.shapeChildAxisManualY,
-                    card.shapeChildAxisManualZ
-                );
-                card.shapeChildAxisPreset = "";
+                node.axisExpr = formatVectorLiteral(node.axisManualCtor, node.axisManualX, node.axisManualY, node.axisManualZ);
+                node.axisPreset = "";
                 this.afterValueMutate({ rerenderCards: true, rebuildPreview: true });
                 return;
             }
-            if (act === "apply-shape-child-display-manual-to") {
+            if (act === "apply-node-display-manual-to") {
                 const card = this.getCardById(cardId);
                 if (!card) return;
-                const item = card.shapeChildDisplayActions[int(btn.dataset.shapeChildDisplayIdx)];
+                const treePath = btn.dataset.treePath ? JSON.parse(btn.dataset.treePath) : null;
+                const node = treePath ? this.getShapeNodeByPath(card, treePath) : null;
+                if (!node) return;
+                const item = (node.displayActions || [])[int(btn.dataset.nodeDisplayIdx)];
                 if (!item) return;
                 this.pushHistory();
                 item.toExpr = formatVectorLiteral(item.toManualCtor, item.toManualX, item.toManualY, item.toManualZ);
                 item.toPreset = "";
-                this.afterValueMutate({ rerenderCards: true, rebuildPreview: true });
-                return;
-            }
-            if (act === "apply-shape-level-axis-manual") {
-                const card = this.getCardById(cardId);
-                if (!card) return;
-                const level = this.getNestedShapeLevel(card, levelIdx, true);
-                if (!level) return;
-                this.pushHistory();
-                level.axisExpr = formatVectorLiteral(level.axisManualCtor, level.axisManualX, level.axisManualY, level.axisManualZ);
-                level.axisPreset = "";
-                this.setNestedShapeLevel(card, levelIdx, level);
-                this.afterValueMutate({ rerenderCards: true, rebuildPreview: true });
-                return;
-            }
-            if (act === "apply-shape-level-display-manual-to") {
-                const card = this.getCardById(cardId);
-                if (!card) return;
-                const level = this.getNestedShapeLevel(card, levelIdx, true);
-                if (!level) return;
-                const item = level.displayActions[int(btn.dataset.shapeLevelDisplayIdx)];
-                if (!item) return;
-                this.pushHistory();
-                item.toExpr = formatVectorLiteral(item.toManualCtor, item.toManualX, item.toManualY, item.toManualZ);
-                item.toPreset = "";
-                this.setNestedShapeLevel(card, levelIdx, level);
                 this.afterValueMutate({ rerenderCards: true, rebuildPreview: true });
                 return;
             }
@@ -2805,26 +2767,18 @@ class CompositionBuilderApp {
                 this.openBezierTool("card", cardId);
                 return;
             }
-            if (act === "open-child-bezier-tool") {
-                this.openBezierTool("shape_child", cardId);
-                return;
-            }
-            if (act === "open-shape-level-bezier-tool") {
-                this.openBezierTool("shape_level", cardId, levelIdx);
+            if (act === "open-node-bezier-tool") {
+                const treePath = btn.dataset.treePath || "[]";
+                this.openBezierTool("tree_node", cardId, treePath);
                 return;
             }
             const skipHistory = act === "open-builder-editor"
                 || act === "open-shape-builder-editor"
-                || act === "open-shape-child-builder-editor"
-                || act === "open-shape-level-builder-editor"
+                || act === "open-node-builder-editor"
                 || act === "import-builder-json"
-                || act === "import-shape-builder-json"
-                || act === "import-shape-child-builder-json"
-                || act === "import-shape-level-builder-json"
+                || act === "import-node-builder-json"
                 || act === "export-builder-json"
-                || act === "export-shape-builder-json"
-                || act === "export-shape-child-builder-json"
-                || act === "export-shape-level-builder-json";
+                || act === "export-node-builder-json";
             if (!skipHistory) this.pushHistory();
             switch (act) {
                 case "delete-card":
@@ -2877,67 +2831,86 @@ class CompositionBuilderApp {
                     if (card && idx >= 0 && idx < card.shapeDisplayActions.length) card.shapeDisplayActions.splice(idx, 1);
                     break;
                 }
-                case "add-shape-child-display-action": {
+                case "add-node-display-action": {
                     const card = this.getCardById(cardId);
-                    if (card) card.shapeChildDisplayActions.push(normalizeDisplayAction({}));
+                    const treePath = btn.dataset.treePath ? JSON.parse(btn.dataset.treePath) : null;
+                    const node = treePath ? this.getShapeNodeByPath(card, treePath) : null;
+                    if (node) node.displayActions.push(normalizeDisplayAction({}));
                     break;
                 }
-                case "remove-shape-child-display-action": {
+                case "remove-node-display-action": {
                     const card = this.getCardById(cardId);
-                    if (card && idx >= 0 && idx < card.shapeChildDisplayActions.length) card.shapeChildDisplayActions.splice(idx, 1);
+                    const treePath = btn.dataset.treePath ? JSON.parse(btn.dataset.treePath) : null;
+                    const node = treePath ? this.getShapeNodeByPath(card, treePath) : null;
+                    if (node && idx >= 0 && idx < node.displayActions.length) node.displayActions.splice(idx, 1);
                     break;
                 }
-                case "add-shape-child-growth-animate":
-                    this.addCardAnimate(cardId, "shapeChildGrowthAnimates");
-                    break;
-                case "remove-shape-child-growth-animate":
-                    this.removeCardAnimate(cardId, "shapeChildGrowthAnimates", idx);
-                    break;
-                case "add-shape-child-level": {
+                case "add-node-growth-animate": {
                     const card = this.getCardById(cardId);
-                    if (card) this.addNestedShapeLevel(card, levelIdx);
-                    break;
-                }
-                case "remove-shape-child-level": {
-                    const card = this.getCardById(cardId);
-                    if (card) this.removeNestedShapeLevel(card, levelIdx);
-                    break;
-                }
-                case "add-shape-level-display-action": {
-                    const card = this.getCardById(cardId);
-                    const level = this.getNestedShapeLevel(card, levelIdx, true);
-                    if (level) {
-                        level.displayActions.push(normalizeDisplayAction({}));
-                        this.setNestedShapeLevel(card, levelIdx, level);
+                    const treePath = btn.dataset.treePath ? JSON.parse(btn.dataset.treePath) : null;
+                    const node = treePath ? this.getShapeNodeByPath(card, treePath) : null;
+                    if (node) {
+                        if (!Array.isArray(node.growthAnimates)) node.growthAnimates = [];
+                        node.growthAnimates.push(normalizeAnimate({ count: 1, condition: "" }));
                     }
                     break;
                 }
-                case "remove-shape-level-display-action": {
+                case "remove-node-growth-animate": {
                     const card = this.getCardById(cardId);
-                    const level = this.getNestedShapeLevel(card, levelIdx, true);
-                    if (level && idx >= 0 && idx < level.displayActions.length) {
-                        level.displayActions.splice(idx, 1);
-                        this.setNestedShapeLevel(card, levelIdx, level);
+                    const treePath = btn.dataset.treePath ? JSON.parse(btn.dataset.treePath) : null;
+                    const node = treePath ? this.getShapeNodeByPath(card, treePath) : null;
+                    if (node && idx >= 0 && idx < node.growthAnimates.length) node.growthAnimates.splice(idx, 1);
+                    break;
+                }
+                case "add-node-pinit": {
+                    const card = this.getCardById(cardId);
+                    const treePath = btn.dataset.treePath ? JSON.parse(btn.dataset.treePath) : null;
+                    const node = treePath ? this.getShapeNodeByPath(card, treePath) : null;
+                    if (node) {
+                        if (!Array.isArray(node.particleInit)) node.particleInit = [];
+                        node.particleInit.push({ id: uid(), target: "size", expr: "", exprPreset: "" });
                     }
                     break;
                 }
-                case "add-shape-level-growth-animate": {
+                case "remove-node-pinit": {
                     const card = this.getCardById(cardId);
-                    const level = this.getNestedShapeLevel(card, levelIdx, true);
-                    if (level) {
-                        if (!Array.isArray(level.growthAnimates)) level.growthAnimates = [];
-                        level.growthAnimates.push(normalizeAnimate({ count: 1, condition: "" }));
-                        this.setNestedShapeLevel(card, levelIdx, level);
+                    const treePath = btn.dataset.treePath ? JSON.parse(btn.dataset.treePath) : null;
+                    const node = treePath ? this.getShapeNodeByPath(card, treePath) : null;
+                    if (node && idx >= 0 && idx < node.particleInit.length) node.particleInit.splice(idx, 1);
+                    break;
+                }
+                case "add-node-cvar": {
+                    const card = this.getCardById(cardId);
+                    const treePath = btn.dataset.treePath ? JSON.parse(btn.dataset.treePath) : null;
+                    const node = treePath ? this.getShapeNodeByPath(card, treePath) : null;
+                    if (node) {
+                        if (!Array.isArray(node.controllerVars)) node.controllerVars = [];
+                        node.controllerVars.push({ id: uid(), name: "tick", type: "Boolean", expr: "true" });
                     }
                     break;
                 }
-                case "remove-shape-level-growth-animate": {
+                case "remove-node-cvar": {
                     const card = this.getCardById(cardId);
-                    const level = this.getNestedShapeLevel(card, levelIdx, true);
-                    if (level && idx >= 0 && idx < level.growthAnimates.length) {
-                        level.growthAnimates.splice(idx, 1);
-                        this.setNestedShapeLevel(card, levelIdx, level);
+                    const treePath = btn.dataset.treePath ? JSON.parse(btn.dataset.treePath) : null;
+                    const node = treePath ? this.getShapeNodeByPath(card, treePath) : null;
+                    if (node && idx >= 0 && idx < node.controllerVars.length) node.controllerVars.splice(idx, 1);
+                    break;
+                }
+                case "add-node-caction": {
+                    const card = this.getCardById(cardId);
+                    const treePath = btn.dataset.treePath ? JSON.parse(btn.dataset.treePath) : null;
+                    const node = treePath ? this.getShapeNodeByPath(card, treePath) : null;
+                    if (node) {
+                        if (!Array.isArray(node.controllerActions)) node.controllerActions = [];
+                        node.controllerActions.push(normalizeControllerAction({ type: "tick_js", script: "" }));
                     }
+                    break;
+                }
+                case "remove-node-caction": {
+                    const card = this.getCardById(cardId);
+                    const treePath = btn.dataset.treePath ? JSON.parse(btn.dataset.treePath) : null;
+                    const node = treePath ? this.getShapeNodeByPath(card, treePath) : null;
+                    if (node && idx >= 0 && idx < node.controllerActions.length) node.controllerActions.splice(idx, 1);
                     break;
                 }
                 case "add-seq-animate":
@@ -2949,56 +2922,192 @@ class CompositionBuilderApp {
                 case "open-builder-editor":
                     this.openBuilderEditor(cardId);
                     return;
-                case "open-shape-builder-editor":
-                    this.openBuilderEditor(cardId, "shape");
+                case "open-node-builder-editor": {
+                    const treePath = btn.dataset.treePath || "[]";
+                    this.openBuilderEditor(cardId, `tree_node:${treePath}`);
                     return;
-                case "open-shape-child-builder-editor":
-                    this.openBuilderEditor(cardId, "shape_child");
+                }
+                case "import-node-builder-json": {
+                    const treePath = btn.dataset.treePath || "[]";
+                    this.importBuilderJson(cardId, `tree_node:${treePath}`);
                     return;
-                case "open-shape-level-builder-editor":
-                    this.openBuilderEditor(cardId, `shape_level:${levelIdx}`);
+                }
+                case "export-node-builder-json": {
+                    const treePath = btn.dataset.treePath || "[]";
+                    this.exportBuilderJson(cardId, `tree_node:${treePath}`);
                     return;
-                case "import-builder-json":
-                    this.importBuilderJson(cardId);
-                    return;
-                case "import-shape-builder-json":
-                    this.importBuilderJson(cardId, "shape");
-                    return;
-                case "import-shape-child-builder-json":
-                    this.importBuilderJson(cardId, "shape_child");
-                    return;
-                case "import-shape-level-builder-json":
-                    this.importBuilderJson(cardId, `shape_level:${levelIdx}`);
-                    return;
-                case "export-builder-json":
-                    this.exportBuilderJson(cardId);
-                    return;
-                case "export-shape-builder-json":
-                    this.exportBuilderJson(cardId, "shape");
-                    return;
-                case "export-shape-child-builder-json":
-                    this.exportBuilderJson(cardId, "shape_child");
-                    return;
-                case "export-shape-level-builder-json":
-                    this.exportBuilderJson(cardId, `shape_level:${levelIdx}`);
-                    return;
-                case "clear-builder":
-                    this.clearBuilder(cardId);
+                }
+                case "clear-node-builder": {
+                    const treePath = btn.dataset.treePath || "[]";
+                    this.clearBuilder(cardId, `tree_node:${treePath}`);
                     break;
-                case "clear-shape-builder":
-                    this.clearBuilder(cardId, "shape");
+                }
+                case "shape-tree-add-parallel": {
+                    const card = this.getCardById(cardId);
+                    if (!card) return;
+                    const parentPath = JSON.parse(btn.dataset.treePath || "[]");
+                    if (parentPath.length === 0) {
+                        this.addChildToCard(card);
+                    } else {
+                        const pNode = this.getShapeNodeByPath(card, parentPath);
+                        if (pNode) this.addChildToNode(pNode);
+                    }
                     break;
-                case "clear-shape-child-builder":
-                    this.clearBuilder(cardId, "shape_child");
+                }
+                case "shape-tree-remove-child": {
+                    const card = this.getCardById(cardId);
+                    if (!card) return;
+                    const parentPath = JSON.parse(btn.dataset.treePath || "[]");
+                    const childIdx = int(btn.dataset.childIdx);
+                    if (parentPath.length === 0) {
+                        this.removeChildFromCard(card, childIdx);
+                    } else {
+                        const pNode = this.getShapeNodeByPath(card, parentPath);
+                        if (pNode) this.removeChildFromNode(pNode, childIdx);
+                    }
+                    // fix viewPath if it pointed at or beyond removed child
+                    if (card.viewPath && card.viewPath.length > parentPath.length) {
+                        const vpIdx = card.viewPath[parentPath.length];
+                        if (vpIdx === childIdx) card.viewPath = [...parentPath];
+                        else if (vpIdx > childIdx) card.viewPath[parentPath.length]--;
+                    }
                     break;
-                case "clear-shape-level-builder":
-                    this.clearBuilder(cardId, `shape_level:${levelIdx}`);
+                }
+                case "shape-tree-drill-into": {
+                    const card = this.getCardById(cardId);
+                    if (!card) return;
+                    const childIdx = int(btn.dataset.childIdx);
+                    card.viewPath = [...(card.viewPath || []), childIdx];
                     break;
+                }
+                case "shape-tree-navigate-breadcrumb": {
+                    const card = this.getCardById(cardId);
+                    if (!card) return;
+                    const depth = int(btn.dataset.depth);
+                    if (depth < 0) card.viewPath = [];
+                    else card.viewPath = (card.viewPath || []).slice(0, depth + 1);
+                    break;
+                }
+                case "shape-tree-move-child-up": {
+                    const card = this.getCardById(cardId);
+                    if (!card) return;
+                    const pp = JSON.parse(btn.dataset.treePath || "[]");
+                    const ci = int(btn.dataset.childIdx);
+                    const nodes = pp.length === 0 ? card.shapeChildren : (this.getShapeNodeByPath(card, pp) || {}).children;
+                    if (nodes && ci > 0) { [nodes[ci - 1], nodes[ci]] = [nodes[ci], nodes[ci - 1]]; }
+                    break;
+                }
+                case "shape-tree-move-child-down": {
+                    const card = this.getCardById(cardId);
+                    if (!card) return;
+                    const pp = JSON.parse(btn.dataset.treePath || "[]");
+                    const ci = int(btn.dataset.childIdx);
+                    const nodes = pp.length === 0 ? card.shapeChildren : (this.getShapeNodeByPath(card, pp) || {}).children;
+                    if (nodes && ci < nodes.length - 1) { [nodes[ci], nodes[ci + 1]] = [nodes[ci + 1], nodes[ci]]; }
+                    break;
+                }
+                case "shape-tree-rename-child": {
+                    const card = this.getCardById(cardId);
+                    if (!card) return;
+                    const tp = JSON.parse(btn.dataset.treePath || "[]");
+                    const node = this.getShapeNodeByPath(card, tp);
+                    if (node) { node.name = btn.dataset.newName || node.name; }
+                    break;
+                }
+                case "apply-tree-node-axis-manual": {
+                    const card = this.getCardById(cardId);
+                    if (!card) return;
+                    const node = this.getCurrentViewNode(card);
+                    if (node) this.syncNodeAxisManualFromExpr(node);
+                    break;
+                }
+                case "add-tree-node-display-action": {
+                    const card = this.getCardById(cardId);
+                    if (!card) return;
+                    const node = this.getCurrentViewNode(card);
+                    if (node) {
+                        if (!node.displayActions) node.displayActions = [];
+                        node.displayActions.push(normalizeDisplayAction({}));
+                    }
+                    break;
+                }
+                case "remove-tree-node-display-action": {
+                    const card = this.getCardById(cardId);
+                    if (!card) return;
+                    const node = this.getCurrentViewNode(card);
+                    const dIdx = int(btn.dataset.treeNodeDisplayIdx ?? btn.dataset.idx);
+                    if (node && node.displayActions) node.displayActions.splice(dIdx, 1);
+                    break;
+                }
+                case "apply-tree-node-display-manual-to": {
+                    const card = this.getCardById(cardId);
+                    if (!card) return;
+                    const node = this.getCurrentViewNode(card);
+                    const dIdx = int(btn.dataset.treeNodeDisplayIdx ?? btn.dataset.idx);
+                    if (node && node.displayActions && node.displayActions[dIdx]) {
+                        const a = node.displayActions[dIdx];
+                        a.toExpr = `${a.toManualCtor || "Vec3"}(${a.toManualX ?? 0}, ${a.toManualY ?? 0}, ${a.toManualZ ?? 0})`;
+                    }
+                    break;
+                }
+                case "add-tree-node-pinit": {
+                    const card = this.getCardById(cardId);
+                    if (!card) return;
+                    const node = this.getCurrentViewNode(card);
+                    if (node) {
+                        if (!Array.isArray(node.particleInit)) node.particleInit = [];
+                        node.particleInit.push({ id: uid(), target: "size", expr: "", exprPreset: "" });
+                    }
+                    break;
+                }
+                case "remove-tree-node-pinit": {
+                    const card = this.getCardById(cardId);
+                    if (!card) return;
+                    const node = this.getCurrentViewNode(card);
+                    const pIdx = int(btn.dataset.idx);
+                    if (node && Array.isArray(node.particleInit)) node.particleInit.splice(pIdx, 1);
+                    break;
+                }
+                case "add-tree-node-cvar": {
+                    const card = this.getCardById(cardId);
+                    if (!card) return;
+                    const node = this.getCurrentViewNode(card);
+                    if (node) {
+                        if (!Array.isArray(node.controllerVars)) node.controllerVars = [];
+                        node.controllerVars.push({ name: "", type: "Double", expr: "0.0" });
+                    }
+                    break;
+                }
+                case "remove-tree-node-cvar": {
+                    const card = this.getCardById(cardId);
+                    if (!card) return;
+                    const node = this.getCurrentViewNode(card);
+                    const cvIdx = int(btn.dataset.idx);
+                    if (node && Array.isArray(node.controllerVars)) node.controllerVars.splice(cvIdx, 1);
+                    break;
+                }
+                case "add-tree-node-caction": {
+                    const card = this.getCardById(cardId);
+                    if (!card) return;
+                    const node = this.getCurrentViewNode(card);
+                    if (node) {
+                        if (!Array.isArray(node.controllerActions)) node.controllerActions = [];
+                        node.controllerActions.push(normalizeControllerAction({}));
+                    }
+                    break;
+                }
+                case "remove-tree-node-caction": {
+                    const card = this.getCardById(cardId);
+                    if (!card) return;
+                    const node = this.getCurrentViewNode(card);
+                    const caIdx = int(btn.dataset.idx);
+                    if (node && Array.isArray(node.controllerActions)) node.controllerActions.splice(caIdx, 1);
+                    break;
+                }
                 default:
                     return;
             }
             const card = this.getCardById(cardId);
-            if (card) this.pruneNestedShapeLevels(card);
             this.afterStructureMutate({ rerenderProject: false, rerenderCards: true, rebuildPreview: true });
             return;
         }
@@ -3068,6 +3177,16 @@ class CompositionBuilderApp {
                 card.rotateAnglePreset = String(card.rotateAnglePreset || "");
                 card.rotateAngleExpr = card.rotateAnglePreset;
             }
+            if (t.dataset.cardField === "dataType") {
+                const isShape = card.dataType === "particle_shape" || card.dataType === "sequenced_shape";
+                if (isShape && (!card.shapeChildren || !card.shapeChildren.length)) {
+                    card.shapeChildren = [normalizeShapeTreeNode({ type: "single" }, 0)];
+                }
+                if (!isShape) {
+                    card.shapeChildren = [];
+                    card.viewPath = [];
+                }
+            }
             if (["bindMode", "dataType", "rotateAngleMode", "rotateToPreset", "rotateToManualCtor"].includes(t.dataset.cardField)) {
                 this.afterStructureMutate({ rerenderCards: true, rebuildPreview: true, rerenderProject: false });
                 return;
@@ -3083,127 +3202,61 @@ class CompositionBuilderApp {
             return;
         }
 
-        if (t.dataset.cardShapeField) {
-            const field = String(t.dataset.cardShapeField || "");
-            if (field === "bindMode") {
-                card.shapeBindMode = t.value === "builder" ? "builder" : "point";
-                this.afterStructureMutate({ rerenderCards: true, rebuildPreview: true, rerenderProject: false });
-                return;
-            }
-            if (field === "pointX" || field === "pointY" || field === "pointZ") {
-                if (field === "pointX") card.shapePoint.x = num(t.value);
-                if (field === "pointY") card.shapePoint.y = num(t.value);
-                if (field === "pointZ") card.shapePoint.z = num(t.value);
-                this.afterValueMutate({ rebuildPreview: true });
-                return;
-            }
-        }
-
-        if (t.dataset.cardShapeChildField) {
-            const field = String(t.dataset.cardShapeChildField || "");
-            if (field === "shapeChildType") {
-                card.shapeChildType = ["single", "particle_shape", "sequenced_shape"].includes(String(t.value || "")) ? String(t.value) : "single";
-                if (card.shapeChildType === "single") {
-                    card.shapeChildCollapsed = false;
-                    card.shapeChildLevels = [];
-                } else if (!Array.isArray(card.shapeChildLevels) || !card.shapeChildLevels.length) {
-                    card.shapeChildLevels = [normalizeShapeNestedLevel({ type: "single" }, 0)];
-                }
-                this.pruneNestedShapeLevels(card);
-                this.afterStructureMutate({ rerenderCards: true, rebuildPreview: true, rerenderProject: false });
-                return;
-            }
-            if (field === "bindMode") {
-                card.shapeChildBindMode = t.value === "builder" ? "builder" : "point";
-                this.afterStructureMutate({ rerenderCards: true, rebuildPreview: true, rerenderProject: false });
-                return;
-            }
-            if (field === "pointX" || field === "pointY" || field === "pointZ") {
-                if (field === "pointX") card.shapeChildPoint.x = num(t.value);
-                if (field === "pointY") card.shapeChildPoint.y = num(t.value);
-                if (field === "pointZ") card.shapeChildPoint.z = num(t.value);
-                this.afterValueMutate({ rebuildPreview: true });
-                return;
-            }
-            if (field === "shapeChildEffectClass") {
-                card.shapeChildEffectClass = String(t.value || DEFAULT_EFFECT_CLASS);
-                this.afterValueMutate({ rebuildPreview: true });
-                return;
-            }
-            if (field === "shapeChildUseTexture") {
-                card.shapeChildUseTexture = !!t.checked;
-                this.afterValueMutate({ rebuildPreview: true });
-                return;
-            }
-        }
-
-        if (t.dataset.shapeLevelIdx !== undefined) {
-            const levelIdx = int(t.dataset.shapeLevelIdx);
-            const field = String(t.dataset.shapeLevelField || "");
-            const level = this.getNestedShapeLevel(card, levelIdx, true);
-            if (!level) return;
+        if (t.dataset.treeNodeField) {
+            const treePath = t.dataset.treePath ? JSON.parse(t.dataset.treePath) : null;
+            const node = treePath ? this.getShapeNodeByPath(card, treePath) : null;
+            if (!node) return;
+            const field = String(t.dataset.treeNodeField || "");
             if (field === "type") {
-                level.type = ["single", "particle_shape", "sequenced_shape"].includes(String(t.value || "")) ? String(t.value) : "single";
-                this.setNestedShapeLevel(card, levelIdx, level);
-                if (level.type === "single") {
-                    this.removeNestedShapeLevel(card, levelIdx + 1);
-                } else {
-                    const next = this.getNestedShapeLevel(card, levelIdx + 1, true);
-                    if (next) {
-                        next.type = ["single", "particle_shape", "sequenced_shape"].includes(String(next.type || "")) ? String(next.type) : "single";
-                        this.setNestedShapeLevel(card, levelIdx + 1, next);
-                    }
+                node.type = ["single", "particle_shape", "sequenced_shape"].includes(String(t.value || "")) ? String(t.value) : "single";
+                if (node.type === "single") {
+                    node.children = [];
+                } else if (!node.children || !node.children.length) {
+                    node.children = [normalizeShapeTreeNode({ type: "single" }, 0)];
                 }
-                this.pruneNestedShapeLevels(card);
                 this.afterStructureMutate({ rerenderCards: true, rebuildPreview: true, rerenderProject: false });
                 return;
             }
             if (field === "bindMode") {
-                level.bindMode = t.value === "builder" ? "builder" : "point";
-                this.setNestedShapeLevel(card, levelIdx, level);
+                node.bindMode = t.value === "builder" ? "builder" : "point";
                 this.afterStructureMutate({ rerenderCards: true, rebuildPreview: true, rerenderProject: false });
                 return;
             }
             if (field === "pointX" || field === "pointY" || field === "pointZ") {
-                if (field === "pointX") level.point.x = num(t.value);
-                if (field === "pointY") level.point.y = num(t.value);
-                if (field === "pointZ") level.point.z = num(t.value);
-                this.setNestedShapeLevel(card, levelIdx, level);
+                if (field === "pointX") node.point.x = num(t.value);
+                if (field === "pointY") node.point.y = num(t.value);
+                if (field === "pointZ") node.point.z = num(t.value);
                 this.afterValueMutate({ rebuildPreview: true });
                 return;
             }
             if (field === "effectClass") {
-                level.effectClass = String(t.value || DEFAULT_EFFECT_CLASS);
-                this.setNestedShapeLevel(card, levelIdx, level);
+                node.effectClass = String(t.value || DEFAULT_EFFECT_CLASS);
                 this.afterValueMutate({ rebuildPreview: true });
                 return;
             }
             if (field === "useTexture") {
-                level.useTexture = !!t.checked;
-                this.setNestedShapeLevel(card, levelIdx, level);
+                node.useTexture = !!t.checked;
                 this.afterValueMutate({ rebuildPreview: true });
                 return;
             }
         }
 
-        if (t.dataset.shapeLevelAxisField) {
-            const levelIdx = int(t.dataset.shapeLevelIdx);
-            const level = this.getNestedShapeLevel(card, levelIdx, true);
-            if (!level) return;
-            this.applyNestedLevelAxisField(level, t.dataset.shapeLevelAxisField, t);
-            this.setNestedShapeLevel(card, levelIdx, level);
-            const rerender = ["axisPreset", "axisManualCtor"].includes(t.dataset.shapeLevelAxisField);
+        if (t.dataset.treeNodeAxisField) {
+            const treePath = t.dataset.treePath ? JSON.parse(t.dataset.treePath) : null;
+            const node = treePath ? this.getShapeNodeByPath(card, treePath) : null;
+            if (!node) return;
+            this.applyNodeAxisField(node, t.dataset.treeNodeAxisField, t);
+            const rerender = ["axisPreset", "axisManualCtor"].includes(t.dataset.treeNodeAxisField);
             this.afterValueMutate({ rerenderCards: rerender, rebuildPreview: true });
             return;
         }
 
-        if (t.dataset.shapeLevelAngleField) {
-            const levelIdx = int(t.dataset.shapeLevelIdx);
-            const level = this.getNestedShapeLevel(card, levelIdx, true);
-            if (!level) return;
-            const field = normalizeAngleOffsetFieldName(t.dataset.shapeLevelAngleField);
-            this.applyAngleOffsetField(level, field, t);
-            this.setNestedShapeLevel(card, levelIdx, level);
+        if (t.dataset.treeNodeAngleField) {
+            const treePath = t.dataset.treePath ? JSON.parse(t.dataset.treePath) : null;
+            const node = treePath ? this.getShapeNodeByPath(card, treePath) : null;
+            if (!node) return;
+            const field = normalizeAngleOffsetFieldName(t.dataset.treeNodeAngleField);
+            this.applyAngleOffsetField(node, field, t);
             if (this.isAngleOffsetStructureField(field)) {
                 this.afterStructureMutate({ rerenderCards: true, rebuildPreview: true, rerenderProject: false });
             } else {
@@ -3212,26 +3265,24 @@ class CompositionBuilderApp {
             return;
         }
 
-        if (t.dataset.shapeLevelScaleField) {
-            const levelIdx = int(t.dataset.shapeLevelIdx);
-            const level = this.getNestedShapeLevel(card, levelIdx, true);
-            if (!level) return;
-            this.applyNestedLevelScaleField(level, t.dataset.shapeLevelScaleField, t);
-            this.setNestedShapeLevel(card, levelIdx, level);
-            this.afterValueMutate({ rerenderCards: t.dataset.shapeLevelScaleField === "type", rebuildPreview: true });
+        if (t.dataset.treeNodeScaleField) {
+            const treePath = t.dataset.treePath ? JSON.parse(t.dataset.treePath) : null;
+            const node = treePath ? this.getShapeNodeByPath(card, treePath) : null;
+            if (!node) return;
+            this.applyNodeScaleField(node, t.dataset.treeNodeScaleField, t);
+            this.afterValueMutate({ rerenderCards: t.dataset.treeNodeScaleField === "type", rebuildPreview: true });
             return;
         }
 
-        if (t.dataset.shapeLevelDisplayIdx !== undefined) {
-            const levelIdx = int(t.dataset.shapeLevelIdx);
-            const level = this.getNestedShapeLevel(card, levelIdx, true);
-            if (!level) return;
-            const item = level.displayActions[int(t.dataset.shapeLevelDisplayIdx)];
+        if (t.dataset.treeNodeDisplayIdx !== undefined) {
+            const treePath = t.dataset.treePath ? JSON.parse(t.dataset.treePath) : null;
+            const node = treePath ? this.getShapeNodeByPath(card, treePath) : null;
+            if (!node) return;
+            const item = node.displayActions[int(t.dataset.treeNodeDisplayIdx)];
             if (!item) return;
-            this.applyDisplayActionField(item, t.dataset.shapeLevelDisplayField, t);
-            this.setNestedShapeLevel(card, levelIdx, level);
+            this.applyDisplayActionField(item, t.dataset.treeNodeDisplayField, t);
             if (this.queueCodeEditorRefresh(t, { rebuildPreview: true })) return;
-            if (["type", "angleMode", "toPreset"].includes(t.dataset.shapeLevelDisplayField)) {
+            if (["type", "angleMode", "toPreset"].includes(t.dataset.treeNodeDisplayField)) {
                 this.afterStructureMutate({ rerenderCards: true, rebuildPreview: true, rerenderProject: false });
             } else {
                 this.afterValueMutate({ rebuildPreview: true });
@@ -3239,40 +3290,52 @@ class CompositionBuilderApp {
             return;
         }
 
-        if (t.dataset.cardShapeChildAxisField) {
-            this.applyCardShapeChildAxisField(card, t.dataset.cardShapeChildAxisField, t);
-            const rerender = ["axisPreset", "axisManualCtor"].includes(t.dataset.cardShapeChildAxisField);
-            this.afterValueMutate({ rerenderCards: rerender, rebuildPreview: true });
-            return;
-        }
-
-        if (t.dataset.cardShapeChildAngleField) {
-            const rootLevel = this.getRootShapeChildLevel(card);
-            const field = normalizeAngleOffsetFieldName(t.dataset.cardShapeChildAngleField);
-            this.applyAngleOffsetField(rootLevel, field, t);
-            this.setRootShapeChildLevel(card, rootLevel);
-            if (this.isAngleOffsetStructureField(field)) {
-                this.afterStructureMutate({ rerenderCards: true, rebuildPreview: true, rerenderProject: false });
-            } else {
-                this.afterValueMutate({ rebuildPreview: true });
-            }
-            return;
-        }
-
-        if (t.dataset.cardShapeChildScaleField) {
-            this.applyCardShapeChildScaleField(card, t.dataset.cardShapeChildScaleField, t);
-            this.afterValueMutate({ rerenderCards: t.dataset.cardShapeChildScaleField === "type", rebuildPreview: true });
-            return;
-        }
-
-        if (t.dataset.cardShapeChildDisplayIdx !== undefined) {
-            const item = card.shapeChildDisplayActions[int(t.dataset.cardShapeChildDisplayIdx)];
+        if (t.dataset.treeNodeCvarIdx !== undefined) {
+            const treePath = t.dataset.treePath ? JSON.parse(t.dataset.treePath) : null;
+            const node = treePath ? this.getShapeNodeByPath(card, treePath) : this.getCurrentViewNode(card);
+            if (!node || !Array.isArray(node.controllerVars)) return;
+            const item = node.controllerVars[int(t.dataset.treeNodeCvarIdx)];
             if (!item) return;
-            this.applyDisplayActionField(item, t.dataset.cardShapeChildDisplayField, t);
+            const field = t.dataset.treeNodeCvarField;
+            if (field === "type") item.type = t.value;
+            else if (field === "name") item.name = t.value;
+            else if (field === "expr") item.expr = t.value;
+            this.afterValueMutate({ rebuildPreview: true });
+            return;
+        }
+
+        if (t.dataset.treeNodeCactIdx !== undefined) {
+            const treePath = t.dataset.treePath ? JSON.parse(t.dataset.treePath) : null;
+            const node = treePath ? this.getShapeNodeByPath(card, treePath) : this.getCurrentViewNode(card);
+            if (!node || !Array.isArray(node.controllerActions)) return;
+            const item = node.controllerActions[int(t.dataset.treeNodeCactIdx)];
+            if (!item) return;
+            const field = t.dataset.treeNodeCactField;
+            if (field === "type") item.type = t.value;
+            else if (field === "script") item.script = t.value;
             if (this.queueCodeEditorRefresh(t, { rebuildPreview: true })) return;
-            if (["type", "angleMode", "toPreset"].includes(t.dataset.cardShapeChildDisplayField)) {
+            this.afterValueMutate({ rebuildPreview: true });
+            return;
+        }
+
+        if (t.dataset.treeNodePinitIdx !== undefined) {
+            const treePath = t.dataset.treePath ? JSON.parse(t.dataset.treePath) : null;
+            const node = treePath ? this.getShapeNodeByPath(card, treePath) : this.getCurrentViewNode(card);
+            if (!node || !Array.isArray(node.particleInit)) return;
+            const item = node.particleInit[int(t.dataset.treeNodePinitIdx)];
+            if (!item) return;
+            const field = t.dataset.treeNodePinitField;
+            if (field === "target") {
+                item.target = t.value;
+                item.expr = "";
+                item.exprPreset = "";
                 this.afterStructureMutate({ rerenderCards: true, rebuildPreview: true, rerenderProject: false });
-            } else {
+            } else if (field === "exprPreset") {
+                item.exprPreset = t.value;
+                if (t.value) item.expr = t.value;
+                this.afterStructureMutate({ rerenderCards: true, rebuildPreview: true, rerenderProject: false });
+            } else if (field === "expr") {
+                item.expr = t.value;
                 this.afterValueMutate({ rebuildPreview: true });
             }
             return;
@@ -3376,22 +3439,93 @@ class CompositionBuilderApp {
             return;
         }
 
+        if (t.dataset.nodePinitIdx !== undefined) {
+            const treePath = t.dataset.treePath ? JSON.parse(t.dataset.treePath) : null;
+            const node = treePath ? this.getShapeNodeByPath(card, treePath) : null;
+            if (!node) return;
+            const item = node.particleInit[int(t.dataset.nodePinitIdx)];
+            if (!item) return;
+            const field = String(t.dataset.nodePinitField || "");
+            if (field === "target") {
+                const prevTarget = String(item.target || "");
+                const prevDefault = this.getParticleInitDefaultExprByTarget(prevTarget);
+                const hadPreset = !!String(item.exprPreset || "").trim();
+                item.target = String(t.value || "size");
+                let nextExpr = String(item.expr || "").trim();
+                if (!hadPreset) {
+                    if (!nextExpr || nextExpr === prevDefault) {
+                        nextExpr = this.getParticleInitDefaultExprByTarget(item.target);
+                    }
+                }
+                let nextPreset = this.resolveParticleInitPresetExpr(nextExpr, item.target);
+                if (hadPreset && !nextPreset) {
+                    nextExpr = this.getParticleInitDefaultExprByTarget(item.target);
+                    nextPreset = this.resolveParticleInitPresetExpr(nextExpr, item.target);
+                }
+                item.expr = nextExpr;
+                item.exprPreset = nextPreset;
+                this.afterValueMutate({ rebuildPreview: true, rerenderCards: true });
+                return;
+            }
+            if (field === "exprPreset") {
+                const prevPreset = String(item.exprPreset || "").trim();
+                item.exprPreset = String(t.value || "");
+                if (item.exprPreset) item.expr = item.exprPreset;
+                else if (!String(item.expr || "").trim() || String(item.expr || "").trim() === prevPreset) {
+                    item.expr = this.getParticleInitDefaultExprByTarget(item.target);
+                }
+                this.afterValueMutate({ rebuildPreview: true, rerenderCards: true });
+                return;
+            }
+            if (field === "expr") {
+                item.expr = String(t.value || "");
+                item.exprPreset = this.resolveParticleInitPresetExpr(item.expr, item.target);
+                this.afterValueMutate({ rebuildPreview: true });
+                return;
+            }
+            this.applyObjectField(item, field, t);
+            this.afterValueMutate({ rebuildPreview: true });
+            return;
+        }
+
+        if (t.dataset.nodeCvarIdx !== undefined) {
+            const treePath = t.dataset.treePath ? JSON.parse(t.dataset.treePath) : null;
+            const node = treePath ? this.getShapeNodeByPath(card, treePath) : null;
+            if (!node) return;
+            const item = node.controllerVars[int(t.dataset.nodeCvarIdx)];
+            if (!item) return;
+            this.applyObjectField(item, t.dataset.nodeCvarField, t);
+            this.afterValueMutate({ rebuildPreview: false });
+            return;
+        }
+
+        if (t.dataset.nodeCactIdx !== undefined) {
+            const treePath = t.dataset.treePath ? JSON.parse(t.dataset.treePath) : null;
+            const node = treePath ? this.getShapeNodeByPath(card, treePath) : null;
+            if (!node) return;
+            const item = node.controllerActions[int(t.dataset.nodeCactIdx)];
+            if (!item) return;
+            this.applyObjectField(item, t.dataset.nodeCactField, t);
+            if (this.queueCodeEditorRefresh(t, { rebuildPreview: true, rerenderCards: t.dataset.nodeCactField === "type" })) return;
+            this.afterValueMutate({ rebuildPreview: true, rerenderCards: t.dataset.nodeCactField === "type" });
+            return;
+        }
+
         if (t.dataset.cardAnimateIdx !== undefined) {
             const idx = int(t.dataset.cardAnimateIdx);
             const key = t.dataset.cardAnimateType;
             if (!key) return;
-            if (String(key).startsWith("shapeLevelGrowth:")) {
-                const levelIdx = int(String(key).split(":")[1]);
-                const level = this.getNestedShapeLevel(card, levelIdx, true);
-                if (!level || !Array.isArray(level.growthAnimates)) return;
-                const item = level.growthAnimates[idx];
+            if (String(key).startsWith("nodeGrowth:")) {
+                const treePath = JSON.parse(String(key).split("nodeGrowth:")[1] || "[]");
+                const node = this.getShapeNodeByPath(card, treePath);
+                if (!node || !Array.isArray(node.growthAnimates)) return;
+                const item = node.growthAnimates[idx];
                 if (!item) return;
                 this.applyAnimateField(item, t.dataset.cardAnimateField, t);
-                this.setNestedShapeLevel(card, levelIdx, level);
                 this.afterValueMutate({ rebuildPreview: false });
                 return;
             }
-            if (!["growthAnimates", "sequencedAnimates", "shapeChildGrowthAnimates"].includes(key)) return;
+            if (!["growthAnimates", "sequencedAnimates"].includes(key)) return;
             const item = card[key] && card[key][idx];
             if (!item) return;
             this.applyAnimateField(item, t.dataset.cardAnimateField, t);
@@ -3722,15 +3856,21 @@ class CompositionBuilderApp {
         cloned.growthAnimates = cloned.growthAnimates.map((it) => ({ ...it, id: uid() }));
         cloned.sequencedAnimates = cloned.sequencedAnimates.map((it) => ({ ...it, id: uid() }));
         cloned.shapeDisplayActions = (cloned.shapeDisplayActions || []).map((it) => ({ ...it, id: uid() }));
-        cloned.shapeChildDisplayActions = (cloned.shapeChildDisplayActions || []).map((it) => ({ ...it, id: uid() }));
-        cloned.shapeChildGrowthAnimates = (cloned.shapeChildGrowthAnimates || []).map((it) => ({ ...it, id: uid() }));
-        cloned.shapeChildLevels = (cloned.shapeChildLevels || []).map((lv, i) => {
-            const level = normalizeShapeNestedLevel(lv, i);
-            level.id = uid();
-            level.displayActions = (level.displayActions || []).map((it) => ({ ...it, id: uid() }));
-            level.growthAnimates = (level.growthAnimates || []).map((it) => ({ ...it, id: uid() }));
-            return level;
-        });
+        const reIdTreeNodes = (nodes) => {
+            return (nodes || []).map((n, i) => {
+                const c = normalizeShapeTreeNode(n, i);
+                c.id = uid();
+                c.displayActions = (c.displayActions || []).map((it) => ({ ...it, id: uid() }));
+                c.growthAnimates = (c.growthAnimates || []).map((it) => ({ ...it, id: uid() }));
+                c.particleInit = (c.particleInit || []).map((it) => ({ ...it, id: uid() }));
+                c.controllerVars = (c.controllerVars || []).map((it) => ({ ...it, id: uid() }));
+                c.controllerActions = (c.controllerActions || []).map((it) => ({ ...it, id: uid() }));
+                c.children = reIdTreeNodes(c.children);
+                return c;
+            });
+        };
+        cloned.shapeChildren = reIdTreeNodes(cloned.shapeChildren);
+        cloned.viewPath = [];
         this.state.cards.splice(idx + 1, 0, cloned);
         this.focusedCardId = cloned.id;
         this.selectedCardIds = new Set([cloned.id]);
@@ -3852,23 +3992,17 @@ class CompositionBuilderApp {
         const card = this.getCardById(cardId);
         if (!card) return;
         const normalizedTarget = normalizeBuilderTarget(target);
-        if (/^shape_level:\d+$/.test(normalizedTarget)) {
-            const levelIdx = int(normalizedTarget.split(":")[1]);
-            const level = this.getNestedShapeLevel(card, levelIdx, true);
-            if (!level) return;
-            level.bindMode = "builder";
-            level.builderState = createDefaultBuilderState();
-            this.setNestedShapeLevel(card, levelIdx, level);
+        if (/^tree_node:/.test(normalizedTarget)) {
+            const treePath = JSON.parse(normalizedTarget.split("tree_node:")[1] || "[]");
+            const node = this.getShapeNodeByPath(card, treePath);
+            if (!node) return;
+            node.bindMode = "builder";
+            node.builderState = createDefaultBuilderState();
             return;
         }
         if (normalizedTarget === "shape") {
             card.shapeBuilderState = createDefaultBuilderState();
             card.shapeBindMode = "builder";
-            return;
-        }
-        if (normalizedTarget === "shape_child") {
-            card.shapeChildBuilderState = createDefaultBuilderState();
-            card.shapeChildBindMode = "builder";
             return;
         }
         card.builderState = createDefaultBuilderState();
@@ -4635,185 +4769,286 @@ class CompositionBuilderApp {
         return html;
     }
 
-    renderNestedShapeLevelBlock(card, levelRaw, levelIdx) {
-        const level = normalizeShapeNestedLevel(levelRaw, levelIdx - 1);
-        const collapsed = !!level.collapsed;
-        const foldIcon = collapsed ? "▸" : "▾";
-        const childType = level.type;
-        const bindMode = level.bindMode === "builder" ? "builder" : "point";
-        const builderStats = this.evaluateBuilderPoints(level.builderState);
-        const builderNodeCount = this.countBuilderNodes(level.builderState?.root?.children || []);
-        const builderPointCount = (builderStats.points || []).length;
-        const growthBlock = childType === "sequenced_shape"
-            ? this.renderCardAnimates(
-                card.id,
-                `shapeLevelGrowth:${levelIdx}`,
-                level.growthAnimates,
-                `嵌套层${levelIdx + 1} 生长动画`,
-                "add-shape-level-growth-animate",
-                "remove-shape-level-growth-animate",
-                { embedOnly: true }
-            ).replaceAll(`data-card-id="${card.id}"`, `data-card-id="${card.id}" data-shape-level-idx="${levelIdx}"`)
-            : "";
-        const effectHtml = this.getEffectOptionsHtml(level.effectClass || card.singleEffectClass || DEFAULT_EFFECT_CLASS);
-        return `
-            <div class="subgroup subgroup-tight nested-shape-level ${collapsed ? "collapsed" : ""}" data-shape-level="${levelIdx}">
-                <div class="subgroup-head">
-                    <button class="iconbtn subgroup-toggle" data-act="toggle-shape-level-fold" data-card-id="${card.id}" data-shape-level-idx="${levelIdx}" title="${collapsed ? "展开" : "折叠"}">${foldIcon}</button>
-                    <div class="subgroup-title">嵌套层${levelIdx + 1}</div>
-                </div>
-                <div class="subgroup-body">
-                    <div class="grid2">
-                        <label class="field">
-                            <span>子点类型</span>
-                            <select class="input" data-card-id="${card.id}" data-shape-level-idx="${levelIdx}" data-shape-level-field="type">
-                                <option value="single" ${childType === "single" ? "selected" : ""}>single</option>
-                                <option value="particle_shape" ${childType === "particle_shape" ? "selected" : ""}>ParticleShapeComposition</option>
-                                <option value="sequenced_shape" ${childType === "sequenced_shape" ? "selected" : ""}>SequencedParticleShapeComposition</option>
-                            </select>
-                        </label>
-                        ${childType === "single"
-                            ? `<label class="field">
-                                <span>子点 Effect</span>
-                                <select class="input" data-card-id="${card.id}" data-shape-level-idx="${levelIdx}" data-shape-level-field="effectClass">${effectHtml}</select>
-                            </label>
-                            <label class="field">
-                                <span>Texture Preview</span>
-                                <span class="chk"><input type="checkbox" data-card-id="${card.id}" data-shape-level-idx="${levelIdx}" data-shape-level-field="useTexture" ${level.useTexture === false ? "" : "checked"}/>Use Texture</span>
-                            </label>`
-                            : `<div class="mini-note">非 single 可继续嵌套</div>`}
-                    </div>
-                    ${childType === "single" ? `
-                        <div class="mini-note">Single 详细参数（沿用当前卡片）</div>
-                        <div class="list-tools">
-                            <button class="btn small primary" data-act="add-pinit" data-card-id="${card.id}">添加 init</button>
-                        </div>
-                        <div class="kv-list">
-                            ${this.renderParticleInitRows(card)}
-                        </div>
-                        <div class="list-tools">
-                            <button class="btn small primary" data-act="add-cvar" data-card-id="${card.id}">添加局部变量</button>
-                            <button class="btn small primary" data-act="add-caction" data-card-id="${card.id}">添加 tick action</button>
-                        </div>
-                        <div class="kv-list">
-                            ${card.controllerVars.map((it, cIdx) => `
-                                <div class="kv-row grid-var">
-                                    <input class="input" data-card-id="${card.id}" data-cvar-idx="${cIdx}" data-cvar-field="name" value="${esc(it.name)}" placeholder="name"/>
-                                    <select class="input" data-card-id="${card.id}" data-cvar-idx="${cIdx}" data-cvar-field="type">
-                                        ${CONTROLLER_VAR_TYPES.map((tp) => `<option value="${esc(tp)}" ${it.type === tp ? "selected" : ""}>${esc(tp)}</option>`).join("")}
-                                    </select>
-                                    <input class="input" data-card-id="${card.id}" data-cvar-idx="${cIdx}" data-cvar-field="expr" value="${esc(it.expr)}" placeholder="初始值"/>
-                                    <div></div><div></div>
-                                    <button class="btn small" data-act="remove-cvar" data-card-id="${card.id}" data-idx="${cIdx}">删除</button>
-                                </div>
-                            `).join("")}
-                        </div>
-                        <div class="kv-list">
-                            ${(card.controllerActions || []).map((a, aIdx) => this.renderControllerActionRow(card.id, a, aIdx, { shapeLevelIdx: levelIdx })).join("")}
-                        </div>
-                    ` : `
-                        <div class="mini-note">子点来源</div>
-                        <div class="grid2">
-                            <label class="field">
-                                <span>子点绑定选项</span>
-                                <select class="input" data-card-id="${card.id}" data-shape-level-idx="${levelIdx}" data-shape-level-field="bindMode">
-                                    <option value="point" ${bindMode === "point" ? "selected" : ""}>point</option>
-                                    <option value="builder" ${bindMode === "builder" ? "selected" : ""}>PointsBuilder</option>
-                                </select>
-                            </label>
-                        </div>
-                        ${bindMode === "point" ? `
-                            <div class="grid3">
-                                <label class="field"><span>X</span><input class="input" type="number" step="${this.state.settings.paramStep}" data-card-id="${card.id}" data-shape-level-idx="${levelIdx}" data-shape-level-field="pointX" value="${esc(formatNumberCompact(level.point?.x))}"/></label>
-                                <label class="field"><span>Y</span><input class="input" type="number" step="${this.state.settings.paramStep}" data-card-id="${card.id}" data-shape-level-idx="${levelIdx}" data-shape-level-field="pointY" value="${esc(formatNumberCompact(level.point?.y))}"/></label>
-                                <label class="field"><span>Z</span><input class="input" type="number" step="${this.state.settings.paramStep}" data-card-id="${card.id}" data-shape-level-idx="${levelIdx}" data-shape-level-field="pointZ" value="${esc(formatNumberCompact(level.point?.z))}"/></label>
-                            </div>
-                        ` : `
-                            <div class="kv-list">
-                                <div class="kv-row display-row">
-                                    <div class="builder-actions">
-                                        <button class="btn small primary" data-act="open-shape-level-builder-editor" data-card-id="${card.id}" data-shape-level-idx="${levelIdx}">编辑嵌套层 Builder</button>
-                                        <button class="btn small" data-act="import-shape-level-builder-json" data-card-id="${card.id}" data-shape-level-idx="${levelIdx}">导入 JSON</button>
-                                        <button class="btn small" data-act="export-shape-level-builder-json" data-card-id="${card.id}" data-shape-level-idx="${levelIdx}">导出 JSON</button>
-                                        <button class="btn small" data-act="clear-shape-level-builder" data-card-id="${card.id}" data-shape-level-idx="${levelIdx}">清空</button>
-                                    </div>
-                                </div>
-                                <div class="kv-row display-row">
-                                    <div class="builder-meta">节点 ${builderNodeCount} / 预览点 ${builderPointCount}</div>
-                                </div>
-                            </div>
-                        `}
-                        <div class="mini-note">子点 Axis</div>
-                        <div class="grid2">
-                            <label class="field">
-                                <span>axis 预设</span>
-                                <select class="input expr-input" data-card-id="${card.id}" data-shape-level-idx="${levelIdx}" data-shape-level-axis-field="axisPreset">${this.getRelativeTargetPresetOptionsHtml(level.axisPreset || level.axisExpr)}</select>
-                            </label>
-                            <label class="field">
-                                <span>axis 输入</span>
-                                <input class="input expr-input" data-card-id="${card.id}" data-shape-level-idx="${levelIdx}" data-shape-level-axis-field="axisExpr" value="${esc(level.axisExpr || "")}" placeholder="axis 表达式"/>
-                            </label>
-                        </div>
-                        <div class="grid5 vector-inputs">
-                            <select class="input vector-ctor" data-card-id="${card.id}" data-shape-level-idx="${levelIdx}" data-shape-level-axis-field="axisManualCtor">
-                                ${["Vec3", "RelativeLocation", "Vector3f"].map((it) => `<option value="${it}" ${level.axisManualCtor === it ? "selected" : ""}>${it}</option>`).join("")}
-                            </select>
-                            <input class="input" type="number" step="${this.state.settings.paramStep}" data-card-id="${card.id}" data-shape-level-idx="${levelIdx}" data-shape-level-axis-field="axisManualX" value="${esc(formatNumberCompact(level.axisManualX))}" placeholder="x"/>
-                            <input class="input" type="number" step="${this.state.settings.paramStep}" data-card-id="${card.id}" data-shape-level-idx="${levelIdx}" data-shape-level-axis-field="axisManualY" value="${esc(formatNumberCompact(level.axisManualY))}" placeholder="y"/>
-                            <input class="input" type="number" step="${this.state.settings.paramStep}" data-card-id="${card.id}" data-shape-level-idx="${levelIdx}" data-shape-level-axis-field="axisManualZ" value="${esc(formatNumberCompact(level.axisManualZ))}" placeholder="z"/>
-                            <button class="btn small primary" data-act="apply-shape-level-axis-manual" data-card-id="${card.id}" data-shape-level-idx="${levelIdx}">套用手动输入</button>
-                        </div>
-                        <div class="mini-note">子点 Display 行为</div>
-                        <div class="list-tools">
-                            <button class="btn small primary" data-act="add-shape-level-display-action" data-card-id="${card.id}" data-shape-level-idx="${levelIdx}">添加子点 display action</button>
-                        </div>
-                        <div class="kv-list">
-                            ${(level.displayActions || []).map((a, aIdx) => this.renderShapeLevelDisplayActionRow(card.id, levelIdx, a, aIdx)).join("")}
-                        </div>
-                        ${this.renderAngleOffsetControl({
-                            scope: "shape_level",
-                            cardId: card.id,
-                            levelIdx,
-                            value: level,
-                            title: `相对角度偏移-嵌套${levelIdx + 1}（可选）`
-                        })}
-                        <div class="mini-note">缩放助手-嵌套${levelIdx + 1}（可选）</div>
-                        ${this.renderScaleHelperEditor({
-                            scope: "shape_level",
-                            cardId: card.id,
-                            levelIdx,
-                            scale: level.scale,
-                            helperName: `缩放助手-嵌套${levelIdx + 1}`,
-                            embedOnly: true
-                        })}
-                        ${growthBlock}
-                    `}
-                </div>
-            </div>
-        `;
+    renderTreeNodeDisplayActionRow(cardId, treePath, action, idx) {
+        const cid = esc(cardId);
+        const tp = esc(treePath);
+        let html = this.renderShapeDisplayActionRow(cardId, action, idx);
+        html = html
+            .replaceAll(`data-card-id="${cid}"`, `data-card-id="${cid}" data-tree-path="${tp}"`)
+            .replaceAll("data-card-shape-display-idx", "data-tree-node-display-idx")
+            .replaceAll("data-card-shape-display-field", "data-tree-node-display-field")
+            .replaceAll("remove-shape-display-action", "remove-tree-node-display-action")
+            .replaceAll("apply-shape-display-manual-to", "apply-tree-node-display-manual-to")
+            .replaceAll("data-shape-display-idx", "data-tree-node-display-idx");
+        return html;
     }
 
-    renderNestedShapeLevels(card) {
-        if (!card) return "";
-        this.pruneNestedShapeLevels(card);
-        const blocks = [];
-        let parentType = String(card.shapeChildType || "single");
-        for (let i = 0; i < (card.shapeChildLevels || []).length; i++) {
-            if (parentType === "single") break;
-            const level = normalizeShapeNestedLevel(card.shapeChildLevels[i], i);
-            const levelIdx = i + 1;
-            blocks.push(this.renderNestedShapeLevelBlock(card, level, levelIdx));
-            parentType = level.type;
+    renderTreeNodeEditor(card, node, treePath) {
+        if (!card || !node) return "";
+        const cardId = card.id;
+        const tp = esc(JSON.stringify(treePath));
+        const nodeType = node.type || "single";
+        const bindMode = node.bindMode === "builder" ? "builder" : "point";
+        const builderStats = this.evaluateBuilderPoints(node.builderState);
+        const builderNodeCount = this.countBuilderNodes(node.builderState?.root?.children || []);
+        const builderPointCount = (builderStats.points || []).length;
+        const effectHtml = this.getEffectOptionsHtml(node.effectClass || DEFAULT_EFFECT_CLASS);
+        return this._renderTreeNodeEditorInner(card, node, treePath, tp, cardId, nodeType, bindMode, builderNodeCount, builderPointCount, effectHtml);
+    }
+
+    _renderTreeNodeEditorInner(card, node, treePath, tp, cardId, nodeType, bindMode, builderNodeCount, builderPointCount, effectHtml) {
+        const step = this.state.settings.paramStep;
+        const typeBlock = `
+            <div class="grid2">
+                <label class="field">
+                    <span>子节点类型</span>
+                    <select class="input" data-card-id="${cardId}" data-tree-path="${tp}" data-tree-node-field="type">
+                        <option value="single" ${nodeType === "single" ? "selected" : ""}>single</option>
+                        <option value="particle_shape" ${nodeType === "particle_shape" ? "selected" : ""}>ParticleShapeComposition</option>
+                        <option value="sequenced_shape" ${nodeType === "sequenced_shape" ? "selected" : ""}>SequencedParticleShapeComposition</option>
+                    </select>
+                </label>
+                <label class="field">
+                    <span>名称</span>
+                    <input class="input" data-card-id="${cardId}" data-tree-path="${tp}" data-tree-node-field="name" value="${esc(node.name || "")}" placeholder="子节点名称"/>
+                </label>
+            </div>`;
+        const bindBlock = this._renderTreeNodeBindBlock(card, node, tp, cardId, bindMode, builderNodeCount, builderPointCount, step);
+        const axisBlock = this._renderTreeNodeAxisBlock(node, tp, cardId, step);
+        const displayBlock = this._renderTreeNodeDisplayBlock(cardId, node, tp);
+        const angleOffsetBlock = this.renderAngleOffsetControl({
+            scope: "tree_node", cardId, treePath: JSON.stringify(treePath),
+            value: node, title: "相对角度偏移（可选）"
+        });
+        const scaleBlock = `
+            <div class="mini-note">缩放助手（可选）</div>
+            ${this.renderScaleHelperEditor({
+                scope: "tree_node", cardId, treePath: JSON.stringify(treePath),
+                scale: node.scale, helperName: "缩放助手", embedOnly: true
+            })}`;
+        if (nodeType === "single") {
+            return this._renderTreeNodeSingleView(card, node, tp, cardId, typeBlock, bindBlock, axisBlock, displayBlock, angleOffsetBlock, scaleBlock, effectHtml, treePath);
         }
-        return blocks.join("");
+        return this._renderTreeNodeShapeView(card, node, tp, cardId, typeBlock, bindBlock, axisBlock, displayBlock, angleOffsetBlock, scaleBlock, nodeType, treePath);
+    }
+
+    _renderTreeNodeBindBlock(card, node, tp, cardId, bindMode, builderNodeCount, builderPointCount, step) {
+        return `
+            <div class="mini-note">子点来源</div>
+            <div class="grid2">
+                <label class="field">
+                    <span>绑定选项</span>
+                    <select class="input" data-card-id="${cardId}" data-tree-path="${tp}" data-tree-node-field="bindMode">
+                        <option value="point" ${bindMode === "point" ? "selected" : ""}>point</option>
+                        <option value="builder" ${bindMode === "builder" ? "selected" : ""}>PointsBuilder</option>
+                    </select>
+                </label>
+            </div>
+            ${bindMode === "point" ? `
+                <div class="grid3">
+                    <label class="field"><span>X</span><input class="input" type="number" step="${step}" data-card-id="${cardId}" data-tree-path="${tp}" data-tree-node-field="pointX" value="${esc(formatNumberCompact(node.point.x))}"/></label>
+                    <label class="field"><span>Y</span><input class="input" type="number" step="${step}" data-card-id="${cardId}" data-tree-path="${tp}" data-tree-node-field="pointY" value="${esc(formatNumberCompact(node.point.y))}"/></label>
+                    <label class="field"><span>Z</span><input class="input" type="number" step="${step}" data-card-id="${cardId}" data-tree-path="${tp}" data-tree-node-field="pointZ" value="${esc(formatNumberCompact(node.point.z))}"/></label>
+                </div>
+            ` : `
+                <div class="kv-list">
+                    <div class="kv-row display-row">
+                        <div class="builder-actions">
+                            <button class="btn small primary" data-act="open-node-builder-editor" data-card-id="${cardId}" data-tree-path="${tp}">编辑 Builder</button>
+                            <button class="btn small" data-act="import-node-builder-json" data-card-id="${cardId}" data-tree-path="${tp}">导入 JSON</button>
+                            <button class="btn small" data-act="export-node-builder-json" data-card-id="${cardId}" data-tree-path="${tp}">导出 JSON</button>
+                            <button class="btn small" data-act="clear-node-builder" data-card-id="${cardId}" data-tree-path="${tp}">清空</button>
+                        </div>
+                    </div>
+                    <div class="kv-row display-row">
+                        <div class="builder-meta">节点 ${builderNodeCount} / 预览点 ${builderPointCount}</div>
+                    </div>
+                </div>
+            `}`;
+    }
+
+    _renderTreeNodeAxisBlock(node, tp, cardId, step) {
+        return `
+            <div class="mini-note">Axis</div>
+            <div class="grid2">
+                <label class="field">
+                    <span>axis 预设</span>
+                    <select class="input expr-input" data-card-id="${cardId}" data-tree-path="${tp}" data-tree-node-axis-field="axisPreset">${this.getRelativeTargetPresetOptionsHtml(node.axisPreset || node.axisExpr)}</select>
+                </label>
+                <label class="field">
+                    <span>axis 输入</span>
+                    <input class="input expr-input" data-card-id="${cardId}" data-tree-path="${tp}" data-tree-node-axis-field="axisExpr" value="${esc(node.axisExpr || "")}" placeholder="axis 表达式"/>
+                </label>
+            </div>
+            <div class="grid5 vector-inputs">
+                <select class="input vector-ctor" data-card-id="${cardId}" data-tree-path="${tp}" data-tree-node-axis-field="axisManualCtor">
+                    ${["Vec3", "RelativeLocation", "Vector3f"].map((it) => `<option value="${it}" ${node.axisManualCtor === it ? "selected" : ""}>${it}</option>`).join("")}
+                </select>
+                <input class="input" type="number" step="${step}" data-card-id="${cardId}" data-tree-path="${tp}" data-tree-node-axis-field="axisManualX" value="${esc(formatNumberCompact(node.axisManualX))}" placeholder="x"/>
+                <input class="input" type="number" step="${step}" data-card-id="${cardId}" data-tree-path="${tp}" data-tree-node-axis-field="axisManualY" value="${esc(formatNumberCompact(node.axisManualY))}" placeholder="y"/>
+                <input class="input" type="number" step="${step}" data-card-id="${cardId}" data-tree-path="${tp}" data-tree-node-axis-field="axisManualZ" value="${esc(formatNumberCompact(node.axisManualZ))}" placeholder="z"/>
+                <button class="btn small primary" data-act="apply-tree-node-axis-manual" data-card-id="${cardId}" data-tree-path="${tp}">套用手动输入</button>
+            </div>`;
+    }
+
+    _renderTreeNodeDisplayBlock(cardId, node, tp) {
+        return `
+            <div class="mini-note">Display 行为</div>
+            <div class="list-tools">
+                <button class="btn small primary" data-act="add-tree-node-display-action" data-card-id="${cardId}" data-tree-path="${tp}">添加 display action</button>
+            </div>
+            <div class="kv-list">
+                ${(node.displayActions || []).map((a, aIdx) => this.renderTreeNodeDisplayActionRow(cardId, tp, a, aIdx)).join("")}
+            </div>`;
+    }
+
+    _renderTreeNodeSingleView(card, node, tp, cardId, typeBlock, bindBlock, axisBlock, displayBlock, angleOffsetBlock, scaleBlock, effectHtml, treePath) {
+        return `
+            ${typeBlock}
+            <div class="grid2">
+                <label class="field">
+                    <span>Effect</span>
+                    <select class="input" data-card-id="${cardId}" data-tree-path="${tp}" data-tree-node-field="effectClass">${effectHtml}</select>
+                </label>
+                <label class="field">
+                    <span>Texture Preview</span>
+                    <span class="chk"><input type="checkbox" data-card-id="${cardId}" data-tree-path="${tp}" data-tree-node-field="useTexture" ${node.useTexture === false ? "" : "checked"}/>Use Texture</span>
+                </label>
+            </div>
+            ${bindBlock}
+            ${axisBlock}
+            ${displayBlock}
+            ${angleOffsetBlock}
+            ${scaleBlock}
+            <div class="mini-note">Particle Init</div>
+            <div class="list-tools">
+                <button class="btn small primary" data-act="add-tree-node-pinit" data-card-id="${cardId}" data-tree-path="${tp}">添加 init</button>
+            </div>
+            <div class="kv-list">
+                ${this.renderTreeNodeParticleInitRows(cardId, node, tp)}
+            </div>
+            <div class="mini-note">Controller</div>
+            <div class="list-tools">
+                <button class="btn small primary" data-act="add-tree-node-cvar" data-card-id="${cardId}" data-tree-path="${tp}">添加局部变量</button>
+                <button class="btn small primary" data-act="add-tree-node-caction" data-card-id="${cardId}" data-tree-path="${tp}">添加 tick action</button>
+            </div>
+            <div class="kv-list">
+                ${(node.controllerVars || []).map((it, cIdx) => `
+                    <div class="kv-row grid-var">
+                        <input class="input" data-card-id="${cardId}" data-tree-path="${tp}" data-tree-node-cvar-idx="${cIdx}" data-tree-node-cvar-field="name" value="${esc(it.name)}" placeholder="name"/>
+                        <select class="input" data-card-id="${cardId}" data-tree-path="${tp}" data-tree-node-cvar-idx="${cIdx}" data-tree-node-cvar-field="type">
+                            ${CONTROLLER_VAR_TYPES.map((t) => `<option value="${esc(t)}" ${it.type === t ? "selected" : ""}>${esc(t)}</option>`).join("")}
+                        </select>
+                        <input class="input" data-card-id="${cardId}" data-tree-path="${tp}" data-tree-node-cvar-idx="${cIdx}" data-tree-node-cvar-field="expr" value="${esc(it.expr)}" placeholder="初始值"/>
+                        <div></div><div></div>
+                        <button class="btn small" data-act="remove-tree-node-cvar" data-card-id="${cardId}" data-tree-path="${tp}" data-idx="${cIdx}">删除</button>
+                    </div>
+                `).join("")}
+            </div>
+            <div class="kv-list">
+                ${(node.controllerActions || []).map((a, aIdx) => this.renderTreeNodeControllerActionRow(cardId, tp, a, aIdx)).join("")}
+            </div>`;
+    }
+
+    _renderTreeNodeShapeView(card, node, tp, cardId, typeBlock, bindBlock, axisBlock, displayBlock, angleOffsetBlock, scaleBlock, nodeType, treePath) {
+        const growthBlock = nodeType === "sequenced_shape"
+            ? this.renderCardAnimates(
+                card.id, `treeNodeGrowth:${JSON.stringify(treePath)}`,
+                node.growthAnimates || [],
+                "生长动画", "add-tree-node-growth-animate", "remove-tree-node-growth-animate",
+                { embedOnly: true }
+            ).replaceAll(`data-card-id="${card.id}"`, `data-card-id="${card.id}" data-tree-path="${tp}"`)
+            : "";
+        const childrenList = this._renderTreeNodeChildrenList(card, node, treePath, cardId);
+        return `
+            ${typeBlock}
+            ${bindBlock}
+            ${axisBlock}
+            ${displayBlock}
+            ${angleOffsetBlock}
+            ${scaleBlock}
+            ${growthBlock}
+            <div class="mini-note">并列子节点</div>
+            ${childrenList}`;
+    }
+
+    renderTreeNodeParticleInitRows(cardId, node, tp) {
+        const list = Array.isArray(node?.particleInit) ? node.particleInit : [];
+        return list.map((it, pIdx) => {
+            const targetOptions = this.getParticleInitTargetOptionsHtml(it.target);
+            const presetSelected = String(it.exprPreset || "").trim() || this.resolveParticleInitPresetExpr(it.expr || "", it.target);
+            const valuePresetOptions = this.getParticleInitValuePresetOptionsHtml(presetSelected, it.target);
+            const manualVisible = !presetSelected;
+            const manualPlaceholder = this.getParticleInitDefaultExprByTarget(it.target);
+            const isVectorTarget = this.isParticleInitVectorTarget(it.target);
+            const parsedVector = this.exprRuntime.parseVecLikeValue(it.expr || manualPlaceholder);
+            const colorHex = vectorToHex01(parsedVector.x, parsedVector.y, parsedVector.z);
+            const valueClass = [
+                "pinit-value",
+                manualVisible ? "" : "preset-only",
+                (manualVisible && isVectorTarget) ? "vector-manual" : ""
+            ].filter(Boolean).join(" ");
+            const colorPicker = (manualVisible && isVectorTarget)
+                ? `<input class="input vector-color pinit-color" type="color" data-card-id="${cardId}" data-tree-path="${tp}" data-tree-node-pinit-color-idx="${pIdx}" value="${esc(colorHex)}" title="打开调色板"/>`
+                : "";
+            return `
+                <div class="kv-row grid-pinit">
+                    <select class="input" data-card-id="${cardId}" data-tree-path="${tp}" data-tree-node-pinit-idx="${pIdx}" data-tree-node-pinit-field="target">${targetOptions}</select>
+                    <div class="${valueClass}">
+                        <select class="input expr-input" data-card-id="${cardId}" data-tree-path="${tp}" data-tree-node-pinit-idx="${pIdx}" data-tree-node-pinit-field="exprPreset">${valuePresetOptions}</select>
+                        <input class="input expr-input mono ${manualVisible ? "" : "pinit-manual-hidden"}" data-card-id="${cardId}" data-tree-path="${tp}" data-tree-node-pinit-idx="${pIdx}" data-tree-node-pinit-field="expr" value="${esc(it.expr || "")}" placeholder="${esc(manualPlaceholder)}"/>
+                        ${colorPicker}
+                    </div>
+                    <button class="btn small" data-act="remove-tree-node-pinit" data-card-id="${cardId}" data-tree-path="${tp}" data-idx="${pIdx}">删除</button>
+                </div>
+            `;
+        }).join("");
+    }
+
+    renderTreeNodeControllerActionRow(cardId, tp, action, idx) {
+        const item = normalizeControllerAction(action);
+        const typeOptions = CONTROLLER_ACTION_TYPES
+            .map((it) => `<option value="${esc(it.id)}" ${item.type === it.id ? "selected" : ""}>${esc(it.title)}</option>`)
+            .join("");
+        return `
+            <div class="kv-row display-row">
+                <div class="grid2">
+                    <select class="input" data-card-id="${esc(cardId)}" data-tree-path="${tp}" data-tree-node-cact-idx="${idx}" data-tree-node-cact-field="type">${typeOptions}</select>
+                    <div class="preview-actions"><button class="btn small" data-act="remove-tree-node-caction" data-card-id="${esc(cardId)}" data-tree-path="${tp}" data-idx="${idx}">删除</button></div>
+                </div>
+                <textarea class="input script-area expr-input" data-code-editor="js" data-code-title="tick action (JS)" data-card-id="${esc(cardId)}" data-tree-path="${tp}" data-tree-node-cact-idx="${idx}" data-tree-node-cact-field="script" placeholder="if (...) { ... }&#10;addSingle() / addMultiple(2)">${esc(item.script || "")}</textarea>
+            </div>`;
+    }
+
+    _renderTreeNodeChildrenList(card, node, parentPath, cardId) {
+        const children = node ? (node.children || []) : [];
+        const tp = esc(JSON.stringify(parentPath));
+        const rows = children.map((child, idx) => {
+            const childPath = [...parentPath, idx];
+            const typeName = child.type === "particle_shape" ? "Shape" : (child.type === "sequenced_shape" ? "SeqShape" : "Single");
+            return `
+                <div class="child-row" data-card-id="${cardId}" data-tree-path="${esc(JSON.stringify(childPath))}">
+                    <span class="child-name">${esc(child.name || `子节点 ${idx + 1}`)}</span>
+                    <span class="child-type badge">${typeName}</span>
+                    <button class="btn small primary" data-act="shape-tree-drill-into" data-card-id="${cardId}" data-child-idx="${idx}">进入</button>
+                    <button class="btn small" data-act="shape-tree-move-child-up" data-card-id="${cardId}" data-tree-path="${tp}" data-child-idx="${idx}">上移</button>
+                    <button class="btn small" data-act="shape-tree-move-child-down" data-card-id="${cardId}" data-tree-path="${tp}" data-child-idx="${idx}">下移</button>
+                    <button class="btn small" data-act="shape-tree-remove-child" data-card-id="${cardId}" data-tree-path="${tp}" data-child-idx="${idx}">删除</button>
+                </div>`;
+        }).join("");
+        return `
+            <div class="children-list">
+                ${rows || '<div class="mini-note">暂无子节点</div>'}
+            </div>
+            <div class="list-tools">
+                <button class="btn small primary" data-act="shape-tree-add-parallel" data-card-id="${cardId}" data-tree-path="${tp}">添加并列子节点</button>
+            </div>`;
     }
 
     renderScaleHelperEditor(opts = {}) {
         const scope = opts.scope === "card"
             ? "card"
-            : (opts.scope === "shape_child"
-                ? "shape_child"
-                : (opts.scope === "shape_level" ? "shape_level" : "project"));
+            : (opts.scope === "tree_node" ? "tree_node" : "project");
         const cardId = String(opts.cardId || "");
         const levelIdx = Math.max(0, int(opts.levelIdx));
         const embedOnly = !!opts.embedOnly;
@@ -4825,15 +5060,16 @@ class CompositionBuilderApp {
             ? "data-project-scale-field"
             : (scope === "card"
                 ? "data-card-scale-field"
-                : (scope === "shape_child" ? "data-card-shape-child-scale-field" : "data-shape-level-scale-field"));
+                : "data-tree-node-scale-field");
+        const treePathAttr = opts.treePath ? ` data-tree-path='${esc(JSON.stringify(opts.treePath))}'` : "";
         const cardAttr = scope === "project"
             ? ""
-            : `data-card-id="${esc(cardId)}"${scope === "shape_level" ? ` data-shape-level-idx="${levelIdx}"` : ""}`;
+            : `data-card-id="${esc(cardId)}"${treePathAttr}`;
         const openBezierAct = scope === "project"
             ? "open-project-bezier-tool"
-            : (scope === "shape_child"
-                ? "open-child-bezier-tool"
-                : (scope === "shape_level" ? "open-shape-level-bezier-tool" : "open-card-bezier-tool"));
+            : (scope === "tree_node"
+                ? "open-node-bezier-tool"
+                : "open-card-bezier-tool");
         const typeSelect = `
             <label class="field">
                 <span>${esc(helperName)}</span>
@@ -4918,9 +5154,9 @@ class CompositionBuilderApp {
     renderAngleOffsetControl(opts = {}) {
         const scope = opts.scope === "card"
             ? "card"
-            : (opts.scope === "shape_level" ? "shape_level" : "shape_child");
+            : "tree_node";
         const cardId = String(opts.cardId || "");
-        const levelIdx = Math.max(0, int(opts.levelIdx));
+        const treePath = opts.treePath || null;
         const value = opts.value && typeof opts.value === "object" ? opts.value : {};
         const title = String(opts.title || "相对角度偏移（可选）");
         const enabled = value.angleOffsetEnabled === true;
@@ -4933,12 +5169,11 @@ class CompositionBuilderApp {
         const angleUnit = normalizeAngleUnit(value.angleOffsetAngleUnit || "deg");
         const angleExpr = String(value.angleOffsetAngleExpr || value.angleOffsetAnglePreset || "PI * 2");
 
+        const treePathAttr = treePath ? ` data-tree-path='${esc(JSON.stringify(treePath))}'` : "";
         const fieldAttr = scope === "card"
             ? "data-card-field"
-            : (scope === "shape_level" ? "data-shape-level-angle-field" : "data-card-shape-child-angle-field");
-        const baseAttr = scope === "shape_level"
-            ? `data-card-id="${esc(cardId)}" data-shape-level-idx="${levelIdx}"`
-            : `data-card-id="${esc(cardId)}"`;
+            : "data-tree-node-angle-field";
+        const baseAttr = `data-card-id="${esc(cardId)}"${treePathAttr}`;
         const fieldName = (short, full) => (scope === "card" ? full : short);
         const bindAttr = (short, full) => `${baseAttr} ${fieldAttr}="${fieldName(short, full)}"`;
 
@@ -5402,7 +5637,6 @@ class CompositionBuilderApp {
         const builderNodeCount = this.countBuilderNodes(card.builderState?.root?.children || []);
         const builderPointCount = (builderStats.points || []).length;
         const effectOptions = card.dataType === "single" ? this.getEffectOptionsHtml(card.singleEffectClass) : "";
-        const shapeBindMode = card.shapeBindMode === "builder" ? "builder" : "point";
 
         return `
             <section class="card ${selected ? "selected" : ""} ${card.folded ? "folded" : ""}" data-card-id="${card.id}">
@@ -5521,52 +5755,7 @@ class CompositionBuilderApp {
                                 </div>
                             </div>
                         ` : `
-                            <div class="subgroup" data-section-key="shape_axis">
-                                <div class="subgroup-title">形状 Axis</div>
-                                <div class="grid2">
-                                    <label class="field">
-                                        <span>axis 预设</span>
-                                        <select class="input expr-input" data-card-id="${card.id}" data-card-shape-axis-field="axisPreset">${this.getRelativeTargetPresetOptionsHtml(card.shapeAxisPreset || card.shapeAxisExpr)}</select>
-                                    </label>
-                                    <label class="field">
-                                        <span>axis 输入</span>
-                                        <input class="input expr-input" data-card-id="${card.id}" data-card-shape-axis-field="axisExpr" value="${esc(card.shapeAxisExpr || "")}" placeholder="axis 表达式"/>
-                                    </label>
-                                </div>
-                                <div class="grid5 vector-inputs">
-                                    <select class="input vector-ctor" data-card-id="${card.id}" data-card-shape-axis-field="axisManualCtor">
-                                        ${["Vec3", "RelativeLocation", "Vector3f"].map((it) => `<option value="${it}" ${card.shapeAxisManualCtor === it ? "selected" : ""}>${it}</option>`).join("")}
-                                    </select>
-                                    <input class="input" type="number" step="${this.state.settings.paramStep}" data-card-id="${card.id}" data-card-shape-axis-field="axisManualX" value="${esc(formatNumberCompact(card.shapeAxisManualX))}" placeholder="x"/>
-                                    <input class="input" type="number" step="${this.state.settings.paramStep}" data-card-id="${card.id}" data-card-shape-axis-field="axisManualY" value="${esc(formatNumberCompact(card.shapeAxisManualY))}" placeholder="y"/>
-                                    <input class="input" type="number" step="${this.state.settings.paramStep}" data-card-id="${card.id}" data-card-shape-axis-field="axisManualZ" value="${esc(formatNumberCompact(card.shapeAxisManualZ))}" placeholder="z"/>
-                                    <button class="btn small primary" data-act="apply-shape-axis-manual" data-card-id="${card.id}">套用手动输入</button>
-                                </div>
-                            </div>
-
-                            <div class="subgroup" data-section-key="shape_display">
-                                <div class="subgroup-title">形状 Display 行为</div>
-                                <div class="list-tools">
-                                    <button class="btn small primary" data-act="add-shape-display-action" data-card-id="${card.id}">添加 display action</button>
-                                </div>
-                                <div class="kv-list">
-                                    ${(card.shapeDisplayActions || []).map((a, aIdx) => this.renderShapeDisplayActionRow(card.id, a, aIdx)).join("")}
-                                </div>
-                                ${this.renderAngleOffsetControl({
-                                    scope: "card",
-                                    cardId: card.id,
-                                    value: card
-                                })}
-                            </div>
-                            ${this.renderShapeChildParamsSection(card, shapeBindMode)}
-
-                            ${this.renderScaleHelperEditor({
-                                scope: "card",
-                                cardId: card.id,
-                                scale: card.shapeScale,
-                                helperName: "缩放助手-卡片",
-                                sectionKey: "shape_scale"
-                            })}
+                            ${this.renderShapeChildParamsSection(card)}
                         `}
 
                         ${card.dataType === "sequenced_shape"
@@ -5578,219 +5767,117 @@ class CompositionBuilderApp {
         `;
     }
 
-    renderShapeChildParamsSection(card, shapeBindMode = "point") {
+    renderShapeChildParamsSection(card) {
         if (!card) return "";
-        const normalizedShapeBindMode = shapeBindMode === "builder" ? "builder" : "point";
-        const shapeBuilderStats = this.evaluateBuilderPoints(card.shapeBuilderState);
-        const shapeBuilderNodeCount = this.countBuilderNodes(card.shapeBuilderState?.root?.children || []);
-        const shapeBuilderPointCount = (shapeBuilderStats.points || []).length;
-        const childType = ["single", "particle_shape", "sequenced_shape"].includes(String(card.shapeChildType || ""))
-            ? String(card.shapeChildType)
-            : "single";
-        const shapeBaseBlock = `
-            <div class="mini-note">Shape 点设置</div>
-            <div class="grid2">
-                <label class="field">
-                    <span>子点来源</span>
-                    <select class="input" data-card-id="${card.id}" data-card-shape-field="bindMode">
-                        <option value="point" ${normalizedShapeBindMode === "point" ? "selected" : ""}>point</option>
-                        <option value="builder" ${normalizedShapeBindMode === "builder" ? "selected" : ""}>PointsBuilder</option>
-                    </select>
-                </label>
-            </div>
-            ${normalizedShapeBindMode === "point" ? `
-                <div class="grid3">
-                    <label class="field"><span>X</span><input class="input" type="number" step="${this.state.settings.paramStep}" data-card-id="${card.id}" data-card-shape-field="pointX" value="${esc(formatNumberCompact(card.shapePoint?.x))}"/></label>
-                    <label class="field"><span>Y</span><input class="input" type="number" step="${this.state.settings.paramStep}" data-card-id="${card.id}" data-card-shape-field="pointY" value="${esc(formatNumberCompact(card.shapePoint?.y))}"/></label>
-                    <label class="field"><span>Z</span><input class="input" type="number" step="${this.state.settings.paramStep}" data-card-id="${card.id}" data-card-shape-field="pointZ" value="${esc(formatNumberCompact(card.shapePoint?.z))}"/></label>
-                </div>
-            ` : `
-                <div class="kv-list">
-                    <div class="kv-row display-row">
-                        <div class="builder-actions">
-                            <button class="btn small primary" data-act="open-shape-builder-editor" data-card-id="${card.id}">编辑 Shape Builder</button>
-                            <button class="btn small" data-act="import-shape-builder-json" data-card-id="${card.id}">导入 JSON</button>
-                            <button class="btn small" data-act="export-shape-builder-json" data-card-id="${card.id}">导出 JSON</button>
-                            <button class="btn small" data-act="clear-shape-builder" data-card-id="${card.id}">清空</button>
-                        </div>
-                    </div>
-                    <div class="kv-row display-row">
-                        <div class="builder-meta">节点 ${shapeBuilderNodeCount} / 预览点 ${shapeBuilderPointCount}</div>
-                    </div>
-                </div>
-            `}
-        `;
-        const typeSelector = `
-            <div class="grid2">
-                <label class="field">
-                    <span>子点类型</span>
-                    <select class="input" data-card-id="${card.id}" data-card-shape-child-field="shapeChildType">
-                        <option value="single" ${childType === "single" ? "selected" : ""}>single</option>
-                        <option value="particle_shape" ${childType === "particle_shape" ? "selected" : ""}>ParticleShapeComposition</option>
-                        <option value="sequenced_shape" ${childType === "sequenced_shape" ? "selected" : ""}>SequencedParticleShapeComposition</option>
-                    </select>
-                </label>
-                ${childType === "single"
-                    ? `<label class="field">
-                        <span>子点 Effect</span>
-                        <select class="input" data-card-id="${card.id}" data-card-shape-child-field="shapeChildEffectClass">${this.getEffectOptionsHtml(card.shapeChildEffectClass || card.singleEffectClass)}</select>
-                    </label>
-                    <label class="field">
-                        <span>Texture Preview</span>
-                        <span class="chk"><input type="checkbox" data-card-id="${card.id}" data-card-shape-child-field="shapeChildUseTexture" ${card.shapeChildUseTexture === false ? "" : "checked"}/>Use Texture</span>
-                    </label>`
-                    : `<div class="mini-note">非 single 子点可继续配置子点来源与子点行为</div>`}
-            </div>
-        `;
-
-        if (childType === "single") {
-            return `
-                <div class="subgroup subgroup-tight" data-section-key="shape_child_params">
-                    <div class="subgroup-title">子点类型参数</div>
-                    ${shapeBaseBlock}
-                    ${typeSelector}
-                    <div class="mini-note">Single: Particle Init</div>
-                    <div class="list-tools">
-                        <button class="btn small primary" data-act="add-pinit" data-card-id="${card.id}">添加 init</button>
-                    </div>
-                    <div class="kv-list">
-                        ${this.renderParticleInitRows(card)}
-                    </div>
-                    <div class="mini-note">Single: Controller Init</div>
-                    <div class="list-tools">
-                        <button class="btn small primary" data-act="add-cvar" data-card-id="${card.id}">添加局部变量</button>
-                        <button class="btn small primary" data-act="add-caction" data-card-id="${card.id}">添加 tick action</button>
-                    </div>
-                    <div class="kv-list">
-                        ${card.controllerVars.map((it, cIdx) => `
-                            <div class="kv-row grid-var">
-                                <input class="input" data-card-id="${card.id}" data-cvar-idx="${cIdx}" data-cvar-field="name" value="${esc(it.name)}" placeholder="name"/>
-                                <select class="input" data-card-id="${card.id}" data-cvar-idx="${cIdx}" data-cvar-field="type">
-                                    ${CONTROLLER_VAR_TYPES.map((tp) => `<option value="${esc(tp)}" ${it.type === tp ? "selected" : ""}>${esc(tp)}</option>`).join("")}
-                                </select>
-                                <input class="input" data-card-id="${card.id}" data-cvar-idx="${cIdx}" data-cvar-field="expr" value="${esc(it.expr)}" placeholder="初始值"/>
-                                <div></div><div></div>
-                                <button class="btn small" data-act="remove-cvar" data-card-id="${card.id}" data-idx="${cIdx}">删除</button>
-                            </div>
-                        `).join("")}
-                    </div>
-                    <div class="kv-list">
-                        ${(card.controllerActions || []).map((a, aIdx) => this.renderControllerActionRow(card.id, a, aIdx, { shapeLevelIdx: 0 })).join("")}
-                    </div>
-                </div>
-            `;
+        const viewPath = card.viewPath || [];
+        const breadcrumb = this._renderTreeBreadcrumb(card, viewPath);
+        let body = "";
+        if (viewPath.length === 0) {
+            body = this._renderTreeRootView(card);
+        } else {
+            const node = this.getShapeNodeByPath(card, viewPath);
+            if (!node) {
+                body = `<div class="mini-note">节点不存在，请返回上级</div>`;
+            } else {
+                body = this.renderTreeNodeEditor(card, node, viewPath);
+            }
         }
-
-        const childBindMode = card.shapeChildBindMode === "builder" ? "builder" : "point";
-        const childBuilderStats = this.evaluateBuilderPoints(card.shapeChildBuilderState);
-        const childBuilderNodeCount = this.countBuilderNodes(card.shapeChildBuilderState?.root?.children || []);
-        const childBuilderPointCount = (childBuilderStats.points || []).length;
-
-        const growthBlock = childType === "sequenced_shape"
-            ? this.renderCardAnimates(
-                card.id,
-                "shapeChildGrowthAnimates",
-                card.shapeChildGrowthAnimates,
-                "子点生长动画",
-                "add-shape-child-growth-animate",
-                "remove-shape-child-growth-animate",
-                { embedOnly: true }
-            )
-            : "";
-        const childCollapsed = !!card.shapeChildCollapsed;
-        const childFoldIcon = childCollapsed ? "▸" : "▾";
-        const nestedBlocks = this.renderNestedShapeLevels(card);
-
         return `
             <div class="subgroup subgroup-tight" data-section-key="shape_child_params">
-                <div class="subgroup-title">子点类型参数</div>
-                ${shapeBaseBlock}
-                ${typeSelector}
-                <div class="subgroup subgroup-tight nested-shape-level ${childCollapsed ? "collapsed" : ""}" data-shape-level="0">
-                    <div class="subgroup-head">
-                        <button class="iconbtn subgroup-toggle" data-act="toggle-shape-child-fold" data-card-id="${card.id}" title="${childCollapsed ? "展开" : "折叠"}">${childFoldIcon}</button>
-                        <div class="subgroup-title">嵌套层1</div>
-                    </div>
-                    <div class="subgroup-body">
-                        <div class="mini-note">子点来源</div>
-                        <div class="grid2">
-                            <label class="field">
-                                <span>子点绑定选项</span>
-                                <select class="input" data-card-id="${card.id}" data-card-shape-child-field="bindMode">
-                                    <option value="point" ${childBindMode === "point" ? "selected" : ""}>point</option>
-                                    <option value="builder" ${childBindMode === "builder" ? "selected" : ""}>PointsBuilder</option>
-                                </select>
-                            </label>
-                        </div>
-                        ${childBindMode === "point" ? `
-                            <div class="grid3">
-                                <label class="field"><span>X</span><input class="input" type="number" step="${this.state.settings.paramStep}" data-card-id="${card.id}" data-card-shape-child-field="pointX" value="${esc(formatNumberCompact(card.shapeChildPoint?.x))}"/></label>
-                                <label class="field"><span>Y</span><input class="input" type="number" step="${this.state.settings.paramStep}" data-card-id="${card.id}" data-card-shape-child-field="pointY" value="${esc(formatNumberCompact(card.shapeChildPoint?.y))}"/></label>
-                                <label class="field"><span>Z</span><input class="input" type="number" step="${this.state.settings.paramStep}" data-card-id="${card.id}" data-card-shape-child-field="pointZ" value="${esc(formatNumberCompact(card.shapeChildPoint?.z))}"/></label>
-                            </div>
-                        ` : `
-                            <div class="kv-list">
-                                <div class="kv-row display-row">
-                                    <div class="builder-actions">
-                                        <button class="btn small primary" data-act="open-shape-child-builder-editor" data-card-id="${card.id}">编辑子点 Builder</button>
-                                        <button class="btn small" data-act="import-shape-child-builder-json" data-card-id="${card.id}">导入 JSON</button>
-                                        <button class="btn small" data-act="export-shape-child-builder-json" data-card-id="${card.id}">导出 JSON</button>
-                                        <button class="btn small" data-act="clear-shape-child-builder" data-card-id="${card.id}">清空</button>
-                                    </div>
-                                </div>
-                                <div class="kv-row display-row">
-                                    <div class="builder-meta">节点 ${childBuilderNodeCount} / 预览点 ${childBuilderPointCount}</div>
-                                </div>
-                            </div>
-                        `}
-                        <div class="mini-note">子点 Axis</div>
-                        <div class="grid2">
-                            <label class="field">
-                                <span>child axis 预设</span>
-                                <select class="input expr-input" data-card-id="${card.id}" data-card-shape-child-axis-field="axisPreset">${this.getRelativeTargetPresetOptionsHtml(card.shapeChildAxisPreset || card.shapeChildAxisExpr)}</select>
-                            </label>
-                            <label class="field">
-                                <span>child axis 输入</span>
-                                <input class="input expr-input" data-card-id="${card.id}" data-card-shape-child-axis-field="axisExpr" value="${esc(card.shapeChildAxisExpr || "")}" placeholder="axis 表达式"/>
-                            </label>
-                        </div>
-                        <div class="grid5 vector-inputs">
-                            <select class="input vector-ctor" data-card-id="${card.id}" data-card-shape-child-axis-field="axisManualCtor">
-                                ${["Vec3", "RelativeLocation", "Vector3f"].map((it) => `<option value="${it}" ${card.shapeChildAxisManualCtor === it ? "selected" : ""}>${it}</option>`).join("")}
-                            </select>
-                            <input class="input" type="number" step="${this.state.settings.paramStep}" data-card-id="${card.id}" data-card-shape-child-axis-field="axisManualX" value="${esc(formatNumberCompact(card.shapeChildAxisManualX))}" placeholder="x"/>
-                            <input class="input" type="number" step="${this.state.settings.paramStep}" data-card-id="${card.id}" data-card-shape-child-axis-field="axisManualY" value="${esc(formatNumberCompact(card.shapeChildAxisManualY))}" placeholder="y"/>
-                            <input class="input" type="number" step="${this.state.settings.paramStep}" data-card-id="${card.id}" data-card-shape-child-axis-field="axisManualZ" value="${esc(formatNumberCompact(card.shapeChildAxisManualZ))}" placeholder="z"/>
-                            <button class="btn small primary" data-act="apply-shape-child-axis-manual" data-card-id="${card.id}">套用手动输入</button>
-                        </div>
-                        <div class="mini-note">子点 Display 行为</div>
-                        <div class="list-tools">
-                            <button class="btn small primary" data-act="add-shape-child-display-action" data-card-id="${card.id}">添加子点 display action</button>
-                        </div>
-                        <div class="kv-list">
-                            ${(card.shapeChildDisplayActions || []).map((a, aIdx) => this.renderShapeChildDisplayActionRow(card.id, a, aIdx)).join("")}
-                        </div>
-                        ${this.renderAngleOffsetControl({
-                            scope: "shape_child",
-                            cardId: card.id,
-                            value: this.getRootShapeChildLevel(card),
-                            title: "相对角度偏移-嵌套1（可选）"
-                        })}
-                        <div class="mini-note">缩放助手-嵌套1（可选）</div>
-                        ${this.renderScaleHelperEditor({
-                            scope: "shape_child",
-                            cardId: card.id,
-                            scale: card.shapeChildScale,
-                            helperName: "缩放助手-嵌套1",
-                            embedOnly: true
-                        })}
-                        ${growthBlock}
-                    </div>
-                </div>
-                ${(card.shapeChildLevels || []).length ? `<div class="mini-note">已配置嵌套层 ${(card.shapeChildLevels || []).length}</div>` : ""}
-                ${nestedBlocks}
+                <div class="subgroup-title">形状树</div>
+                ${breadcrumb}
+                ${body}
             </div>
         `;
+    }
+
+    _renderTreeRootView(card) {
+        const cardId = card.id;
+        const axisBlock = `
+            <div class="subgroup" data-section-key="shape_axis">
+                <div class="subgroup-title">Axis</div>
+                <div class="grid2">
+                    <label class="field">
+                        <span>axis 预设</span>
+                        <select class="input expr-input" data-card-id="${cardId}" data-card-shape-axis-field="axisPreset">${this.getRelativeTargetPresetOptionsHtml(card.shapeAxisPreset || card.shapeAxisExpr)}</select>
+                    </label>
+                    <label class="field">
+                        <span>axis 输入</span>
+                        <input class="input expr-input" data-card-id="${cardId}" data-card-shape-axis-field="axisExpr" value="${esc(card.shapeAxisExpr || "")}" placeholder="axis 表达式"/>
+                    </label>
+                </div>
+                <div class="grid5 vector-inputs">
+                    <select class="input vector-ctor" data-card-id="${cardId}" data-card-shape-axis-field="axisManualCtor">
+                        ${["Vec3", "RelativeLocation", "Vector3f"].map((it) => `<option value="${it}" ${card.shapeAxisManualCtor === it ? "selected" : ""}>${it}</option>`).join("")}
+                    </select>
+                    <input class="input" type="number" step="${this.state.settings.paramStep}" data-card-id="${cardId}" data-card-shape-axis-field="axisManualX" value="${esc(formatNumberCompact(card.shapeAxisManualX))}" placeholder="x"/>
+                    <input class="input" type="number" step="${this.state.settings.paramStep}" data-card-id="${cardId}" data-card-shape-axis-field="axisManualY" value="${esc(formatNumberCompact(card.shapeAxisManualY))}" placeholder="y"/>
+                    <input class="input" type="number" step="${this.state.settings.paramStep}" data-card-id="${cardId}" data-card-shape-axis-field="axisManualZ" value="${esc(formatNumberCompact(card.shapeAxisManualZ))}" placeholder="z"/>
+                    <button class="btn small primary" data-act="apply-shape-axis-manual" data-card-id="${cardId}">套用手动输入</button>
+                </div>
+            </div>`;
+        const displayBlock = `
+            <div class="subgroup" data-section-key="shape_display">
+                <div class="subgroup-title">Display 行为</div>
+                <div class="list-tools">
+                    <button class="btn small primary" data-act="add-shape-display-action" data-card-id="${cardId}">添加 display action</button>
+                </div>
+                <div class="kv-list">
+                    ${(card.shapeDisplayActions || []).map((a, aIdx) => this.renderShapeDisplayActionRow(cardId, a, aIdx)).join("")}
+                </div>
+                ${this.renderAngleOffsetControl({ scope: "card", cardId, value: card })}
+            </div>`;
+        const scaleBlock = this.renderScaleHelperEditor({
+            scope: "card", cardId, scale: card.shapeScale,
+            helperName: "缩放助手", sectionKey: "shape_scale"
+        });
+        const childrenList = this._renderTreeRootChildrenList(card);
+        return `${axisBlock}${displayBlock}${scaleBlock}${childrenList}`;
+    }
+
+    _renderTreeBreadcrumb(card, viewPath) {
+        if (!viewPath || viewPath.length === 0) {
+            return `<div class="tree-breadcrumb"><span class="crumb active">根</span></div>`;
+        }
+        const crumbs = [`<button class="crumb clickable" data-act="shape-tree-navigate-breadcrumb" data-card-id="${card.id}" data-depth="-1">根</button>`];
+        let currentNodes = card.shapeChildren || [];
+        for (let i = 0; i < viewPath.length; i++) {
+            const idx = viewPath[i];
+            const node = currentNodes[idx];
+            if (!node) break;
+            const name = node.name || `子节点 ${idx + 1}`;
+            if (i === viewPath.length - 1) {
+                crumbs.push(`<span class="crumb active">${esc(name)}</span>`);
+            } else {
+                crumbs.push(`<button class="crumb clickable" data-act="shape-tree-navigate-breadcrumb" data-card-id="${card.id}" data-depth="${i}">${esc(name)}</button>`);
+            }
+            currentNodes = node.children || [];
+        }
+        return `<div class="tree-breadcrumb">${crumbs.join(' <span class="crumb-sep">&gt;</span> ')}</div>`;
+    }
+
+    _renderTreeRootChildrenList(card) {
+        const children = card.shapeChildren || [];
+        const cardId = card.id;
+        const rows = children.map((child, idx) => {
+            const typeName = child.type === "particle_shape" ? "Shape" : (child.type === "sequenced_shape" ? "SeqShape" : "Single");
+            return `
+                <div class="child-row" data-card-id="${cardId}">
+                    <span class="child-name">${esc(child.name || `子节点 ${idx + 1}`)}</span>
+                    <span class="child-type badge">${typeName}</span>
+                    <button class="btn small primary" data-act="shape-tree-drill-into" data-card-id="${cardId}" data-child-idx="${idx}">进入</button>
+                    <button class="btn small" data-act="shape-tree-move-child-up" data-card-id="${cardId}" data-tree-path="[]" data-child-idx="${idx}">上移</button>
+                    <button class="btn small" data-act="shape-tree-move-child-down" data-card-id="${cardId}" data-tree-path="[]" data-child-idx="${idx}">下移</button>
+                    <button class="btn small" data-act="shape-tree-remove-child" data-card-id="${cardId}" data-tree-path="[]" data-child-idx="${idx}">删除</button>
+                </div>`;
+        }).join("");
+        return `
+            <div class="children-list">
+                ${rows || '<div class="mini-note">暂无子节点，请添加并列子节点</div>'}
+            </div>
+            <div class="list-tools">
+                <button class="btn small primary" data-act="shape-tree-add-parallel" data-card-id="${cardId}" data-tree-path="[]">添加并列子节点</button>
+            </div>`;
     }
 
     renderControllerActionRow(cardId, action, idx, opts = {}) {
@@ -6629,13 +6716,6 @@ class CompositionBuilderApp {
     }
 
     getShapeLeafType(card) {
-        if (!card || card.dataType === "single") return "single";
-        const chain = this.getShapeChildChain(card);
-        if (!chain.length) return "single";
-        for (const lv of chain) {
-            const t = String(lv?.type || "single");
-            if (t === "single") return "single";
-        }
         return "single";
     }
 
@@ -6666,41 +6746,46 @@ class CompositionBuilderApp {
 
     buildShapeLocalTuplesForPreview(card) {
         if (!card || card.dataType === "single") return [];
-        const rootPoints = this.resolveShapeSourcePoints(card.shapeBindMode, card.shapePoint, card.shapeBuilderState);
-        let tuples = rootPoints.map((p, idx) => {
-            const vec = U.v(num(p?.x), num(p?.y), num(p?.z));
-            return {
-                sum: U.clone(vec),
-                levels: [{ vec, ref: idx }]
-            };
-        });
-        if (!tuples.length) return [];
-
-        const chain = this.getShapeChildChain(card);
-        for (const levelRaw of chain) {
-            const level = normalizeShapeNestedLevel(levelRaw);
-            if (String(level.type || "single") === "single") break;
-            const src = this.resolveShapeSourcePoints(level.bindMode, level.point, level.builderState);
-            if (!src.length) return [];
-            const next = [];
-            for (const tuple of tuples) {
-                const baseLevels = Array.isArray(tuple?.levels) ? tuple.levels : [];
-                const sumBase = tuple?.sum || U.v(0, 0, 0);
-                for (let si = 0; si < src.length; si++) {
-                    const sp = src[si];
-                    const sv = U.v(num(sp?.x), num(sp?.y), num(sp?.z));
-                    const levels = baseLevels.map((lv) => ({ vec: U.v(num(lv?.vec?.x), num(lv?.vec?.y), num(lv?.vec?.z)), ref: int(lv?.ref || 0) }));
-                    levels.push({ vec: U.clone(sv), ref: si });
-                    next.push({
-                        sum: U.v(num(sumBase?.x) + sv.x, num(sumBase?.y) + sv.y, num(sumBase?.z) + sv.z),
-                        levels
-                    });
-                }
-            }
-            tuples = next;
-            if (!tuples.length) break;
+        const children = card.shapeChildren || [];
+        if (!children.length) return [];
+        let allTuples = [];
+        for (const child of children) {
+            const childTuples = this._buildTreeNodeTuplesForPreview(child, U.v(0, 0, 0), []);
+            allTuples = allTuples.concat(childTuples);
         }
-        return tuples;
+        return allTuples;
+    }
+
+    _buildTreeNodeTuplesForPreview(node, parentSum, parentLevels) {
+        if (!node) return [];
+        const src = this.resolveShapeSourcePoints(node.bindMode, node.point, node.builderState);
+        if (!src.length) return [];
+        const nodeType = node.type || "single";
+        if (nodeType === "single") {
+            return src.map((p, si) => {
+                const sv = U.v(num(p?.x), num(p?.y), num(p?.z));
+                const levels = parentLevels.map((lv) => ({ vec: U.v(num(lv?.vec?.x), num(lv?.vec?.y), num(lv?.vec?.z)), ref: int(lv?.ref || 0) }));
+                levels.push({ vec: U.clone(sv), ref: si });
+                return {
+                    sum: U.v(num(parentSum?.x) + sv.x, num(parentSum?.y) + sv.y, num(parentSum?.z) + sv.z),
+                    levels
+                };
+            });
+        }
+        const nodeChildren = node.children || [];
+        if (!nodeChildren.length) return [];
+        let allTuples = [];
+        for (const p of src) {
+            const sv = U.v(num(p?.x), num(p?.y), num(p?.z));
+            const newSum = U.v(num(parentSum?.x) + sv.x, num(parentSum?.y) + sv.y, num(parentSum?.z) + sv.z);
+            const newLevels = parentLevels.map((lv) => ({ vec: U.v(num(lv?.vec?.x), num(lv?.vec?.y), num(lv?.vec?.z)), ref: int(lv?.ref || 0) }));
+            newLevels.push({ vec: U.clone(sv), ref: 0 });
+            for (const child of nodeChildren) {
+                const childTuples = this._buildTreeNodeTuplesForPreview(child, newSum, newLevels);
+                allTuples = allTuples.concat(childTuples);
+            }
+        }
+        return allTuples;
     }
 
     buildShapeLocalPointsForPreview(card) {
@@ -6712,9 +6797,15 @@ class CompositionBuilderApp {
         if (!card) return "single";
         const d = Math.max(0, int(depth));
         if (d === 0) return String(card.dataType || "single");
-        if (d === 1) return String(card.shapeChildType || "single");
-        const lv = this.getNestedShapeLevel(card, d - 1, false);
-        return String(lv?.type || "single");
+        // traverse first-child path for depth
+        let nodes = card.shapeChildren || [];
+        for (let i = 1; i <= d; i++) {
+            if (!nodes.length) return "single";
+            const node = nodes[0];
+            if (i === d) return String(node.type || "single");
+            nodes = node.children || [];
+        }
+        return "single";
     }
 
     getShapeScopeInfoByRuntimeLevel(card, runtimeLevel = 0) {
@@ -6753,28 +6844,33 @@ class CompositionBuilderApp {
             actions: rootActions,
             hasExpression: !!rootActions.__hasExpression
         });
-        const chain = this.getShapeChildChain(card);
-        for (let i = 0; i < chain.length; i++) {
-            const lv = normalizeShapeNestedLevel(chain[i], i);
-            if (lv.type === "single") break;
-            const scope = this.getShapeScopeInfoByRuntimeLevel(card, i + 1);
-            const actions = this.buildPreviewRuntimeActions(elapsedTick, lv.displayActions || [], {
-                skipExpression,
-                scope: "shape_level_display",
-                cardId: card.id
-            });
-            levels.push({
-                scopeLevel: i + 1,
-                ancestorSequencedDepths: scope.sequencedDepths,
-                sequenced: lv.type === "sequenced_shape",
-                growthAnimates: lv.type === "sequenced_shape" ? (lv.growthAnimates || []) : [],
-                axis: this.resolveRelativeDirection(lv.axisExpr || lv.axisPreset || "RelativeLocation.yAxis()"),
-                scale: normalizeScaleHelperConfig(lv.scale, { type: "none" }),
-                actions,
-                hasExpression: !!actions.__hasExpression
-            });
-        }
+        // Collect levels from tree children (depth-first, first-child path for preview)
+        this._collectTreeNodeRuntimeLevels(card, card.shapeChildren || [], levels, 1, elapsedTick, skipExpression);
         return levels;
+    }
+
+    _collectTreeNodeRuntimeLevels(card, children, levels, depth, elapsedTick, skipExpression) {
+        if (!children || !children.length) return;
+        // For preview, use first child at each level to determine composition behavior
+        const node = children[0];
+        if (!node || (node.type || "single") === "single") return;
+        const scope = this.getShapeScopeInfoByRuntimeLevel(card, depth);
+        const actions = this.buildPreviewRuntimeActions(elapsedTick, node.displayActions || [], {
+            skipExpression,
+            scope: "shape_level_display",
+            cardId: card.id
+        });
+        levels.push({
+            scopeLevel: depth,
+            ancestorSequencedDepths: scope.sequencedDepths,
+            sequenced: node.type === "sequenced_shape",
+            growthAnimates: node.type === "sequenced_shape" ? (node.growthAnimates || []) : [],
+            axis: this.resolveRelativeDirection(node.axisExpr || node.axisPreset || "RelativeLocation.yAxis()"),
+            scale: normalizeScaleHelperConfig(node.scale, { type: "none" }),
+            actions,
+            hasExpression: !!actions.__hasExpression
+        });
+        this._collectTreeNodeRuntimeLevels(card, node.children || [], levels, depth + 1, elapsedTick, skipExpression);
     }
 
     extractLastAssignedExprInScript(scriptRaw, names = []) {
@@ -8581,9 +8677,8 @@ class CompositionBuilderApp {
         this.saveStateNow();
         let msg = "已返回 PointsBuilder 并加载根 Builder";
         if (target === "shape") msg = "已返回并加载 Shape Builder";
-        if (target === "shape_child") msg = "已返回并加载子点 Builder";
-        if (/^shape_level:\d+$/.test(target)) {
-            msg = `已返回并加载嵌套层${Math.max(2, int(target.split(":")[1]) + 2)} Builder`;
+        if (/^tree_node:/.test(target)) {
+            msg = "已返回并加载子节点 Builder";
         }
         this.showToast(msg, "success");
     }
@@ -8606,13 +8701,12 @@ class CompositionBuilderApp {
     resolveCardBuilderState(card, target = "root") {
         if (!card) return createDefaultBuilderState();
         const normalizedTarget = normalizeBuilderTarget(target);
-        if (/^shape_level:\d+$/.test(normalizedTarget)) {
-            const levelIdx = int(normalizedTarget.split(":")[1]);
-            const level = this.getNestedShapeLevel(card, levelIdx, true);
-            return normalizeBuilderState(level?.builderState);
+        if (/^tree_node:/.test(normalizedTarget)) {
+            const treePath = JSON.parse(normalizedTarget.split("tree_node:")[1] || "[]");
+            const node = this.getShapeNodeByPath(card, treePath);
+            return normalizeBuilderState(node?.builderState);
         }
         if (normalizedTarget === "shape") return normalizeBuilderState(card.shapeBuilderState);
-        if (normalizedTarget === "shape_child") return normalizeBuilderState(card.shapeChildBuilderState);
         return normalizeBuilderState(card.builderState);
     }
 
@@ -8620,23 +8714,17 @@ class CompositionBuilderApp {
         if (!card) return;
         const next = normalizeBuilderState(state);
         const normalizedTarget = normalizeBuilderTarget(target);
-        if (/^shape_level:\d+$/.test(normalizedTarget)) {
-            const levelIdx = int(normalizedTarget.split(":")[1]);
-            const level = this.getNestedShapeLevel(card, levelIdx, true);
-            if (!level) return;
-            level.bindMode = "builder";
-            level.builderState = next;
-            this.setNestedShapeLevel(card, levelIdx, level);
+        if (/^tree_node:/.test(normalizedTarget)) {
+            const treePath = JSON.parse(normalizedTarget.split("tree_node:")[1] || "[]");
+            const node = this.getShapeNodeByPath(card, treePath);
+            if (!node) return;
+            node.bindMode = "builder";
+            node.builderState = next;
             return;
         }
         if (normalizedTarget === "shape") {
             card.shapeBindMode = "builder";
             card.shapeBuilderState = next;
-            return;
-        }
-        if (normalizedTarget === "shape_child") {
-            card.shapeChildBindMode = "builder";
-            card.shapeChildBuilderState = next;
             return;
         }
         card.bindMode = "builder";
@@ -8673,31 +8761,24 @@ class CompositionBuilderApp {
             if (!card) return normalizeScaleHelperConfig({ type: "bezier" }, { type: "bezier" });
             return adaptLegacyX(normalizeScaleHelperConfig(card.shapeScale, { type: "bezier" }));
         }
-        if (scope === "shape_child") {
+        if (scope === "tree_node") {
             const card = this.getCardById(cardId);
             if (!card) return normalizeScaleHelperConfig({ type: "bezier" }, { type: "bezier" });
-            return adaptLegacyX(normalizeScaleHelperConfig(card.shapeChildScale, { type: "bezier" }));
-        }
-        if (scope === "shape_level") {
-            const card = this.getCardById(cardId);
-            const levelIdx = Math.max(1, int(this.bezierToolTarget?.levelIdx || 1));
-            if (!card) return normalizeScaleHelperConfig({ type: "bezier" }, { type: "bezier" });
-            const level = this.getNestedShapeLevel(card, levelIdx, true);
-            return adaptLegacyX(normalizeScaleHelperConfig(level?.scale, { type: "bezier" }));
+            const treePath = this.bezierToolTarget?.treePath ? JSON.parse(this.bezierToolTarget.treePath) : [];
+            const node = this.getShapeNodeByPath(card, treePath);
+            return adaptLegacyX(normalizeScaleHelperConfig(node?.scale, { type: "bezier" }));
         }
         return adaptLegacyX(normalizeScaleHelperConfig(this.state.projectScale, { type: "bezier" }));
     }
 
-    openBezierTool(scope = "project", cardId = "", levelIdx = 0) {
+    openBezierTool(scope = "project", cardId = "", treePathOrLevelIdx = "") {
         const normScope = scope === "card"
             ? "card"
-            : (scope === "shape_child"
-                ? "shape_child"
-                : (scope === "shape_level" ? "shape_level" : "project"));
+            : (scope === "tree_node" ? "tree_node" : "project");
         this.bezierToolTarget = {
             scope: normScope,
             cardId: String(cardId || ""),
-            levelIdx: Math.max(0, int(levelIdx || 0))
+            treePath: scope === "tree_node" ? String(treePathOrLevelIdx || "[]") : ""
         };
         const cfg = this.getBezierToolScaleConfig(this.bezierToolTarget.scope, this.bezierToolTarget.cardId);
         if (this.dom.bezierFrame) {
@@ -8778,49 +8859,31 @@ class CompositionBuilderApp {
             this.showToast("已应用到卡片缩放助手", "success");
             return true;
         }
-        if (target.scope === "shape_child") {
+        if (target.scope === "tree_node") {
             const card = this.getCardById(target.cardId);
             if (!card) {
                 this.showToast("卡片不存在", "error");
                 return false;
             }
-            card.shapeChildScale = normalizeScaleHelperConfig(card.shapeChildScale, { type: "bezier" });
-            card.shapeChildScale.type = "bezier";
-            card.shapeChildScale.min = minValue;
-            card.shapeChildScale.max = maxValue;
-            card.shapeChildScale.tick = tick;
-            card.shapeChildScale.c1x = c1x;
-            card.shapeChildScale.c1y = c1y;
-            card.shapeChildScale.c1z = c1z;
-            card.shapeChildScale.c2x = c2x;
-            card.shapeChildScale.c2y = c2y;
-            card.shapeChildScale.c2z = c2z;
-            this.afterValueMutate({ rerenderCards: true, rebuildPreview: true });
-            this.showToast("已应用到缩放助手-嵌套1", "success");
-            return true;
-        }
-        if (target.scope === "shape_level") {
-            const card = this.getCardById(target.cardId);
-            const levelIdx = Math.max(1, int(target.levelIdx || 1));
-            const level = this.getNestedShapeLevel(card, levelIdx, true);
-            if (!card || !level) {
-                this.showToast("卡片不存在", "error");
+            const treePath = target.treePath ? JSON.parse(target.treePath) : [];
+            const node = this.getShapeNodeByPath(card, treePath);
+            if (!node) {
+                this.showToast("节点不存在", "error");
                 return false;
             }
-            level.scale = normalizeScaleHelperConfig(level.scale, { type: "bezier" });
-            level.scale.type = "bezier";
-            level.scale.min = minValue;
-            level.scale.max = maxValue;
-            level.scale.tick = tick;
-            level.scale.c1x = c1x;
-            level.scale.c1y = c1y;
-            level.scale.c1z = c1z;
-            level.scale.c2x = c2x;
-            level.scale.c2y = c2y;
-            level.scale.c2z = c2z;
-            this.setNestedShapeLevel(card, levelIdx, level);
+            node.scale = normalizeScaleHelperConfig(node.scale, { type: "bezier" });
+            node.scale.type = "bezier";
+            node.scale.min = minValue;
+            node.scale.max = maxValue;
+            node.scale.tick = tick;
+            node.scale.c1x = c1x;
+            node.scale.c1y = c1y;
+            node.scale.c1z = c1z;
+            node.scale.c2x = c2x;
+            node.scale.c2y = c2y;
+            node.scale.c2z = c2z;
             this.afterValueMutate({ rerenderCards: true, rebuildPreview: true });
-            this.showToast(`已应用到缩放助手-嵌套${levelIdx + 1}`, "success");
+            this.showToast("已应用到节点缩放助手", "success");
             return true;
         }
         this.state.projectScale = normalizeScaleHelperConfig(this.state.projectScale, { type: "bezier" });
@@ -8877,9 +8940,9 @@ class CompositionBuilderApp {
         const card = this.getCardById(cardId || this.focusedCardId);
         if (!card) return;
         const normalizedTarget = normalizeBuilderTarget(target);
-        const targetLabel = /^shape_level:\d+$/.test(normalizedTarget)
-            ? `嵌套层${Math.max(2, int(normalizedTarget.split(":")[1]) + 2)} Builder`
-            : (normalizedTarget === "shape" ? "Shape Builder" : (normalizedTarget === "shape_child" ? "子点 Builder" : "Builder"));
+        const targetLabel = /^tree_node:/.test(normalizedTarget)
+            ? "子节点 Builder"
+            : (normalizedTarget === "shape" ? "Shape Builder" : "Builder");
         const input = document.createElement("input");
         input.type = "file";
         input.accept = "application/json";
@@ -8905,14 +8968,12 @@ class CompositionBuilderApp {
         if (!card) return;
         const normalizedTarget = normalizeBuilderTarget(target);
         const state = this.resolveCardBuilderState(card, normalizedTarget);
-        const suffix = /^shape_level:\d+$/.test(normalizedTarget)
-            ? `shape_level_${Math.max(1, int(normalizedTarget.split(":")[1]))}_builder`
-            : (normalizedTarget === "shape"
-                ? "shape_builder"
-                : (normalizedTarget === "shape_child" ? "shape_child_builder" : "builder"));
-        const targetLabel = /^shape_level:\d+$/.test(normalizedTarget)
-            ? `嵌套层${Math.max(2, int(normalizedTarget.split(":")[1]) + 2)} Builder`
-            : (normalizedTarget === "shape" ? "Shape Builder" : (normalizedTarget === "shape_child" ? "子点 Builder" : "Builder"));
+        const suffix = /^tree_node:/.test(normalizedTarget)
+            ? "tree_node_builder"
+            : (normalizedTarget === "shape" ? "shape_builder" : "builder");
+        const targetLabel = /^tree_node:/.test(normalizedTarget)
+            ? "子节点 Builder"
+            : (normalizedTarget === "shape" ? "Shape Builder" : "Builder");
         const name = sanitizeFileBase(card.name || suffix) || suffix;
         const result = await this.saveTextWithPicker({
             filename: `${name}.${suffix}.pointsbuilder.json`,
@@ -9292,126 +9353,132 @@ class CompositionBuilderApp {
     buildShapeDisplayerExpr(card, className, type = "particle_shape") {
         const isSequenced = type === "sequenced_shape";
         const cls = isSequenced ? "SequencedParticleShapeComposition" : "ParticleShapeComposition";
-        const applyFn = "applyPoint";
-        const childType = ["single", "particle_shape", "sequenced_shape"].includes(String(card.shapeChildType || "")) ? String(card.shapeChildType) : "single";
         const axisExpr = rewriteClassQualifier(String(card.shapeAxisExpr || card.shapeAxisPreset || "RelativeLocation.yAxis()"), className);
         const scale = normalizeScaleHelperConfig(card.shapeScale, { type: "none" });
-        const shapeBindMode = card.shapeBindMode === "builder" ? "builder" : "point";
-        const shapePointExpr = relExpr(card.shapePoint?.x, card.shapePoint?.y, card.shapePoint?.z);
-        const shapeBuilderExpr = this.emitBuilderExprFromState(card.shapeBuilderState);
         const rootCtx = this.createShapeDataLambdaContext(0, isSequenced, null);
         const rootScopeInfo = this.getShapeScopeInfoByRuntimeLevel(card, 0);
-        const childDisplayerExpr = this.buildShapeChildDisplayerExpr(card, className, rootCtx);
-        const dataLambdaHead = this.formatShapeDataLambdaParams(rootCtx);
         const lines = [];
         lines.push("ParticleDisplayer.withComposition(");
         lines.push(`    ${cls}(it).apply {`);
         if (axisExpr) lines.push(`        axis = ${axisExpr}`);
-        if (scale.type === "bezier") {
-            lines.push(
-                `        loadScaleHelperBezierValue(${formatKotlinDoubleLiteral(scale.min)}, ${formatKotlinDoubleLiteral(scale.max)}, ${Math.max(1, int(scale.tick))}, ` +
-                `RelativeLocation(${formatKotlinDoubleLiteral(scale.c1x)}, ${formatKotlinDoubleLiteral(scale.c1y)}, ${formatKotlinDoubleLiteral(scale.c1z)}), ` +
-                `RelativeLocation(${formatKotlinDoubleLiteral(scale.c2x)}, ${formatKotlinDoubleLiteral(scale.c2y)}, ${formatKotlinDoubleLiteral(scale.c2z)}))`
-            );
-        } else if (scale.type === "linear") {
-            lines.push(`        loadScaleValue(${formatKotlinDoubleLiteral(scale.min)}, ${formatKotlinDoubleLiteral(scale.max)}, ${Math.max(1, int(scale.tick))})`);
+        this._emitScaleHelper(lines, scale, "        ");
+        const children = card.shapeChildren || [];
+        for (const child of children) {
+            this._emitTreeNodeApplyBlock(lines, child, card, className, rootCtx, "        ");
         }
-        if (shapeBindMode === "builder") {
-            lines.push("        applyBuilder(");
-            lines.push(indentText(shapeBuilderExpr, "            "));
-            lines.push(`        ) { ${dataLambdaHead} ->`);
-            lines.push(this.emitShapeCompositionDataBase(rootCtx, "            "));
-            lines.push("                .setDisplayerSupplier {");
-            lines.push(indentText(childDisplayerExpr, "                    "));
-            lines.push("                }");
-            if (childType === "single") {
-                const singleChain = this.buildSingleDataChain(card, className, "                ");
-                if (singleChain) lines.push(singleChain);
-            }
-            lines.push("        }");
-        } else {
-            lines.push(`        ${applyFn}(${shapePointExpr}) { ${dataLambdaHead} ->`);
-            lines.push(this.emitShapeCompositionDataBase(rootCtx, "            "));
-            lines.push("                .setDisplayerSupplier {");
-            lines.push(indentText(childDisplayerExpr, "                    "));
-            lines.push("                }");
-            if (childType === "single") {
-                const singleChain = this.buildSingleDataChain(card, className, "                ");
-                if (singleChain) lines.push(singleChain);
-            }
-            lines.push("        }");
-        }
-        lines.push(this.applyCardCompositionActions(card, className, "        ", type === "sequenced_shape", rootScopeInfo));
+        lines.push(this.applyCardCompositionActions(card, className, "        ", isSequenced, rootScopeInfo));
         lines.push("    }");
         lines.push(")");
         return lines.join("\n");
     }
 
-    buildShapeChildDisplayerExpr(card, className, parentCtx = null) {
-        const chain = this.getShapeChildChain(card);
-        const baseDepth = parentCtx && Number.isFinite(Number(parentCtx.depth)) ? int(parentCtx.depth) + 1 : 0;
-        const buildLevel = (levelIdx = 0, outerCtx = parentCtx) => {
-            const level = chain[levelIdx] ? normalizeShapeNestedLevel(chain[levelIdx], levelIdx) : normalizeShapeNestedLevel({});
-            if (level.type === "single") {
-                const fx = sanitizeKotlinIdentifier(level.effectClass || card.singleEffectClass || DEFAULT_EFFECT_CLASS, DEFAULT_EFFECT_CLASS);
-                return `ParticleDisplayer.withSingle(${fx}(it))`;
+    _emitScaleHelper(lines, scale, indent) {
+        if (scale.type === "bezier") {
+            lines.push(
+                `${indent}loadScaleHelperBezierValue(${formatKotlinDoubleLiteral(scale.min)}, ${formatKotlinDoubleLiteral(scale.max)}, ${Math.max(1, int(scale.tick))}, ` +
+                `RelativeLocation(${formatKotlinDoubleLiteral(scale.c1x)}, ${formatKotlinDoubleLiteral(scale.c1y)}, ${formatKotlinDoubleLiteral(scale.c1z)}), ` +
+                `RelativeLocation(${formatKotlinDoubleLiteral(scale.c2x)}, ${formatKotlinDoubleLiteral(scale.c2y)}, ${formatKotlinDoubleLiteral(scale.c2z)}))`
+            );
+        } else if (scale.type === "linear") {
+            lines.push(`${indent}loadScaleValue(${formatKotlinDoubleLiteral(scale.min)}, ${formatKotlinDoubleLiteral(scale.max)}, ${Math.max(1, int(scale.tick))})`);
+        }
+    }
+
+    _emitTreeNodeApplyBlock(lines, node, card, className, parentCtx, indent) {
+        if (!node) return;
+        const nodeType = node.type || "single";
+        const bindMode = node.bindMode === "builder" ? "builder" : "point";
+        const pointExpr = relExpr(node.point?.x, node.point?.y, node.point?.z);
+        const builderExpr = this.emitBuilderExprFromState(node.builderState);
+        const isSequenced = nodeType === "sequenced_shape";
+        const depth = parentCtx ? int(parentCtx.depth) + 1 : 1;
+        const ctx = this.createShapeDataLambdaContext(depth, isSequenced, parentCtx);
+        const dataLambdaHead = this.formatShapeDataLambdaParams(ctx);
+        if (nodeType === "single") {
+            this._emitTreeNodeSingleApply(lines, node, card, className, ctx, bindMode, pointExpr, builderExpr, dataLambdaHead, indent);
+        } else {
+            this._emitTreeNodeShapeApply(lines, node, card, className, ctx, bindMode, pointExpr, builderExpr, dataLambdaHead, indent, isSequenced, depth);
+        }
+    }
+
+    _emitTreeNodeSingleApply(lines, node, card, className, ctx, bindMode, pointExpr, builderExpr, dataLambdaHead, indent) {
+        const fx = sanitizeKotlinIdentifier(node.effectClass || card.singleEffectClass || DEFAULT_EFFECT_CLASS, DEFAULT_EFFECT_CLASS);
+        if (bindMode === "builder") {
+            lines.push(`${indent}applyBuilder(`);
+            lines.push(indentText(builderExpr, `${indent}    `));
+            lines.push(`${indent}) { ${dataLambdaHead} ->`);
+        } else {
+            lines.push(`${indent}applyPoint(${pointExpr}) { ${dataLambdaHead} ->`);
+        }
+        lines.push(this.emitShapeCompositionDataBase(ctx, `${indent}    `));
+        lines.push(`${indent}        .setDisplayerSupplier {`);
+        lines.push(`${indent}            ParticleDisplayer.withSingle(${fx}(it))`);
+        lines.push(`${indent}        }`);
+        const singleChain = this._buildTreeNodeSingleDataChain(node, card, className, `${indent}        `);
+        if (singleChain) lines.push(singleChain);
+        lines.push(`${indent}}`);
+    }
+
+    _emitTreeNodeShapeApply(lines, node, card, className, ctx, bindMode, pointExpr, builderExpr, dataLambdaHead, indent, isSequenced, depth) {
+        const cls = isSequenced ? "SequencedParticleShapeComposition" : "ParticleShapeComposition";
+        const axisExpr = rewriteClassQualifier(String(node.axisExpr || node.axisPreset || "RelativeLocation.yAxis()"), className);
+        const scale = normalizeScaleHelperConfig(node.scale, { type: "none" });
+        if (bindMode === "builder") {
+            lines.push(`${indent}applyBuilder(`);
+            lines.push(indentText(builderExpr, `${indent}    `));
+            lines.push(`${indent}) { ${dataLambdaHead} ->`);
+        } else {
+            lines.push(`${indent}applyPoint(${pointExpr}) { ${dataLambdaHead} ->`);
+        }
+        lines.push(this.emitShapeCompositionDataBase(ctx, `${indent}    `));
+        lines.push(`${indent}        .setDisplayerSupplier {`);
+        lines.push(`${indent}            ParticleDisplayer.withComposition(`);
+        lines.push(`${indent}                ${cls}(it).apply {`);
+        if (axisExpr) lines.push(`${indent}                    axis = ${axisExpr}`);
+        this._emitScaleHelper(lines, scale, `${indent}                    `);
+        const children = node.children || [];
+        for (const child of children) {
+            this._emitTreeNodeApplyBlock(lines, child, card, className, ctx, `${indent}                    `);
+        }
+        const pseudo = { id: card.id, shapeDisplayActions: node.displayActions || [], shapeScale: scale, growthAnimates: node.growthAnimates || [] };
+        const scopeInfo = this.getShapeScopeInfoByRuntimeLevel(card, depth);
+        const actions = this.applyCardCompositionActions(pseudo, className, `${indent}                    `, isSequenced, scopeInfo);
+        if (String(actions || "").trim()) lines.push(actions);
+        lines.push(`${indent}                }`);
+        lines.push(`${indent}            )`);
+        lines.push(`${indent}        }`);
+        lines.push(`${indent}}`);
+    }
+
+    _buildTreeNodeSingleDataChain(node, card, className, indentBase) {
+        const lines = [];
+        const pinitList = Array.isArray(node.particleInit) ? node.particleInit : [];
+        if (pinitList.length) {
+            lines.push(`${indentBase}.addParticleInstanceInit {`);
+            for (const it of pinitList) {
+                const target = sanitizeKotlinIdentifier(it.target || "size", "size");
+                const expr = rewriteClassQualifier(String(it.expr || "0.0"), className);
+                lines.push(`${indentBase}    ${target} = ${expr}`);
             }
-            const isSequenced = level.type === "sequenced_shape";
-            const cls = isSequenced ? "SequencedParticleShapeComposition" : "ParticleShapeComposition";
-            const applyFn = "applyPoint";
-            const axisExpr = rewriteClassQualifier(String(level.axisExpr || level.axisPreset || "RelativeLocation.yAxis()"), className);
-            const scale = normalizeScaleHelperConfig(level.scale, { type: "none" });
-            const bindMode = level.bindMode === "builder" ? "builder" : "point";
-            const pointExpr = relExpr(level.point?.x, level.point?.y, level.point?.z);
-            const builderExpr = this.emitBuilderExprFromState(level.builderState);
-            const depth = baseDepth + Math.max(0, int(levelIdx));
-            const ctx = this.createShapeDataLambdaContext(depth, isSequenced, outerCtx);
-            const dataLambdaHead = this.formatShapeDataLambdaParams(ctx);
-            const nextLevel = chain[levelIdx + 1] ? normalizeShapeNestedLevel(chain[levelIdx + 1], levelIdx + 1) : normalizeShapeNestedLevel({});
-            const nextDisplayerExpr = buildLevel(levelIdx + 1, ctx);
-            const scopeInfo = this.getShapeScopeInfoByRuntimeLevel(card, levelIdx + 1);
-            const pseudo = {
-                id: card.id,
-                shapeDisplayActions: level.displayActions || [],
-                shapeScale: scale,
-                growthAnimates: level.growthAnimates || []
-            };
-            const lines = [];
-            lines.push("ParticleDisplayer.withComposition(");
-            lines.push(`    ${cls}(it).apply {`);
-            if (axisExpr) lines.push(`        axis = ${axisExpr}`);
-            if (scale.type === "bezier") {
-                lines.push(
-                    `        loadScaleHelperBezierValue(${formatKotlinDoubleLiteral(scale.min)}, ${formatKotlinDoubleLiteral(scale.max)}, ${Math.max(1, int(scale.tick))}, ` +
-                    `RelativeLocation(${formatKotlinDoubleLiteral(scale.c1x)}, ${formatKotlinDoubleLiteral(scale.c1y)}, ${formatKotlinDoubleLiteral(scale.c1z)}), ` +
-                    `RelativeLocation(${formatKotlinDoubleLiteral(scale.c2x)}, ${formatKotlinDoubleLiteral(scale.c2y)}, ${formatKotlinDoubleLiteral(scale.c2z)}))`
-                );
-            } else if (scale.type === "linear") {
-                lines.push(`        loadScaleValue(${formatKotlinDoubleLiteral(scale.min)}, ${formatKotlinDoubleLiteral(scale.max)}, ${Math.max(1, int(scale.tick))})`);
+            lines.push(`${indentBase}}`);
+        }
+        const cvars = Array.isArray(node.controllerVars) ? node.controllerVars : [];
+        const cactions = Array.isArray(node.controllerActions) ? node.controllerActions : [];
+        if (cvars.length || cactions.length) {
+            lines.push(`${indentBase}.addController {`);
+            for (const v of cvars) {
+                const vName = sanitizeKotlinIdentifier(v.name || "v", "v");
+                const vType = v.type || "Double";
+                const vExpr = rewriteClassQualifier(String(v.expr || "0.0"), className);
+                lines.push(`${indentBase}    var ${vName}: ${vType} = ${vExpr}`);
             }
-            if (bindMode === "builder") {
-                lines.push("        applyBuilder(");
-                lines.push(indentText(builderExpr, "            "));
-                lines.push(`        ) { ${dataLambdaHead} ->`);
-            } else {
-                lines.push(`        ${applyFn}(${pointExpr}) { ${dataLambdaHead} ->`);
+            for (const a of cactions) {
+                const script = this.compileControllerActionScript(a, className, `${indentBase}    `);
+                if (script) lines.push(script);
             }
-            lines.push(this.emitShapeCompositionDataBase(ctx, "            "));
-            lines.push("                .setDisplayerSupplier {");
-            lines.push(indentText(nextDisplayerExpr, "                    "));
-            lines.push("                }");
-            if (nextLevel.type === "single") {
-                const singleChain = this.buildSingleDataChain(card, className, "                ");
-                if (singleChain) lines.push(singleChain);
-            }
-            lines.push("        }");
-            const actions = this.applyCardCompositionActions(pseudo, className, "        ", level.type === "sequenced_shape", scopeInfo);
-            if (String(actions || "").trim()) lines.push(actions);
-            lines.push("    }");
-            lines.push(")");
-            return lines.join("\n");
-        };
-        return buildLevel(0, parentCtx);
+            lines.push(`${indentBase}}`);
+        }
+        return lines.length ? lines.join("\n") : "";
     }
 
     applyCardCompositionActions(card, className, innerIndent = "        ", supportsAnimate = false, scopeInfo = null) {

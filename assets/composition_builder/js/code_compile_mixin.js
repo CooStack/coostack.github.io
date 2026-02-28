@@ -51,32 +51,18 @@ export function installCodeCompileMethods(CompositionBuilderApp, deps = {}) {
                 source: String(action.expression || "")
             };
         }
-        if (target.dataset.cardShapeChildDisplayField === "expression") {
-            const actionIdx = parseIndex(target.dataset.cardShapeChildDisplayIdx);
+        if (target.dataset.treeNodeDisplayField === "expression") {
+            const actionIdx = parseIndex(target.dataset.treeNodeDisplayIdx);
             if (actionIdx < 0) return null;
-            const list = Array.isArray(card.shapeChildDisplayActions) ? card.shapeChildDisplayActions : [];
+            const node = this.getCurrentViewNode(card);
+            if (!node) return null;
+            const list = Array.isArray(node.displayActions) ? node.displayActions : [];
             const action = list[actionIdx];
             if (!action) return null;
+            const depth = (card.viewPath || []).length + 1;
             return {
                 kind: "display_expression",
-                compileKey: this.makePreviewDisplayActionCompileKey("shape_level_display", card.id, 1, actionIdx),
-                source: String(action.expression || "")
-            };
-        }
-        if (target.dataset.shapeLevelDisplayField === "expression") {
-            const levelFromRow = target.closest?.("[data-shape-level]")?.dataset?.shapeLevel;
-            const rawLevelIdx = target.dataset.shapeLevelIdx ?? levelFromRow;
-            const levelIdx = parseIndex(rawLevelIdx);
-            const actionIdx = parseIndex(target.dataset.shapeLevelDisplayIdx);
-            if (levelIdx <= 0 || actionIdx < 0) return null;
-            const level = this.getNestedShapeLevel(card, levelIdx, false);
-            if (!level) return null;
-            const list = Array.isArray(level.displayActions) ? level.displayActions : [];
-            const action = list[actionIdx];
-            if (!action) return null;
-            return {
-                kind: "display_expression",
-                compileKey: this.makePreviewDisplayActionCompileKey("shape_level_display", card.id, levelIdx + 1, actionIdx),
+                compileKey: this.makePreviewDisplayActionCompileKey("shape_level_display", card.id, depth, actionIdx),
                 source: String(action.expression || "")
             };
         }

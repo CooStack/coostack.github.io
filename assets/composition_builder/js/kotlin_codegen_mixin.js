@@ -7,7 +7,6 @@ export function installKotlinCodegenMethods(CompositionBuilderApp, deps = {}) {
         normalizeControllerAction,
         normalizeDisplayAction,
         normalizeScaleHelperConfig,
-        normalizeShapeNestedLevel,
         sanitizeKotlinClassName,
         sanitizeKotlinIdentifier,
         defaultLiteralForKotlinType,
@@ -451,158 +450,145 @@ export function installKotlinCodegenMethods(CompositionBuilderApp, deps = {}) {
     buildShapeDisplayerExpr(card, className, type = "particle_shape", actionCtx = null) {
         const isSequenced = type === "sequenced_shape";
         const cls = isSequenced ? "SequencedParticleShapeComposition" : "ParticleShapeComposition";
-        const applyFn = "applyPoint";
-        const childType = ["single", "particle_shape", "sequenced_shape"].includes(String(card.shapeChildType || "")) ? String(card.shapeChildType) : "single";
         const axisExpr = this.rewriteRelativeTargetExpr(String(card.shapeAxisExpr || card.shapeAxisPreset || "RelativeLocation.yAxis()"), className);
         const scale = normalizeScaleHelperConfig(card.shapeScale, { type: "none" });
-        const shapeBindMode = card.shapeBindMode === "builder" ? "builder" : "point";
-        const shapePointExpr = relExpr(card.shapePoint?.x, card.shapePoint?.y, card.shapePoint?.z);
-        const shapeBuilderExpr = this.emitBuilderExprFromState(card.shapeBuilderState);
         const rootCtx = this.createShapeDataLambdaContext(0, isSequenced, null);
         const rootScopeInfo = this.getShapeScopeInfoByRuntimeLevel(card, 0);
-        const rootShapeLevel = this.getRootShapeChildLevel(card);
-        const rootChildOffsetCfg = this.resolveShapeLevelAngleOffsetConfig(rootShapeLevel, className);
-        const rootChildActionCtx = rootChildOffsetCfg
-            ? {
-                angleOffsetExpr: "finalAngle",
-                angleOffsetConfig: rootChildOffsetCfg
-            }
-            : null;
-        const childDisplayerExpr = this.buildShapeChildDisplayerExpr(card, className, rootCtx, rootChildActionCtx);
-        const dataLambdaHead = this.formatShapeDataLambdaParams(rootCtx);
-        const emitChildSourceBinding = (callIndent = "        ") => {
-            const out = [];
-            if (shapeBindMode === "builder") {
-                out.push(`${callIndent}applyBuilder(`);
-                out.push(indentText(shapeBuilderExpr, `${callIndent}    `));
-                out.push(`${callIndent}) { ${dataLambdaHead} ->`);
-            } else {
-                out.push(`${callIndent}${applyFn}(${shapePointExpr}) { ${dataLambdaHead} ->`);
-            }
-            out.push(this.emitShapeCompositionDataBase(rootCtx, `${callIndent}    `));
-            out.push(`${callIndent}        .setDisplayerSupplier {`);
-            out.push(indentText(childDisplayerExpr, `${callIndent}            `));
-            out.push(`${callIndent}        }`);
-            if (childType === "single") {
-                const singleChain = this.buildSingleDataChain(card, className, `${callIndent}        `);
-                if (singleChain) out.push(singleChain);
-            }
-            out.push(`${callIndent}}`);
-            return out;
-        };
         const lines = [];
         lines.push("ParticleDisplayer.withComposition(");
         lines.push(`    ${cls}(it).apply {`);
         if (axisExpr) lines.push(`        axis = ${axisExpr}`);
-        if (scale.type === "bezier") {
-            lines.push(
-                `        loadScaleHelperBezierValue(${formatKotlinDoubleLiteral(scale.min)}, ${formatKotlinDoubleLiteral(scale.max)}, ${Math.max(1, int(scale.tick))}, ` +
-                `RelativeLocation(${formatKotlinDoubleLiteral(scale.c1x)}, ${formatKotlinDoubleLiteral(scale.c1y)}, ${formatKotlinDoubleLiteral(scale.c1z)}), ` +
-                `RelativeLocation(${formatKotlinDoubleLiteral(scale.c2x)}, ${formatKotlinDoubleLiteral(scale.c2y)}, ${formatKotlinDoubleLiteral(scale.c2z)}))`
-            );
-        } else if (scale.type === "linear") {
-            lines.push(`        loadScaleValue(${formatKotlinDoubleLiteral(scale.min)}, ${formatKotlinDoubleLiteral(scale.max)}, ${Math.max(1, int(scale.tick))})`);
+        this._emitScaleHelperCodegen(lines, scale, "        ");
+        const children = card.shapeChildren || [];
+        for (const child of children) {
+            this._emitTreeNodeApplyBlockCodegen(lines, child, card, className, rootCtx, "        ", actionCtx);
         }
-        if (rootChildOffsetCfg) {
-            lines.push(`        val angleOffsetCount = ${Math.max(1, int(rootChildOffsetCfg.count))}`);
-            lines.push("        repeat(angleOffsetCount) { index ->");
-            lines.push(`            val finalAngle = (${rootChildOffsetCfg.totalAngleExpr}) * index.toDouble() / angleOffsetCount.toDouble()`);
-            lines.push(...emitChildSourceBinding("            "));
-            lines.push("        }");
-        } else {
-            lines.push(...emitChildSourceBinding("        "));
-        }
-        lines.push(this.applyCardCompositionActions(card, className, "        ", type === "sequenced_shape", rootScopeInfo, actionCtx));
+        lines.push(this.applyCardCompositionActions(card, className, "        ", isSequenced, rootScopeInfo, actionCtx));
         lines.push("    }");
         lines.push(")");
         return lines.join("\n");
     }
 
-    buildShapeChildDisplayerExpr(card, className, parentCtx = null, rootActionCtx = null) {
-        const chain = this.getShapeChildChain(card);
-        const baseDepth = parentCtx && Number.isFinite(Number(parentCtx.depth)) ? int(parentCtx.depth) + 1 : 0;
-        const buildLevel = (levelIdx = 0, outerCtx = parentCtx, incomingActionCtx = null) => {
-            const level = chain[levelIdx] ? normalizeShapeNestedLevel(chain[levelIdx], levelIdx) : normalizeShapeNestedLevel({});
-            if (level.type === "single") {
-                const fx = sanitizeKotlinIdentifier(level.effectClass || card.singleEffectClass || DEFAULT_EFFECT_CLASS, DEFAULT_EFFECT_CLASS);
-                return `ParticleDisplayer.withSingle(${fx}(it))`;
-            }
-            const isSequenced = level.type === "sequenced_shape";
-            const cls = isSequenced ? "SequencedParticleShapeComposition" : "ParticleShapeComposition";
-            const applyFn = "applyPoint";
-            const axisExpr = this.rewriteRelativeTargetExpr(String(level.axisExpr || level.axisPreset || "RelativeLocation.yAxis()"), className);
-            const scale = normalizeScaleHelperConfig(level.scale, { type: "none" });
-            const bindMode = level.bindMode === "builder" ? "builder" : "point";
-            const pointExpr = relExpr(level.point?.x, level.point?.y, level.point?.z);
-            const builderExpr = this.emitBuilderExprFromState(level.builderState);
-            const depth = baseDepth + Math.max(0, int(levelIdx));
-            const ctx = this.createShapeDataLambdaContext(depth, isSequenced, outerCtx);
-            const dataLambdaHead = this.formatShapeDataLambdaParams(ctx);
-            const nextLevel = chain[levelIdx + 1] ? normalizeShapeNestedLevel(chain[levelIdx + 1], levelIdx + 1) : normalizeShapeNestedLevel({});
-            const nextOffsetCfg = this.resolveShapeLevelAngleOffsetConfig(nextLevel, className);
-            const nextActionCtx = nextOffsetCfg
-                ? {
-                    angleOffsetExpr: "finalAngle",
-                    angleOffsetConfig: nextOffsetCfg
-                }
-                : null;
-            const nextDisplayerExpr = buildLevel(levelIdx + 1, ctx, nextActionCtx);
-            const scopeInfo = this.getShapeScopeInfoByRuntimeLevel(card, levelIdx + 1);
-            const pseudo = {
-                id: card.id,
-                shapeDisplayActions: level.displayActions || [],
-                shapeScale: scale,
-                growthAnimates: level.growthAnimates || []
-            };
-            const emitNextSourceBinding = (callIndent = "        ") => {
-                const out = [];
-                if (bindMode === "builder") {
-                    out.push(`${callIndent}applyBuilder(`);
-                    out.push(indentText(builderExpr, `${callIndent}    `));
-                    out.push(`${callIndent}) { ${dataLambdaHead} ->`);
-                } else {
-                    out.push(`${callIndent}${applyFn}(${pointExpr}) { ${dataLambdaHead} ->`);
-                }
-                out.push(this.emitShapeCompositionDataBase(ctx, `${callIndent}    `));
-                out.push(`${callIndent}        .setDisplayerSupplier {`);
-                out.push(indentText(nextDisplayerExpr, `${callIndent}            `));
-                out.push(`${callIndent}        }`);
-                if (nextLevel.type === "single") {
-                    const singleChain = this.buildSingleDataChain(card, className, `${callIndent}        `);
-                    if (singleChain) out.push(singleChain);
-                }
-                out.push(`${callIndent}}`);
-                return out;
-            };
-            const lines = [];
-            lines.push("ParticleDisplayer.withComposition(");
-            lines.push(`    ${cls}(it).apply {`);
-            if (axisExpr) lines.push(`        axis = ${axisExpr}`);
-            if (scale.type === "bezier") {
-                lines.push(
-                    `        loadScaleHelperBezierValue(${formatKotlinDoubleLiteral(scale.min)}, ${formatKotlinDoubleLiteral(scale.max)}, ${Math.max(1, int(scale.tick))}, ` +
-                    `RelativeLocation(${formatKotlinDoubleLiteral(scale.c1x)}, ${formatKotlinDoubleLiteral(scale.c1y)}, ${formatKotlinDoubleLiteral(scale.c1z)}), ` +
-                    `RelativeLocation(${formatKotlinDoubleLiteral(scale.c2x)}, ${formatKotlinDoubleLiteral(scale.c2y)}, ${formatKotlinDoubleLiteral(scale.c2z)}))`
-                );
-            } else if (scale.type === "linear") {
-                lines.push(`        loadScaleValue(${formatKotlinDoubleLiteral(scale.min)}, ${formatKotlinDoubleLiteral(scale.max)}, ${Math.max(1, int(scale.tick))})`);
-            }
-            if (nextOffsetCfg) {
-                lines.push(`        val angleOffsetCount = ${Math.max(1, int(nextOffsetCfg.count))}`);
-                lines.push("        repeat(angleOffsetCount) { index ->");
-                lines.push(`            val finalAngle = (${nextOffsetCfg.totalAngleExpr}) * index.toDouble() / angleOffsetCount.toDouble()`);
-                lines.push(...emitNextSourceBinding("            "));
-                lines.push("        }");
+    _emitScaleHelperCodegen(lines, scale, indent) {
+        if (scale.type === "bezier") {
+            lines.push(
+                `${indent}loadScaleHelperBezierValue(${formatKotlinDoubleLiteral(scale.min)}, ${formatKotlinDoubleLiteral(scale.max)}, ${Math.max(1, int(scale.tick))}, ` +
+                `RelativeLocation(${formatKotlinDoubleLiteral(scale.c1x)}, ${formatKotlinDoubleLiteral(scale.c1y)}, ${formatKotlinDoubleLiteral(scale.c1z)}), ` +
+                `RelativeLocation(${formatKotlinDoubleLiteral(scale.c2x)}, ${formatKotlinDoubleLiteral(scale.c2y)}, ${formatKotlinDoubleLiteral(scale.c2z)}))`
+            );
+        } else if (scale.type === "linear") {
+            lines.push(`${indent}loadScaleValue(${formatKotlinDoubleLiteral(scale.min)}, ${formatKotlinDoubleLiteral(scale.max)}, ${Math.max(1, int(scale.tick))})`);
+        }
+    }
+
+    _emitTreeNodeApplyBlockCodegen(lines, node, card, className, parentCtx, indent, actionCtx) {
+        if (!node) return;
+        const nodeType = node.type || "single";
+        const bindMode = node.bindMode === "builder" ? "builder" : "point";
+        const pointExpr = relExpr(node.point?.x, node.point?.y, node.point?.z);
+        const builderExpr = this.emitBuilderExprFromState(node.builderState);
+        const isSequenced = nodeType === "sequenced_shape";
+        const depth = parentCtx ? int(parentCtx.depth) + 1 : 1;
+        const ctx = this.createShapeDataLambdaContext(depth, isSequenced, parentCtx);
+        const dataLambdaHead = this.formatShapeDataLambdaParams(ctx);
+        const offsetCfg = this.resolveShapeLevelAngleOffsetConfig(node, className);
+        if (offsetCfg) {
+            lines.push(`${indent}val angleOffsetCount = ${Math.max(1, int(offsetCfg.count))}`);
+            lines.push(`${indent}repeat(angleOffsetCount) { index ->`);
+            lines.push(`${indent}    val finalAngle = (${offsetCfg.totalAngleExpr}) * index.toDouble() / angleOffsetCount.toDouble()`);
+            const innerActionCtx = { angleOffsetExpr: "finalAngle", angleOffsetConfig: offsetCfg };
+            if (nodeType === "single") {
+                this._emitTreeNodeSingleApplyCodegen(lines, node, card, className, ctx, bindMode, pointExpr, builderExpr, dataLambdaHead, `${indent}    `, innerActionCtx);
             } else {
-                lines.push(...emitNextSourceBinding("        "));
+                this._emitTreeNodeShapeApplyCodegen(lines, node, card, className, ctx, bindMode, pointExpr, builderExpr, dataLambdaHead, `${indent}    `, isSequenced, depth, innerActionCtx);
             }
-            const actions = this.applyCardCompositionActions(pseudo, className, "        ", level.type === "sequenced_shape", scopeInfo, incomingActionCtx);
-            if (String(actions || "").trim()) lines.push(actions);
-            lines.push("    }");
-            lines.push(")");
-            return lines.join("\n");
-        };
-        return buildLevel(0, parentCtx, rootActionCtx);
+            lines.push(`${indent}}`);
+        } else if (nodeType === "single") {
+            this._emitTreeNodeSingleApplyCodegen(lines, node, card, className, ctx, bindMode, pointExpr, builderExpr, dataLambdaHead, indent, actionCtx);
+        } else {
+            this._emitTreeNodeShapeApplyCodegen(lines, node, card, className, ctx, bindMode, pointExpr, builderExpr, dataLambdaHead, indent, isSequenced, depth, actionCtx);
+        }
+    }
+
+    _emitTreeNodeSingleApplyCodegen(lines, node, card, className, ctx, bindMode, pointExpr, builderExpr, dataLambdaHead, indent, actionCtx) {
+        const fx = sanitizeKotlinIdentifier(node.effectClass || card.singleEffectClass || DEFAULT_EFFECT_CLASS, DEFAULT_EFFECT_CLASS);
+        if (bindMode === "builder") {
+            lines.push(`${indent}applyBuilder(`);
+            lines.push(indentText(builderExpr, `${indent}    `));
+            lines.push(`${indent}) { ${dataLambdaHead} ->`);
+        } else {
+            lines.push(`${indent}applyPoint(${pointExpr}) { ${dataLambdaHead} ->`);
+        }
+        lines.push(this.emitShapeCompositionDataBase(ctx, `${indent}    `));
+        lines.push(`${indent}        .setDisplayerSupplier {`);
+        lines.push(`${indent}            ParticleDisplayer.withSingle(${fx}(it))`);
+        lines.push(`${indent}        }`);
+        const singleChain = this._buildTreeNodeSingleDataChainCodegen(node, card, className, `${indent}        `);
+        if (singleChain) lines.push(singleChain);
+        lines.push(`${indent}}`);
+    }
+
+    _emitTreeNodeShapeApplyCodegen(lines, node, card, className, ctx, bindMode, pointExpr, builderExpr, dataLambdaHead, indent, isSequenced, depth, actionCtx) {
+        const cls = isSequenced ? "SequencedParticleShapeComposition" : "ParticleShapeComposition";
+        const axisExpr = this.rewriteRelativeTargetExpr(String(node.axisExpr || node.axisPreset || "RelativeLocation.yAxis()"), className);
+        const scale = normalizeScaleHelperConfig(node.scale, { type: "none" });
+        if (bindMode === "builder") {
+            lines.push(`${indent}applyBuilder(`);
+            lines.push(indentText(builderExpr, `${indent}    `));
+            lines.push(`${indent}) { ${dataLambdaHead} ->`);
+        } else {
+            lines.push(`${indent}applyPoint(${pointExpr}) { ${dataLambdaHead} ->`);
+        }
+        lines.push(this.emitShapeCompositionDataBase(ctx, `${indent}    `));
+        lines.push(`${indent}        .setDisplayerSupplier {`);
+        lines.push(`${indent}            ParticleDisplayer.withComposition(`);
+        lines.push(`${indent}                ${cls}(it).apply {`);
+        if (axisExpr) lines.push(`${indent}                    axis = ${axisExpr}`);
+        this._emitScaleHelperCodegen(lines, scale, `${indent}                    `);
+        const children = node.children || [];
+        for (const child of children) {
+            this._emitTreeNodeApplyBlockCodegen(lines, child, card, className, ctx, `${indent}                    `, actionCtx);
+        }
+        const pseudo = { id: card.id, shapeDisplayActions: node.displayActions || [], shapeScale: scale, growthAnimates: node.growthAnimates || [] };
+        const scopeInfo = this.getShapeScopeInfoByRuntimeLevel(card, depth);
+        const actions = this.applyCardCompositionActions(pseudo, className, `${indent}                    `, isSequenced, scopeInfo, actionCtx);
+        if (String(actions || "").trim()) lines.push(actions);
+        lines.push(`${indent}                }`);
+        lines.push(`${indent}            )`);
+        lines.push(`${indent}        }`);
+        lines.push(`${indent}}`);
+    }
+
+    _buildTreeNodeSingleDataChainCodegen(node, card, className, indentBase) {
+        const lines = [];
+        const pinitList = Array.isArray(node.particleInit) ? node.particleInit : [];
+        if (pinitList.length) {
+            lines.push(`${indentBase}.addParticleInstanceInit {`);
+            for (const it of pinitList) {
+                const target = sanitizeKotlinIdentifier(it.target || "size", "size");
+                const expr = rewriteClassQualifier(String(it.expr || "0.0"), className);
+                lines.push(`${indentBase}    ${target} = ${expr}`);
+            }
+            lines.push(`${indentBase}}`);
+        }
+        const cvars = Array.isArray(node.controllerVars) ? node.controllerVars : [];
+        const cactions = Array.isArray(node.controllerActions) ? node.controllerActions : [];
+        if (cvars.length || cactions.length) {
+            lines.push(`${indentBase}.addController {`);
+            for (const v of cvars) {
+                const vName = sanitizeKotlinIdentifier(v.name || "v", "v");
+                const vType = v.type || "Double";
+                const vExpr = rewriteClassQualifier(String(v.expr || "0.0"), className);
+                lines.push(`${indentBase}    var ${vName}: ${vType} = ${vExpr}`);
+            }
+            for (const a of cactions) {
+                const na = normalizeControllerAction(a);
+                const aExpr = rewriteClassQualifier(String(na.expr || ""), className);
+                if (aExpr.trim()) lines.push(`${indentBase}    ${aExpr}`);
+            }
+            lines.push(`${indentBase}}`);
+        }
+        return lines.length ? lines.join("\n") : null;
     }
 
     applyCardCompositionActions(card, className, innerIndent = "        ", supportsAnimate = false, scopeInfo = null, actionCtx = null) {

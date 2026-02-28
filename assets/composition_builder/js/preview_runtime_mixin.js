@@ -11,7 +11,6 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
         normalizeControllerAction,
         normalizeDisplayAction,
         normalizeScaleHelperConfig,
-        normalizeShapeNestedLevel,
         ensureStatusHelperMethods,
         stripJsForLint,
         transpileKotlinThisQualifierToJs,
@@ -439,12 +438,18 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
         for (const card of (Array.isArray(this.state.cards) ? this.state.cards : [])) {
             if (!card || !card.id) continue;
             eatDisplayActions(card.shapeDisplayActions || [], "shape_display", card.id, 0);
-            eatDisplayActions(card.shapeChildDisplayActions || [], "shape_level_display", card.id, 1);
-            const nested = Array.isArray(card.shapeChildLevels) ? card.shapeChildLevels : [];
-            for (let i = 0; i < nested.length; i++) {
-                const lv = normalizeShapeNestedLevel(nested[i], i);
-                eatDisplayActions(lv.displayActions || [], "shape_level_display", card.id, i + 2);
-            }
+            // traverse tree children for display actions
+            const eatTreeChildren = (children, depth) => {
+                if (!Array.isArray(children)) return;
+                for (const child of children) {
+                    if (!child) continue;
+                    eatDisplayActions(child.displayActions || [], "shape_level_display", card.id, depth);
+                    if (child.type !== "single" && Array.isArray(child.children)) {
+                        eatTreeChildren(child.children, depth + 1);
+                    }
+                }
+            };
+            eatTreeChildren(card.shapeChildren || [], 1);
             const controllerActions = Array.isArray(card.controllerActions) ? card.controllerActions : [];
             for (let i = 0; i < controllerActions.length; i++) {
                 const key = this.makePreviewControllerScriptCompileKey(card.id, i);
@@ -1125,17 +1130,23 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
                 useTexture: card.singleUseTexture !== false,
             };
         }
-        let effectClass = String(card.shapeChildEffectClass || card.singleEffectClass || "");
-        let useTexture = card.shapeChildUseTexture !== false;
-        const chain = this.getShapeChildChain(card);
-        for (const raw of chain) {
-            const level = normalizeShapeNestedLevel(raw);
-            if (String(level.type || "single") !== "single") continue;
-            effectClass = String(level.effectClass || effectClass || "");
-            useTexture = level.useTexture !== false;
-            break;
-        }
-        return { effectClass, useTexture };
+        // traverse tree to find first single leaf
+        const findLeaf = (children) => {
+            if (!Array.isArray(children)) return null;
+            for (const child of children) {
+                if (!child) continue;
+                if (String(child.type || "single") === "single") {
+                    return {
+                        effectClass: String(child.effectClass || card.singleEffectClass || ""),
+                        useTexture: child.useTexture !== false,
+                    };
+                }
+                const found = findLeaf(child.children);
+                if (found) return found;
+            }
+            return null;
+        };
+        return findLeaf(card.shapeChildren || []) || { effectClass: String(card.singleEffectClass || ""), useTexture: true };
     }
 
     updatePreviewFrameIndices(elapsedTick, cycleCfg, groupRuntimeCache, pointGroupIndex, totalCount) {
@@ -1891,13 +1902,6 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
     }
 
     getShapeLeafType(card) {
-        if (!card || card.dataType === "single") return "single";
-        const chain = this.getShapeChildChain(card);
-        if (!chain.length) return "single";
-        for (const lv of chain) {
-            const t = String(lv?.type || "single");
-            if (t === "single") return "single";
-        }
         return "single";
     }
 
@@ -1928,74 +1932,62 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
 
     buildShapeLocalTuplesForPreview(card) {
         if (!card || card.dataType === "single") return [];
-        const rootPoints = this.resolveShapeSourcePoints(card.shapeBindMode, card.shapePoint, card.shapeBuilderState);
-        let tuples = rootPoints.map((p, idx) => {
-            const vec = U.v(num(p?.x), num(p?.y), num(p?.z));
-            return {
-                sum: U.clone(vec),
-                levels: [{ vec, ref: idx, offsetIndex: 0 }]
-            };
-        });
-        if (!tuples.length) return [];
-
-        const chain = this.getShapeChildChain(card);
-        for (const levelRaw of chain) {
-            const level = normalizeShapeNestedLevel(levelRaw);
-            if (String(level.type || "single") === "single") {
-                const levelOffsetCfg = this.resolvePreviewAngleOffsetConfig(level);
-                const levelRepeatCount = levelOffsetCfg ? Math.max(1, int(levelOffsetCfg.count || 1)) : 1;
-                if (levelRepeatCount > 1) {
-                    const repeated = [];
-                    for (const tuple of tuples) {
-                        const baseLevels = Array.isArray(tuple?.levels) ? tuple.levels : [];
-                        for (let repeatIndex = 0; repeatIndex < levelRepeatCount; repeatIndex++) {
-                            const levels = baseLevels.map((lv) => ({
-                                vec: U.v(num(lv?.vec?.x), num(lv?.vec?.y), num(lv?.vec?.z)),
-                                ref: int(lv?.ref || 0),
-                                offsetIndex: int(lv?.offsetIndex ?? 0)
-                            }));
-                            if (levels.length) {
-                                levels[levels.length - 1].offsetIndex = repeatIndex;
-                            }
-                            repeated.push({
-                                sum: U.v(num(tuple?.sum?.x), num(tuple?.sum?.y), num(tuple?.sum?.z)),
-                                levels
-                            });
-                        }
-                    }
-                    tuples = repeated;
-                }
-                break;
-            }
-            const src = this.resolveShapeSourcePoints(level.bindMode, level.point, level.builderState);
-            if (!src.length) return [];
-            const levelOffsetCfg = this.resolvePreviewAngleOffsetConfig(level);
-            const levelRepeatCount = levelOffsetCfg ? Math.max(1, int(levelOffsetCfg.count || 1)) : 1;
-            const next = [];
-            for (const tuple of tuples) {
-                const baseLevels = Array.isArray(tuple?.levels) ? tuple.levels : [];
-                const sumBase = tuple?.sum || U.v(0, 0, 0);
-                for (let repeatIndex = 0; repeatIndex < levelRepeatCount; repeatIndex++) {
-                    for (let si = 0; si < src.length; si++) {
-                        const sp = src[si];
-                        const sv = U.v(num(sp?.x), num(sp?.y), num(sp?.z));
-                        const levels = baseLevels.map((lv) => ({
-                            vec: U.v(num(lv?.vec?.x), num(lv?.vec?.y), num(lv?.vec?.z)),
-                            ref: int(lv?.ref || 0),
-                            offsetIndex: int(lv?.offsetIndex ?? 0)
-                        }));
-                        levels.push({ vec: U.clone(sv), ref: si, offsetIndex: repeatIndex });
-                        next.push({
-                            sum: U.v(num(sumBase?.x) + sv.x, num(sumBase?.y) + sv.y, num(sumBase?.z) + sv.z),
-                            levels
-                        });
-                    }
-                }
-            }
-            tuples = next;
-            if (!tuples.length) break;
+        const children = card.shapeChildren || [];
+        if (!children.length) return [];
+        let allTuples = [];
+        for (const child of children) {
+            const childTuples = this._buildTreeNodeTuplesForPreview(child, U.v(0, 0, 0), []);
+            allTuples = allTuples.concat(childTuples);
         }
-        return tuples;
+        return allTuples;
+    }
+
+    _buildTreeNodeTuplesForPreview(node, parentSum, parentLevels) {
+        if (!node) return [];
+        const src = this.resolveShapeSourcePoints(node.bindMode, node.point, node.builderState);
+        if (!src.length) return [];
+        const nodeType = String(node.type || "single");
+        const offsetCfg = this.resolvePreviewAngleOffsetConfig(node);
+        const repeatCount = offsetCfg ? Math.max(1, int(offsetCfg.count || 1)) : 1;
+        if (nodeType === "single") {
+            const results = [];
+            for (const p of src) {
+                const sv = U.v(num(p?.x), num(p?.y), num(p?.z));
+                for (let ri = 0; ri < repeatCount; ri++) {
+                    const levels = parentLevels.map((lv) => ({
+                        vec: U.v(num(lv?.vec?.x), num(lv?.vec?.y), num(lv?.vec?.z)),
+                        ref: int(lv?.ref || 0),
+                        offsetIndex: int(lv?.offsetIndex ?? 0)
+                    }));
+                    levels.push({ vec: U.clone(sv), ref: 0, offsetIndex: ri });
+                    results.push({
+                        sum: U.v(num(parentSum?.x) + sv.x, num(parentSum?.y) + sv.y, num(parentSum?.z) + sv.z),
+                        levels
+                    });
+                }
+            }
+            return results;
+        }
+        const nodeChildren = node.children || [];
+        if (!nodeChildren.length) return [];
+        let allTuples = [];
+        for (const p of src) {
+            const sv = U.v(num(p?.x), num(p?.y), num(p?.z));
+            const newSum = U.v(num(parentSum?.x) + sv.x, num(parentSum?.y) + sv.y, num(parentSum?.z) + sv.z);
+            for (let ri = 0; ri < repeatCount; ri++) {
+                const newLevels = parentLevels.map((lv) => ({
+                    vec: U.v(num(lv?.vec?.x), num(lv?.vec?.y), num(lv?.vec?.z)),
+                    ref: int(lv?.ref || 0),
+                    offsetIndex: int(lv?.offsetIndex ?? 0)
+                }));
+                newLevels.push({ vec: U.clone(sv), ref: 0, offsetIndex: ri });
+                for (const child of nodeChildren) {
+                    const childTuples = this._buildTreeNodeTuplesForPreview(child, newSum, newLevels);
+                    allTuples = allTuples.concat(childTuples);
+                }
+            }
+        }
+        return allTuples;
     }
 
     buildShapeLocalPointsForPreview(card) {
@@ -2007,9 +1999,14 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
         if (!card) return "single";
         const d = Math.max(0, int(depth));
         if (d === 0) return String(card.dataType || "single");
-        if (d === 1) return String(card.shapeChildType || "single");
-        const lv = this.getNestedShapeLevel(card, d - 1, false);
-        return String(lv?.type || "single");
+        let nodes = card.shapeChildren || [];
+        for (let i = 1; i <= d; i++) {
+            if (!nodes.length) return "single";
+            const node = nodes[0];
+            if (i === d) return String(node.type || "single");
+            nodes = node.children || [];
+        }
+        return "single";
     }
 
     getShapeScopeInfoByRuntimeLevel(card, runtimeLevel = 0) {
@@ -2051,31 +2048,34 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
             hasExpression: !!rootActions.__hasExpression,
             hasPointDependentExpression: this.isPreviewActionsPointDependent(rootActions)
         });
-        const chain = this.getShapeChildChain(card);
-        for (let i = 0; i < chain.length; i++) {
-            const lv = normalizeShapeNestedLevel(chain[i], i);
-            if (lv.type === "single" && i > 0) break;
-            const scope = this.getShapeScopeInfoByRuntimeLevel(card, i + 1);
-            const actions = this.buildPreviewRuntimeActions(elapsedTick, lv.displayActions || [], {
-                skipExpression,
-                scope: "shape_level_display",
-                cardId: card.id,
-                scopeLevel: i + 1
-            });
-            levels.push({
-                scopeLevel: i + 1,
-                ancestorSequencedDepths: scope.sequencedDepths,
-                sequenced: lv.type === "sequenced_shape",
-                growthAnimates: lv.type === "sequenced_shape" ? (lv.growthAnimates || []) : [],
-                axis: this.resolveRelativeDirection(lv.axisExpr || lv.axisPreset || "RelativeLocation.yAxis()"),
-                scale: normalizeScaleHelperConfig(lv.scale, { type: "none" }),
-                angleOffset: this.resolvePreviewAngleOffsetConfig(lv),
-                actions,
-                hasExpression: !!actions.__hasExpression,
-                hasPointDependentExpression: this.isPreviewActionsPointDependent(actions)
-            });
-        }
+        this._collectTreeNodeRuntimeLevels(card, card.shapeChildren || [], levels, 1, elapsedTick, skipExpression);
         return levels;
+    }
+
+    _collectTreeNodeRuntimeLevels(card, children, levels, depth, elapsedTick, skipExpression) {
+        if (!children || !children.length) return;
+        const node = children[0];
+        if (!node || (node.type || "single") === "single") return;
+        const scope = this.getShapeScopeInfoByRuntimeLevel(card, depth);
+        const actions = this.buildPreviewRuntimeActions(elapsedTick, node.displayActions || [], {
+            skipExpression,
+            scope: "shape_level_display",
+            cardId: card.id,
+            scopeLevel: depth
+        });
+        levels.push({
+            scopeLevel: depth,
+            ancestorSequencedDepths: scope.sequencedDepths,
+            sequenced: node.type === "sequenced_shape",
+            growthAnimates: node.type === "sequenced_shape" ? (node.growthAnimates || []) : [],
+            axis: this.resolveRelativeDirection(node.axisExpr || node.axisPreset || "RelativeLocation.yAxis()"),
+            scale: normalizeScaleHelperConfig(node.scale, { type: "none" }),
+            angleOffset: this.resolvePreviewAngleOffsetConfig(node),
+            actions,
+            hasExpression: !!actions.__hasExpression,
+            hasPointDependentExpression: this.isPreviewActionsPointDependent(actions)
+        });
+        this._collectTreeNodeRuntimeLevels(card, node.children || [], levels, depth + 1, elapsedTick, skipExpression);
     }
 
     resolvePreviewAngleOffsetConfig(raw) {
