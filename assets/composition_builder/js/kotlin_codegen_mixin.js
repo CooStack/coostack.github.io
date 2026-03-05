@@ -19,6 +19,7 @@ export function installKotlinCodegenMethods(CompositionBuilderApp, deps = {}) {
         relExpr,
         indentText,
         normalizeAngleOffsetEaseName,
+        normalizeAngleOffsetEaseSpecialParams,
         normalizeAngleUnit,
         translateJsBlockToKotlin,
         normalizeParticleFloatAssignmentExpr,
@@ -184,18 +185,46 @@ export function installKotlinCodegenMethods(CompositionBuilderApp, deps = {}) {
         return this.emitCardPutAll(card, className, sequencedRoot, cardIndex);
     }
 
+    buildAngleOffsetEaseExpr(easeName, rawParams) {
+        const ease = normalizeAngleOffsetEaseName(easeName || "outCubic");
+        const params = normalizeAngleOffsetEaseSpecialParams(rawParams || {});
+        if (ease === "outBack") {
+            return `Eases.outBack(${formatKotlinDoubleLiteral(params.angleOffsetEaseOvershoot)})`;
+        }
+        if (ease === "outElastic") {
+            const period = formatKotlinDoubleLiteral(params.angleOffsetEasePeriod);
+            const decay = formatKotlinDoubleLiteral(params.angleOffsetEaseDecay);
+            const shift = formatKotlinDoubleLiteral(params.angleOffsetEaseShift);
+            return `Eases.outElastic(${period}, ${decay}, ${shift})`;
+        }
+        if (ease === "outBounce") {
+            const n1 = formatKotlinDoubleLiteral(params.angleOffsetEaseN1);
+            const d1 = formatKotlinDoubleLiteral(params.angleOffsetEaseD1);
+            return `Eases.outBounce(${n1}, ${d1})`;
+        }
+        if (ease === "bezierEase") {
+            const startX = formatKotlinDoubleLiteral(params.angleOffsetEaseBezierStartX);
+            const startY = formatKotlinDoubleLiteral(params.angleOffsetEaseBezierStartY);
+            const endX = formatKotlinDoubleLiteral(params.angleOffsetEaseBezierEndX);
+            const endY = formatKotlinDoubleLiteral(params.angleOffsetEaseBezierEndY);
+            return `Eases.bezierEase(RelativeLocation(${startX}, ${startY}, 0.0), RelativeLocation(${endX}, ${endY}, 0.0))`;
+        }
+        return `Eases.${ease}`;
+    }
+
     resolveAngleOffsetConfig(raw, className) {
         if (!raw || raw.angleOffsetEnabled !== true) return null;
         const count = Math.max(1, int(raw.angleOffsetCount || 1));
         if (count <= 1) return null;
         const glowTick = Math.max(1, int(raw.angleOffsetGlowTick || 20));
         const easeName = normalizeAngleOffsetEaseName(raw.angleOffsetEase || "outCubic");
+        const easeExpr = this.buildAngleOffsetEaseExpr(easeName, raw);
         const reverseOnDisable = raw.angleOffsetReverseOnDisable === true;
         const totalAngleRaw = raw.angleOffsetAngleMode === "expr"
             ? String(raw.angleOffsetAngleExpr || raw.angleOffsetAnglePreset || "PI * 2")
             : U.angleToKotlinRadExpr(num(raw.angleOffsetAngleValue || 0), normalizeAngleUnit(raw.angleOffsetAngleUnit || "deg"));
         const totalAngleExpr = this.rewriteCodeExpr(totalAngleRaw || "0.0", className) || "0.0";
-        return { count, glowTick, easeName, reverseOnDisable, totalAngleExpr };
+        return { count, glowTick, easeName, easeExpr, reverseOnDisable, totalAngleExpr };
     }
 
     resolveCardAngleOffsetConfig(card, className) {
@@ -606,10 +635,10 @@ export function installKotlinCodegenMethods(CompositionBuilderApp, deps = {}) {
         const appendOffsetAnimator = (targetLines, callIndent = `${innerIndent}    `) => {
             if (!useAngleOffsetAnimator) return;
             const glowTick = Math.max(1, int(offsetCfg.glowTick || 20));
-            const easeName = normalizeAngleOffsetEaseName(offsetCfg.easeName || "outCubic");
+            const easeExpr = String(offsetCfg.easeExpr || this.buildAngleOffsetEaseExpr(offsetCfg.easeName || "outCubic", offsetCfg));
             const reverseOnDisable = offsetCfg.reverseOnDisable === true;
             const cls = sanitizeKotlinClassName(className);
-            targetLines.push(`${callIndent}val animator = AngleAnimator(${glowTick}, ${offsetAngleExpr}, Eases.${easeName})`);
+            targetLines.push(`${callIndent}val animator = AngleAnimator(${glowTick}, ${offsetAngleExpr}, ${easeExpr})`);
             targetLines.push(`${callIndent}animator.reset()`);
             targetLines.push(`${callIndent}val timeline = Timeline()`);
             targetLines.push(`${callIndent}    .step {`);
@@ -684,9 +713,10 @@ export function installKotlinCodegenMethods(CompositionBuilderApp, deps = {}) {
     buildOnDisplayMethod(className) {
         const actions = this.state.displayActions || [];
         const projectScale = normalizeScaleHelperConfig(this.state.projectScale, { type: "none" });
-        const hasProjectScale = projectScale.type !== "none";
-        const needReverseScale = hasProjectScale && projectScale.reversedOnDisable;
-        if (!actions.length && !hasProjectScale) {
+        const hasProjectScaleHelper = projectScale.type !== "none";
+        const projectScaleAuto = hasProjectScaleHelper && projectScale.runMode !== "manual";
+        const needReverseScale = projectScaleAuto && projectScale.reversedOnDisable;
+        if (!actions.length && !projectScaleAuto) {
             return [
                 "    override fun onDisplay() {",
                 "    }"
@@ -695,7 +725,7 @@ export function installKotlinCodegenMethods(CompositionBuilderApp, deps = {}) {
         const lines = [];
         lines.push("    override fun onDisplay() {");
         lines.push("        addPreTickAction {");
-        if (hasProjectScale) {
+        if (projectScaleAuto) {
             if (needReverseScale) {
                 lines.push("            if (status.isEnable()) {");
                 lines.push("                scaleHelper.doScale()");

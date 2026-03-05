@@ -3,7 +3,7 @@ import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { createKindDefs } from "../../points_builder/js/kinds.js";
 import { createBuilderTools } from "../../points_builder/js/builder.js";
 import { createExpressionRuntime } from "./expression_runtime.js?v=20260221_2";
-import { InlineCodeEditor, mergeCompletionGroups } from "./code_editor.js?v=20260221_6";
+import { InlineCodeEditor, mergeCompletionGroups } from "./code_editor.js?v=20260302_1";
 import {
     isVectorLiteralType,
     normalizeVectorCtor,
@@ -15,19 +15,24 @@ import {
 } from "./vector_value_utils.js";
 import {
     normalizeScaleHelperConfig,
-    SCALE_HELPER_TYPES
+    SCALE_HELPER_TYPES,
+    SCALE_HELPER_RUN_MODES
 } from "./scale_helper_utils.js";
 import {
     ANGLE_OFFSET_EASE_OPTIONS,
     normalizeAngleUnit,
     normalizeAngleOffsetEaseName,
     normalizeAngleOffsetFieldName,
+    normalizeAngleOffsetEaseParamFieldName,
+    normalizeAngleOffsetEaseSpecialParams,
+    getAngleOffsetEaseParamMeta,
+    hasAngleOffsetEaseSpecialParams,
     formatAngleValue
 } from "./angle_offset_utils.js";
-import { installPreviewRuntimeMethods } from "./preview_runtime_mixin.js?v=20260226_21";
+import { installPreviewRuntimeMethods } from "./preview_runtime_mixin.js?v=20260302_23";
 import { installKotlinCodegenMethods } from "./kotlin_codegen_mixin.js?v=20260226_2";
 import { installCodeOutputMethods } from "./code_output_mixin.js";
-import { installExpressionEditorMethods } from "./expression_editor_mixin.js?v=20260221_7";
+import { installExpressionEditorMethods } from "./expression_editor_mixin.js?v=20260302_11";
 import { installCodeCompileMethods } from "./code_compile_mixin.js?v=20260220_1";
 import { installTargetPresetMethods } from "./target_preset_mixin.js";
 import {
@@ -619,6 +624,7 @@ function normalizeShapeNestedLevel(raw, index = 0) {
     x.angleOffsetCount = Math.max(1, int(x.angleOffsetCount || 1));
     x.angleOffsetGlowTick = Math.max(1, int(x.angleOffsetGlowTick || 20));
     x.angleOffsetEase = normalizeAngleOffsetEaseName(x.angleOffsetEase || "outCubic");
+    Object.assign(x, normalizeAngleOffsetEaseSpecialParams(x));
     x.angleOffsetReverseOnDisable = x.angleOffsetReverseOnDisable === true;
     x.angleOffsetAngleMode = x.angleOffsetAngleMode === "expr" ? "expr" : "numeric";
     x.angleOffsetAngleValue = Number.isFinite(Number(x.angleOffsetAngleValue)) ? num(x.angleOffsetAngleValue) : 360;
@@ -626,6 +632,7 @@ function normalizeShapeNestedLevel(raw, index = 0) {
     x.angleOffsetAngleExpr = String(x.angleOffsetAngleExpr || "PI * 2");
     x.angleOffsetAnglePreset = String(x.angleOffsetAnglePreset || x.angleOffsetAngleExpr || "PI * 2");
     x.scale = normalizeScaleHelperConfig(x.scale, { type: "none" });
+    x.scale.runMode = "auto";
     x.growthAnimates = Array.isArray(x.growthAnimates) ? x.growthAnimates.map((it) => normalizeAnimate(it)) : [];
     x.name = String(x.name || `嵌套层${index + 2}`);
     return x;
@@ -653,6 +660,7 @@ function normalizeShapeTreeNode(raw = {}, index = 0) {
     x.angleOffsetCount = Math.max(1, int(x.angleOffsetCount || 1));
     x.angleOffsetGlowTick = Math.max(1, int(x.angleOffsetGlowTick || 20));
     x.angleOffsetEase = normalizeAngleOffsetEaseName(x.angleOffsetEase || "outCubic");
+    Object.assign(x, normalizeAngleOffsetEaseSpecialParams(x));
     x.angleOffsetReverseOnDisable = x.angleOffsetReverseOnDisable === true;
     x.angleOffsetAngleMode = x.angleOffsetAngleMode === "expr" ? "expr" : "numeric";
     x.angleOffsetAngleValue = Number.isFinite(Number(x.angleOffsetAngleValue)) ? num(x.angleOffsetAngleValue) : 360;
@@ -660,6 +668,7 @@ function normalizeShapeTreeNode(raw = {}, index = 0) {
     x.angleOffsetAngleExpr = String(x.angleOffsetAngleExpr || "PI * 2");
     x.angleOffsetAnglePreset = String(x.angleOffsetAnglePreset || x.angleOffsetAngleExpr || "PI * 2");
     x.scale = normalizeScaleHelperConfig(x.scale, { type: "none" });
+    x.scale.runMode = "auto";
     x.growthAnimates = Array.isArray(x.growthAnimates) ? x.growthAnimates.map((it) => normalizeAnimate(it)) : [];
     x.effectClass = String(x.effectClass || DEFAULT_EFFECT_CLASS);
     x.useTexture = x.useTexture !== false;
@@ -737,6 +746,7 @@ function normalizeCard(card, index = 0) {
     x.angleOffsetCount = Math.max(1, int(x.angleOffsetCount || 1));
     x.angleOffsetGlowTick = Math.max(1, int(x.angleOffsetGlowTick || 20));
     x.angleOffsetEase = normalizeAngleOffsetEaseName(x.angleOffsetEase || "outCubic");
+    Object.assign(x, normalizeAngleOffsetEaseSpecialParams(x));
     x.angleOffsetReverseOnDisable = x.angleOffsetReverseOnDisable === true;
     x.angleOffsetAngleMode = x.angleOffsetAngleMode === "expr" ? "expr" : "numeric";
     x.angleOffsetAngleValue = Number.isFinite(Number(x.angleOffsetAngleValue)) ? num(x.angleOffsetAngleValue) : 360;
@@ -753,6 +763,7 @@ function normalizeCard(card, index = 0) {
     x.shapeAxisManualZ = Number.isFinite(Number(x.shapeAxisManualZ)) ? num(x.shapeAxisManualZ) : 0;
     x.shapeDisplayActions = Array.isArray(x.shapeDisplayActions) ? x.shapeDisplayActions.map((a) => normalizeDisplayAction(a)) : [];
     x.shapeScale = normalizeScaleHelperConfig(x.shapeScale, { type: "none" });
+    x.shapeScale.runMode = "auto";
     x.shapeChildren = Array.isArray(x.shapeChildren)
         ? x.shapeChildren.map((c, i) => normalizeShapeTreeNode(c, i))
         : [];
@@ -901,6 +912,7 @@ function createDefaultState() {
         compositionAxisManualZ: 0,
         projectScale: {
             type: "none",
+            runMode: "auto",
             min: 0.01,
             max: 4.0,
             tick: 18,
@@ -1183,7 +1195,7 @@ class CompositionBuilderApp {
 
         this.hotkeyCaptureActionId = null;
         this.builderModalCardId = null;
-        this.bezierToolTarget = { scope: "project", cardId: "" };
+        this.bezierToolTarget = { scope: "project", cardId: "", treePath: "", kind: "scale" };
         this.confirmResolver = null;
         this.confirmKeydownHandler = null;
 
@@ -2045,7 +2057,7 @@ class CompositionBuilderApp {
         }
         if (t.dataset.projectScaleField) {
             this.applyProjectScaleField(t.dataset.projectScaleField, t);
-            this.afterValueMutate({ rebuildPreview: true, rerenderProject: t.dataset.projectScaleField === "type" });
+            this.afterValueMutate({ rebuildPreview: true, rerenderProject: ["type", "runMode"].includes(t.dataset.projectScaleField) });
             return;
         }
         if (t.dataset.axisField) {
@@ -2126,7 +2138,7 @@ class CompositionBuilderApp {
         if (t.dataset.projectScaleField) {
             // Fallback for environments where <select> only emits "change".
             this.applyProjectScaleField(t.dataset.projectScaleField, t);
-            this.afterValueMutate({ rebuildPreview: true, rerenderProject: t.dataset.projectScaleField === "type" });
+            this.afterValueMutate({ rebuildPreview: true, rerenderProject: ["type", "runMode"].includes(t.dataset.projectScaleField) });
             return;
         }
         if (t.dataset.axisField) {
@@ -2297,6 +2309,11 @@ class CompositionBuilderApp {
             scale.type = SCALE_HELPER_TYPES.includes(next) ? next : "none";
             return;
         }
+        if (field === "runMode") {
+            const next = String(target.value || "auto");
+            scale.runMode = SCALE_HELPER_RUN_MODES.includes(next) ? next : "auto";
+            return;
+        }
         if (field === "reversedOnDisable") {
             scale.reversedOnDisable = !!target.checked;
             return;
@@ -2415,10 +2432,14 @@ class CompositionBuilderApp {
     applyCardScaleField(card, field, target) {
         if (!card) return;
         const scale = Object.assign({}, normalizeScaleHelperConfig(card.shapeScale, { type: "none" }));
+        scale.runMode = "auto";
         card.shapeScale = scale;
         if (field === "type") {
             const next = String(target.value || "none");
             scale.type = SCALE_HELPER_TYPES.includes(next) ? next : "none";
+            return;
+        }
+        if (field === "runMode") {
             return;
         }
         if (field === "reversedOnDisable") {
@@ -2437,10 +2458,14 @@ class CompositionBuilderApp {
     applyNodeScaleField(node, field, target) {
         if (!node) return;
         const scale = Object.assign({}, normalizeScaleHelperConfig(node.scale, { type: "none" }));
+        scale.runMode = "auto";
         node.scale = scale;
         if (field === "type") {
             const next = String(target.value || "none");
             scale.type = SCALE_HELPER_TYPES.includes(next) ? next : "none";
+            return;
+        }
+        if (field === "runMode") {
             return;
         }
         if (field === "reversedOnDisable") {
@@ -2583,10 +2608,14 @@ class CompositionBuilderApp {
     applyNestedLevelScaleField(level, field, target) {
         if (!level) return;
         const scale = Object.assign({}, normalizeScaleHelperConfig(level.scale, { type: "none" }));
+        scale.runMode = "auto";
         level.scale = scale;
         if (field === "type") {
             const next = String(target.value || "none");
             scale.type = SCALE_HELPER_TYPES.includes(next) ? next : "none";
+            return;
+        }
+        if (field === "runMode") {
             return;
         }
         if (field === "reversedOnDisable") {
@@ -2770,6 +2799,15 @@ class CompositionBuilderApp {
             if (act === "open-node-bezier-tool") {
                 const treePath = btn.dataset.treePath || "[]";
                 this.openBezierTool("tree_node", cardId, treePath);
+                return;
+            }
+            if (act === "open-card-angle-bezier-tool") {
+                this.openBezierTool("card", cardId, "", "angle_ease");
+                return;
+            }
+            if (act === "open-node-angle-bezier-tool") {
+                const treePath = btn.dataset.treePath || "[]";
+                this.openBezierTool("tree_node", cardId, treePath, "angle_ease");
                 return;
             }
             const skipHistory = act === "open-builder-editor"
@@ -3577,6 +3615,7 @@ class CompositionBuilderApp {
         if (!targetObj) return;
         const field = normalizeAngleOffsetFieldName(rawField);
         if (!field) return;
+        const paramField = normalizeAngleOffsetEaseParamFieldName(field);
         if (field === "angleOffsetEnabled" || field === "angleOffsetReverseOnDisable") {
             targetObj[field] = !!target.checked;
             return;
@@ -3587,6 +3626,12 @@ class CompositionBuilderApp {
         }
         if (field === "angleOffsetEase") {
             targetObj[field] = normalizeAngleOffsetEaseName(target.value || "outCubic");
+            Object.assign(targetObj, normalizeAngleOffsetEaseSpecialParams(targetObj));
+            return;
+        }
+        if (paramField) {
+            targetObj[paramField] = target.value;
+            Object.assign(targetObj, normalizeAngleOffsetEaseSpecialParams(targetObj));
             return;
         }
         if (field === "angleOffsetAngleMode") {
@@ -3614,6 +3659,7 @@ class CompositionBuilderApp {
     isAngleOffsetStructureField(rawField) {
         const field = normalizeAngleOffsetFieldName(rawField);
         return field === "angleOffsetEnabled"
+            || field === "angleOffsetEase"
             || field === "angleOffsetAngleMode"
             || field === "angleOffsetAnglePreset";
     }
@@ -5056,12 +5102,17 @@ class CompositionBuilderApp {
         const helperName = String(opts.helperName || "缩放助手");
         const sectionKeyAttr = opts.sectionKey ? ` data-section-key="${esc(String(opts.sectionKey))}"` : "";
         const scale = normalizeScaleHelperConfig(opts.scale, { type: "none" });
+        const isProjectScope = scope === "project";
+        if (!isProjectScope) scale.runMode = "auto";
+        const runMode = isProjectScope && scale.runMode === "manual" ? "manual" : "auto";
         const fieldAttr = scope === "project"
             ? "data-project-scale-field"
             : (scope === "card"
                 ? "data-card-scale-field"
                 : "data-tree-node-scale-field");
-        const treePathAttr = opts.treePath ? ` data-tree-path='${esc(JSON.stringify(opts.treePath))}'` : "";
+        const treePathRaw = opts.treePath;
+        const treePath = treePathRaw == null ? null : this.parseBezierToolTreePath(treePathRaw);
+        const treePathAttr = treePath ? ` data-tree-path='${esc(JSON.stringify(treePath))}'` : "";
         const cardAttr = scope === "project"
             ? ""
             : `data-card-id="${esc(cardId)}"${treePathAttr}`;
@@ -5080,10 +5131,20 @@ class CompositionBuilderApp {
                 </select>
             </label>
         `;
+        const runModeSelect = isProjectScope ? `
+            <label class="field">
+                <span>运行模式</span>
+                <select class="input" ${fieldAttr}="runMode">
+                    <option value="auto" ${runMode === "auto" ? "selected" : ""}>自动（系统调用）</option>
+                    <option value="manual" ${runMode === "manual" ? "selected" : ""}>手动（表达式调用）</option>
+                </select>
+            </label>
+        ` : "";
         if (scale.type === "none") {
             const body = `
-                <div class="grid2">
+                <div class="${isProjectScope ? "grid3" : "grid2"}">
                     ${typeSelect}
+                    ${runModeSelect}
                     <div class="mini-note">仅可添加一个缩放助手</div>
                 </div>
             `;
@@ -5119,13 +5180,15 @@ class CompositionBuilderApp {
             </div>
         ` : "";
         const body = `
-            <div class="grid2">
+            <div class="${isProjectScope ? "grid3" : "grid2"}">
                 ${typeSelect}
+                ${runModeSelect}
                 <label class="chk">
                     <input type="checkbox" ${cardAttr} ${fieldAttr}="reversedOnDisable" ${scale.reversedOnDisable ? "checked" : ""}/>
                     <span>消散时回缩</span>
                 </label>
             </div>
+            ${isProjectScope && runMode === "manual" ? '<div class="mini-note">手动模式下不会自动调用缩放，请在项目 display 表达式中使用 scaleHelper.doScale() / scaleHelper.doScaleReversed()。</div>' : ""}
             <div class="grid3">
                 <label class="field">
                     <span>起始缩放</span>
@@ -5156,7 +5219,8 @@ class CompositionBuilderApp {
             ? "card"
             : "tree_node";
         const cardId = String(opts.cardId || "");
-        const treePath = opts.treePath || null;
+        const treePathRaw = opts.treePath;
+        const treePath = treePathRaw == null ? null : this.parseBezierToolTreePath(treePathRaw);
         const value = opts.value && typeof opts.value === "object" ? opts.value : {};
         const title = String(opts.title || "相对角度偏移（可选）");
         const enabled = value.angleOffsetEnabled === true;
@@ -5168,6 +5232,8 @@ class CompositionBuilderApp {
         const angleValue = Number.isFinite(Number(value.angleOffsetAngleValue)) ? num(value.angleOffsetAngleValue) : 360;
         const angleUnit = normalizeAngleUnit(value.angleOffsetAngleUnit || "deg");
         const angleExpr = String(value.angleOffsetAngleExpr || value.angleOffsetAnglePreset || "PI * 2");
+        const easeSpecialParams = normalizeAngleOffsetEaseSpecialParams(value);
+        const easeParamMeta = getAngleOffsetEaseParamMeta(easeName);
 
         const treePathAttr = treePath ? ` data-tree-path='${esc(JSON.stringify(treePath))}'` : "";
         const fieldAttr = scope === "card"
@@ -5176,6 +5242,9 @@ class CompositionBuilderApp {
         const baseAttr = `data-card-id="${esc(cardId)}"${treePathAttr}`;
         const fieldName = (short, full) => (scope === "card" ? full : short);
         const bindAttr = (short, full) => `${baseAttr} ${fieldAttr}="${fieldName(short, full)}"`;
+        const openBezierAct = scope === "card"
+            ? "open-card-angle-bezier-tool"
+            : "open-node-angle-bezier-tool";
 
         const easeOptions = ANGLE_OFFSET_EASE_OPTIONS
             .map((it) => `<option value="${esc(it.id)}" ${it.id === easeName ? "selected" : ""}>${esc(it.title)}</option>`)
@@ -5209,6 +5278,23 @@ class CompositionBuilderApp {
                     </label>
                 </div>
             `;
+
+        const easeParamInput = hasAngleOffsetEaseSpecialParams(easeName)
+            ? `
+                <div class="mini-note">函数参数</div>
+                <div class="${easeParamMeta.length <= 2 ? "grid2" : "grid3"}">
+                    ${easeParamMeta.map((meta) => `
+                        <label class="field">
+                            <span title="${esc(meta.tip || "")}">${esc(meta.label)}</span>
+                            <input class="input" type="number" step="${this.state.settings.paramStep}" ${bindAttr(meta.short, meta.field)} value="${esc(formatAngleValue(easeSpecialParams[meta.field]))}"/>
+                        </label>
+                    `).join("")}
+                </div>
+                ${easeName === "bezierEase"
+                    ? `<div class="list-tools"><button class="btn small" data-act="${openBezierAct}" ${baseAttr}>打开 Bezier 工具</button></div>`
+                    : ""}
+            `
+            : "";
 
         return `
             <div class="mini-note">${esc(title)}</div>
@@ -5249,6 +5335,7 @@ class CompositionBuilderApp {
                     </select>
                 </label>
             </div>
+            ${easeParamInput}
             ${angleInput}
         `;
     }
@@ -8048,7 +8135,19 @@ class CompositionBuilderApp {
             this.closeExprSuggest();
             return;
         }
-        const filtered = all.filter((it) => force || !token || it.toLowerCase().includes(token.toLowerCase())).slice(0, 18);
+        const tokenLower = token.toLowerCase();
+        const dotIdx = token.lastIndexOf(".");
+        const ownerPrefixLower = dotIdx > 0 ? `${token.slice(0, dotIdx)}.`.toLowerCase() : "";
+        const memberPrefixLower = dotIdx > 0 ? token.slice(dotIdx + 1).toLowerCase() : "";
+        const filtered = all.filter((it) => {
+            if (!token) return force;
+            const valueLower = String(it || "").toLowerCase();
+            if (dotIdx > 0) {
+                if (!valueLower.startsWith(ownerPrefixLower)) return false;
+                return !memberPrefixLower || valueLower.slice(ownerPrefixLower.length).startsWith(memberPrefixLower);
+            }
+            return valueLower.includes(tokenLower);
+        }).slice(0, 18);
         if (!filtered.length) {
             this.closeExprSuggest();
             return;
@@ -8742,6 +8841,22 @@ class CompositionBuilderApp {
         this.builderModalCardId = null;
     }
 
+    parseBezierToolTreePath(raw) {
+        let value = raw;
+        for (let i = 0; i < 3; i++) {
+            if (Array.isArray(value)) return value;
+            if (typeof value !== "string") break;
+            const text = value.trim();
+            if (!text) return [];
+            try {
+                value = JSON.parse(text);
+            } catch {
+                return [];
+            }
+        }
+        return Array.isArray(value) ? value : [];
+    }
+
     getBezierToolScaleConfig(scope = "project", cardId = "") {
         const adaptLegacyX = (cfg) => {
             const tick = Math.max(1, int(cfg.tick || 18));
@@ -8764,28 +8879,58 @@ class CompositionBuilderApp {
         if (scope === "tree_node") {
             const card = this.getCardById(cardId);
             if (!card) return normalizeScaleHelperConfig({ type: "bezier" }, { type: "bezier" });
-            const treePath = this.bezierToolTarget?.treePath ? JSON.parse(this.bezierToolTarget.treePath) : [];
+            const treePath = this.parseBezierToolTreePath(this.bezierToolTarget?.treePath || "[]");
             const node = this.getShapeNodeByPath(card, treePath);
             return adaptLegacyX(normalizeScaleHelperConfig(node?.scale, { type: "bezier" }));
         }
         return adaptLegacyX(normalizeScaleHelperConfig(this.state.projectScale, { type: "bezier" }));
     }
 
-    openBezierTool(scope = "project", cardId = "", treePathOrLevelIdx = "") {
+    getBezierToolAngleEaseConfig(scope = "card", cardId = "", treePathRaw = "") {
+        let source = null;
+        if (scope === "card") {
+            source = this.getCardById(cardId);
+        } else if (scope === "tree_node") {
+            const card = this.getCardById(cardId);
+            if (card) {
+                const treePath = this.parseBezierToolTreePath(treePathRaw);
+                source = this.getShapeNodeByPath(card, treePath);
+            }
+        }
+        const params = normalizeAngleOffsetEaseSpecialParams(source || {});
+        return {
+            min: 0,
+            max: 1,
+            tick: 1,
+            c1x: num(params.angleOffsetEaseBezierStartX),
+            c1y: num(params.angleOffsetEaseBezierStartY),
+            c1z: 0,
+            c2x: num(params.angleOffsetEaseBezierEndX),
+            c2y: num(params.angleOffsetEaseBezierEndY),
+            c2z: 0
+        };
+    }
+
+    openBezierTool(scope = "project", cardId = "", treePathOrLevelIdx = "", kind = "scale") {
         const normScope = scope === "card"
             ? "card"
             : (scope === "tree_node" ? "tree_node" : "project");
+        const normKind = kind === "angle_ease" ? "angle_ease" : "scale";
         this.bezierToolTarget = {
             scope: normScope,
             cardId: String(cardId || ""),
-            treePath: scope === "tree_node" ? String(treePathOrLevelIdx || "[]") : ""
+            treePath: normScope === "tree_node" ? String(treePathOrLevelIdx || "[]") : "",
+            kind: normKind
         };
-        const cfg = this.getBezierToolScaleConfig(this.bezierToolTarget.scope, this.bezierToolTarget.cardId);
+        const cfg = normKind === "angle_ease"
+            ? this.getBezierToolAngleEaseConfig(this.bezierToolTarget.scope, this.bezierToolTarget.cardId, this.bezierToolTarget.treePath)
+            : this.getBezierToolScaleConfig(this.bezierToolTarget.scope, this.bezierToolTarget.cardId);
         if (this.dom.bezierFrame) {
             const q = new URLSearchParams({
                 min: String(num(cfg.min)),
                 max: String(num(cfg.max)),
                 tick: String(Math.max(1, int(cfg.tick || 18))),
+                mode: normKind,
                 c1x: String(num(cfg.c1x)),
                 c1y: String(num(cfg.c1y)),
                 c1z: String(num(cfg.c1z)),
@@ -8836,8 +8981,55 @@ class CompositionBuilderApp {
         const c2y = num(data.c2y);
         const c2z = num(data.c2z);
 
-        const target = this.bezierToolTarget || { scope: "project", cardId: "" };
+        const target = this.bezierToolTarget || { scope: "project", cardId: "", treePath: "", kind: "scale" };
+        const targetKind = target.kind === "angle_ease" ? "angle_ease" : "scale";
         this.pushHistory();
+
+        if (targetKind === "angle_ease") {
+            const startX = tick > 0 ? c1x / tick : c1x;
+            const endX = tick > 0 ? c2x / tick : c2x;
+            if (target.scope === "card") {
+                const card = this.getCardById(target.cardId);
+                if (!card) {
+                    this.showToast("卡片不存在", "error");
+                    return false;
+                }
+                card.angleOffsetEase = "bezierEase";
+                card.angleOffsetEaseBezierStartX = startX;
+                card.angleOffsetEaseBezierStartY = c1y;
+                card.angleOffsetEaseBezierEndX = endX;
+                card.angleOffsetEaseBezierEndY = c2y;
+                Object.assign(card, normalizeAngleOffsetEaseSpecialParams(card));
+                this.afterValueMutate({ rerenderCards: true, rebuildPreview: true });
+                this.showToast("已应用到卡片相对角度缓动", "success");
+                return true;
+            }
+            if (target.scope === "tree_node") {
+                const card = this.getCardById(target.cardId);
+                if (!card) {
+                    this.showToast("卡片不存在", "error");
+                    return false;
+                }
+                const treePath = this.parseBezierToolTreePath(target.treePath || "[]");
+                const node = this.getShapeNodeByPath(card, treePath);
+                if (!node) {
+                    this.showToast("节点不存在", "error");
+                    return false;
+                }
+                node.angleOffsetEase = "bezierEase";
+                node.angleOffsetEaseBezierStartX = startX;
+                node.angleOffsetEaseBezierStartY = c1y;
+                node.angleOffsetEaseBezierEndX = endX;
+                node.angleOffsetEaseBezierEndY = c2y;
+                Object.assign(node, normalizeAngleOffsetEaseSpecialParams(node));
+                this.afterValueMutate({ rerenderCards: true, rebuildPreview: true });
+                this.showToast("已应用到节点相对角度缓动", "success");
+                return true;
+            }
+            this.showToast("当前目标不支持相对角度 Bezier", "error");
+            return false;
+        }
+
         if (target.scope === "card") {
             const card = this.getCardById(target.cardId);
             if (!card) {
@@ -8865,7 +9057,7 @@ class CompositionBuilderApp {
                 this.showToast("卡片不存在", "error");
                 return false;
             }
-            const treePath = target.treePath ? JSON.parse(target.treePath) : [];
+            const treePath = this.parseBezierToolTreePath(target.treePath || "[]");
             const node = this.getShapeNodeByPath(card, treePath);
             if (!node) {
                 this.showToast("节点不存在", "error");
@@ -9834,6 +10026,7 @@ installKotlinCodegenMethods(CompositionBuilderApp, {
     relExpr,
     indentText,
     normalizeAngleOffsetEaseName,
+    normalizeAngleOffsetEaseSpecialParams,
     normalizeAngleUnit,
     translateJsBlockToKotlin,
     normalizeParticleFloatAssignmentExpr,
@@ -9858,6 +10051,7 @@ installPreviewRuntimeMethods(CompositionBuilderApp, {
     CONTROLLER_SCOPE_RESERVED,
     normalizeAngleUnit,
     normalizeAngleOffsetEaseName,
+    normalizeAngleOffsetEaseSpecialParams,
     textureEffectWhitelist: EFFECT_CLASS_OPTIONS
 });
 

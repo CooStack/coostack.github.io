@@ -105,7 +105,19 @@ export function installExpressionEditorMethods(CompositionBuilderApp, deps = {})
             this.closeExprSuggest();
             return;
         }
-        const filtered = all.filter((it) => force || !token || it.toLowerCase().includes(token.toLowerCase())).slice(0, 18);
+        const tokenLower = token.toLowerCase();
+        const dotIdx = token.lastIndexOf(".");
+        const ownerPrefixLower = dotIdx > 0 ? `${token.slice(0, dotIdx)}.`.toLowerCase() : "";
+        const memberPrefixLower = dotIdx > 0 ? token.slice(dotIdx + 1).toLowerCase() : "";
+        const filtered = all.filter((it) => {
+            if (!token) return force;
+            const valueLower = String(it || "").toLowerCase();
+            if (dotIdx > 0) {
+                if (!valueLower.startsWith(ownerPrefixLower)) return false;
+                return !memberPrefixLower || valueLower.slice(ownerPrefixLower.length).startsWith(memberPrefixLower);
+            }
+            return valueLower.includes(tokenLower);
+        }).slice(0, 18);
         if (!filtered.length) {
             this.closeExprSuggest();
             return;
@@ -235,6 +247,9 @@ export function installExpressionEditorMethods(CompositionBuilderApp, deps = {})
             "RelativeLocation($0)",
             "Vector3f($0)"
         ];
+        for (const snippet of this.getProjectScaleHelperCompletionSnippets()) {
+            base.push(snippet);
+        }
         for (const g of this.state.globalVars) {
             const name = String(g.name || "").trim();
             if (!name) continue;
@@ -247,6 +262,24 @@ export function installExpressionEditorMethods(CompositionBuilderApp, deps = {})
             if (name) base.push(name);
         }
         return Array.from(new Set(base));
+    }
+
+    hasManualProjectScaleHelper() {
+        const projectScale = (this.state?.projectScale && typeof this.state.projectScale === "object")
+            ? this.state.projectScale
+            : null;
+        if (!projectScale) return false;
+        const type = String(projectScale.type || "none").trim();
+        if (!type || type === "none") return false;
+        return String(projectScale.runMode || "auto").trim() === "manual";
+    }
+
+    getProjectScaleHelperCompletionSnippets() {
+        if (!this.hasManualProjectScaleHelper()) return [];
+        return [
+            "scaleHelper.doScale()",
+            "scaleHelper.doScaleReversed()"
+        ];
     }
 
     getCodeEditorScopeInfo(textarea) {
@@ -321,6 +354,10 @@ export function installExpressionEditorMethods(CompositionBuilderApp, deps = {})
             if (!allowGrowthApi && (key === "addSingle" || key === "addMultiple")) continue;
             allowed.add(key);
         }
+        const cardId = String(opts.cardId || "").trim();
+        if (this.hasManualProjectScaleHelper() && !cardId) {
+            allowed.add("scaleHelper");
+        }
         const scope = (opts.scope && typeof opts.scope === "object") ? opts.scope : null;
         if (scope?.allowRel) allowed.add("rel");
         if (scope?.allowOrder) allowed.add("order");
@@ -345,7 +382,6 @@ export function installExpressionEditorMethods(CompositionBuilderApp, deps = {})
             const name = String(c?.name || "").trim();
             if (/^[A-Za-z_$][A-Za-z0-9_$]*$/.test(name)) allowed.add(name);
         }
-        const cardId = String(opts.cardId || "");
         if (cardId) {
             const card = this.getCardById(cardId);
             if (card) {
@@ -474,6 +510,11 @@ export function installExpressionEditorMethods(CompositionBuilderApp, deps = {})
         }
         lines.push("declare function addPreTickAction(...args: any[]): any;");
         lines.push("declare function setReversedScaleOnCompositionStatus(...args: any[]): any;");
+        const isProjectDisplayExpr = String(textarea?.dataset?.displayField || "") === "expression"
+            && !String(textarea?.dataset?.cardId || "").trim();
+        if (this.hasManualProjectScaleHelper() && isProjectDisplayExpr) {
+            lines.push("declare const scaleHelper: { doScale(...args: any[]): any; doScaleReversed(...args: any[]): any; };");
+        }
         lines.push("declare function RelativeLocation(...args: any[]): any;");
         lines.push("declare namespace RelativeLocation { function yAxis(...args: any[]): any; }");
         lines.push("declare function Vec3(...args: any[]): any;");
@@ -626,6 +667,25 @@ export function installExpressionEditorMethods(CompositionBuilderApp, deps = {})
                 { label: "Math.min(a, b)", insertText: "Math.min($0, )", cursorOffset: 11, detail: "数学函数", priority: 180 },
                 { label: "Math.max(a, b)", insertText: "Math.max($0, )", cursorOffset: 11, detail: "数学函数", priority: 180 }
             ];
+        const isProjectDisplayExpr = !isControllerScript
+            && String(textarea?.dataset?.displayField || "") === "expression"
+            && !String(textarea?.dataset?.cardId || "").trim();
+        if (isProjectDisplayExpr && this.hasManualProjectScaleHelper()) {
+            base.push(
+                {
+                    label: "scaleHelper.doScale()",
+                    insertText: "scaleHelper.doScale()",
+                    detail: "项目缩放助手 API（手动模式）",
+                    priority: 262
+                },
+                {
+                    label: "scaleHelper.doScaleReversed()",
+                    insertText: "scaleHelper.doScaleReversed()",
+                    detail: "项目缩放助手 API（手动模式）",
+                    priority: 262
+                }
+            );
+        }
         if (!allowGrowthApi) {
             for (let i = base.length - 1; i >= 0; i--) {
                 const raw = String(base[i]?.insertText || base[i]?.label || "");

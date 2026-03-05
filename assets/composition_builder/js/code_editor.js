@@ -147,6 +147,45 @@ function toSnippetInsertText(rawInsertText, cursorOffset = null) {
     };
 }
 
+function getCompletionFilterContext(model, position) {
+    const lineNumber = Math.max(1, Number(position?.lineNumber) || 1);
+    const column = Math.max(1, Number(position?.column) || 1);
+    const lineContent = String(model?.getLineContent?.(lineNumber) || "");
+    const left = lineContent.slice(0, Math.max(0, column - 1));
+    const tokenMatch = left.match(/[A-Za-z_][A-Za-z0-9_@.]*$/);
+    const token = tokenMatch ? String(tokenMatch[0] || "") : "";
+    const startColumn = token ? Math.max(1, column - token.length) : column;
+    return {
+        token,
+        lineNumber,
+        startColumn,
+        endColumn: column
+    };
+}
+
+function filterCompletionItemsByToken(items, token) {
+    const list = Array.isArray(items) ? items : [];
+    const rawToken = String(token || "").trim();
+    if (!rawToken) return list;
+    const dotIdx = rawToken.lastIndexOf(".");
+    if (dotIdx <= 0) return list;
+    const ownerPrefixLower = `${rawToken.slice(0, dotIdx)}.`.toLowerCase();
+    const memberPrefixLower = rawToken.slice(dotIdx + 1).toLowerCase();
+    return list.filter((item) => {
+        const candidates = [
+            String(item?.insertText || ""),
+            String(item?.label || "")
+        ];
+        for (const candidate of candidates) {
+            const valueLower = candidate.toLowerCase();
+            if (!valueLower.startsWith(ownerPrefixLower)) continue;
+            const memberLower = valueLower.slice(ownerPrefixLower.length);
+            if (!memberPrefixLower || memberLower.startsWith(memberPrefixLower)) return true;
+        }
+        return false;
+    });
+}
+
 function parseValidationMessagePosition(source, message) {
     const m = /未定义标识符\s*:\s*([A-Za-z_$][A-Za-z0-9_$]*)/.exec(String(message || ""));
     if (!m) return null;
@@ -454,14 +493,14 @@ export class InlineCodeEditor {
 
         this.completionRegistration = this.languageService.registerCompletionProvider({
             provideCompletionItems: ({ model, position }) => {
-                const word = model.getWordUntilPosition(position);
+                const context = getCompletionFilterContext(model, position);
                 const range = {
-                    startLineNumber: position.lineNumber,
-                    endLineNumber: position.lineNumber,
-                    startColumn: word.startColumn,
-                    endColumn: word.endColumn
+                    startLineNumber: context.lineNumber,
+                    endLineNumber: context.lineNumber,
+                    startColumn: context.startColumn,
+                    endColumn: context.endColumn
                 };
-                const list = toCompletionObjects(this.completions);
+                const list = filterCompletionItemsByToken(toCompletionObjects(this.completions), context.token);
                 const suggestions = list.map((item) => {
                     const insert = toSnippetInsertText(item.insertText || item.label, item.cursorOffset);
                     return {

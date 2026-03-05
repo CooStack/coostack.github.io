@@ -1,4 +1,5 @@
 export const SCALE_HELPER_TYPES = ["none", "linear", "bezier"];
+export const SCALE_HELPER_RUN_MODES = ["auto", "manual"];
 
 function toNum(v) {
     const n = Number(v);
@@ -12,6 +13,7 @@ function toInt(v) {
 export function normalizeScaleHelperConfig(raw, defaults = {}) {
     const base = Object.assign({
         type: "none",
+        runMode: "auto",
         min: 0.01,
         max: 1.0,
         tick: 18,
@@ -25,6 +27,7 @@ export function normalizeScaleHelperConfig(raw, defaults = {}) {
     }, defaults || {});
     const x = Object.assign({}, base, raw || {});
     x.type = SCALE_HELPER_TYPES.includes(String(x.type || "").trim()) ? String(x.type || "").trim() : String(base.type);
+    x.runMode = SCALE_HELPER_RUN_MODES.includes(String(x.runMode || "").trim()) ? String(x.runMode || "").trim() : "auto";
     x.min = toNum(x.min);
     x.max = toNum(x.max);
     x.tick = Math.max(1, toInt(x.tick || 18));

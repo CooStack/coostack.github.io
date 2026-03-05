@@ -1,5 +1,7 @@
 (() => {
     const q = new URLSearchParams(location.search);
+    const bezierMode = q.get("mode") === "angle_ease" ? "angle_ease" : "scale";
+    const isScaleBezierMode = bezierMode === "scale";
     const num = (v, fb = 0) => {
         const n = Number(v);
         return Number.isFinite(n) ? n : fb;
@@ -10,7 +12,7 @@
     const state = {
         min: num(q.get("min"), 0.01),
         max: num(q.get("max"), 4.0),
-        tick: Math.max(1, int(q.get("tick"), 18)),
+        tick: isScaleBezierMode ? Math.max(1, int(q.get("tick"), 18)) : 1,
         c1x: num(q.get("c1x"), 0.17106),
         c1y: num(q.get("c1y"), 0.49026),
         c1z: num(q.get("c1z"), 0.0),
@@ -37,6 +39,9 @@
         chkSnapSEY: document.getElementById("chkSnapSEY")
     };
 
+    const tickFieldLabel = el.inpTick?.closest("label");
+    if (tickFieldLabel) tickFieldLabel.style.display = isScaleBezierMode ? "" : "none";
+
     const ctx = el.chart.getContext("2d", { alpha: true });
     const pad = { l: 44, r: 16, t: 16, b: 34 };
     let dragTarget = "";
@@ -56,7 +61,7 @@
         el.status.textContent = text || "Ready";
     };
 
-    const safeTick = () => Math.max(1, int(state.tick || 1));
+    const safeTick = () => (isScaleBezierMode ? Math.max(1, int(state.tick || 1)) : 1);
 
     const normalizeState = () => {
         state.tick = safeTick();
@@ -692,7 +697,7 @@
 
     bindInput(el.inpMin, "min");
     bindInput(el.inpMax, "max");
-    bindInput(el.inpTick, "tick", true);
+    if (isScaleBezierMode) bindInput(el.inpTick, "tick", true);
     bindInput(el.inpC1x, "c1x");
     bindInput(el.inpC1y, "c1y");
     bindInput(el.inpC1z, "c1z");
@@ -742,7 +747,7 @@
         if (!cfg || typeof cfg !== "object") return;
         state.min = num(cfg.min, state.min);
         state.max = num(cfg.max, state.max);
-        state.tick = Math.max(1, int(cfg.tick, state.tick));
+        state.tick = isScaleBezierMode ? Math.max(1, int(cfg.tick, state.tick)) : 1;
         state.c1x = num(cfg.c1x, state.c1x);
         state.c1y = num(cfg.c1y, state.c1y);
         state.c1z = num(cfg.c1z, state.c1z);

@@ -19,6 +19,7 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
         CONTROLLER_SCOPE_RESERVED,
         normalizeAngleUnit,
         normalizeAngleOffsetEaseName,
+        normalizeAngleOffsetEaseSpecialParams,
         textureEffectWhitelist
     } = deps;
 
@@ -897,6 +898,7 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
             let anchor = anchorsByBirth[anchorRef];
             if (!anchor) {
                 const globalScale = this.resolveScaleFactor(this.state.projectScale, cached.age, cycleCfg, {
+                    scope: "project",
                     fadeAgeTick: cached.statusAge
                 });
                 anchor = this.applyScaleFactorToPoint(anchorBase, globalScale);
@@ -1839,6 +1841,7 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
                     }
                     vars.thisAt = thisAt;
                     const noop = () => {};
+                    const scaleHelperApi = { doScale: noop, doScaleReversed: noop };
                     const addSingle = () => {
                         visible += 1;
                     };
@@ -1846,6 +1849,7 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
                         visible += Math.max(1, int(n || 1));
                     };
                     vars.rotateToPoint = noop;
+                    vars.scaleHelper = scaleHelperApi;
                     try {
                         fn(vars, U.v(0, 0, 0), noop, noop, noop, addSingle, addMultiple, thisAt);
                     } catch {
@@ -1864,7 +1868,10 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
 
     resolveScaleFactor(rawScaleCfg, ageTick, cycleCfg = null, opts = {}) {
         const cfg = normalizeScaleHelperConfig(rawScaleCfg, { type: "none" });
+        const scope = opts?.scope === "project" ? "project" : "local";
+        if (scope !== "project") cfg.runMode = "auto";
         if (cfg.type === "none") return 1;
+        if (scope === "project" && cfg.runMode === "manual") return 1;
         const cycle = cycleCfg || this.getPreviewCycleConfig();
         const age = num(ageTick);
         const fadeAgeBase = Number.isFinite(Number(opts?.fadeAgeTick))
@@ -2129,10 +2136,23 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
         if (!raw || raw.angleOffsetEnabled !== true) return null;
         const count = Math.max(1, int(raw.angleOffsetCount || 1));
         if (count <= 1) return null;
+        const easeSpecialParams = normalizeAngleOffsetEaseSpecialParams(raw);
         return {
             count,
             glowTick: Math.max(1, int(raw.angleOffsetGlowTick || 20)),
             easeName: normalizeAngleOffsetEaseName(raw.angleOffsetEase || "outCubic"),
+            easeParams: {
+                overshoot: easeSpecialParams.angleOffsetEaseOvershoot,
+                period: easeSpecialParams.angleOffsetEasePeriod,
+                decay: easeSpecialParams.angleOffsetEaseDecay,
+                shift: easeSpecialParams.angleOffsetEaseShift,
+                n1: easeSpecialParams.angleOffsetEaseN1,
+                d1: easeSpecialParams.angleOffsetEaseD1,
+                startX: easeSpecialParams.angleOffsetEaseBezierStartX,
+                startY: easeSpecialParams.angleOffsetEaseBezierStartY,
+                endX: easeSpecialParams.angleOffsetEaseBezierEndX,
+                endY: easeSpecialParams.angleOffsetEaseBezierEndY
+            },
             reverseOnDisable: raw.angleOffsetReverseOnDisable === true,
             angleMode: raw.angleOffsetAngleMode === "expr" ? "expr" : "numeric",
             angleValue: Number.isFinite(Number(raw.angleOffsetAngleValue)) ? num(raw.angleOffsetAngleValue) : 360,
@@ -2166,6 +2186,7 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
             targetAngle,
             glowTick: Math.max(1, int(cfg.glowTick || 20)),
             easeName: normalizeAngleOffsetEaseName(cfg.easeName || "outCubic"),
+            easeParams: cfg.easeParams || {},
             ageTick,
             elapsedTick,
             statusElapsedTick: statusTick,
@@ -3472,7 +3493,31 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
                 }
             }
         }
+        const projectScaleCfg = normalizeScaleHelperConfig(this.state?.projectScale, { type: "none" });
+        const projectScaleManual = projectScaleCfg.type !== "none"
+            && String(projectScaleCfg.runMode || "auto") === "manual";
+        const applyProjectScale = (reversed = false) => {
+            if (!projectScaleManual) return;
+            const tickMax = Math.max(1, int(projectScaleCfg.tick || 1));
+            const progressTick = clamp(num(ageTick), 0, tickMax);
+            const curveTick = reversed ? (tickMax - progressTick) : progressTick;
+            const factor = this.evalScaleCurve(projectScaleCfg, curveTick, tickMax);
+            api.point = U.v(
+                num(api.point?.x) * factor,
+                num(api.point?.y) * factor,
+                num(api.point?.z) * factor
+            );
+        };
+        const scaleHelperApi = {
+            doScale: () => {
+                applyProjectScale(false);
+            },
+            doScaleReversed: () => {
+                applyProjectScale(true);
+            }
+        };
         vars.rotateToPoint = api.rotateToPoint;
+        vars.scaleHelper = scaleHelperApi;
         vars.thisAt = thisAt;
         vars.axis = U.clone(api.axis);
         try {
