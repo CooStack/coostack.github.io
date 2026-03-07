@@ -2631,7 +2631,7 @@ class CompositionBuilderApp {
         }
     }
 
-    onCardClick(e) {
+    async onCardClick(e) {
         const btn = e.target.closest("button[data-act]");
         if (btn) {
             const act = btn.dataset.act;
@@ -2817,6 +2817,18 @@ class CompositionBuilderApp {
                 || act === "import-node-builder-json"
                 || act === "export-builder-json"
                 || act === "export-node-builder-json";
+            if (act === "delete-card") {
+                const card = this.getCardById(cardId);
+                const cardName = String(card?.name || "该卡片").trim() || "该卡片";
+                const accepted = await this.askThemeConfirm({
+                    title: "删除卡片",
+                    message: `确定删除“${cardName}”吗？此操作可通过撤销恢复。`,
+                    okText: "删除",
+                    cancelText: "取消",
+                    danger: true
+                });
+                if (!accepted) return;
+            }
             if (!skipHistory) this.pushHistory();
             switch (act) {
                 case "delete-card":
@@ -8030,6 +8042,9 @@ class CompositionBuilderApp {
         if (Array.isArray(this.previewFrameGroupPointVisualCache)) this.previewFrameGroupPointVisualCache.fill(undefined);
         this.previewRuntimeGlobals = null;
         this.previewRuntimeAppliedTick = -1;
+        this.previewAutoPaused = false;
+        this.previewWasPlayingBeforeAutoPause = false;
+        if (this.previewPaused) this.setPreviewPaused(false);
     }
 
     jumpPreviewToPreFade() {
