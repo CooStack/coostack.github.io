@@ -318,6 +318,7 @@ export function installKotlinCodegenMethods(CompositionBuilderApp, deps = {}) {
             const suffix = Math.max(0, int(cardIndex)) + 1;
             const countVar = `angleOffsetCount${suffix}`;
             const angleVar = `finalAngle${suffix}`;
+            const countLiteral = formatKotlinDoubleLiteral(Math.max(1, int(offsetCfg.count)));
             const dataExpr = this.emitCompositionDataExpr(card, className, sequencedRoot, "                        ", {
                 angleOffsetExpr: angleVar,
                 angleOffsetConfig: offsetCfg
@@ -325,7 +326,7 @@ export function installKotlinCodegenMethods(CompositionBuilderApp, deps = {}) {
             return [
                 `        val ${countVar} = ${Math.max(1, int(offsetCfg.count))}`,
                 `        repeat(${countVar}) { index ->`,
-                `            val ${angleVar} = (${offsetCfg.totalAngleExpr}) * index.toDouble() / ${countVar}.toDouble()`,
+                `            val ${angleVar} = (${offsetCfg.totalAngleExpr}) * (index / ${countLiteral})`,
                 "            result.putAll(",
                 `${indentText(builderExpr, "                ")}`,
                 "                    .createWithCompositionData { rel ->",
@@ -353,6 +354,7 @@ export function installKotlinCodegenMethods(CompositionBuilderApp, deps = {}) {
             const suffix = Math.max(0, int(cardIndex)) + 1;
             const countVar = `angleOffsetCount${suffix}`;
             const angleVar = `finalAngle${suffix}`;
+            const countLiteral = formatKotlinDoubleLiteral(Math.max(1, int(offsetCfg.count)));
             const dataExpr = this.emitCompositionDataExpr(card, className, sequencedRoot, "                    ", {
                 angleOffsetExpr: angleVar,
                 angleOffsetConfig: offsetCfg
@@ -360,7 +362,7 @@ export function installKotlinCodegenMethods(CompositionBuilderApp, deps = {}) {
             return [
                 `        val ${countVar} = ${Math.max(1, int(offsetCfg.count))}`,
                 `        repeat(${countVar}) { index ->`,
-                `            val ${angleVar} = (${offsetCfg.totalAngleExpr}) * index.toDouble() / ${countVar}.toDouble()`,
+                `            val ${angleVar} = (${offsetCfg.totalAngleExpr}) * (index / ${countLiteral})`,
                 "            result[",
                 dataExpr,
                 `            ] = ${rel}`,
@@ -523,8 +525,9 @@ export function installKotlinCodegenMethods(CompositionBuilderApp, deps = {}) {
         const offsetCfg = this.resolveShapeLevelAngleOffsetConfig(node, className);
         if (offsetCfg) {
             const angleOffsetCount = Math.max(1, int(offsetCfg.count));
+            const angleOffsetCountLiteral = formatKotlinDoubleLiteral(angleOffsetCount);
             lines.push(`${indent}repeat(${angleOffsetCount}) { index ->`);
-            lines.push(`${indent}    val finalAngle = (${offsetCfg.totalAngleExpr}) * index.toDouble() / ${angleOffsetCount}.toDouble()`);
+            lines.push(`${indent}    val finalAngle = (${offsetCfg.totalAngleExpr}) * (index / ${angleOffsetCountLiteral})`);
             const innerActionCtx = { angleOffsetExpr: "finalAngle", angleOffsetConfig: offsetCfg };
             if (nodeType === "single") {
                 this._emitTreeNodeSingleApplyCodegen(lines, node, card, className, ctx, bindMode, pointExpr, builderExpr, dataLambdaHead, `${indent}    `, innerActionCtx);
