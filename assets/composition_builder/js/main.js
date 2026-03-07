@@ -29,8 +29,8 @@ import {
     hasAngleOffsetEaseSpecialParams,
     formatAngleValue
 } from "./angle_offset_utils.js";
-import { installPreviewRuntimeMethods } from "./preview_runtime_mixin.js?v=20260302_23";
-import { installKotlinCodegenMethods } from "./kotlin_codegen_mixin.js?v=20260226_2";
+import { installPreviewRuntimeMethods } from "./preview_runtime_mixin.js?v=20260307_3";
+import { installKotlinCodegenMethods } from "./kotlin_codegen_mixin.js?v=20260307_3";
 import { installCodeOutputMethods } from "./code_output_mixin.js";
 import { installExpressionEditorMethods } from "./expression_editor_mixin.js?v=20260302_11";
 import { installCodeCompileMethods } from "./code_compile_mixin.js?v=20260220_1";
@@ -1160,6 +1160,8 @@ class CompositionBuilderApp {
         this.previewLocalRef = [];
         this.previewLevelBases = [];
         this.previewLevelRefs = [];
+        this.previewLevelOffsetRefs = [];
+        this.previewLevelMetas = [];
         this.previewUseLocalOps = [];
         this.previewRootOffsetIndex = [];
         this.previewRootVirtualIndex = [];
@@ -3257,6 +3259,12 @@ class CompositionBuilderApp {
             const node = treePath ? this.getShapeNodeByPath(card, treePath) : null;
             if (!node) return;
             const field = String(t.dataset.treeNodeField || "");
+            if (field === "name") {
+                node.name = String(t.value || "");
+                this.updateSelectionStatus();
+                this.afterValueMutate({ rebuildPreview: false, rerenderCards: true, rerenderProject: false });
+                return;
+            }
             if (field === "type") {
                 node.type = ["single", "particle_shape", "sequenced_shape"].includes(String(t.value || "")) ? String(t.value) : "single";
                 if (node.type === "single") {

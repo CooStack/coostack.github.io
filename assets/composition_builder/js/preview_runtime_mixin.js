@@ -70,6 +70,7 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
         const levelBases = [];
         const levelRefs = [];
         const levelOffsetRefs = [];
+        const levelMetas = [];
         const useLocalOpsList = [];
         const rootOffsetIndexList = [];
         const rootVirtualIndexList = [];
@@ -107,6 +108,7 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
                 levelBases.push([]);
                 levelRefs.push([]);
                 levelOffsetRefs.push([]);
+                levelMetas.push([]);
                 useLocalOpsList.push(false);
                 rootOffsetIndexList.push(0);
                 rootVirtualIndexList.push(rootStart);
@@ -142,6 +144,7 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
                         levelBases.push(tupleLevels.map((it) => U.v(num(it?.vec?.x), num(it?.vec?.y), num(it?.vec?.z))));
                         levelRefs.push(tupleLevels.map((it) => int(it?.ref || 0)));
                         levelOffsetRefs.push(tupleLevels.map((it) => int(it?.offsetIndex ?? 0)));
+                        levelMetas.push(tupleLevels.map((it) => ({ node: it?.node || null, depth: int(it?.depth || 0) })));
                         useLocalOpsList.push(true);
                         rootOffsetIndexList.push(repeatIndex);
                         rootVirtualIndexList.push(rootStart + repeatIndex);
@@ -186,6 +189,7 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
         this.previewLevelBases = levelBases;
         this.previewLevelRefs = levelRefs;
         this.previewLevelOffsetRefs = levelOffsetRefs;
+        this.previewLevelMetas = levelMetas;
         this.previewUseLocalOps = useLocalOpsList;
         this.previewRootOffsetIndex = rootOffsetIndexList;
         this.previewRootVirtualIndex = rootVirtualIndexList;
@@ -915,7 +919,15 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
             let pz = anchor.z;
             if (useLocalOps && cached.cardHasShapeOps) {
                 let local = null;
-                const localCacheable = !cached.cardRuntimeHasPointDependentExpression;
+                const levelMetaList = Array.isArray(this.previewLevelMetas?.[i]) && this.previewLevelMetas[i].length
+                    ? this.previewLevelMetas[i]
+                    : [];
+                const ownerCard = this.getCardById(owner);
+                const tupleHasPointDependentExpression = !!(ownerCard && levelMetaList.length && levelMetaList.some((meta) => {
+                    const runtime = this.resolvePreviewTupleLevelRuntime(ownerCard, cached, meta, cached.elapsedTick, cached.age, skipExprPerPoint, frameRuntimeGlobals, globalAxis);
+                    return !!runtime?.hasPointDependentExpression;
+                }));
+                const localCacheable = !cached.cardRuntimeHasPointDependentExpression && !tupleHasPointDependentExpression;
                 let localsByBirth = groupId >= 0 ? localCache[groupId] : null;
                 if (!localsByBirth) {
                     localsByBirth = [];
@@ -939,24 +951,29 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
                     for (let lvIdx = 0; lvIdx < levelBaseList.length; lvIdx++) {
                         const lvBase = levelBaseList[lvIdx] || U.v(0, 0, 0);
                         const lvPointRef = int(levelRefList[lvIdx] ?? localRef);
-                        const lvOffsetRef = lvIdx === 0
+                        const sharedOffsetRef = lvIdx === 0
                             ? rootOffsetIndex
-                            : int(levelOffsetRefList[lvIdx] ?? lvPointRef);
-                        const lvRuntime = runtimeLevels[lvIdx] || null;
+                            : int(levelOffsetRefList[lvIdx - 1] ?? lvPointRef);
+                        const currentOffsetRef = int(levelOffsetRefList[lvIdx] ?? lvPointRef);
+                        const lvMeta = levelMetaList[lvIdx] || null;
+                        const sharedRuntime = runtimeLevels[lvIdx] || null;
+                        const currentRuntime = (ownerCard && lvMeta?.node && String(lvMeta.node.type || "") === "single")
+                            ? this.resolvePreviewTupleLevelRuntime(ownerCard, cached, lvMeta, cached.elapsedTick, cached.age, skipExprPerPoint, frameRuntimeGlobals, globalAxis)
+                            : null;
                         let lvPoint = U.clone(lvBase);
-                        if (lvRuntime) {
+                        const applyLevelRuntime = (runtime, offsetRef) => {
+                            if (!runtime) return;
                             const lvActionElapsed = cached.elapsedTick;
                             const lvActionAge = cached.age;
                             const lvScaleAge = cached.age;
-                            const cardScale = this.resolveScaleFactor(lvRuntime.scale, lvScaleAge, cycleCfg, {
+                            const cardScale = this.resolveScaleFactor(runtime.scale, lvScaleAge, cycleCfg, {
                                 fadeAgeTick: cached.statusAge
                             });
                             lvPoint = this.applyScaleFactorToPoint(lvPoint, cardScale);
-                            if (lvRuntime.angleOffset) {
-                                const levelOffsetIndex = lvOffsetRef;
+                            if (runtime.angleOffset) {
                                 const offsetAngle = this.resolvePreviewAngleOffsetRotation(
-                                    lvRuntime.angleOffset,
-                                    levelOffsetIndex,
+                                    runtime.angleOffset,
+                                    offsetRef,
                                     lvActionElapsed,
                                     lvActionAge,
                                     lvPointRef,
@@ -964,24 +981,23 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
                                     elapsedTick
                                 );
                                 if (Math.abs(offsetAngle) > 1e-9) {
-                                    lvPoint = U.rotateAroundAxis(lvPoint, lvRuntime.axis || globalAxis, offsetAngle);
+                                    lvPoint = U.rotateAroundAxis(lvPoint, runtime.axis || globalAxis, offsetAngle);
                                 }
                             }
-                            if (lvRuntime.actions && lvRuntime.actions.length) {
+                            if (runtime.actions && runtime.actions.length) {
                                 const shapeScope = {
                                     rel: anchorBase,
                                     order: int(localIndex),
-                                    // shapeRelN 需要使用当前 shape 已转换的点集做索引
                                     shapeRels: transformedLevelRels,
                                     shapeOrders: transformedLevelOrders
                                 };
                                 lvPoint = this.applyRuntimeActionsToPoint(
                                     lvPoint,
-                                    lvRuntime.actions,
+                                    runtime.actions,
                                     lvActionElapsed,
                                     lvActionAge,
                                     lvPointRef,
-                                    lvRuntime.axis || globalAxis,
+                                    runtime.axis || globalAxis,
                                     {
                                         skipExpression: skipExprPerPoint,
                                         runtimeVars: frameRuntimeGlobals,
@@ -990,7 +1006,9 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
                                     }
                                 );
                             }
-                        }
+                        };
+                        applyLevelRuntime(sharedRuntime, sharedOffsetRef);
+                        applyLevelRuntime(currentRuntime, currentOffsetRef);
                         transformedLevelRels[lvIdx] = lvPoint;
                         transformedLevelOrders[lvIdx] = lvPointRef;
                         localSum.x += num(lvPoint.x);
@@ -2003,9 +2021,11 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
                     const levels = levelsBase.map((lv) => ({
                         vec: U.v(num(lv?.vec?.x), num(lv?.vec?.y), num(lv?.vec?.z)),
                         ref: int(lv?.ref || 0),
-                        offsetIndex: int(lv?.offsetIndex ?? 0)
+                        offsetIndex: int(lv?.offsetIndex ?? 0),
+                        node: lv?.node || null,
+                        depth: int(lv?.depth || 0)
                     }));
-                    levels.push({ vec: U.clone(sv), ref: si, offsetIndex: ri });
+                    levels.push({ vec: U.clone(sv), ref: si, offsetIndex: ri, node, depth: levelsBase.length + 1 });
                     results.push({
                         sum: U.v(num(sumBase?.x) + sv.x, num(sumBase?.y) + sv.y, num(sumBase?.z) + sv.z),
                         levels,
@@ -2032,9 +2052,11 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
                 const newLevels = parentLevels.map((lv) => ({
                     vec: U.v(num(lv?.vec?.x), num(lv?.vec?.y), num(lv?.vec?.z)),
                     ref: int(lv?.ref || 0),
-                    offsetIndex: int(lv?.offsetIndex ?? 0)
+                    offsetIndex: int(lv?.offsetIndex ?? 0),
+                    node: lv?.node || null,
+                    depth: int(lv?.depth || 0)
                 }));
-                newLevels.push({ vec: U.clone(sv), ref: si, offsetIndex: ri });
+                newLevels.push({ vec: U.clone(sv), ref: si, offsetIndex: ri, node, depth: parentLevels.length + 1 });
                 for (const child of nodeChildren) {
                     const childTuples = this._buildTreeNodeTuplesForPreview(child, newSum, newLevels, rootCard);
                     allTuples = allTuples.concat(childTuples);
@@ -2106,10 +2128,8 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
         return levels;
     }
 
-    _collectTreeNodeRuntimeLevels(card, children, levels, depth, elapsedTick, skipExpression) {
-        if (!children || !children.length) return;
-        const node = children[0];
-        if (!node || (node.type || "single") === "single") return;
+    buildPreviewRuntimeLevelForNode(card, node, depth, elapsedTick, skipExpression) {
+        if (!card || !node) return null;
         const scope = this.getShapeScopeInfoByRuntimeLevel(card, depth);
         const actions = this.buildPreviewRuntimeActions(elapsedTick, node.displayActions || [], {
             skipExpression,
@@ -2117,7 +2137,7 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
             cardId: card.id,
             scopeLevel: depth
         });
-        levels.push({
+        return {
             scopeLevel: depth,
             ancestorSequencedDepths: scope.sequencedDepths,
             sequenced: node.type === "sequenced_shape",
@@ -2128,7 +2148,35 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
             actions,
             hasExpression: !!actions.__hasExpression,
             hasPointDependentExpression: this.isPreviewActionsPointDependent(actions)
-        });
+        };
+    }
+
+    resolvePreviewTupleLevelRuntime(card, cached, levelMeta, elapsedTick, ageTick, skipExpression, runtimeVars, fallbackAxis) {
+        if (!card || !levelMeta?.node) return null;
+        if (!(cached.__tupleLevelRuntimeCache instanceof Map)) {
+            cached.__tupleLevelRuntimeCache = new Map();
+        }
+        const depth = Math.max(1, int(levelMeta.depth || 0));
+        const nodeId = String(levelMeta.node?.id || "").trim();
+        const cacheKey = `${depth}:${nodeId || "no-id"}`;
+        let runtime = cached.__tupleLevelRuntimeCache.get(cacheKey);
+        if (runtime === undefined) {
+            runtime = this.buildPreviewRuntimeLevelForNode(card, levelMeta.node, depth, elapsedTick, skipExpression) || null;
+            cached.__tupleLevelRuntimeCache.set(cacheKey, runtime);
+        }
+        if (runtime && (runtime.hasExpression || !runtime.__globalsApplied)) {
+            this.applyExpressionGlobalsOnce(runtime.actions, elapsedTick, ageTick, runtimeVars, runtime.axis || fallbackAxis);
+            runtime.__globalsApplied = true;
+        }
+        return runtime;
+    }
+
+    _collectTreeNodeRuntimeLevels(card, children, levels, depth, elapsedTick, skipExpression) {
+        if (!children || !children.length) return;
+        const node = children[0];
+        if (!node) return;
+        const runtimeLevel = this.buildPreviewRuntimeLevelForNode(card, node, depth, elapsedTick, skipExpression);
+        if (runtimeLevel) levels.push(runtimeLevel);
         this._collectTreeNodeRuntimeLevels(card, node.children || [], levels, depth + 1, elapsedTick, skipExpression);
     }
 

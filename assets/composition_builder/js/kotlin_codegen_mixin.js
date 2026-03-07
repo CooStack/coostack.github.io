@@ -233,7 +233,7 @@ export function installKotlinCodegenMethods(CompositionBuilderApp, deps = {}) {
     }
 
     resolveShapeLevelAngleOffsetConfig(level, className) {
-        if (!level || level.type === "single") return null;
+        if (!level) return null;
         return this.resolveAngleOffsetConfig(level, className);
     }
 
@@ -522,9 +522,9 @@ export function installKotlinCodegenMethods(CompositionBuilderApp, deps = {}) {
         const dataLambdaHead = this.formatShapeDataLambdaParams(ctx);
         const offsetCfg = this.resolveShapeLevelAngleOffsetConfig(node, className);
         if (offsetCfg) {
-            lines.push(`${indent}val angleOffsetCount = ${Math.max(1, int(offsetCfg.count))}`);
-            lines.push(`${indent}repeat(angleOffsetCount) { index ->`);
-            lines.push(`${indent}    val finalAngle = (${offsetCfg.totalAngleExpr}) * index.toDouble() / angleOffsetCount.toDouble()`);
+            const angleOffsetCount = Math.max(1, int(offsetCfg.count));
+            lines.push(`${indent}repeat(${angleOffsetCount}) { index ->`);
+            lines.push(`${indent}    val finalAngle = (${offsetCfg.totalAngleExpr}) * index.toDouble() / ${angleOffsetCount}.toDouble()`);
             const innerActionCtx = { angleOffsetExpr: "finalAngle", angleOffsetConfig: offsetCfg };
             if (nodeType === "single") {
                 this._emitTreeNodeSingleApplyCodegen(lines, node, card, className, ctx, bindMode, pointExpr, builderExpr, dataLambdaHead, `${indent}    `, innerActionCtx);
@@ -541,6 +541,7 @@ export function installKotlinCodegenMethods(CompositionBuilderApp, deps = {}) {
 
     _emitTreeNodeSingleApplyCodegen(lines, node, card, className, ctx, bindMode, pointExpr, builderExpr, dataLambdaHead, indent, actionCtx) {
         const fx = sanitizeKotlinIdentifier(node.effectClass || card.singleEffectClass || DEFAULT_EFFECT_CLASS, DEFAULT_EFFECT_CLASS);
+        const scale = normalizeScaleHelperConfig(node.scale, { type: "none" });
         if (bindMode === "builder") {
             lines.push(`${indent}applyBuilder(`);
             lines.push(indentText(builderExpr, `${indent}    `));
@@ -549,9 +550,19 @@ export function installKotlinCodegenMethods(CompositionBuilderApp, deps = {}) {
             lines.push(`${indent}applyPoint(${pointExpr}) { ${dataLambdaHead} ->`);
         }
         lines.push(this.emitShapeCompositionDataBase(ctx, `${indent}    `));
+        this._emitScaleHelperCodegen(lines, scale, `${indent}        `);
         lines.push(`${indent}        .setDisplayerSupplier {`);
         lines.push(`${indent}            ParticleDisplayer.withSingle(${fx}(it))`);
         lines.push(`${indent}        }`);
+        const singlePseudo = {
+            id: card.id,
+            shapeDisplayActions: node.displayActions || [],
+            shapeScale: scale,
+            growthAnimates: []
+        };
+        const scopeInfo = this.getShapeScopeInfoByRuntimeLevel(card, int(ctx?.depth || 1));
+        const singleActions = this.applyCardCompositionActions(singlePseudo, className, `${indent}        `, false, scopeInfo, actionCtx);
+        if (String(singleActions || "").trim()) lines.push(singleActions);
         const singleChain = this._buildTreeNodeSingleDataChainCodegen(node, card, className, `${indent}        `);
         if (singleChain) lines.push(singleChain);
         lines.push(`${indent}}`);
