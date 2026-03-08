@@ -1902,9 +1902,7 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
         const scope = opts?.scope === "project" ? "project" : "local";
         if (scope !== "project") cfg.runMode = "auto";
         if (cfg.type === "none") return 1;
-        if (scope === "project" && cfg.runMode === "manual") return 1;
-        const cycle = cycleCfg || this.getPreviewCycleConfig();
-        const age = num(ageTick);
+        if (scope === "project" && cfg.runMode === "manual") return this.evalScaleCurve(cfg, 0, Math.max(1, int(cfg.tick || 1)));        const age = num(ageTick);
         const fadeAgeBase = Number.isFinite(Number(opts?.fadeAgeTick))
             ? num(opts.fadeAgeTick)
             : age;
@@ -3516,8 +3514,6 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
                 if (dt > 0 && dt <= MAX_ACCUM_DT) {
                     accum += speed * dt;
                 }
-                // Large dt means this action was likely paused by branch/scope;
-                // skip catch-up so resumed rotation does not jump.
             }
             runtimeVars[accKey] = accum;
             runtimeVars[lastKey] = nowTick;
@@ -3544,7 +3540,6 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
                 api.point = this.rotateAroundUnitAxis(api.point, dir, rot);
                 api.axis = U.clone(dir);
             },
-            // 预览 addSingle/addMultiple 不改变几何，仅保证表达式兼容
             addSingle: () => {},
             addMultiple: () => {}
         };
@@ -3583,10 +3578,12 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
             const progressTick = clamp(num(ageTick), 0, tickMax);
             const curveTick = reversed ? (tickMax - progressTick) : progressTick;
             const factor = this.evalScaleCurve(projectScaleCfg, curveTick, tickMax);
+            const baseFactor = this.evalScaleCurve(projectScaleCfg, 0, tickMax);
+            const applyFactor = Math.abs(baseFactor) > 1e-9 ? (factor / baseFactor) : factor;
             api.point = U.v(
-                num(api.point?.x) * factor,
-                num(api.point?.y) * factor,
-                num(api.point?.z) * factor
+                num(api.point?.x) * applyFactor,
+                num(api.point?.y) * applyFactor,
+                num(api.point?.z) * applyFactor
             );
         };
         const scaleHelperApi = {
@@ -3651,9 +3648,7 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
         } catch {
             return { point, axis: startAxis };
         }
-    }
-
-    parseJsVec(v) {
+    }    parseJsVec(v) {
         if (!v) return U.v(0, 1, 0);
         if (typeof v === "object" && Number.isFinite(v.x) && Number.isFinite(v.y) && Number.isFinite(v.z)) {
             const x = num(v.x);
