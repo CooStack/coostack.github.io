@@ -132,9 +132,6 @@ export function initHotkeysSystem(ctx) {
         if (!ae) return false;
         const tag = (ae.tagName || "").toUpperCase();
         if (tag === "INPUT") {
-            const type = (ae.type || "text").toLowerCase();
-            // number 输入允许快捷键触发（避免影响常用工作流）
-            if (type === "number") return false;
             return true;
         }
         if (tag === "TEXTAREA") {

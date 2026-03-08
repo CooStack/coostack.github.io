@@ -115,8 +115,6 @@ export function initHotkeysSystem(ctx) {
             if (!(node instanceof Element) || typeof node.closest !== "function") return false;
             const tag = (node.tagName || "").toUpperCase();
             if (tag === "INPUT") {
-                const type = (node.type || "text").toLowerCase();
-                if (type === "number") return false;
                 return true;
             }
             if (tag === "TEXTAREA") {

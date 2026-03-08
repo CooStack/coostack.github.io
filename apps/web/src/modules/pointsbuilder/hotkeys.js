@@ -93,8 +93,6 @@ export function shouldIgnoreHotkeys(target) {
   if (!target) return false;
   const tag = target.tagName;
   if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') {
-    const type = String(target.type || '').toLowerCase();
-    if (type === 'number') return false;
     return true;
   }
   return Boolean(target.isContentEditable);
