@@ -8997,15 +8997,19 @@ class CompositionBuilderApp {
         const tick = Math.max(1, int(data.tick || 18));
         const minValue = num(data.min);
         const maxValue = num(data.max);
-        const c1x = clamp(num(data.c1x), 0, tick);
+        const c1xRaw = num(data.c1x);
         const c1y = num(data.c1y);
         const c1z = num(data.c1z);
-        const c2x = clamp(num(data.c2x), 0, tick);
+        const c2xRaw = num(data.c2x);
         const c2y = num(data.c2y);
         const c2z = num(data.c2z);
 
         const target = this.bezierToolTarget || { scope: "project", cardId: "", treePath: "", kind: "scale" };
         const targetKind = target.kind === "angle_ease" ? "angle_ease" : "scale";
+        const c1x = clamp(c1xRaw, 0, tick);
+        const c2x = targetKind === "angle_ease"
+            ? clamp(c2xRaw, -tick, 0)
+            : clamp(c2xRaw, 0, tick);
         this.pushHistory();
 
         if (targetKind === "angle_ease") {

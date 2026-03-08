@@ -1,5 +1,5 @@
 <template>
-  <div class="legacy-home" :data-theme="theme">
+  <div ref="homeRootRef" class="legacy-home" :data-theme="theme">
     <canvas ref="bgRef" class="bg-canvas" aria-hidden="true"></canvas>
     <canvas ref="fwRef" class="fw-canvas" aria-hidden="true"></canvas>
     <div class="grid-bg" aria-hidden="true"></div>
@@ -94,6 +94,7 @@ import { fetchBilibiliStat } from '../services/api/social.js';
 import { highlightKotlin } from '../utils/legacy-code-highlight.js';
 
 const router = useRouter();
+const homeRootRef = ref(null);
 const bgRef = ref(null);
 const fwRef = ref(null);
 const codeBoxRef = ref(null);
@@ -130,8 +131,11 @@ let downHandler = null;
 let followerRefreshTimer = null;
 let followerRequesting = false;
 let themeTransitioning = false;
+let themeMaskFrame = 0;
+let themeSnapshotElement = null;
 
 const FOLLOWER_REFRESH_MS = 1000;
+const THEME_MASK_MS = 420;
 
 function loadTheme() {
   try {
@@ -157,12 +161,65 @@ function updateThemeMaskOrigin() {
   if (!buttonElement) {
     document.documentElement.style.setProperty('--theme-mask-x', '50vw');
     document.documentElement.style.setProperty('--theme-mask-y', '32px');
-    return;
+    return { x: window.innerWidth / 2, y: 32 };
   }
 
   const rect = buttonElement.getBoundingClientRect();
-  document.documentElement.style.setProperty('--theme-mask-x', `${rect.left + rect.width / 2}px`);
-  document.documentElement.style.setProperty('--theme-mask-y', `${rect.top + rect.height / 2}px`);
+  const x = rect.left + rect.width / 2;
+  const y = rect.top + rect.height / 2;
+  document.documentElement.style.setProperty('--theme-mask-x', `${x}px`);
+  document.documentElement.style.setProperty('--theme-mask-y', `${y}px`);
+  return { x, y };
+}
+
+function easeThemeMask(progress) {
+  return 1 - ((1 - progress) ** 3);
+}
+
+function cleanupThemeSnapshot() {
+  if (themeMaskFrame) {
+    cancelAnimationFrame(themeMaskFrame);
+    themeMaskFrame = 0;
+  }
+  if (themeSnapshotElement) {
+    themeSnapshotElement.remove();
+    themeSnapshotElement = null;
+  }
+}
+
+function syncSnapshotCanvases(sourceRoot, snapshotRoot) {
+  const sourceCanvases = sourceRoot.querySelectorAll('canvas');
+  const snapshotCanvases = snapshotRoot.querySelectorAll('canvas');
+  snapshotCanvases.forEach((canvas, index) => {
+    const sourceCanvas = sourceCanvases[index];
+    if (!sourceCanvas) return;
+    canvas.width = sourceCanvas.width;
+    canvas.height = sourceCanvas.height;
+    canvas.style.width = sourceCanvas.style.width;
+    canvas.style.height = sourceCanvas.style.height;
+    const context = canvas.getContext('2d');
+    if (!context) return;
+    context.clearRect(0, 0, canvas.width, canvas.height);
+    context.drawImage(sourceCanvas, 0, 0);
+  });
+}
+
+function applyThemeSnapshotMask(element, x, y, radius) {
+  const hole = `radial-gradient(circle at ${x}px ${y}px, transparent 0, transparent ${radius}px, rgba(0, 0, 0, 1) ${radius + 1}px)`;
+  element.style.webkitMaskImage = hole;
+  element.style.maskImage = hole;
+}
+
+function createThemeSnapshot() {
+  const sourceRoot = homeRootRef.value;
+  if (!sourceRoot) return null;
+  const snapshot = sourceRoot.cloneNode(true);
+  snapshot.removeAttribute('data-v-inspector');
+  snapshot.setAttribute('aria-hidden', 'true');
+  snapshot.classList.add('theme-transition-snapshot');
+  syncSnapshotCanvases(sourceRoot, snapshot);
+  document.body.appendChild(snapshot);
+  return snapshot;
 }
 
 async function playThemeMask(nextTheme) {
@@ -170,21 +227,41 @@ async function playThemeMask(nextTheme) {
     return;
   }
 
-  updateThemeMaskOrigin();
-
-  if (typeof document.startViewTransition !== 'function') {
-    theme.value = nextTheme;
-    return;
-  }
+  const origin = updateThemeMaskOrigin();
+  cleanupThemeSnapshot();
+  const snapshot = createThemeSnapshot();
 
   themeTransitioning = true;
   try {
-    const transition = document.startViewTransition(async () => {
-      theme.value = nextTheme;
-      await nextTick();
+    theme.value = nextTheme;
+    await nextTick();
+    if (!snapshot) {
+      return;
+    }
+
+    themeSnapshotElement = snapshot;
+    const maxRadius = Math.hypot(
+      Math.max(origin.x, window.innerWidth - origin.x),
+      Math.max(origin.y, window.innerHeight - origin.y)
+    ) + 24;
+
+    await new Promise((resolve) => {
+      const startedAt = performance.now();
+      const tick = (now) => {
+        const progress = Math.min(1, (now - startedAt) / THEME_MASK_MS);
+        const radius = maxRadius * easeThemeMask(progress);
+        applyThemeSnapshotMask(snapshot, origin.x, origin.y, radius);
+        if (progress >= 1) {
+          resolve();
+          return;
+        }
+        themeMaskFrame = requestAnimationFrame(tick);
+      };
+      applyThemeSnapshotMask(snapshot, origin.x, origin.y, 0);
+      themeMaskFrame = requestAnimationFrame(tick);
     });
-    await transition.finished;
   } finally {
+    cleanupThemeSnapshot();
     themeTransitioning = false;
   }
 }
@@ -504,6 +581,7 @@ onMounted(async () => {
 });
 
 onBeforeUnmount(() => {
+  cleanupThemeSnapshot();
   if (codeTimer) window.clearTimeout(codeTimer);
   if (followerRefreshTimer) window.clearInterval(followerRefreshTimer);
   if (animationFrame) cancelAnimationFrame(animationFrame);
@@ -578,19 +656,15 @@ onBeforeUnmount(() => {
   animation: gridMove 16s linear infinite;
 }
 
+:global(::view-transition-group(root)),
+:global(::view-transition-image-pair(root)),
 :global(::view-transition-old(root)),
-:global(::view-transition-new(root)) {
-  animation: none;
-  mix-blend-mode: normal;
-}
-
-:global(::view-transition-old(root)) {
-  z-index: 1;
-}
-
-:global(::view-transition-new(root)) {
-  z-index: 2;
-  animation: themeMaskReveal 2s cubic-bezier(.22, 1, .36, 1);
+.theme-transition-snapshot {
+  position: fixed;
+  inset: 0;
+  z-index: 5;
+  pointer-events: none;
+  overflow: hidden;
 }
 
 .theme-toggle {
@@ -1064,14 +1138,6 @@ onBeforeUnmount(() => {
 :deep(.tok-type){ color: rgba(140,220,255,.92); }
 
 @keyframes blink { 50% { opacity:0; } }
-@keyframes themeMaskReveal {
-  from {
-    clip-path: circle(0px at var(--theme-mask-x, 50vw) var(--theme-mask-y, 32px));
-  }
-  to {
-    clip-path: circle(160vmax at var(--theme-mask-x, 50vw) var(--theme-mask-y, 32px));
-  }
-}
 @keyframes pulseDot {
   0%, 100% { transform: scale(1); opacity: .92; }
   50% { transform: scale(1.18); opacity: 1; }

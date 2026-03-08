@@ -1,11 +1,11 @@
 <template>
   <div class="legacy-page-host">
-    <iframe class="legacy-page-frame" :src="src" :title="title"></iframe>
+    <iframe :key="frameKey" class="legacy-page-frame" :src="src" :title="title"></iframe>
   </div>
 </template>
 
 <script setup>
-import { computed } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { deploymentProfile } from '../config/deployment.js';
 
@@ -22,6 +22,7 @@ const props = defineProps({
 
 const route = useRoute();
 const router = useRouter();
+const frameNonce = ref(0);
 
 function routeHref(name) {
   const href = router.resolve({ name }).href;
@@ -50,6 +51,32 @@ const src = computed(() => {
   params.set('spa_bezier', routeHref('bezier'));
   const search = params.toString();
   return `${deploymentProfile.appBase}legacy/${props.page}${search ? `?${search}` : ''}`;
+});
+
+const frameKey = computed(() => `${props.page}:${frameNonce.value}:${src.value}`);
+
+const messageRouteMap = Object.freeze({
+  'cpb-builder-return': 'composition',
+  'egpb-builder-return': 'generator'
+});
+
+function handleLegacyMessage(event) {
+  const type = String(event?.data?.type || '').trim();
+  const targetName = messageRouteMap[type];
+  if (!targetName) return;
+  if (route.name === targetName) {
+    frameNonce.value += 1;
+    return;
+  }
+  router.push({ name: targetName });
+}
+
+onMounted(() => {
+  window.addEventListener('message', handleLegacyMessage);
+});
+
+onBeforeUnmount(() => {
+  window.removeEventListener('message', handleLegacyMessage);
 });
 </script>
 

@@ -62,15 +62,23 @@ export function initStandaloneOrEmbeddedReturn({
 
     back.addEventListener("click", (ev) => {
       ev.preventDefault();
-      if (window.parent && window.parent !== window) {
-        postMessageSafe(window.parent, { type: messageType }, "*");
-        return;
-      }
 
       try {
         writeStorage(params, localStorage);
       } catch {
       }
+
+      if (window.parent && window.parent !== window) {
+        postMessageSafe(window.parent, { type: messageType }, "*");
+        return;
+      }
+
+      if (window.opener && !window.opener.closed) {
+        postMessageSafe(window.opener, { type: messageType }, "*");
+        window.close();
+        return;
+      }
+
       if (typeof window.__legacyNavigate === 'function') {
         window.__legacyNavigate(`./${returnPage}`);
         return;

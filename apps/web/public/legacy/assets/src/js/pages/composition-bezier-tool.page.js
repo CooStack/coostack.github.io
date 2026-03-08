@@ -51,10 +51,65 @@
     let manualYRange = null;
     let yRangeDialog = null;
     let rafId = 0;
+    let dragHandleYRange = null;
 
     const cubic = (a, b, c, d, t) => {
         const inv = 1 - t;
         return inv * inv * inv * a + 3 * inv * inv * t * b + 3 * inv * t * t * c + t * t * t * d;
+    };
+
+    const makePoint = (x, y) => ({ x, y });
+
+    const getHandlePoint = (target, sourceState = state) => {
+        const tick = isScaleBezierMode ? Math.max(1, int(sourceState.tick || 1)) : 1;
+        if (target === "c1") {
+            return makePoint(
+                clamp(num(sourceState.c1x), 0, tick),
+                isScaleBezierMode ? num(sourceState.c1y) : num(sourceState.min) + num(sourceState.c1y)
+            );
+        }
+        if (isScaleBezierMode) {
+            return makePoint(
+                clamp(num(sourceState.c2x), 0, tick),
+                num(sourceState.c2y)
+            );
+        }
+        return makePoint(
+            tick + clamp(num(sourceState.c2x), -tick, 0),
+            num(sourceState.max) + num(sourceState.c2y)
+        );
+    };
+
+    const getCurvePoints = (sourceState = state) => {
+        const tick = isScaleBezierMode ? Math.max(1, int(sourceState.tick || 1)) : 1;
+        return {
+            p0: makePoint(0, num(sourceState.min)),
+            p1: getHandlePoint("c1", sourceState),
+            p2: getHandlePoint("c2", sourceState),
+            p3: makePoint(tick, num(sourceState.max))
+        };
+    };
+
+    const toHandleModel = (target, point, sourceState = state) => {
+        const tick = isScaleBezierMode ? Math.max(1, int(sourceState.tick || 1)) : 1;
+        const actualX = clamp(num(point.x), 0, tick);
+        const actualY = num(point.y);
+        if (target === "c1") {
+            return {
+                x: actualX,
+                y: isScaleBezierMode ? actualY : actualY - num(sourceState.min)
+            };
+        }
+        if (isScaleBezierMode) {
+            return {
+                x: actualX,
+                y: actualY
+            };
+        }
+        return {
+            x: clamp(actualX - tick, -tick, 0),
+            y: actualY - num(sourceState.max)
+        };
     };
 
     const updateStatus = (text) => {
@@ -65,10 +120,12 @@
 
     const normalizeState = () => {
         state.tick = safeTick();
-        state.c1x = clamp(num(state.c1x), 0, state.tick);
-        state.c2x = clamp(num(state.c2x), 0, state.tick);
         state.min = num(state.min);
         state.max = num(state.max);
+        state.c1x = clamp(num(state.c1x), 0, state.tick);
+        state.c2x = isScaleBezierMode
+            ? clamp(num(state.c2x), 0, state.tick)
+            : clamp(num(state.c2x), -state.tick, 0);
         state.c1y = num(state.c1y);
         state.c2y = num(state.c2y);
         state.c1z = num(state.c1z);
@@ -103,7 +160,8 @@
     };
 
     const calcAutoYRange = () => {
-        const vals = [state.min, state.max, state.c1y, state.c2y];
+        const { p0, p1, p2, p3 } = getCurvePoints();
+        const vals = [p0.y, p1.y, p2.y, p3.y];
         let lo = Math.min(...vals);
         let hi = Math.max(...vals);
         if (!Number.isFinite(lo) || !Number.isFinite(hi)) {
@@ -118,12 +176,15 @@
     };
 
     const getYRange = () => {
-        if (!manualYRange) return calcAutoYRange();
-        const lo = num(manualYRange.lo, -1);
-        const hi = num(manualYRange.hi, 1);
-        if (!Number.isFinite(lo) || !Number.isFinite(hi)) return calcAutoYRange();
-        if (hi - lo < 1e-6) return { lo, hi: lo + 1 };
-        return { lo, hi };
+        if (manualYRange) {
+            const lo = num(manualYRange.lo, -1);
+            const hi = num(manualYRange.hi, 1);
+            if (!Number.isFinite(lo) || !Number.isFinite(hi)) return calcAutoYRange();
+            if (hi - lo < 1e-6) return { lo, hi: lo + 1 };
+            return { lo, hi };
+        }
+        if (dragHandleYRange) return dragHandleYRange;
+        return calcAutoYRange();
     };
 
     const ensureManualYRange = () => {
@@ -156,28 +217,21 @@
     const evalBezierAtTick = (xTick) => {
         const tick = safeTick();
         const x = clamp(num(xTick), 0, tick);
-        const p0x = 0;
-        const p0y = state.min;
-        const p1x = clamp(state.c1x, 0, tick);
-        const p1y = state.c1y;
-        const p2x = clamp(state.c2x, 0, tick);
-        const p2y = state.c2y;
-        const p3x = tick;
-        const p3y = state.max;
+        const { p0, p1, p2, p3 } = getCurvePoints();
 
-        if (x <= 0) return p0y;
-        if (x >= tick) return p3y;
+        if (x <= 0) return p0.y;
+        if (x >= tick) return p3.y;
 
         let lo = 0;
         let hi = 1;
         let mid = 0.5;
         for (let i = 0; i < 26; i++) {
             mid = (lo + hi) * 0.5;
-            const bx = cubic(p0x, p1x, p2x, p3x, mid);
+            const bx = cubic(p0.x, p1.x, p2.x, p3.x, mid);
             if (bx < x) lo = mid;
             else hi = mid;
         }
-        return cubic(p0y, p1y, p2y, p3y, mid);
+        return cubic(p0.y, p1.y, p2.y, p3.y, mid);
     };
 
     const scheduleRender = () => {
@@ -267,10 +321,7 @@
         ctx.restore();
 
         // helper lines
-        const p0 = { x: 0, y: state.min };
-        const p1 = { x: state.c1x, y: state.c1y };
-        const p2 = { x: state.c2x, y: state.c2y };
-        const p3 = { x: safeTick(), y: state.max };
+        const { p0, p1, p2, p3 } = getCurvePoints();
 
         ctx.save();
         ctx.strokeStyle = "rgba(103,164,255,0.45)";
@@ -365,8 +416,10 @@
             const dy = y - my;
             return Math.sqrt(dx * dx + dy * dy);
         };
-        const c1 = { x: xToPx(state.c1x, b), y: yToPx(state.c1y, b, yr), id: "c1" };
-        const c2 = { x: xToPx(state.c2x, b), y: yToPx(state.c2y, b, yr), id: "c2" };
+        const c1Point = getHandlePoint("c1");
+        const c2Point = getHandlePoint("c2");
+        const c1 = { x: xToPx(c1Point.x, b), y: yToPx(c1Point.y, b, yr), id: "c1" };
+        const c2 = { x: xToPx(c2Point.x, b), y: yToPx(c2Point.y, b, yr), id: "c2" };
         const a = d(c1.x, c1.y);
         const b2 = d(c2.x, c2.y);
         if (a <= handlePriorityR && a <= b2) return c1.id;
@@ -405,6 +458,7 @@
         dragTarget = "";
         dragPointerId = null;
         dragRangeAnchor = null;
+        dragHandleYRange = null;
         if (statusText) updateStatus(statusText);
         applyCursor();
         scheduleRender();
@@ -430,8 +484,10 @@
                 hi: base.hi,
                 valuePerPixel: (base.hi - base.lo) / Math.max(1, b.ih)
             };
+            dragHandleYRange = null;
         } else {
             dragRangeAnchor = null;
+            dragHandleYRange = manualYRange ? null : calcAutoYRange();
         }
 
         dragPointerId = ev.pointerId;
@@ -495,12 +551,13 @@
             else if (Math.abs(p.y - maxPy) <= snapPx) nextY = state.max;
         }
 
+        const nextHandle = toHandleModel(dragTarget, { x: nextX, y: nextY });
         if (dragTarget === "c1") {
-            state.c1x = nextX;
-            state.c1y = nextY;
+            state.c1x = nextHandle.x;
+            state.c1y = nextHandle.y;
         } else if (dragTarget === "c2") {
-            state.c2x = nextX;
-            state.c2y = nextY;
+            state.c2x = nextHandle.x;
+            state.c2y = nextHandle.y;
         }
         scheduleRender();
     };
@@ -711,10 +768,11 @@
 
     el.btnResetLinear.addEventListener("click", () => {
         const tick = safeTick();
+        const delta = state.max - state.min;
         state.c1x = tick / 3;
-        state.c2x = tick * 2 / 3;
-        state.c1y = state.min + (state.max - state.min) / 3;
-        state.c2y = state.min + (state.max - state.min) * 2 / 3;
+        state.c1y = isScaleBezierMode ? state.min + delta / 3 : delta / 3;
+        state.c2x = isScaleBezierMode ? tick * 2 / 3 : -tick / 3;
+        state.c2y = isScaleBezierMode ? state.min + delta * 2 / 3 : -delta / 3;
         scheduleRender();
         updateStatus("Reset to linear");
     });

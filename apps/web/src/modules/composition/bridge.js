@@ -52,10 +52,10 @@ export function openCompositionPointsBuilderBridge({ router, cardId, target = 'r
     query: {
       card: cardId,
       target,
-      return: 'composition'
+      return: 'composition_builder.html'
     }
   });
-  window.open(route.href, '_blank', 'noopener');
+  window.open(route.href, '_blank');
 }
 
 export function saveBezierSeed({ cardId = '', treePath = [], targetType = 'card', scaleHelper = null } = {}) {

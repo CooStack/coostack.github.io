@@ -81,6 +81,30 @@ function outBounce(t, params = {}) {
     return n1 * p * p + 0.984375;
 }
 
+function cubic(a, b, c, d, t) {
+    const inv = 1 - t;
+    return inv * inv * inv * a + 3 * inv * inv * t * b + 3 * inv * t * t * c + t * t * t * d;
+}
+
+function solveBezierEaseY(x, startX, startY, endX, endY) {
+    if (x <= 0) return 0;
+    if (x >= 1) return 1;
+    const p1x = startX;
+    const p1y = startY;
+    const p2x = 1 + endX;
+    const p2y = 1 + endY;
+    let lo = 0;
+    let hi = 1;
+    let mid = 0.5;
+    for (let i = 0; i < 28; i += 1) {
+        mid = (lo + hi) * 0.5;
+        const bx = cubic(0, p1x, p2x, 1, mid);
+        if (bx < x) lo = mid;
+        else hi = mid;
+    }
+    return cubic(0, p1y, p2y, 1, mid);
+}
+
 const EASES = {
     linear: (t) => clamp01(t),
     outCubic: (t) => {
@@ -128,18 +152,11 @@ const EASES = {
     outBounce,
     bezierEase: (t, params = {}) => {
         const x = clamp01(t);
+        const startX = pickFinite(params.startX, DEFAULT_EASE_PARAMS.bezierEase.startX);
         const startY = pickFinite(params.startY, DEFAULT_EASE_PARAMS.bezierEase.startY);
+        const endX = pickFinite(params.endX, DEFAULT_EASE_PARAMS.bezierEase.endX);
         const endY = pickFinite(params.endY, DEFAULT_EASE_PARAMS.bezierEase.endY);
-        const u = 1 - x;
-        const u2 = u * u;
-        const x2 = x * x;
-        const endHandleY = 1 + endY;
-        const y =
-            (u2 * u * 0) +
-            (3 * u2 * x * startY) +
-            (3 * u * x2 * endHandleY) +
-            (x2 * x * 1);
-        return clamp01(y);
+        return solveBezierEaseY(x, startX, startY, endX, endY);
     }
 };
 

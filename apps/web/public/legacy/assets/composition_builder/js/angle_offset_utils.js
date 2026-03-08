@@ -81,7 +81,7 @@ export const ANGLE_OFFSET_EASE_PARAM_META = Object.freeze({
             field: "angleOffsetEaseBezierStartX",
             short: "bezierStartX",
             label: "起点手柄 X (startX)",
-            tip: "当前实现主要由 Y 生效；X 调高/调低对结果影响很小。",
+            tip: "变高：前段推进更晚更缓；变低：前段推进更早更快。",
             defaultValue: ANGLE_OFFSET_EASE_DEFAULT_PARAMS.angleOffsetEaseBezierStartX
         },
         {
@@ -95,7 +95,7 @@ export const ANGLE_OFFSET_EASE_PARAM_META = Object.freeze({
             field: "angleOffsetEaseBezierEndX",
             short: "bezierEndX",
             label: "终点手柄 X (endX)",
-            tip: "当前实现主要由 Y 生效；X 调高/调低对结果影响很小。",
+            tip: "变高：后段更靠后贴近终点；变低：后段更早开始收束。",
             defaultValue: ANGLE_OFFSET_EASE_DEFAULT_PARAMS.angleOffsetEaseBezierEndX
         },
         {
