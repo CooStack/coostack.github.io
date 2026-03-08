@@ -1369,6 +1369,8 @@ class CompositionBuilderApp {
         d.btnCopyCode.addEventListener("click", () => this.copyCode());
         d.btnCopyCode2.addEventListener("click", () => this.copyCode());
         d.btnDownloadCode.addEventListener("click", () => this.downloadCode());
+        if (d.btnPausePreview) d.btnPausePreview.addEventListener("click", () => this.togglePreviewPause());
+        if (d.btnReplayPreview) d.btnReplayPreview.addEventListener("click", () => this.replayPreview());
 
         d.projectSection.addEventListener("click", (e) => this.onProjectClick(e));
         d.projectSection.addEventListener("input", (e) => this.onProjectInput(e));
@@ -1881,9 +1883,12 @@ class CompositionBuilderApp {
     }
 
     setPreviewPaused(paused, opts = {}) {
+        const wasPaused = !!this.previewPaused;
         this.previewPaused = !!paused;
-        if (!this.previewPaused && !opts.keepTimeline) {
-            this.previewAnimStart = performance.now();
+        if (!this.previewPaused) {
+            if (!wasPaused || opts.restartTimeline === true) {
+                this.previewAnimStart = performance.now();
+            }
             this.previewPerfLastTs = 0;
         }
         this.refreshPauseButtonUi();
@@ -1912,7 +1917,6 @@ class CompositionBuilderApp {
             this.previewAutoPaused = false;
             this.previewWasPlayingBeforeAutoPause = false;
             this.setPreviewPaused(false);
-            this.replayPreview();
             return;
         }
         this.previewAutoPaused = false;
@@ -1974,7 +1978,7 @@ class CompositionBuilderApp {
         this.writeExportedSignature("");
         this.previewAutoPaused = false;
         this.previewWasPlayingBeforeAutoPause = false;
-        this.setPreviewPaused(false);
+        this.setPreviewPaused(false, { restartTimeline: true });
         this.applySettingsToDom();
         this.renderProjectSection();
         this.renderCards();
@@ -3388,11 +3392,14 @@ class CompositionBuilderApp {
                 item.exprPreset = "";
                 this.afterStructureMutate({ rerenderCards: true, rebuildPreview: true, rerenderProject: false });
             } else if (field === "exprPreset") {
-                item.exprPreset = t.value;
-                if (t.value) item.expr = t.value;
+                const prevPreset = String(item.exprPreset || "").trim();
+                item.exprPreset = String(t.value || "");
+                if (item.exprPreset) item.expr = item.exprPreset;
+                else if (prevPreset) item.expr = this.getParticleInitDefaultExprByTarget(item.target);
                 this.afterStructureMutate({ rerenderCards: true, rebuildPreview: true, rerenderProject: false });
             } else if (field === "expr") {
-                item.expr = t.value;
+                item.expr = String(t.value || "");
+                item.exprPreset = this.resolveParticleInitPresetExpr(item.expr, item.target);
                 this.afterValueMutate({ rebuildPreview: true });
             }
             return;
@@ -3461,7 +3468,9 @@ class CompositionBuilderApp {
                 const prevPreset = String(item.exprPreset || "").trim();
                 item.exprPreset = String(t.value || "");
                 if (item.exprPreset) item.expr = item.exprPreset;
-                else if (!String(item.expr || "").trim() || String(item.expr || "").trim() === prevPreset) {
+                else if (prevPreset) {
+                    item.expr = this.getParticleInitDefaultExprByTarget(item.target);
+                } else if (!String(item.expr || "").trim()) {
                     item.expr = this.getParticleInitDefaultExprByTarget(item.target);
                 }
                 this.afterValueMutate({ rebuildPreview: true, rerenderCards: true });
@@ -3528,7 +3537,9 @@ class CompositionBuilderApp {
                 const prevPreset = String(item.exprPreset || "").trim();
                 item.exprPreset = String(t.value || "");
                 if (item.exprPreset) item.expr = item.exprPreset;
-                else if (!String(item.expr || "").trim() || String(item.expr || "").trim() === prevPreset) {
+                else if (prevPreset) {
+                    item.expr = this.getParticleInitDefaultExprByTarget(item.target);
+                } else if (!String(item.expr || "").trim()) {
                     item.expr = this.getParticleInitDefaultExprByTarget(item.target);
                 }
                 this.afterValueMutate({ rebuildPreview: true, rerenderCards: true });

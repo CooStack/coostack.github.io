@@ -1179,20 +1179,27 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
         if (String(card.dataType || "single") === "single") {
             return this.resolvePreviewTextureConfigForCard(card);
         }
-        // traverse tree to find first single leaf
+        const leaf = this.resolvePreviewVisualSource(card);
+        if (leaf && leaf !== card) {
+            return this.resolvePreviewTextureConfigForShapeLeaf(leaf, card);
+        }
+        return this.resolvePreviewTextureConfigForCard(card);
+    }
+
+    resolvePreviewVisualSource(card) {
+        if (!card) return null;
+        if (String(card.dataType || "single") === "single") return card;
         const findLeaf = (children) => {
             if (!Array.isArray(children)) return null;
             for (const child of children) {
                 if (!child) continue;
-                if (String(child.type || "single") === "single") {
-                    return this.resolvePreviewTextureConfigForShapeLeaf(child, card);
-                }
+                if (String(child.type || "single") === "single") return child;
                 const found = findLeaf(child.children);
                 if (found) return found;
             }
             return null;
         };
-        return findLeaf(card.shapeChildren || []) || this.resolvePreviewTextureConfigForCard(card);
+        return findLeaf(card.shapeChildren || []) || card;
     }
 
     updatePreviewFrameIndices(elapsedTick, cycleCfg, groupRuntimeCache, pointGroupIndex, totalCount) {
@@ -1387,7 +1394,7 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
                 eatExprGrowth(card.shapeDisplayActions || [], maxOwner);
             } else {
                 let step = 0;
-                for (const action of (card.controllerActions || [])) {
+                for (const action of (visualSource.controllerActions || [])) {
                     step += estimateGrowthStepFromScript(action?.script || "");
                 }
                 if (step > 0) {
@@ -2490,9 +2497,8 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
         const fallback = { color: [1, 1, 1], size: 0.2, alpha: 1 };
         const card = this.getCardById(cardId);
         if (!card) return fallback;
-        const useSingleInit = card.dataType === "single"
-            || (card.dataType !== "single" && this.getShapeLeafType(card) === "single");
-        if (!useSingleInit) return fallback;
+        const visualSource = this.resolvePreviewVisualSource(card);
+        if (!visualSource) return fallback;
         const visual = { color: [...fallback.color], size: 0.2, alpha: 1 };
         let resolvedCurrentAge = Number.isFinite(Number(opts.currentAge))
             ? Math.max(0, num(opts.currentAge))
@@ -2507,7 +2513,7 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
         evalRuntimeVars.textureSheet = Number.isFinite(Number(runtimeVars?.textureSheet))
             ? int(runtimeVars.textureSheet)
             : 0;
-        for (const it of (card.particleInit || [])) {
+        for (const it of (visualSource.particleInit || [])) {
             const target = String(it.target || "").trim().toLowerCase();
             const expr = String(it.expr || "").trim();
             if (!expr) continue;
@@ -2538,10 +2544,11 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
                 evalRuntimeVars.currentAge = resolvedCurrentAge;
             }
         }
-        const controllerActions = Array.isArray(card.controllerActions) ? card.controllerActions : [];
+        const controllerActions = Array.isArray(visualSource.controllerActions) ? visualSource.controllerActions : [];
+        const visualSourceId = String(visualSource.id || card.id || cardId);
         for (let actionIdx = 0; actionIdx < controllerActions.length; actionIdx++) {
             const action = controllerActions[actionIdx];
-            const compileKey = this.makePreviewControllerScriptCompileKey(card.id, actionIdx);
+            const compileKey = this.makePreviewControllerScriptCompileKey(visualSourceId, actionIdx);
             this.applyControllerScriptVisual(visual, String(action?.script || ""), {
                 runtimeVars,
                 elapsedTick,
@@ -2573,7 +2580,9 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
 
     isCardVisualAgeDependent(card) {
         if (!card) return false;
-        for (const it of (card.particleInit || [])) {
+        const visualSource = this.resolvePreviewVisualSource(card);
+        if (!visualSource) return false;
+        for (const it of (visualSource.particleInit || [])) {
             const target = String(it?.target || "").trim().toLowerCase();
             if (target !== "color" && target !== "particlecolor" && target !== "particle.particlecolor"
                 && target !== "size" && target !== "particlesize" && target !== "particle.particlesize"
@@ -2589,7 +2598,7 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
             if (this.isScriptAgeDependent(expr)) return true;
             if (/\bRandom\b/.test(stripJsForLint(transpileKotlinThisQualifierToJs(expr)))) return true;
         }
-        for (const action of (card.controllerActions || [])) {
+        for (const action of (visualSource.controllerActions || [])) {
             if (this.isScriptAgeDependent(String(action?.script || ""))) return true;
         }
         return false;

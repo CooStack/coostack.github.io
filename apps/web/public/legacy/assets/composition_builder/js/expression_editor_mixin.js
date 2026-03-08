@@ -247,7 +247,7 @@ export function installExpressionEditorMethods(CompositionBuilderApp, deps = {})
             "RelativeLocation($0)",
             "Vector3f($0)"
         ];
-        for (const snippet of this.getProjectScaleHelperCompletionSnippets()) {
+        for (const snippet of this.getProjectScaleHelperCompletionSnippets(textarea)) {
             base.push(snippet);
         }
         for (const g of this.state.globalVars) {
@@ -274,8 +274,18 @@ export function installExpressionEditorMethods(CompositionBuilderApp, deps = {})
         return String(projectScale.runMode || "auto").trim() === "manual";
     }
 
-    getProjectScaleHelperCompletionSnippets() {
-        if (!this.hasManualProjectScaleHelper()) return [];
+    isScaleHelperAllowedForCodeEditor(textarea) {
+        if (!this.hasManualProjectScaleHelper()) return false;
+        if (!(textarea instanceof HTMLTextAreaElement)) return false;
+        if (textarea.dataset.cactField === "script") return false;
+        return textarea.dataset.displayField === "expression"
+            || textarea.dataset.cardShapeDisplayField === "expression"
+            || textarea.dataset.cardShapeChildDisplayField === "expression"
+            || textarea.dataset.shapeLevelDisplayField === "expression";
+    }
+
+    getProjectScaleHelperCompletionSnippets(textarea = null) {
+        if (!this.isScaleHelperAllowedForCodeEditor(textarea)) return [];
         return [
             "scaleHelper.doScale()",
             "scaleHelper.doScaleReversed()"
@@ -355,7 +365,7 @@ export function installExpressionEditorMethods(CompositionBuilderApp, deps = {})
             allowed.add(key);
         }
         const cardId = String(opts.cardId || "").trim();
-        if (this.hasManualProjectScaleHelper() && !cardId) {
+        if (opts.allowScaleHelper === true && this.hasManualProjectScaleHelper()) {
             allowed.add("scaleHelper");
         }
         const scope = (opts.scope && typeof opts.scope === "object") ? opts.scope : null;
@@ -442,7 +452,8 @@ export function installExpressionEditorMethods(CompositionBuilderApp, deps = {})
         const cardId = String(textarea.dataset.cardId || "");
         const scope = this.getCodeEditorScopeInfo(textarea);
         const allowGrowthApi = this.isGrowthApiAllowedForCodeEditor(textarea);
-        const result = this.validateJsExpressionSource(source, { cardId, scope, allowGrowthApi });
+        const allowScaleHelper = this.isScaleHelperAllowedForCodeEditor(textarea);
+        const result = this.validateJsExpressionSource(source, { cardId, scope, allowGrowthApi, allowScaleHelper });
         if (result.valid) return result;
         return {
             valid: false,
@@ -454,7 +465,8 @@ export function installExpressionEditorMethods(CompositionBuilderApp, deps = {})
         const cardId = String(textarea?.dataset?.cardId || "");
         const scope = this.getCodeEditorScopeInfo(textarea);
         const allowGrowthApi = this.isGrowthApiAllowedForCodeEditor(textarea);
-        const allowed = this.getJsValidationAllowedIdentifiers({ cardId, scope, allowGrowthApi });
+        const allowScaleHelper = this.isScaleHelperAllowedForCodeEditor(textarea);
+        const allowed = this.getJsValidationAllowedIdentifiers({ cardId, scope, allowGrowthApi, allowScaleHelper });
         const declared = new Map();
         const lines = [];
         const declareSymbol = (name, type = "any", mutable = false, opts = {}) => {
@@ -510,9 +522,7 @@ export function installExpressionEditorMethods(CompositionBuilderApp, deps = {})
         }
         lines.push("declare function addPreTickAction(...args: any[]): any;");
         lines.push("declare function setReversedScaleOnCompositionStatus(...args: any[]): any;");
-        const isProjectDisplayExpr = String(textarea?.dataset?.displayField || "") === "expression"
-            && !String(textarea?.dataset?.cardId || "").trim();
-        if (this.hasManualProjectScaleHelper() && isProjectDisplayExpr) {
+        if (allowScaleHelper) {
             lines.push("declare const scaleHelper: { doScale(...args: any[]): any; doScaleReversed(...args: any[]): any; };");
         }
         lines.push("declare function RelativeLocation(...args: any[]): any;");
