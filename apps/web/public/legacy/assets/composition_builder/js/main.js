@@ -4120,11 +4120,13 @@ class CompositionBuilderApp {
         const rerenderProject = opts.rerenderProject !== false;
         const rerenderCards = opts.rerenderCards !== false;
         const rebuildPreview = opts.rebuildPreview !== false;
+        const focusState = this.captureEditableFocusState();
         if (rerenderProject) this.renderProjectSection();
         if (rerenderCards) this.renderCards();
         if (rebuildPreview) this.rebuildPreview();
         this.generateCodeAndRender(this.state.settings.realtimeCode);
         this.writeBuilderCompositionContext();
+        this.restoreEditableFocusState(focusState, { rerenderProject, rerenderCards });
         this.scheduleSave();
         if (this.previewPaused && this.renderer) {
             this.updatePreviewAnimation();
@@ -4135,16 +4137,102 @@ class CompositionBuilderApp {
     afterValueMutate(opts = {}) {
         if (this.exprRuntime?.invalidateCache) this.exprRuntime.invalidateCache();
         this.ensureSelectionValid();
-        if (opts.rerenderProject) this.renderProjectSection();
-        if (opts.rerenderCards) this.renderCards();
+        const rerenderProject = !!opts.rerenderProject;
+        const rerenderCards = !!opts.rerenderCards;
+        const focusState = this.captureEditableFocusState();
+        if (rerenderProject) this.renderProjectSection();
+        if (rerenderCards) this.renderCards();
         if (opts.rebuildPreview !== false) this.rebuildPreview();
         this.generateCodeAndRender(this.state.settings.realtimeCode);
         this.writeBuilderCompositionContext();
+        this.restoreEditableFocusState(focusState, { rerenderProject, rerenderCards });
         this.scheduleSave();
         if (this.previewPaused && this.renderer) {
             this.updatePreviewAnimation();
             this.renderer.render(this.scene, this.camera);
         }
+    }
+
+    captureEditableFocusState() {
+        return {
+            project: this.captureEditableFocus(this.dom?.projectSection),
+            cards: this.captureEditableFocus(this.dom?.cardsRoot)
+        };
+    }
+
+    captureEditableFocus(root) {
+        const active = document.activeElement;
+        if (!(root instanceof Element) || !(active instanceof HTMLElement) || !root.contains(active)) return null;
+        const tag = String(active.tagName || "").toLowerCase();
+        const role = String(active.getAttribute?.("role") || "");
+        const isEditable = tag === "input" || tag === "textarea" || tag === "select" || active.isContentEditable || role === "textbox" || role === "combobox";
+        if (!isEditable) return null;
+        const dataset = {};
+        for (const [key, value] of Object.entries(active.dataset || {})) {
+            if (value !== undefined && value !== null && String(value) !== "") dataset[key] = String(value);
+        }
+        return {
+            id: active.id ? String(active.id) : "",
+            tag,
+            type: String(active.getAttribute?.("type") || ""),
+            role,
+            dataset,
+            selectionStart: typeof active.selectionStart === "number" ? active.selectionStart : null,
+            selectionEnd: typeof active.selectionEnd === "number" ? active.selectionEnd : null,
+            selectionDirection: typeof active.selectionDirection === "string" ? active.selectionDirection : null
+        };
+    }
+
+    restoreEditableFocusState(state, opts = {}) {
+        if (opts.rerenderProject) this.restoreEditableFocus(this.dom?.projectSection, state?.project);
+        if (opts.rerenderCards) this.restoreEditableFocus(this.dom?.cardsRoot, state?.cards);
+    }
+
+    restoreEditableFocus(root, snapshot) {
+        if (!(root instanceof Element) || !snapshot) return;
+        const selector = this.buildEditableFocusSelector(snapshot);
+        if (!selector) return;
+        const next = root.querySelector(selector);
+        if (!(next instanceof HTMLElement)) return;
+        try {
+            next.focus({ preventScroll: true });
+        } catch {
+            try {
+                next.focus();
+            } catch {
+                return;
+            }
+        }
+        if (typeof next.setSelectionRange !== "function") return;
+        if (typeof snapshot.selectionStart !== "number" || typeof snapshot.selectionEnd !== "number") return;
+        const valueLength = String(next.value || "").length;
+        const start = Math.max(0, Math.min(snapshot.selectionStart, valueLength));
+        const end = Math.max(start, Math.min(snapshot.selectionEnd, valueLength));
+        try {
+            next.setSelectionRange(start, end, snapshot.selectionDirection || "none");
+        } catch {
+        }
+    }
+
+    buildEditableFocusSelector(snapshot) {
+        if (!snapshot) return "";
+        if (snapshot.id) return `#${this.escapeCssSelector(snapshot.id)}`;
+        const tag = snapshot.tag || "input";
+        const parts = [tag];
+        if (snapshot.type) parts.push(`[type="${this.escapeCssSelector(snapshot.type)}"]`);
+        if (snapshot.role) parts.push(`[role="${this.escapeCssSelector(snapshot.role)}"]`);
+        const datasetEntries = Object.entries(snapshot.dataset || {}).sort(([a], [b]) => a.localeCompare(b));
+        for (const [key, value] of datasetEntries) {
+            const attr = `data-${String(key).replace(/[A-Z]/g, (ch) => `-${ch.toLowerCase()}`)}`;
+            parts.push(`[${attr}="${this.escapeCssSelector(value)}"]`);
+        }
+        return parts.join("");
+    }
+
+    escapeCssSelector(value) {
+        const raw = String(value || "");
+        if (globalThis.CSS && typeof globalThis.CSS.escape === "function") return globalThis.CSS.escape(raw);
+        return raw.replace(/([#.;,:+*~'"!^$\[\]()=>|/@ ])/g, "\\$1");
     }
 
     mergeMutateOptions(base = null, next = {}) {
