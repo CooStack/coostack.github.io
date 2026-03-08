@@ -1,0 +1,5 @@
+node_modules/
+dist/
+.env
+apps/server/data/projects/*.json
+!apps/server/data/projects/.gitkeep

@@ -1,0 +1,183 @@
+import { deepClone } from '../../utils/clone.js';
+import { createPointsBuilderBaseProject } from './schema.js';
+import { POINTS_NODE_KINDS } from './kinds.js';
+import { createFourierTerm, createNodeByKind, isBuilderContainerKind } from './node-helpers.js';
+
+const KIND_ALIASES = {
+  point: 'add_point',
+  line: 'add_line',
+  circle: 'add_circle',
+  with_builder: 'add_builder'
+};
+
+function normalizeLegacyVecParams(params, prefix, objectKey = null) {
+  if (!params || typeof params !== 'object') return;
+  const px = `${prefix}x`;
+  const py = `${prefix}y`;
+  const pz = `${prefix}z`;
+  if (params[px] !== undefined || params[py] !== undefined || params[pz] !== undefined) return;
+
+  const key = objectKey || prefix;
+  const raw = params[key];
+  if (!raw) return;
+
+  if (Array.isArray(raw)) {
+    if (raw[0] !== undefined) params[px] = raw[0];
+    if (raw[1] !== undefined) params[py] = raw[1];
+    if (raw[2] !== undefined) params[pz] = raw[2];
+    return;
+  }
+
+  if (typeof raw === 'object') {
+    if (raw.x !== undefined) params[px] = raw.x;
+    if (raw.y !== undefined) params[py] = raw.y;
+    if (raw.z !== undefined) params[pz] = raw.z;
+  }
+}
+
+function normalizeKind(kind) {
+  const next = KIND_ALIASES[kind] || kind;
+  if (POINTS_NODE_KINDS[next]) return next;
+  return 'add_point';
+}
+
+function collectParams(rawNode, definition) {
+  const params = {
+    ...deepClone(definition.defaultParams || {}),
+    ...(typeof rawNode?.params === 'object' && rawNode.params ? deepClone(rawNode.params) : {})
+  };
+
+  (definition.fields || []).forEach((field) => {
+    if (params[field.key] === undefined && rawNode?.[field.key] !== undefined) {
+      params[field.key] = rawNode[field.key];
+    }
+  });
+  return params;
+}
+
+function normalizeNodeParams(kind, params) {
+  if (kind === 'add_builder') {
+    if (params.ox === undefined) params.ox = 0;
+    if (params.oy === undefined) params.oy = 0;
+    if (params.oz === undefined) params.oz = 0;
+  }
+
+  switch (kind) {
+    case 'add_bezier':
+      normalizeLegacyVecParams(params, 'p1');
+      normalizeLegacyVecParams(params, 'p2');
+      normalizeLegacyVecParams(params, 'p3');
+      if (params.count === undefined && params.counts !== undefined) params.count = params.counts;
+      break;
+    case 'add_bezier_4':
+      normalizeLegacyVecParams(params, 'p1');
+      normalizeLegacyVecParams(params, 'p2');
+      normalizeLegacyVecParams(params, 'p3');
+      normalizeLegacyVecParams(params, 'p4');
+      if (params.count === undefined && params.counts !== undefined) params.count = params.counts;
+      break;
+    case 'add_bezier_curve':
+      if (params.tx === undefined && params.target && typeof params.target === 'object') params.tx = params.target.x ?? params.target[0] ?? 0;
+      if (params.ty === undefined && params.target && typeof params.target === 'object') params.ty = params.target.y ?? params.target[1] ?? 0;
+      if (params.shx === undefined && params.startHandle && typeof params.startHandle === 'object') params.shx = params.startHandle.x ?? params.startHandle[0] ?? 0;
+      if (params.shy === undefined && params.startHandle && typeof params.startHandle === 'object') params.shy = params.startHandle.y ?? params.startHandle[1] ?? 0;
+      if (params.ehx === undefined && params.endHandle && typeof params.endHandle === 'object') params.ehx = params.endHandle.x ?? params.endHandle[0] ?? 0;
+      if (params.ehy === undefined && params.endHandle && typeof params.endHandle === 'object') params.ehy = params.endHandle.y ?? params.endHandle[1] ?? 0;
+      break;
+    case 'add_polygon':
+      if (params.count === undefined && params.edgeCount !== undefined) params.count = params.edgeCount;
+      if (params.sideCount === undefined && params.n !== undefined) params.sideCount = params.n;
+      break;
+    case 'add_polygon_in_circle':
+      if (params.edgeCount === undefined && params.count !== undefined) params.edgeCount = params.count;
+      if (params.n === undefined && params.sideCount !== undefined) params.n = params.sideCount;
+      break;
+    case 'add_lightning_points':
+    case 'add_lightning_nodes':
+    case 'add_lightning_nodes_attenuation':
+      normalizeLegacyVecParams(params, 's', 'start');
+      normalizeLegacyVecParams(params, 'e', 'end');
+      if (params.useStart === undefined && (params.start || params.sx !== undefined || params.sy !== undefined || params.sz !== undefined)) {
+        params.useStart = true;
+      }
+      if (params.useOffsetRange === undefined && params.offsetRange !== undefined) {
+        params.useOffsetRange = true;
+      }
+      break;
+    default:
+      break;
+  }
+}
+
+export function normalizeNode(rawNode) {
+  const kind = normalizeKind(rawNode?.kind);
+  const definition = POINTS_NODE_KINDS[kind] || POINTS_NODE_KINDS.add_point;
+  const params = collectParams(rawNode, definition);
+  normalizeNodeParams(kind, params);
+
+  const node = createNodeByKind(kind, {
+    id: rawNode?.id,
+    collapsed: rawNode?.collapsed,
+    folded: rawNode?.folded,
+    bodyHeight: rawNode?.bodyHeight,
+    subWidth: rawNode?.subWidth,
+    subHeight: rawNode?.subHeight,
+    params
+  });
+
+  node.children = isBuilderContainerKind(kind)
+    ? (Array.isArray(rawNode?.children) ? rawNode.children.map((child) => normalizeNode(child)) : [])
+    : [];
+
+  node.terms = kind === 'add_fourier_series'
+    ? (Array.isArray(rawNode?.terms) && rawNode.terms.length
+        ? rawNode.terms.map((term) => createFourierTerm(term))
+        : node.terms)
+    : [];
+
+  return node;
+}
+
+export function normalizePointsBuilderProject(source, tool = 'pointsbuilder') {
+  const base = createPointsBuilderBaseProject(tool);
+  const raw = source && typeof source === 'object' ? deepClone(source) : {};
+  const rawNodes = Array.isArray(raw?.state?.root?.children)
+    ? raw.state.root.children
+    : Array.isArray(raw?.nodes)
+      ? raw.nodes
+      : [];
+
+  const normalized = {
+    id: raw.id || base.id,
+    tool: raw.tool || tool,
+    schemaVersion: base.schemaVersion,
+    name: raw.name || base.name,
+    description: raw.description || base.description,
+    kotlinEndMode: raw.kotlinEndMode || base.kotlinEndMode,
+    settings: {
+      ...base.settings,
+      ...(typeof raw.settings === 'object' && raw.settings ? raw.settings : {})
+    },
+    state: {
+      root: {
+        id: 'root',
+        kind: 'ROOT',
+        children: rawNodes.map((node) => normalizeNode(node))
+      },
+      selection: {
+        focusedNodeId: raw?.state?.selection?.focusedNodeId || raw.selectedNodeId || ''
+      }
+    }
+  };
+
+  if (!normalized.state.root.children.length) {
+    normalized.state.root.children.push(createNodeByKind('add_circle'));
+  }
+
+  const existing = normalized.state.root.children.some((node) => node.id === normalized.state.selection.focusedNodeId);
+  if (!existing) {
+    normalized.state.selection.focusedNodeId = normalized.state.root.children[0]?.id || '';
+  }
+
+  return normalized;
+}

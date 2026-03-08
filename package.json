@@ -1,0 +1,16 @@
+{
+  "name": "blogs-rewrite",
+  "private": true,
+  "version": "1.0.0",
+  "workspaces": [
+    "apps/web",
+    "apps/server"
+  ],
+  "scripts": {
+    "dev:web": "npm --workspace @blogs/web run dev",
+    "dev:server": "npm --workspace @blogs/server run dev",
+    "build:web": "npm --workspace @blogs/web run build",
+    "build:web:github": "npm --workspace @blogs/web run build:github",
+    "start:server": "npm --workspace @blogs/server run start"
+  }
+}
