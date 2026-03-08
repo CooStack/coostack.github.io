@@ -1137,13 +1137,13 @@ class CompositionBuilderApp {
         this.currentKotlin = "";
         this.saveTimer = 0;
         this.toastTimer = 0;
+        this.pendingImeMutate = null;
+        this.pendingImeMutateTimer = 0;
+        this.activeImeCompositionCount = 0;
 
         this.scene = null;
         this.camera = null;
-        this.renderer = null;
-        this.controls = null;
-        this.axes = null;
-        this.grid = null;
+        this.renderer = null;        this.grid = null;
         this.pointsMesh = null;
         this.pointsGeom = null;
         this.pointsMat = null;
@@ -1371,20 +1371,20 @@ class CompositionBuilderApp {
         d.btnDownloadCode.addEventListener("click", () => this.downloadCode());
 
         d.projectSection.addEventListener("click", (e) => this.onProjectClick(e));
+        d.projectSection.addEventListener("click", (e) => this.onProjectClick(e));
         d.projectSection.addEventListener("input", (e) => this.onProjectInput(e));
         d.projectSection.addEventListener("change", (e) => this.onProjectChange(e));
+        d.projectSection.addEventListener("compositionstart", (e) => this.onEditableCompositionStart(e), true);
+        d.projectSection.addEventListener("compositionend", (e) => this.onEditableCompositionEnd(e), true);
         d.projectSection.addEventListener("focusout", (e) => this.onCodeEditorFocusOut(e), true);
 
         d.cardsRoot.addEventListener("click", (e) => this.onCardClick(e));
         d.cardsRoot.addEventListener("input", (e) => this.onCardInput(e));
         d.cardsRoot.addEventListener("change", (e) => this.onCardChange(e));
+        d.cardsRoot.addEventListener("compositionstart", (e) => this.onEditableCompositionStart(e), true);
+        d.cardsRoot.addEventListener("compositionend", (e) => this.onEditableCompositionEnd(e), true);
         d.cardsRoot.addEventListener("focusin", (e) => this.onCardFocusIn(e), true);
         d.cardsRoot.addEventListener("focusout", (e) => this.onCodeEditorFocusOut(e), true);
-
-        d.btnResetCamera.addEventListener("click", () => this.resetCamera());
-        d.btnFullscreen.addEventListener("click", () => this.toggleFullscreen());
-        d.btnPausePreview?.addEventListener("click", () => this.togglePreviewPause());
-        if (d.btnReplayPreview) d.btnReplayPreview.addEventListener("click", () => this.replayPreview());
         if (d.btnCompileExpr) d.btnCompileExpr.addEventListener("click", () => this.compileAllCodeEditorSources({ force: true, showToast: true }));
         if (d.btnJumpPreviewEnd) d.btnJumpPreviewEnd.addEventListener("click", () => this.jumpPreviewToPreFade());
 
@@ -4114,6 +4114,10 @@ class CompositionBuilderApp {
     }
 
     afterStructureMutate(opts = {}) {
+        if (this.isImeCompositionActive()) {
+            this.queuePendingImeMutate("structure", opts);
+            return;
+        }
         this.state = normalizeStateShape(this.state);
         if (this.exprRuntime?.invalidateCache) this.exprRuntime.invalidateCache();
         this.ensureSelectionValid();
@@ -4135,6 +4139,10 @@ class CompositionBuilderApp {
     }
 
     afterValueMutate(opts = {}) {
+        if (this.isImeCompositionActive()) {
+            this.queuePendingImeMutate("value", opts);
+            return;
+        }
         if (this.exprRuntime?.invalidateCache) this.exprRuntime.invalidateCache();
         this.ensureSelectionValid();
         const rerenderProject = !!opts.rerenderProject;
@@ -4151,6 +4159,61 @@ class CompositionBuilderApp {
             this.updatePreviewAnimation();
             this.renderer.render(this.scene, this.camera);
         }
+    }
+
+    onEditableCompositionStart(e) {
+        const target = e?.target;
+        if (!(target instanceof HTMLElement)) return;
+        target.dataset.imeComposing = "1";
+        this.activeImeCompositionCount += 1;
+        if (this.pendingImeMutateTimer) {
+            clearTimeout(this.pendingImeMutateTimer);
+            this.pendingImeMutateTimer = 0;
+        }
+    }
+
+    onEditableCompositionEnd(e) {
+        const target = e?.target;
+        if (target instanceof HTMLElement) {
+            delete target.dataset.imeComposing;
+        }
+        this.activeImeCompositionCount = Math.max(0, this.activeImeCompositionCount - 1);
+        if (this.pendingImeMutateTimer) clearTimeout(this.pendingImeMutateTimer);
+        this.pendingImeMutateTimer = setTimeout(() => {
+            this.pendingImeMutateTimer = 0;
+            this.flushPendingImeMutate();
+        }, 0);
+    }
+
+    isImeCompositionActive() {
+        if (this.activeImeCompositionCount > 0) return true;
+        return !!document.querySelector("[data-ime-composing='1']");
+    }
+
+    queuePendingImeMutate(kind, opts = {}) {
+        const normalizedKind = kind === "structure" ? "structure" : "value";
+        const pending = this.pendingImeMutate;
+        if (!pending) {
+            this.pendingImeMutate = { kind: normalizedKind, opts: Object.assign({}, opts) };
+            return;
+        }
+        const mergedKind = pending.kind === "structure" || normalizedKind === "structure" ? "structure" : "value";
+        this.pendingImeMutate = {
+            kind: mergedKind,
+            opts: this.mergeMutateOptions(pending.opts, opts)
+        };
+    }
+
+    flushPendingImeMutate() {
+        if (this.isImeCompositionActive()) return;
+        const pending = this.pendingImeMutate;
+        this.pendingImeMutate = null;
+        if (!pending) return;
+        if (pending.kind === "structure") {
+            this.afterStructureMutate(pending.opts || {});
+            return;
+        }
+        this.afterValueMutate(pending.opts || {});
     }
 
     captureEditableFocusState() {
