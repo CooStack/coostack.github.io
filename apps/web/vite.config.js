@@ -8,11 +8,21 @@ function normalizeBase(rawBase = '/') {
   return withLeading.endsWith('/') ? withLeading : `${withLeading}/`;
 }
 
+function resolveGithubPagesBase(repository) {
+  const repo = String(repository || '').trim();
+  if (!repo) return '/';
+  const repoName = repo.split('/')[1] || '';
+  if (!repoName || repoName.endsWith('.github.io')) {
+    return '/';
+  }
+  return `/${repoName}/`;
+}
+
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), '');
   const deployTarget = String(env.VITE_DEPLOY_TARGET || 'local').trim();
-  const defaultBase = deployTarget === 'github-pages' && env.GITHUB_REPOSITORY
-    ? `/${env.GITHUB_REPOSITORY.split('/')[1] || ''}/`
+  const defaultBase = deployTarget === 'github-pages'
+    ? resolveGithubPagesBase(env.GITHUB_REPOSITORY)
     : '/';
 
   return {

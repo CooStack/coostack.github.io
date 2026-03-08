@@ -35,11 +35,20 @@ jobs:
       - name: 配置 Pages
         uses: actions/configure-pages@v5
 
+      - name: 计算 GitHub Pages 基础路径
+        shell: bash
+        run: |
+          REPO_NAME="${GITHUB_REPOSITORY#*/}"
+          if [[ "$REPO_NAME" == *.github.io ]]; then
+            echo "VITE_APP_BASE=/" >> "$GITHUB_ENV"
+          else
+            echo "VITE_APP_BASE=/$REPO_NAME/" >> "$GITHUB_ENV"
+          fi
+
       - name: 构建前端（GitHub Pages 模式）
         run: npm run build:web:github
         env:
           VITE_DEPLOY_TARGET: github-pages
-          VITE_APP_BASE: /${{ github.event.repository.name }}/
           VITE_ROUTER_MODE: hash
           VITE_PROJECT_REPOSITORY_MODE: local
 
