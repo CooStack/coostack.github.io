@@ -557,19 +557,20 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
         const totalCount = this.previewBasePoints.length;
         const minInterval = totalCount >= 50000 ? 16 : 0;
         if (minInterval > 0 && (now - this.previewPerfLastTs) < minInterval) return;
-        this.previewPerfLastTs = now;
         const elapsedTick = (now - this.previewAnimStart) / 50;
-        this.previewManualProjectScaleTick = elapsedTick;
         const cycleCfg = this.getPreviewCycleConfig();
         const cycleAppear = cycleCfg.appear;
         const cycleLive = cycleCfg.live;
         const cycleFade = cycleCfg.fade;
         const cycleTotal = cycleCfg.total;
         const globalCycleAge = ((elapsedTick % cycleTotal) + cycleTotal) % cycleTotal;
+        const cycleIndex = cycleTotal > 1e-6 ? Math.floor(elapsedTick / cycleTotal) : 0;
+        this.previewManualProjectScaleTick = globalCycleAge;
         const positions = this.pointsGeom.getAttribute("position")?.array;
         const colors = this.pointsGeom.getAttribute("color")?.array;
         const sizes = this.pointsGeom.getAttribute("aSize")?.array;
-        const alphas = this.pointsGeom.getAttribute("aAlpha")?.array;        if (!positions || !colors || !sizes || !alphas) return;
+        const alphas = this.pointsGeom.getAttribute("aAlpha")?.array;
+        if (!positions || !colors || !sizes || !alphas) return;
         let resolvedCurrentAges = this.previewFrameCurrentAges;
         if (!(resolvedCurrentAges instanceof Float32Array) || resolvedCurrentAges.length !== totalCount) {
             resolvedCurrentAges = new Float32Array(totalCount);
@@ -590,21 +591,24 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
             persistentCurrentAges = new Float32Array(totalCount);
             this.previewPersistentCurrentAges = persistentCurrentAges;
         }
-        let manualAgeFlags = this.previewManualCurrentAgeFlags;
+        let manualAgeFlags = this.previewManualAgeFlags;
         if (!(manualAgeFlags instanceof Uint8Array) || manualAgeFlags.length !== totalCount) {
             manualAgeFlags = new Uint8Array(totalCount);
-            this.previewManualCurrentAgeFlags = manualAgeFlags;
+            this.previewManualAgeFlags = manualAgeFlags;
         }
         const skipExprPerPoint = totalCount >= 50000;
-        const runtimeActions = this.buildPreviewRuntimeActions(elapsedTick, this.state.displayActions || [], {
+        const runtimeActions = this.buildPreviewRuntimeActions(globalCycleAge, this.state.displayActions || [], {
             skipExpression: skipExprPerPoint,
             scope: "display"
         });
         const globalAxis = this.resolveCompositionAxisDirection();
-        const tickStep = Math.max(0, Math.floor(elapsedTick));
-        if (!this.previewRuntimeGlobals || tickStep < this.previewRuntimeAppliedTick) {
+        const tickStep = Math.max(0, Math.floor(globalCycleAge));
+        if (!this.previewRuntimeGlobals
+            || tickStep < this.previewRuntimeAppliedTick
+            || this.previewRuntimeCycleIndex !== cycleIndex) {
             this.previewRuntimeGlobals = this.buildPreviewRuntimeGlobals(0, 0, 0);
             this.previewRuntimeAppliedTick = -1;
+            this.previewRuntimeCycleIndex = cycleIndex;
             persistentCurrentAges.fill(0);
             manualAgeFlags.fill(0);
         }
@@ -613,8 +617,11 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
             this.applyExpressionGlobalsOnce(runtimeActions, t, t, frameRuntimeGlobals, globalAxis);
         }
         if (tickStep > this.previewRuntimeAppliedTick) this.previewRuntimeAppliedTick = tickStep;
-        this.syncPreviewStatusWithCycle(frameRuntimeGlobals, cycleCfg, globalCycleAge, elapsedTick);
+        this.syncPreviewStatusWithCycle(frameRuntimeGlobals, cycleCfg, globalCycleAge, globalCycleAge);
 
+        if (!this.previewPointGroupIndex || this.previewPointGroupIndex.length !== totalCount) {
+            this.rebuildPreviewRuntimeIndex();
+        }
         if (!this.previewPointGroupIndex || this.previewPointGroupIndex.length !== totalCount) {
             this.rebuildPreviewRuntimeIndex();
         }
@@ -906,7 +913,7 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
                     fadeAgeTick: cached.statusAge
                 });
                 anchor = this.applyScaleFactorToPoint(anchorBase, globalScale);
-                anchor = this.applyRuntimeActionsToPoint(anchor, runtimeActions, elapsedTick, cached.statusAge, anchorRef, globalAxis, {
+                anchor = this.applyRuntimeActionsToPoint(anchor, runtimeActions, globalCycleAge, cached.statusAge, anchorRef, globalAxis, {
                     skipExpression: skipExprPerPoint,
                     runtimeVars: frameRuntimeGlobals,
                     persistExpressionVars: false
@@ -915,9 +922,7 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
             }
             let px = anchor.x;
             let py = anchor.y;
-            let pz = anchor.z;
-            if (useLocalOps && cached.cardHasShapeOps) {
-                let local = null;
+            if (useLocalOps && cached.cardHasShapeOps) {                let local = null;
                 const levelMetaList = Array.isArray(this.previewLevelMetas?.[i]) && this.previewLevelMetas[i].length
                     ? this.previewLevelMetas[i]
                     : [];
