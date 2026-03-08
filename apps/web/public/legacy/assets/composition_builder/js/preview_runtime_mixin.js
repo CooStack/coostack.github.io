@@ -3364,20 +3364,38 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
         const thisAtVars = (opts.thisAtVars && typeof opts.thisAtVars === "object")
             ? opts.thisAtVars
             : localVars;
-        if (/^[A-Za-z_$][A-Za-z0-9_$]*$/.test(src)) {
-            if (localVars && localVars[src]) {
-                const v = localVars[src];
-                if (v && Number.isFinite(v.x) && Number.isFinite(v.y) && Number.isFinite(v.z)) {
-                    return U.v(v.x, v.y, v.z);
+        const resolveRuntimeVec = (scope, key) => {
+            if (!scope || typeof scope !== "object" || !key) return null;
+            let value;
+            try {
+                value = scope[key];
+            } catch {
+                value = undefined;
+            }
+            if (Array.isArray(value) && value.length >= 3) {
+                const x = Number(value[0]);
+                const y = Number(value[1]);
+                const z = Number(value[2]);
+                if (Number.isFinite(x) && Number.isFinite(y) && Number.isFinite(z)) {
+                    return U.v(x, y, z);
                 }
             }
+            if (value && Number.isFinite(Number(value.x)) && Number.isFinite(Number(value.y)) && Number.isFinite(Number(value.z))) {
+                return U.v(Number(value.x), Number(value.y), Number(value.z));
+            }
+            if (value && Number.isFinite(Number(value.r)) && Number.isFinite(Number(value.g)) && Number.isFinite(Number(value.b))) {
+                return U.v(Number(value.r), Number(value.g), Number(value.b));
+            }
+            return null;
+        };
+        if (/^[A-Za-z_$][A-Za-z0-9_$]*$/.test(src)) {
+            const vec = resolveRuntimeVec(localVars, src);
+            if (vec) return vec;
         }
         const thisAtMatch = src.match(/^thisAt\.([A-Za-z_$][A-Za-z0-9_$]*)$/);
-        if (thisAtMatch && thisAtVars) {
-            const v = thisAtVars[thisAtMatch[1]];
-            if (v && Number.isFinite(v.x) && Number.isFinite(v.y) && Number.isFinite(v.z)) {
-                return U.v(v.x, v.y, v.z);
-            }
+        if (thisAtMatch) {
+            const vec = resolveRuntimeVec(thisAtVars, thisAtMatch[1]);
+            if (vec) return vec;
         }
         const m = src.match(/(?:Vec3|RelativeLocation|Vector3f)\s*\(\s*([^,]+)\s*,\s*([^,]+)\s*,\s*([^)]+)\s*\)/i);
         if (m) {
