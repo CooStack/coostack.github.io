@@ -44,7 +44,7 @@ jobs:
             echo "VITE_APP_BASE=/$REPO_NAME/" >> "$GITHUB_ENV"
           fi
 
-      - name: 构建前端（GitHub Pages 模式）d
+      - name: 构建前端（GitHub Pages 模式）
         run: npm run build:web:github
         env:
           VITE_DEPLOY_TARGET: github-pages
