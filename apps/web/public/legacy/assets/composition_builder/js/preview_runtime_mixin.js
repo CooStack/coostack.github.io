@@ -901,16 +901,7 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
             }
             let anchor = anchorsByBirth[anchorRef];
             if (!anchor) {
-                const globalScale = this.resolveScaleFactor(this.state.projectScale, cached.age, cycleCfg, {
-                    scope: "project",
-                    fadeAgeTick: cached.statusAge
-                });
-                anchor = this.applyScaleFactorToPoint(anchorBase, globalScale);
-                anchor = this.applyRuntimeActionsToPoint(anchor, runtimeActions, cached.elapsedTick, cached.age, anchorRef, globalAxis, {
-                    skipExpression: skipExprPerPoint,
-                    runtimeVars: frameRuntimeGlobals,
-                    persistExpressionVars: false
-                });
+                anchor = U.clone(anchorBase);
                 anchorsByBirth[anchorRef] = anchor;
             }
 
@@ -1022,6 +1013,21 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
                 py = anchor.y + local.y;
                 pz = anchor.z + local.z;
             }
+
+            let finalPoint = U.v(px, py, pz);
+            const globalScale = this.resolveScaleFactor(this.state.projectScale, cached.age, cycleCfg, {
+                scope: "project",
+                fadeAgeTick: cached.statusAge
+            });
+            finalPoint = this.applyScaleFactorToPoint(finalPoint, globalScale);
+            finalPoint = this.applyRuntimeActionsToPoint(finalPoint, runtimeActions, cached.elapsedTick, cached.age, anchorRef, globalAxis, {
+                skipExpression: skipExprPerPoint,
+                runtimeVars: frameRuntimeGlobals,
+                persistExpressionVars: false
+            });
+            px = finalPoint.x;
+            py = finalPoint.y;
+            pz = finalPoint.z;
 
             positions[i * 3 + 0] = px;
             positions[i * 3 + 1] = py;
