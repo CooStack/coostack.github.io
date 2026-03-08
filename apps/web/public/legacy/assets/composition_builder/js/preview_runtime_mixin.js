@@ -906,14 +906,13 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
                     fadeAgeTick: cached.statusAge
                 });
                 anchor = this.applyScaleFactorToPoint(anchorBase, globalScale);
-                anchor = this.applyRuntimeActionsToPoint(anchor, runtimeActions, cached.elapsedTick, cached.age, anchorRef, globalAxis, {
+                anchor = this.applyRuntimeActionsToPoint(anchor, runtimeActions, elapsedTick, cached.statusAge, anchorRef, globalAxis, {
                     skipExpression: skipExprPerPoint,
                     runtimeVars: frameRuntimeGlobals,
                     persistExpressionVars: false
                 });
                 anchorsByBirth[anchorRef] = anchor;
             }
-
             let px = anchor.x;
             let py = anchor.y;
             let pz = anchor.z;
