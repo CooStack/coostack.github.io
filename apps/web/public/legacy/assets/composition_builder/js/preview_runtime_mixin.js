@@ -1902,7 +1902,11 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
         const scope = opts?.scope === "project" ? "project" : "local";
         if (scope !== "project") cfg.runMode = "auto";
         if (cfg.type === "none") return 1;
-        if (scope === "project" && cfg.runMode === "manual") return this.evalScaleCurve(cfg, 0, Math.max(1, int(cfg.tick || 1)));        const age = num(ageTick);
+        if (scope === "project" && cfg.runMode === "manual") {
+            return this.evalScaleCurve(cfg, 0, Math.max(1, int(cfg.tick || 1)));
+        }
+        const cycle = cycleCfg || this.getPreviewCycleConfig();
+        const age = num(ageTick);
         const fadeAgeBase = Number.isFinite(Number(opts?.fadeAgeTick))
             ? num(opts.fadeAgeTick)
             : age;
@@ -1922,8 +1926,7 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
 
     evalScaleCurve(cfg, tickRaw, tickMaxRaw = 1) {
         const tickMax = Math.max(1, num(tickMaxRaw));
-        const tick = clamp(num(tickRaw), 0, tickMax);
-        if (cfg.type === "bezier") {
+        const tick = clamp(num(tickRaw), 0, tickMax);        if (cfg.type === "bezier") {
             return this.evalScaleBezierValue(cfg, tick, tickMax);
         }
         const t = tick / tickMax;
