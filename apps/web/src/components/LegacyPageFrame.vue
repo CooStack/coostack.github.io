@@ -24,7 +24,11 @@ const route = useRoute();
 const router = useRouter();
 
 function routeHref(name) {
-  return router.resolve({ name }).href;
+  const href = router.resolve({ name }).href;
+  if (href.startsWith('#')) {
+    return `${deploymentProfile.appBase}${href}`;
+  }
+  return href;
 }
 
 const src = computed(() => {

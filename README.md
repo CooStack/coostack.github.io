@@ -79,7 +79,7 @@ GitHub Pages 不能运行 Node.js，因此前端构建后会自动切换为：
 GitHub Actions 构建时会注入以下变量：
 
 - `VITE_DEPLOY_TARGET=github-pages`
-- `VITE_APP_BASE=/<仓库名>/`
+- `VITE_APP_BASE=/<仓库名>/`（若仓库名本身是 `<用户名>.github.io`，则自动使用 `/`）
 - `VITE_ROUTER_MODE=hash`
 - `VITE_PROJECT_REPOSITORY_MODE=local`
 
