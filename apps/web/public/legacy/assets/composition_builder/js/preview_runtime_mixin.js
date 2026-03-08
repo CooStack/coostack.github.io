@@ -1399,8 +1399,7 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
                 eatExprGrowth(card.shapeDisplayActions || [], maxOwner);
             } else {
                 let step = 0;
-                for (const action of (visualSource.controllerActions || [])) {
-                    step += estimateGrowthStepFromScript(action?.script || "");
+                for (const action of (card.controllerActions || [])) {                    step += estimateGrowthStepFromScript(action?.script || "");
                 }
                 if (step > 0) {
                     appear = Math.max(appear, Math.ceil(maxOwner / step));
