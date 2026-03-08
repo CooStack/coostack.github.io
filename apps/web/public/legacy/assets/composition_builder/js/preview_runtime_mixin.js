@@ -922,7 +922,9 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
             }
             let px = anchor.x;
             let py = anchor.y;
-            if (useLocalOps && cached.cardHasShapeOps) {                let local = null;
+            let pz = anchor.z;
+            if (useLocalOps && cached.cardHasShapeOps) {
+                let local = null;
                 const levelMetaList = Array.isArray(this.previewLevelMetas?.[i]) && this.previewLevelMetas[i].length
                     ? this.previewLevelMetas[i]
                     : [];
@@ -1030,15 +1032,11 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
             positions[i * 3 + 0] = px;
             positions[i * 3 + 1] = py;
             positions[i * 3 + 2] = pz;
-            positions[i * 3 + 0] = px;
-            positions[i * 3 + 1] = py;
-            positions[i * 3 + 2] = pz;
             let pRef = this.previewPoints[i];
             if (!pRef) {
                 pRef = U.v(px, py, pz);
                 this.previewPoints[i] = pRef;
-            } else {
-                pRef.x = px;
+            } else {                pRef.x = px;
                 pRef.y = py;
                 pRef.z = pz;
             }
