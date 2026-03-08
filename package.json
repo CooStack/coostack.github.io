@@ -9,8 +9,10 @@
   "scripts": {
     "dev:web": "npm --workspace @blogs/web run dev",
     "dev:server": "npm --workspace @blogs/server run dev",
+    "build": "npm run build:web",
     "build:web": "npm --workspace @blogs/web run build",
     "build:web:github": "npm --workspace @blogs/web run build:github",
+    "start": "npm run start:server",
     "start:server": "npm --workspace @blogs/server run start"
   }
 }

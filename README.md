@@ -17,6 +17,7 @@
 - `Shader Builder` 作为着色器编辑器恢复模型着色器 / 后处理页签、纹理库、后处理图、设置 / 快捷键弹窗、渲染预览、JSON 导入导出、Kotlin 输出
 - 首页恢复旧版卡片网格、主题切换、整卡点击与代码流展示；Generator、Bezier 页面入口补齐
 - GitHub Actions Pages 自动部署工作流
+- Express 可直接托管 `apps/web/dist`，支持单服务部署前端主页和 `/api`
 
 ## 已包含页面
 
@@ -33,7 +34,7 @@
 - 前端：Vue 3 + Vue Router + Vite + Three.js
 - 后端：Node.js + Express
 - 数据：服务端 JSON 持久化 + 前端本地存储降级
-- 部署：GitHub Pages + GitHub Actions
+- 部署：GitHub Pages + GitHub Actions，或单独部署 Node 服务
 
 ## 目录结构
 
@@ -64,17 +65,41 @@
 - 若 API 不可用，会自动降级到本地仓库模式
 - 导出优先尝试后端，失败时回退本地文件下载
 
+## 单服务部署（推荐）
+
+如果你希望主页和后端接口走同一个域名，当前仓库已经支持由 Express 同时托管前端构建产物和 `/api`。
+
+构建与启动：
+
+1. 在仓库根目录执行 `npm run build`
+2. 启动服务：`npm run start`
+3. 将整个仓库内容一并部署，至少要包含：
+   - `apps/server`
+   - `apps/web/dist`
+   - 根目录 `package.json` / `package-lock.json`
+
+部署后的效果：
+
+- `GET /` 返回前端主页
+- `GET /api/social/bilibili/stat` 返回粉丝数据
+- 前端会默认请求同域 `/api`
+- 首页粉丝数可正常显示
+
+这类部署适合 Render、Railway、Fly.io、云服务器 Docker、宝塔 Node 项目等可运行 Node.js 进程的平台。
+
 ## GitHub Pages 部署
 
-GitHub Pages 不能运行 Node.js，因此前端构建后会自动切换为：
+**2026-03-08 当前情况：GitHub Pages 仍然只能托管静态文件，不能运行 Node.js / Express 进程。**
 
-- Hash 路由
-- 本地项目仓库模式
-- 本地导出模式
+所以：
 
-工作流文件：
+- `https://coostack.github.io` 这类 GitHub Pages 地址本身**不能直接变成后端服务**
+- 仅把前端发布到 Pages 时，首页粉丝数依赖的 `/api/social/bilibili/stat` 不会在 Pages 上自动存在
+- 想在 Pages 上继续显示粉丝数，只能额外部署一个后端，并把 `VITE_API_BASE_URL` 指向那个后端地址
 
-- `.github/workflows/deploy-pages.yml`
+GitHub Actions 工作流文件：
+
+- `.github/workflows/jekyll-gh-pages.yml`
 
 GitHub Actions 构建时会注入以下变量：
 
@@ -82,22 +107,22 @@ GitHub Actions 构建时会注入以下变量：
 - `VITE_APP_BASE=/<仓库名>/`（若仓库名本身是 `<用户名>.github.io`，则自动使用 `/`）
 - `VITE_ROUTER_MODE=hash`
 - `VITE_PROJECT_REPOSITORY_MODE=local`
-- `VITE_API_BASE_URL=${{ vars.VITE_API_BASE_URL }}`（可选；若未配置，Pages 端不会再错误请求本地 `localhost:3001`）
+- `VITE_API_BASE_URL=${{ vars.VITE_API_BASE_URL }}`（可选；如配置为外部后端地址，Pages 页面也能拿到粉丝数）
 
-只要仓库默认分支是 `master` 或 `main`，并在仓库设置中启用 GitHub Pages + GitHub Actions，推送后就会自动发布前端静态产物。
+如果你的目标是“同一个域名同时返回页面和接口”，请不要继续用 GitHub Pages 作为最终生产承载，而是改为部署 Node 服务，或者使用你自己的自定义域名反代到 Node 服务。
 
 ## 构建校验
 
-当前已执行：
+建议执行：
 
-- `npm.cmd run build:web`
-- `npm.cmd run build:web:github`
+- `npm run build`
+- `npm run build:web:github`
 
-结果：
+预期结果：
 
-- 本地模式前端构建通过
+- 单服务模式前端构建通过
 - GitHub Pages 模式前端构建通过
-- 存在单 chunk 体积告警，但不阻塞发布
+- 存在单 chunk 体积告警时，一般不阻塞发布
 
 ## 下次继续时先看
 
