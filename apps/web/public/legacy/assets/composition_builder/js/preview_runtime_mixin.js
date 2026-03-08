@@ -559,7 +559,8 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
         if (minInterval > 0 && (now - this.previewPerfLastTs) < minInterval) return;
         this.previewPerfLastTs = now;
         const elapsedTick = (now - this.previewAnimStart) / 50;
-        const cycleCfg = this.previewCycleCache || (this.previewCycleCache = this.getPreviewCycleConfig());
+        this.previewManualProjectScaleTick = elapsedTick;
+        const cycleCfg = this.getPreviewCycleConfig();
         const cycleAppear = cycleCfg.appear;
         const cycleLive = cycleCfg.live;
         const cycleFade = cycleCfg.fade;
@@ -568,8 +569,7 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
         const positions = this.pointsGeom.getAttribute("position")?.array;
         const colors = this.pointsGeom.getAttribute("color")?.array;
         const sizes = this.pointsGeom.getAttribute("aSize")?.array;
-        const alphas = this.pointsGeom.getAttribute("aAlpha")?.array;
-        if (!positions || !colors || !sizes || !alphas) return;
+        const alphas = this.pointsGeom.getAttribute("aAlpha")?.array;        if (!positions || !colors || !sizes || !alphas) return;
         let resolvedCurrentAges = this.previewFrameCurrentAges;
         if (!(resolvedCurrentAges instanceof Float32Array) || resolvedCurrentAges.length !== totalCount) {
             resolvedCurrentAges = new Float32Array(totalCount);
@@ -3478,7 +3478,6 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
             z: w * dot * (1 - cosA) + z * cosA + (-v * x + u * y) * sinA
         };
     }
-
     applyExpressionActionToPoint(action, point, elapsedTick, ageTick, pointIndex, axisInput = null, opts = {}) {
         const srcRaw = String(action?.expressionRaw || action?.expression || "").trim();
         const src = transpileKotlinThisQualifierToJs(srcRaw);
@@ -3575,10 +3574,36 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
         const applyProjectScale = (reversed = false) => {
             if (!projectScaleManual) return;
             const tickMax = Math.max(1, int(projectScaleCfg.tick || 1));
-            const progressTick = clamp(num(ageTick), 0, tickMax);
-            const curveTick = reversed ? (tickMax - progressTick) : progressTick;
-            const factor = this.evalScaleCurve(projectScaleCfg, curveTick, tickMax);
+            const nowTick = persistExpressionVars
+                ? Math.max(0, num(elapsedTick))
+                : (Number.isFinite(Number(this.previewManualProjectScaleTick))
+                    ? Math.max(0, num(this.previewManualProjectScaleTick))
+                    : Math.max(0, num(elapsedTick)));
             const baseFactor = this.evalScaleCurve(projectScaleCfg, 0, tickMax);
+            let phaseTick = 0;
+            if (runtimeVars && actionKeyBase) {
+                const phaseKey = `__cpbProjectScalePhase__${actionKeyBase}`;
+                const lastKey = `__cpbProjectScaleLast__${actionKeyBase}`;
+                let phaseValue = Number(runtimeVars[phaseKey]);
+                let lastValue = Number(runtimeVars[lastKey]);
+                if (!Number.isFinite(phaseValue)) phaseValue = 0;
+                if (!Number.isFinite(lastValue)) {
+                    lastValue = nowTick;
+                } else {
+                    let dt = nowTick - lastValue;
+                    if (dt < 0) {
+                        dt = 0;
+                        phaseValue = 0;
+                    }
+                    if (dt > 0 && dt <= MAX_ACCUM_DT) {
+                        phaseValue += reversed ? -dt : dt;
+                    }
+                }
+                phaseTick = clamp(phaseValue, 0, tickMax);
+                runtimeVars[phaseKey] = phaseTick;
+                runtimeVars[lastKey] = nowTick;
+            }
+            const factor = this.evalScaleCurve(projectScaleCfg, phaseTick, tickMax);
             const applyFactor = Math.abs(baseFactor) > 1e-9 ? (factor / baseFactor) : factor;
             api.point = U.v(
                 num(api.point?.x) * applyFactor,
@@ -3648,7 +3673,9 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
         } catch {
             return { point, axis: startAxis };
         }
-    }    parseJsVec(v) {
+    }
+
+    parseJsVec(v) {
         if (!v) return U.v(0, 1, 0);
         if (typeof v === "object" && Number.isFinite(v.x) && Number.isFinite(v.y) && Number.isFinite(v.z)) {
             const x = num(v.x);
@@ -3670,11 +3697,10 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
     getExpressionVars(elapsedTick = 0, ageTick = 0, pointIndex = 0, opts = {}) {
         return this.exprRuntime.getExpressionVars(elapsedTick, ageTick, pointIndex, opts);
     }
+}
 
-    }
-
-    for (const key of Object.getOwnPropertyNames(PreviewRuntimeMixin.prototype)) {
-        if (key === "constructor") continue;
-        CompositionBuilderApp.prototype[key] = PreviewRuntimeMixin.prototype[key];
-    }
+for (const key of Object.getOwnPropertyNames(PreviewRuntimeMixin.prototype)) {
+    if (key === "constructor") continue;
+    CompositionBuilderApp.prototype[key] = PreviewRuntimeMixin.prototype[key];
+}
 }
