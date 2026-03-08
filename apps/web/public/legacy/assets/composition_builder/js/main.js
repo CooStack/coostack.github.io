@@ -847,13 +847,13 @@ function normalizeStateShape(state) {
 
     next.settings.theme = String(next.settings.theme || "dark-1");
     next.settings.paramStep = Math.max(0.000001, num(next.settings.paramStep || 0.1));
-    next.settings.pointSize = Math.max(0.001, num(next.settings.pointSize || 0.07));
+    next.settings.pointSize = Math.max(0.001, num(next.settings.pointSize || 1.5));
     next.settings.showAxes = next.settings.showAxes !== false;
-    next.settings.showGrid = next.settings.showGrid !== false;
+    next.settings.showGrid = next.settings.showGrid === true ? true : false;
     next.settings.realtimeCode = next.settings.realtimeCode !== false;
-    next.settings.leftPanelWidth = clamp(num(next.settings.leftPanelWidth || 560), 400, 1200);
+    next.settings.leftPanelWidth = clamp(num(next.settings.leftPanelWidth || 586), 400, 1200);
     next.settings.projectSectionHeight = clamp(num(next.settings.projectSectionHeight || 42), 20, 70);
-    next.settings.leftPanelTab = next.settings.leftPanelTab === "cards" ? "cards" : "project";
+    next.settings.leftPanelTab = next.settings.leftPanelTab === "project" ? "project" : "cards";
     next.projectScale = normalizeScaleHelperConfig(next.projectScale, { type: "none" });
 
     next.globalVars = next.globalVars.map((v) => normalizeGlobalVar(v));
@@ -932,11 +932,13 @@ function createDefaultState() {
         settings: {
             theme: "dark-1",
             paramStep: 0.1,
-            pointSize: 0.07,
+            pointSize: 1.5,
             showAxes: true,
-            showGrid: true,
+            showGrid: false,
             realtimeCode: true,
-            leftPanelTab: "project"
+            leftPanelTab: "cards",
+            leftPanelWidth: 586,
+            projectSectionHeight: 42
         },
         hotkeys: deepClone(DEFAULT_HOTKEYS)
     });
@@ -4331,21 +4333,83 @@ class CompositionBuilderApp {
         }
     }
 
-    writeBuilderCompositionContext() {
+    isBuilderContextNumericType(typeName = "") {
+        return ["Int", "Long", "Float", "Double"].includes(String(typeName || "").trim());
+    }
+
+    isBuilderContextVectorType(typeName = "") {
+        return ["Vec3", "RelativeLocation", "Vector3f"].includes(String(typeName || "").trim());
+    }
+
+    normalizeBuilderContextSymbolEntry(item, extra = {}) {
+        const name = String(item?.name || "").trim();
+        const type = String(item?.type || "").trim();
+        const value = String(item?.value ?? item?.expr ?? "").trim();
+        const ref = String(extra?.ref || name).trim() || name;
+        return {
+            name,
+            type,
+            value,
+            ref,
+            scope: String(extra?.scope || "").trim(),
+            path: Array.isArray(extra?.path) ? extra.path.slice() : []
+        };
+    }
+
+    collectBuilderScopedLocalVars(card, target = "root") {
+        const out = [];
+        const pushList = (list, scope, path = []) => {
+            if (!Array.isArray(list)) return;
+            for (const item of list) {
+                const entry = this.normalizeBuilderContextSymbolEntry(item, {
+                    scope,
+                    path,
+                    ref: String(item?.name || "").trim()
+                });
+                if (!entry.name) continue;
+                out.push(entry);
+            }
+        };
+        if (!card) return out;
+        pushList(card.controllerVars, "card", []);
+        const normalizedTarget = normalizeBuilderTarget(target);
+        if (!/^tree_node:/.test(normalizedTarget)) return out;
         try {
+            const treePath = JSON.parse(normalizedTarget.slice("tree_node:".length));
+            if (!Array.isArray(treePath) || !treePath.length) return out;
+            for (let depth = 0; depth < treePath.length; depth++) {
+                const node = this.getShapeNodeByPath(card, treePath.slice(0, depth + 1));
+                if (!node) break;
+                pushList(node.controllerVars, "tree_node", treePath.slice(0, depth + 1));
+            }
+        } catch {
+        }
+        return out;
+    }
+
+    writeBuilderCompositionContext(card = null, target = "root") {
+        try {
+            const projectName = String(this.state.projectName || "NewComposition");
+            const projectClass = sanitizeKotlinClassName(projectName || "NewComposition");
+            const globalVars = (this.state.globalVars || []).map((it) => this.normalizeBuilderContextSymbolEntry(it, {
+                scope: "global",
+                ref: `this@${projectClass}.${String(it?.name || "").trim()}`
+            })).filter((it) => !!it.name);
+            const globalConsts = (this.state.globalConsts || []).map((it) => this.normalizeBuilderContextSymbolEntry(it, {
+                scope: "global_const",
+                ref: String(it?.name || "").trim()
+            })).filter((it) => !!it.name);
+            const localVars = this.collectBuilderScopedLocalVars(card, target);
             localStorage.setItem(CPB_COMP_CONTEXT_KEY, JSON.stringify({
+                source: "composition_builder",
                 ts: Date.now(),
-                projectName: String(this.state.projectName || "NewComposition"),
-                globalVars: (this.state.globalVars || []).map((it) => ({
-                    name: String(it?.name || ""),
-                    type: String(it?.type || ""),
-                    value: String(it?.value ?? "")
-                })),
-                globalConsts: (this.state.globalConsts || []).map((it) => ({
-                    name: String(it?.name || ""),
-                    type: String(it?.type || ""),
-                    value: String(it?.value ?? "")
-                })),
+                projectName,
+                projectClass,
+                cardId: String(card?.id || "").trim(),
+                target: normalizeBuilderTarget(target),
+                globalVars,
+                globalConsts,
+                localVars,
                 numericMap: this.getBuilderNumericContextMap()
             }));
         } catch {
@@ -8993,7 +9057,7 @@ class CompositionBuilderApp {
             }));
             localStorage.setItem(CPB_PROJECT_KEY, sanitizeFileBase(card.name || this.state.projectName || "Builder"));
             localStorage.setItem(CPB_THEME_KEY, this.state.settings.theme || "dark-1");
-            this.writeBuilderCompositionContext();
+            this.writeBuilderCompositionContext(card, target);
         } catch (e) {
             console.warn("seed builder sandbox failed:", e);
         }

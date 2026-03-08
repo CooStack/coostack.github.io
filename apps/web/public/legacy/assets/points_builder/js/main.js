@@ -480,14 +480,21 @@ function initPointsBuilderMain() {
     const PB_COMP_CONTEXT_KEY = "pb_comp_context_v1";
     const compositionNumericContext = {
         enabled: false,
-        map: {},
+        map: { PI: Math.PI },
         suggestions: [],
+        vectorOptions: [],
         cache: new Map(),
         version: 0
     };
+    const CONTEXT_NUMERIC_TYPES = new Set(["Int", "Long", "Float", "Double"]);
+    const CONTEXT_VECTOR_TYPES = new Set(["Vec3", "RelativeLocation", "Vector3f"]);
+
+    function transpileKotlinThisQualifierToJs(raw) {
+        return String(raw || "").replace(/this@[A-Za-z_][A-Za-z0-9_]*\./g, "");
+    }
 
     function stripNumericSuffix(raw) {
-        return String(raw || "").replace(/(\d+(?:\.\d+)?(?:[eE][+\-]?\d+)?)[fFdDlL]\b/g, "$1");
+        return transpileKotlinThisQualifierToJs(String(raw || "")).replace(/(\d+(?:\.\d+)?(?:[eE][+\-]?\d+)?)[fFdDlL]\b/g, "$1");
     }
 
     function isNumericLiteral(raw) {
@@ -498,6 +505,29 @@ function initPointsBuilderMain() {
         return /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(String(raw || "").trim());
     }
 
+    function normalizeContextIdentifier(raw) {
+        const text = stripNumericSuffix(String(raw || "").trim());
+        return isIdentifier(text) ? text : "";
+    }
+
+    function isFiniteVectorLike(value) {
+        return !!value
+            && Number.isFinite(Number(value.x))
+            && Number.isFinite(Number(value.y))
+            && Number.isFinite(Number(value.z));
+    }
+
+    function makeVectorProxy(vec, typeName = "") {
+        const x = Number.isFinite(Number(vec?.x)) ? Number(vec.x) : 0;
+        const y = Number.isFinite(Number(vec?.y)) ? Number(vec.y) : 0;
+        const z = Number.isFinite(Number(vec?.z)) ? Number(vec.z) : 0;
+        const out = { x, y, z };
+        if (String(typeName || "").trim() === "Vec3") {
+            out.asRelative = () => ({ x, y, z });
+        }
+        return Object.freeze(out);
+    }
+
     function evaluateExpressionWithMap(rawExpr, vars = {}) {
         const expr = stripNumericSuffix(String(rawExpr || "").trim());
         if (!expr) return 0;
@@ -505,8 +535,8 @@ function initPointsBuilderMain() {
             const n = Number(expr);
             return Number.isFinite(n) ? n : 0;
         }
-        const keys = Object.keys(vars || {}).filter((k) => isIdentifier(k));
-        const values = keys.map((k) => Number(vars[k]) || 0);
+        const keys = Object.keys(vars || {}).filter((k) => k !== "PI" && isIdentifier(k));
+        const values = keys.map((k) => vars[k]);
         try {
             const fn = new Function(...keys, "PI", "Math", `return (${expr});`);
             const out = fn(...values, Math.PI, Math);
@@ -516,32 +546,93 @@ function initPointsBuilderMain() {
         }
     }
 
-    function resolveCompositionNumericMap(payload) {
-        const numericTypes = new Set(["Int", "Long", "Float", "Double"]);
+    function parseContextVectorValue(rawExpr, vars, resolveVectorByName, stack = new Set()) {
+        const expr = stripNumericSuffix(String(rawExpr || "").trim());
+        if (!expr) return null;
+        if (expr === "Vec3.ZERO") return { x: 0, y: 0, z: 0 };
+        if (expr === "RelativeLocation.yAxis()") return { x: 0, y: 1, z: 0 };
+        const refName = normalizeContextIdentifier(expr);
+        if (refName) {
+            const resolved = typeof resolveVectorByName === "function" ? resolveVectorByName(refName, stack) : null;
+            if (isFiniteVectorLike(resolved)) return resolved;
+            const direct = vars?.[refName];
+            if (isFiniteVectorLike(direct)) {
+                return {
+                    x: Number(direct.x) || 0,
+                    y: Number(direct.y) || 0,
+                    z: Number(direct.z) || 0
+                };
+            }
+        }
+        const m = expr.match(/^(?:Vec3|RelativeLocation|Vector3f)\s*\(\s*([^,]+)\s*,\s*([^,]+)\s*,\s*([^)]+)\s*\)$/i);
+        if (!m) return null;
+        return {
+            x: evaluateExpressionWithMap(m[1], vars || {}),
+            y: evaluateExpressionWithMap(m[2], vars || {}),
+            z: evaluateExpressionWithMap(m[3], vars || {})
+        };
+    }
+
+    function buildCompositionContext(payload) {
         const map = { PI: Math.PI };
-        const entries = [];
+        const suggestions = [];
+        const vectorOptions = [];
+        const numericEntries = [];
+        const vectorEntries = new Map();
+        const pushSuggestion = (value) => {
+            const text = String(value || "").trim();
+            if (!text || suggestions.includes(text)) return;
+            suggestions.push(text);
+        };
+        const pushNumericEntry = (name, expr) => {
+            if (!name || !isIdentifier(name)) return;
+            numericEntries.push({ name, expr: String(expr || "0") });
+        };
         const baseMap = (payload && typeof payload.numericMap === "object") ? payload.numericMap : {};
         for (const key of Object.keys(baseMap || {})) {
             if (!isIdentifier(key)) continue;
             const n = Number(baseMap[key]);
             if (Number.isFinite(n)) map[key] = n;
         }
-        const globalVars = Array.isArray(payload?.globalVars) ? payload.globalVars : [];
-        for (const item of globalVars) {
-            const name = String(item?.name || "").trim();
+        const allScopedVars = []
+            .concat(Array.isArray(payload?.globalVars) ? payload.globalVars : [])
+            .concat(Array.isArray(payload?.globalConsts) ? payload.globalConsts : [])
+            .concat(Array.isArray(payload?.localVars) ? payload.localVars : []);
+        for (const item of allScopedVars) {
+            const name = normalizeContextIdentifier(item?.name || "");
             const type = String(item?.type || "").trim();
-            if (!name || !isIdentifier(name) || !numericTypes.has(type)) continue;
-            entries.push({ name, expr: String(item?.value || "0") });
+            const value = String(item?.value ?? item?.expr ?? "").trim();
+            const ref = String(item?.ref || name).trim() || name;
+            if (!name) continue;
+            if (CONTEXT_NUMERIC_TYPES.has(type)) {
+                pushNumericEntry(name, value || "0");
+                pushSuggestion(ref);
+                if (ref !== name) pushSuggestion(name);
+                continue;
+            }
+            if (type === "Boolean") {
+                map[name] = /^true$/i.test(value);
+                pushSuggestion(ref);
+                if (ref !== name) pushSuggestion(name);
+                continue;
+            }
+            if (CONTEXT_VECTOR_TYPES.has(type)) {
+                vectorEntries.set(name, { name, type, expr: value, ref, scope: String(item?.scope || "") });
+                continue;
+            }
         }
         const globalConsts = Array.isArray(payload?.globalConsts) ? payload.globalConsts : [];
         for (const item of globalConsts) {
-            const name = String(item?.name || "").trim();
-            if (!name || !isIdentifier(name)) continue;
-            entries.push({ name, expr: String(item?.value || "0") });
+            const name = normalizeContextIdentifier(item?.name || "");
+            const ref = String(item?.ref || name).trim() || name;
+            if (!name) continue;
+            pushNumericEntry(name, String(item?.value ?? "0"));
+            pushSuggestion(ref);
+            if (ref !== name) pushSuggestion(name);
         }
         for (let pass = 0; pass < 8; pass++) {
             let changed = false;
-            for (const entry of entries) {
+            for (const entry of numericEntries) {
                 const n = evaluateExpressionWithMap(entry.expr, map);
                 if (!Number.isFinite(n)) continue;
                 if (map[entry.name] !== n) {
@@ -551,7 +642,57 @@ function initPointsBuilderMain() {
             }
             if (!changed) break;
         }
-        return map;
+        const resolvedVectors = new Map();
+        const resolvingTag = Symbol("context_vector_resolving");
+        const resolveVectorByName = (name, stack = new Set()) => {
+            if (!name || !vectorEntries.has(name)) return null;
+            if (resolvedVectors.has(name)) {
+                const cached = resolvedVectors.get(name);
+                if (cached === resolvingTag) return { x: 0, y: 0, z: 0 };
+                return cached;
+            }
+            if (stack.has(name) || stack.size > 16) return { x: 0, y: 0, z: 0 };
+            resolvedVectors.set(name, resolvingTag);
+            const info = vectorEntries.get(name);
+            const nextStack = new Set(stack);
+            nextStack.add(name);
+            const scope = Object.assign({}, map);
+            for (const [resolvedName, vec] of resolvedVectors.entries()) {
+                if (vec === resolvingTag || !isFiniteVectorLike(vec)) continue;
+                const resolvedInfo = vectorEntries.get(resolvedName);
+                scope[resolvedName] = makeVectorProxy(vec, resolvedInfo?.type || "");
+            }
+            const vec = parseContextVectorValue(info?.expr || "", scope, resolveVectorByName, nextStack) || { x: 0, y: 0, z: 0 };
+            resolvedVectors.set(name, vec);
+            map[name] = makeVectorProxy(vec, info?.type || "");
+            return vec;
+        };
+        for (const [name, info] of vectorEntries.entries()) {
+            resolveVectorByName(name, new Set());
+            vectorOptions.push({
+                name,
+                ref: String(info?.ref || name).trim() || name,
+                type: String(info?.type || "").trim(),
+                label: `${String(info?.ref || name).trim() || name}（${String(info?.scope || "变量").trim() || "变量"} ${String(info?.type || "Vec3").trim() || "Vec3"}）`
+            });
+        }
+        vectorOptions.sort((a, b) => String(a.ref).localeCompare(String(b.ref)));
+        for (const option of vectorOptions) {
+            pushSuggestion(`${option.ref}.x`);
+            pushSuggestion(`${option.ref}.y`);
+            pushSuggestion(`${option.ref}.z`);
+            if (option.ref !== option.name) {
+                pushSuggestion(`${option.name}.x`);
+                pushSuggestion(`${option.name}.y`);
+                pushSuggestion(`${option.name}.z`);
+            }
+        }
+        return {
+            enabled: suggestions.length > 0 || vectorOptions.length > 0 || Object.keys(map).some((k) => k !== "PI"),
+            map,
+            suggestions: suggestions.slice().sort((a, b) => a.localeCompare(b)),
+            vectorOptions
+        };
     }
 
     function loadCompositionNumericContext() {
@@ -562,13 +703,11 @@ function initPointsBuilderMain() {
         } catch {
             payload = null;
         }
-        const map = resolveCompositionNumericMap(payload || {});
-        const names = Object.keys(map)
-            .filter((k) => k !== "PI")
-            .sort((a, b) => a.localeCompare(b));
-        compositionNumericContext.enabled = names.length > 0;
-        compositionNumericContext.map = map;
-        compositionNumericContext.suggestions = names;
+        const next = buildCompositionContext(payload || {});
+        compositionNumericContext.enabled = !!next.enabled;
+        compositionNumericContext.map = next.map || { PI: Math.PI };
+        compositionNumericContext.suggestions = Array.isArray(next.suggestions) ? next.suggestions : [];
+        compositionNumericContext.vectorOptions = Array.isArray(next.vectorOptions) ? next.vectorOptions : [];
         compositionNumericContext.cache.clear();
         compositionNumericContext.version += 1;
     }
@@ -580,6 +719,12 @@ function initPointsBuilderMain() {
     function getCompositionNumericSuggestions() {
         return Array.isArray(compositionNumericContext.suggestions)
             ? compositionNumericContext.suggestions.slice()
+            : [];
+    }
+
+    function getCompositionVec3VariableOptions() {
+        return Array.isArray(compositionNumericContext.vectorOptions)
+            ? compositionNumericContext.vectorOptions.map((it) => Object.assign({}, it))
             : [];
     }
 
@@ -629,30 +774,44 @@ function initPointsBuilderMain() {
     }
 
     const SETTINGS_STORAGE_KEY = "pb_settings_v1";
-    let paramStep = 0.1;
-    let snapStep = 1;
-    let particleSnapRange = 0.35;
-    let offsetPreviewLimit = -1;
-    let realtimeKotlin = false;
-    let pointPickPreviewEnabled = true;
-    let snapGridKeyToggleMode = false;
-    let snapParticleKeyToggleMode = false;
+    const DEFAULT_SETTINGS_PAYLOAD = {
+        paramStep: 0.5,
+        snapStep: 0.125,
+        particleSnapRange: 0.5,
+        showAxes: true,
+        showGrid: true,
+        realtimeKotlin: false,
+        pointPickPreviewEnabled: true,
+        theme: "dark-1",
+        pointSize: 1.5,
+        offsetPreviewLimit: -1,
+        snapGridKeyToggleMode: false,
+        snapParticleKeyToggleMode: false
+    };
+    let paramStep = DEFAULT_SETTINGS_PAYLOAD.paramStep;
+    let snapStep = DEFAULT_SETTINGS_PAYLOAD.snapStep;
+    let particleSnapRange = DEFAULT_SETTINGS_PAYLOAD.particleSnapRange;
+    let offsetPreviewLimit = DEFAULT_SETTINGS_PAYLOAD.offsetPreviewLimit;
+    let realtimeKotlin = DEFAULT_SETTINGS_PAYLOAD.realtimeKotlin;
+    let pointPickPreviewEnabled = DEFAULT_SETTINGS_PAYLOAD.pointPickPreviewEnabled;
+    let snapGridKeyToggleMode = DEFAULT_SETTINGS_PAYLOAD.snapGridKeyToggleMode;
+    let snapParticleKeyToggleMode = DEFAULT_SETTINGS_PAYLOAD.snapParticleKeyToggleMode;
 
     function normalizeParamStep(v) {
         const n = parseFloat(v);
-        if (!Number.isFinite(n) || n <= 0) return 0.1;
+        if (!Number.isFinite(n) || n <= 0) return DEFAULT_SETTINGS_PAYLOAD.paramStep;
         return Math.max(0.000001, n);
     }
 
     function normalizeSnapStep(v) {
         const n = parseFloat(v);
-        if (!Number.isFinite(n) || n <= 0) return 1;
+        if (!Number.isFinite(n) || n <= 0) return DEFAULT_SETTINGS_PAYLOAD.snapStep;
         return Math.max(0.000001, n);
     }
 
     function normalizeParticleSnapRange(v) {
         const n = parseFloat(v);
-        if (!Number.isFinite(n) || n <= 0) return 0.35;
+        if (!Number.isFinite(n) || n <= 0) return DEFAULT_SETTINGS_PAYLOAD.particleSnapRange;
         return Math.max(0.000001, n);
     }
 
@@ -861,11 +1020,15 @@ function initPointsBuilderMain() {
     function loadSettingsFromStorage() {
         try {
             const raw = localStorage.getItem(SETTINGS_STORAGE_KEY);
-            if (!raw) return;
+            if (!raw) {
+                applySettingsPayload(DEFAULT_SETTINGS_PAYLOAD, { skipSave: true });
+                return;
+            }
             const obj = JSON.parse(raw);
-            applySettingsPayload(obj, { skipSave: true });
+            applySettingsPayload(Object.assign({}, DEFAULT_SETTINGS_PAYLOAD, obj || {}), { skipSave: true });
         } catch (e) {
             console.warn("loadSettings failed:", e);
+            applySettingsPayload(DEFAULT_SETTINGS_PAYLOAD, { skipSave: true });
         }
     }
 
@@ -1471,6 +1634,7 @@ function initPointsBuilderMain() {
         getParamStep: () => paramStep,
         enableExprNumbers: () => hasCompositionNumericContext(),
         getExprSuggestions: () => getCompositionNumericSuggestions(),
+        getVec3VariableOptions: () => getCompositionVec3VariableOptions(),
         parseExprNumber: (raw) => num(raw)
     });
 
@@ -2245,7 +2409,7 @@ function initPointsBuilderMain() {
     const rotatePointColor = new THREE.Color(ROTATE_POINT_HEX);
 
     let pickMarkers = [];
-    let pointSize = 0.2;     // ✅ 粒子大小（PointsMaterial.size）
+    let pointSize = 1.5;     // ✅ 粒子大小（PointsMaterial.size）
     // line pick state (可指向主/任意子 builder)
     let linePickMode = false;
     let linePickType = "line"; // line | triangle
@@ -5503,6 +5667,15 @@ function onCanvasDblClick(ev) {
         const groups = OFFSET_PARAM_GROUPS[node.kind];
         if (!groups) return false;
         const p = node.params || (node.params = {});
+        for (const g of groups) {
+            for (const key of g) {
+                const raw = String(p[key] ?? "").trim();
+                if (!raw) continue;
+                if (!isNumericLiteral(stripNumericSuffix(raw))) {
+                    return false;
+                }
+            }
+        }
         for (const g of groups) {
             const kx = g[0], ky = g[1], kz = g[2];
             if (kx) p[kx] = num(p[kx]) + delta.x;

@@ -37,33 +37,32 @@ export function initHotkeysSystem(ctx) {
     const DEFAULT_HOTKEYS = {
         version: 6,
         actions: {
-            openPicker: "KeyW",          // W
-            pickLineXZ: "KeyQ",          // Q
-            pickTriangle: "KeyT",        // T
-            pickPoint: "KeyE",           // E
-            toggleFullscreen: "KeyF",    // F
-            resetCamera: "Shift+KeyR",   // Shift + R
-            importJson: "Mod+KeyO",      // Ctrl/Cmd + O
-            toggleSettings: "KeyH",      // H
-            toggleParamSync: "KeyY",     // Y
-            toggleFilter: "KeyL",        // L
-            toggleSnapGrid: "KeyG",      // G
-            toggleSnapParticle: "KeyP",  // P
-            toggleSnapQuick: "",         // deprecated: use per-key grid/particle hotkeys
-            snapPlaneXZ: "KeyA",         // A
-            snapPlaneXY: "KeyS",         // S
-            snapPlaneZY: "KeyD",         // D
-            mirrorPlaneXZ: "Shift+KeyA", // Shift + A
-            mirrorPlaneXY: "Shift+KeyS", // Shift + S
-            mirrorPlaneZY: "Shift+KeyD", // Shift + D
-            lockPlaneHold: "KeyX",       // X
-            copyFocused: "Mod+KeyD",     // Ctrl/Cmd + D
-            mirrorCopy: "Mod+Shift+KeyM",// Ctrl/Cmd + Shift + M
-            triggerFocusedMove: "KeyV",  // V
-            triggerFocusedRotate: "KeyR",// R
-            undo: "Mod+KeyZ",            // Ctrl/Cmd + Z
-            redo: "Mod+Shift+KeyZ",      // Ctrl/Cmd + Shift + Z
-            // 删除聚焦卡片（Mac 键盘上的“Delete”通常对应 Backspace；更通用）
+            openPicker: "KeyN",
+            pickLineXZ: "KeyQ",
+            pickTriangle: "KeyT",
+            pickPoint: "KeyE",
+            toggleFullscreen: "KeyF",
+            resetCamera: "Shift+KeyR",
+            importJson: "Shift+KeyN",
+            toggleSettings: "KeyH",
+            toggleParamSync: "KeyY",
+            toggleFilter: "KeyL",
+            toggleSnapGrid: "Mod+Space",
+            toggleSnapParticle: "Space",
+            toggleSnapQuick: "",
+            snapPlaneXZ: "KeyA",
+            snapPlaneXY: "KeyS",
+            snapPlaneZY: "KeyD",
+            mirrorPlaneXZ: "Shift+KeyA",
+            mirrorPlaneXY: "Shift+KeyS",
+            mirrorPlaneZY: "Shift+KeyD",
+            lockPlaneHold: "KeyX",
+            copyFocused: "Mod+KeyD",
+            mirrorCopy: "Mod+Shift+KeyD",
+            triggerFocusedMove: "KeyV",
+            triggerFocusedRotate: "KeyR",
+            undo: "Mod+KeyZ",
+            redo: "Mod+Shift+KeyZ",
             deleteFocused: "Backspace",
         },
         kinds: {},

@@ -7,6 +7,7 @@ export function createCardInputs(ctx) {
         getParamStep,
         enableExprNumbers,
         getExprSuggestions,
+        getVec3VariableOptions,
         parseExprNumber
     } = ctx || {};
 
@@ -624,22 +625,160 @@ function select(options, value, onChange) {
     function makeVec3Editor(p, prefix, onChange, label = "") {
         const box = document.createElement("div");
         box.className = "mini";
-        const ix = inputNum(p[prefix + "x"], v => {
-            p[prefix + "x"] = v;
+        box.style.flexDirection = "column";
+        box.style.alignItems = "stretch";
+        box.style.width = "100%";
+        box.style.gap = "6px";
+        const modeKey = `__pb_vec_mode_${prefix || "root"}`;
+        const varKey = `__pb_vec_var_${prefix || "root"}`;
+        const xKey = prefix + "x";
+        const yKey = prefix + "y";
+        const zKey = prefix + "z";
+        const vecOptions = (typeof getVec3VariableOptions === "function") ? getVec3VariableOptions() : [];
+        const getManualFallback = (key) => num(p[key]);
+        const applyWholeVarBinding = (ref) => {
+            const base = String(ref || "").trim();
+            if (!base) return;
+            p[xKey] = `${base}.x`;
+            p[yKey] = `${base}.y`;
+            p[zKey] = `${base}.z`;
+        };
+        const inferWholeVarRef = () => {
+            const x = String(p[xKey] ?? "").trim();
+            const y = String(p[yKey] ?? "").trim();
+            const z = String(p[zKey] ?? "").trim();
+            if (!x || !y || !z) return "";
+            for (const option of vecOptions) {
+                const ref = String(option?.ref || option?.value || option?.name || "").trim();
+                if (!ref) continue;
+                if (x === `${ref}.x` && y === `${ref}.y` && z === `${ref}.z`) return ref;
+            }
+            return "";
+        };
+        if (p[modeKey] !== "var" && p[modeKey] !== "manual") {
+            const inferred = inferWholeVarRef();
+            p[modeKey] = inferred ? "var" : "manual";
+            if (inferred && !p[varKey]) p[varKey] = inferred;
+        }
+        if (!p[varKey]) {
+            const inferred = inferWholeVarRef();
+            if (inferred) p[varKey] = inferred;
+        }
+
+        const topRow = document.createElement("div");
+        topRow.className = "mini";
+        topRow.style.width = "100%";
+        topRow.style.marginBottom = "0";
+        const modeSelect = select([
+            ["manual", "手动 / 分量"],
+            ["var", "整向量变量"]
+        ], p[modeKey] || "manual", (value) => {
+            const prevMode = p[modeKey] || "manual";
+            p[modeKey] = value === "var" ? "var" : "manual";
+            if (p[modeKey] === "manual" && prevMode === "var") {
+                p[xKey] = getManualFallback(xKey);
+                p[yKey] = getManualFallback(yKey);
+                p[zKey] = getManualFallback(zKey);
+            }
+            if (p[modeKey] === "var") {
+                const ref = String(p[varKey] || inferWholeVarRef() || vecOptions[0]?.ref || vecOptions[0]?.value || "").trim();
+                if (ref) {
+                    p[varKey] = ref;
+                    applyWholeVarBinding(ref);
+                }
+            }
+            refreshModeView();
             onChange();
         });
-        const iy = inputNum(p[prefix + "y"], v => {
-            p[prefix + "y"] = v;
+        modeSelect.style.width = "160px";
+        modeSelect.style.maxWidth = "100%";
+        topRow.appendChild(modeSelect);
+        box.appendChild(topRow);
+
+        const varRow = document.createElement("div");
+        varRow.className = "mini";
+        varRow.style.flexDirection = "column";
+        varRow.style.alignItems = "stretch";
+        varRow.style.width = "100%";
+        varRow.style.gap = "6px";
+        const varInput = document.createElement("input");
+        varInput.className = "input";
+        varInput.type = "text";
+        varInput.placeholder = "输入 Vec3 变量名";
+        varInput.value = String(p[varKey] || inferWholeVarRef() || "");
+        armHistoryOnFocus && armHistoryOnFocus(varInput, "edit");
+        varInput.addEventListener("input", () => {
+            const ref = String(varInput.value || "").trim();
+            p[varKey] = ref;
+            if (ref) applyWholeVarBinding(ref);
             onChange();
         });
-        const iz = inputNum(p[prefix + "z"], v => {
-            p[prefix + "z"] = v;
+        varInput.addEventListener("focus", () => {
+            if (typeof setActiveVecTarget === "function") setActiveVecTarget(target);
+        });
+        varInput.style.width = "100%";
+        varInput.style.minWidth = "0";
+        varInput.style.flex = "1 1 auto";
+        varRow.appendChild(varInput);
+        if (vecOptions.length) {
+            const varSelectOptions = [["", "选择变量"]].concat(vecOptions.map((option) => {
+                const ref = String(option?.ref || option?.value || option?.name || "").trim();
+                const type = String(option?.type || "Vec3").trim() || "Vec3";
+                const labelText = String(option?.label || `${ref}（${type}）`).trim();
+                return [ref, labelText];
+            }));
+            const varSelect = select(varSelectOptions, String(p[varKey] || inferWholeVarRef() || ""), (value) => {
+                const ref = String(value || "").trim();
+                p[varKey] = ref;
+                varInput.value = ref;
+                if (ref) applyWholeVarBinding(ref);
+                onChange();
+            });
+            varSelect.style.width = "100%";
+            varSelect.style.minWidth = "0";
+            varSelect.style.flex = "1 1 auto";
+            varRow.appendChild(varSelect);
+            varRow.__quickPick = varSelect;
+        }
+
+        const manualRow = document.createElement("div");
+        manualRow.className = "mini";
+        manualRow.style.display = "grid";
+        manualRow.style.gridTemplateColumns = "repeat(3, minmax(0, 1fr))";
+        manualRow.style.width = "100%";
+        manualRow.style.gap = "6px";
+        const ix = inputNum(p[xKey], v => {
+            p[xKey] = v;
             onChange();
         });
-        ix.style.width = iy.style.width = iz.style.width = "96px";
-        box.appendChild(ix);
-        box.appendChild(iy);
-        box.appendChild(iz);
+        const iy = inputNum(p[yKey], v => {
+            p[yKey] = v;
+            onChange();
+        });
+        const iz = inputNum(p[zKey], v => {
+            p[zKey] = v;
+            onChange();
+        });
+        ix.style.width = iy.style.width = iz.style.width = "100%";
+        ix.style.minWidth = iy.style.minWidth = iz.style.minWidth = "0";
+        manualRow.appendChild(ix);
+        manualRow.appendChild(iy);
+        manualRow.appendChild(iz);
+        box.appendChild(varRow);
+        box.appendChild(manualRow);
+
+        const refreshModeView = () => {
+            const mode = p[modeKey] || "manual";
+            varRow.style.display = mode === "var" ? "flex" : "none";
+            manualRow.style.display = mode === "var" ? "none" : "grid";
+            modeSelect.value = mode;
+            varInput.value = String(p[varKey] || inferWholeVarRef() || "");
+            if (varRow.__quickPick) {
+                varRow.__quickPick.value = String(p[varKey] || inferWholeVarRef() || "");
+            }
+        };
+        refreshModeView();
+
         const tipBase = getTipForLabel(label) || getTipForLabel(prefix);
         if (tipBase) {
             ix.setAttribute("data-tip", `${tipBase}（X）`);
@@ -648,7 +787,7 @@ function select(options, value, onChange) {
         }
         const target = {
             obj: p,
-            keys: {x: prefix + "x", y: prefix + "y", z: prefix + "z"},
+            keys: {x: xKey, y: yKey, z: zKey},
             inputs: {x: ix, y: iy, z: iz},
             label: label || prefix || "vec3",
             onChange
@@ -3320,6 +3459,10 @@ export function initCardSystem(ctx = {}) {
                 })));
                 body.appendChild(row("zOffset", inputNum(p.zOffset, v => {
                     p.zOffset = v;
+                    rebuildPreviewAndKotlin();
+                })));
+                body.appendChild(row("scale", inputNum(p.scale, v => {
+                    p.scale = v;
                     rebuildPreviewAndKotlin();
                 })));
                 body.appendChild(row("count", inputNum(p.count, v => {
