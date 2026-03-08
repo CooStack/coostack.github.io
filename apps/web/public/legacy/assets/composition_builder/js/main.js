@@ -5519,7 +5519,7 @@ class CompositionBuilderApp {
         if (target === "alpha" || target === "particlealpha" || target === "particle.particlealpha") return "1.0";
         if (target === "currentage" || target === "age") return "0";
         if (target === "texturesheet") return "0";
-        if (target === "color" || target === "particlecolor" || target === "particle.particlecolor") return "Vector3f(0F, 0F, 0F)";
+        if (target === "color" || target === "particlecolor" || target === "particle.particlecolor") return "Vector3f(1F, 1F, 1F)";
         return "0";
     }
 
@@ -7188,7 +7188,7 @@ class CompositionBuilderApp {
         const elapsedTick = num(opts.elapsedTick);
         const ageTick = num(opts.ageTick);
         const pointIndex = int(opts.pointIndex || 0);
-        const fallback = { color: this.getCardColorRgb(cardId), size: 0.2, alpha: 1 };
+        const fallback = { color: [1, 1, 1], size: 0.2, alpha: 1 };
         const card = this.getCardById(cardId);
         if (!card) return fallback;
         const useSingleInit = card.dataType === "single"

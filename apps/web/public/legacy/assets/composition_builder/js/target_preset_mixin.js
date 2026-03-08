@@ -91,7 +91,7 @@ export function installTargetPresetMethods(CompositionBuilderApp, deps = {}) {
         if (target === "alpha" || target === "particlealpha" || target === "particle.particlealpha") return "1.0";
         if (target === "currentage" || target === "age") return "0";
         if (target === "texturesheet") return "0";
-        if (target === "color" || target === "particlecolor" || target === "particle.particlecolor") return "Vector3f(0F, 0F, 0F)";
+        if (target === "color" || target === "particlecolor" || target === "particle.particlecolor") return "Vector3f(1F, 1F, 1F)";
         return "0";
     }
 

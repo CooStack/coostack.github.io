@@ -82,6 +82,7 @@ GitHub Actions 构建时会注入以下变量：
 - `VITE_APP_BASE=/<仓库名>/`（若仓库名本身是 `<用户名>.github.io`，则自动使用 `/`）
 - `VITE_ROUTER_MODE=hash`
 - `VITE_PROJECT_REPOSITORY_MODE=local`
+- `VITE_API_BASE_URL=${{ vars.VITE_API_BASE_URL }}`（可选；若未配置，Pages 端不会再错误请求本地 `localhost:3001`）
 
 只要仓库默认分支是 `master` 或 `main`，并在仓库设置中启用 GitHub Pages + GitHub Actions，推送后就会自动发布前端静态产物。
 

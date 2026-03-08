@@ -2487,7 +2487,7 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
         const ageTick = num(opts.ageTick);
         const pointIndex = int(opts.pointIndex || 0);
         const keepInitializedCurrentAge = opts.keepInitializedCurrentAge === true;
-        const fallback = { color: this.getCardColorRgb(cardId), size: 0.2, alpha: 1 };
+        const fallback = { color: [1, 1, 1], size: 0.2, alpha: 1 };
         const card = this.getCardById(cardId);
         if (!card) return fallback;
         const useSingleInit = card.dataType === "single"

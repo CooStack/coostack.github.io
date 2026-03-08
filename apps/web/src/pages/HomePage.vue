@@ -90,7 +90,7 @@
 <script setup>
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
-import { fetchBilibiliStat } from '../services/api/social.js';
+import { canFetchBilibiliStat, fetchBilibiliStat } from '../services/api/social.js';
 import { highlightKotlin } from '../utils/legacy-code-highlight.js';
 
 const router = useRouter();
@@ -309,7 +309,7 @@ function buildFollowerChars(previousValue, currentValue) {
 }
 
 async function loadBilibiliFollowerCount() {
-  if (followerRequesting) {
+  if (!canFetchBilibiliStat() || followerRequesting) {
     return;
   }
 
