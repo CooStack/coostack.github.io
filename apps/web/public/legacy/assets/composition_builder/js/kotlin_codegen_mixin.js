@@ -495,7 +495,6 @@ export function installKotlinCodegenMethods(CompositionBuilderApp, deps = {}) {
         lines.push("ParticleDisplayer.withComposition(");
         lines.push(`    ${cls}(it).apply {`);
         if (axisExpr) lines.push(`        axis = ${axisExpr}`);
-        this._emitScaleHelperCodegen(lines, scale, "        ");
         const children = card.shapeChildren || [];
         for (const child of children) {
             this._emitTreeNodeApplyBlockCodegen(lines, child, card, className, rootCtx, "        ", actionCtx);
@@ -559,7 +558,6 @@ export function installKotlinCodegenMethods(CompositionBuilderApp, deps = {}) {
             lines.push(`${indent}applyPoint(${pointExpr}) { ${dataLambdaHead} ->`);
         }
         lines.push(this.emitShapeCompositionDataBase(ctx, `${indent}    `));
-        this._emitScaleHelperCodegen(lines, scale, `${indent}        `);
         lines.push(`${indent}        .setDisplayerSupplier {`);
         lines.push(`${indent}            ParticleDisplayer.withSingle(${fx}(it))`);
         lines.push(`${indent}        }`);
@@ -593,7 +591,6 @@ export function installKotlinCodegenMethods(CompositionBuilderApp, deps = {}) {
         lines.push(`${indent}            ParticleDisplayer.withComposition(`);
         lines.push(`${indent}                ${cls}(it).apply {`);
         if (axisExpr) lines.push(`${indent}                    axis = ${axisExpr}`);
-        this._emitScaleHelperCodegen(lines, scale, `${indent}                    `);
         const children = node.children || [];
         for (const child of children) {
             this._emitTreeNodeApplyBlockCodegen(lines, child, card, className, ctx, `${indent}                    `, actionCtx);
@@ -627,7 +624,8 @@ export function installKotlinCodegenMethods(CompositionBuilderApp, deps = {}) {
             : null;
         const useAngleOffsetAnimator = !!offsetAngleExpr && !!offsetCfg;
         const shapeScale = normalizeScaleHelperConfig(card.shapeScale, { type: "none" });
-        const needReverseScale = shapeScale.type !== "none" && shapeScale.reversedOnDisable;
+        const hasShapeScale = shapeScale.type !== "none";
+        const needReverseScale = hasShapeScale && shapeScale.reversedOnDisable;
         const appendOffsetAnimator = (targetLines, callIndent = `${innerIndent}    `) => {
             if (!useAngleOffsetAnimator) return;
             const glowTick = Math.max(1, int(offsetCfg.glowTick || 20));
@@ -652,8 +650,9 @@ export function installKotlinCodegenMethods(CompositionBuilderApp, deps = {}) {
             targetLines.push(`${callIndent}    timeline.doTick()`);
             targetLines.push(`${callIndent}}`);
         };
-        if (displayActions.length || useAngleOffsetAnimator || needReverseScale) {
+        if (displayActions.length || useAngleOffsetAnimator || hasShapeScale || needReverseScale) {
             const blockLines = [];
+            if (hasShapeScale) this._emitScaleHelperCodegen(blockLines, shapeScale, `${innerIndent}    `);
             if (useAngleOffsetAnimator) appendOffsetAnimator(blockLines);
             for (let i = 0; i < displayActions.length; i++) {
                 const act = displayActions[i];
