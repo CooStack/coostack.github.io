@@ -1412,15 +1412,6 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
         for (const card of this.state.cards) {
             if (card.dataType !== "single") {
                 eatExprGrowth(card.shapeDisplayActions || [], maxOwner);
-            } else {
-                let step = 0;
-                for (const action of (card.controllerActions || [])) {                    step += estimateGrowthStepFromScript(action?.script || "");
-                }
-                if (step > 0) {
-                    appear = Math.max(appear, Math.ceil(maxOwner / step));
-                    hasExprGrowth = true;
-                    maxGrowthTarget = Math.max(maxGrowthTarget, maxOwner);
-                }
             }
         }
         if (hasExprGrowth) {

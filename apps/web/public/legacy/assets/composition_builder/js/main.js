@@ -29,7 +29,7 @@ import {
     hasAngleOffsetEaseSpecialParams,
     formatAngleValue
 } from "./angle_offset_utils.js";
-import { installPreviewRuntimeMethods } from "./preview_runtime_mixin.js?v=20260309_4";
+import { installPreviewRuntimeMethods } from "./preview_runtime_mixin.js?v=20260309_5";
 import { installKotlinCodegenMethods } from "./kotlin_codegen_mixin.js?v=20260307_4";
 import { installCodeOutputMethods } from "./code_output_mixin.js";
 import { installExpressionEditorMethods } from "./expression_editor_mixin.js?v=20260302_11";
@@ -6745,16 +6745,6 @@ class CompositionBuilderApp {
         for (const card of this.state.cards) {
             if (card.dataType !== "single") {
                 eatExprGrowth(card.shapeDisplayActions || [], maxOwner);
-            } else {
-                let step = 0;
-                for (const action of (card.controllerActions || [])) {
-                    step += estimateGrowthStepFromScript(action?.script || "");
-                }
-                if (step > 0) {
-                    appear = Math.max(appear, Math.ceil(maxOwner / step));
-                    hasExprGrowth = true;
-                    maxGrowthTarget = Math.max(maxGrowthTarget, maxOwner);
-                }
             }
         }
         if (hasExprGrowth) {
@@ -6830,19 +6820,6 @@ class CompositionBuilderApp {
                 // Sequenced 形状未配置任何几何生长来源时，初始可见数量应为 0。
                 if (!hasLevelGrowthSource) return 0;
                 visibleLimit = Math.min(visibleLimit, levelLimit);
-                hasLocalGrowthSource = true;
-            }
-        } else if (card.dataType === "single" && Array.isArray(card.controllerActions) && card.controllerActions.length) {
-            const controllerExprActions = card.controllerActions
-                .map((it) => normalizeControllerAction(it))
-                .map((it) => ({ type: "expression", expression: String(it.script || ""), fn: null }));
-            const n = this.computeExpressionVisibleCount(controllerExprActions, ownerCount, growthAge, {
-                scopeLevel: -1,
-                allowOrder: false,
-                sequencedDepths: []
-            });
-            if (Number.isFinite(n)) {
-                visibleLimit = Math.min(visibleLimit, n);
                 hasLocalGrowthSource = true;
             }
         } else {
