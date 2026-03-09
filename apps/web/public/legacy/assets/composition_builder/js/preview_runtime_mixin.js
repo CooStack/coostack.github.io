@@ -540,6 +540,7 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
             this.pointsGeom.attributes.aFrameIndex.needsUpdate = true;
         }
         this.previewPersistentCurrentAges = new Float32Array(count);
+        this.previewPersistentControllerStates = new Array(count).fill(null);
         this.syncTextureUniforms();
         this.pointsGeom.computeBoundingSphere();
         if (this.pointsMat) this.pointsMat.size = this.state.settings.pointSize;
@@ -596,6 +597,11 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
             manualAgeFlags = new Uint8Array(totalCount);
             this.previewManualAgeFlags = manualAgeFlags;
         }
+        let persistentControllerStates = this.previewPersistentControllerStates;
+        if (!Array.isArray(persistentControllerStates) || persistentControllerStates.length !== totalCount) {
+            persistentControllerStates = new Array(totalCount).fill(null);
+            this.previewPersistentControllerStates = persistentControllerStates;
+        }
         const skipExprPerPoint = totalCount >= 50000;
         const runtimeActions = this.buildPreviewRuntimeActions(globalCycleAge, this.state.displayActions || [], {
             skipExpression: skipExprPerPoint,
@@ -611,6 +617,7 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
             this.previewRuntimeCycleIndex = cycleIndex;
             persistentCurrentAges.fill(0);
             manualAgeFlags.fill(0);
+            persistentControllerStates.fill(null);
         }
         const frameRuntimeGlobals = this.previewRuntimeGlobals;
         for (let t = this.previewRuntimeAppliedTick + 1; t <= tickStep; t++) {
@@ -1063,6 +1070,9 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
             const persistedCurrentAge = Number.isFinite(Number(persistedCurrentAgeRaw))
                 ? Math.max(0, num(persistedCurrentAgeRaw))
                 : 0;
+            const persistedControllerState = (persistentControllerStates[i] && typeof persistentControllerStates[i] === "object")
+                ? persistentControllerStates[i]
+                : null;
             let pointVisual = null;
             if (!skipExprPerPoint && cached.cardVisualAgeDependent) {
                 let byLocal = groupId >= 0 ? pointVisualCache[groupId] : null;
@@ -1078,6 +1088,7 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
                         ageTick: pointAgeTick,
                         currentAge: persistedCurrentAge,
                         keepInitializedCurrentAge: manualAgeFlags[i] === 1,
+                        controllerState: persistedControllerState,
                         pointIndex: localIndex
                     });
                     byLocal[localIndex] = pointVisual;
@@ -1091,10 +1102,14 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
                         ageTick: cached.age,
                         currentAge: persistedCurrentAge,
                         keepInitializedCurrentAge: manualAgeFlags[i] === 1,
+                        controllerState: persistedControllerState,
                         pointIndex: 0
                     });
                     if (groupId >= 0) ownerVisualCache[groupId] = pointVisual;
                 }
+            }
+            if (pointVisual && pointVisual.__controllerState && typeof pointVisual.__controllerState === "object") {
+                persistentControllerStates[i] = pointVisual.__controllerState;
             }
 
             const hasManualCurrentAge = pointVisual?.__manualCurrentAge === true;
@@ -2346,7 +2361,9 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
         const srcRaw = String(scriptRaw || "").trim();
         if (!visual || !srcRaw) return;
         const runtimeVars = (opts.runtimeVars && typeof opts.runtimeVars === "object") ? opts.runtimeVars : null;
-        const runtimeCtx = Object.assign({}, runtimeVars || {});
+        const incomingControllerState = (opts.controllerState && typeof opts.controllerState === "object") ? opts.controllerState : null;
+        const controllerVarNames = Array.isArray(opts.controllerVarNames) ? opts.controllerVarNames : [];
+        const runtimeCtx = Object.assign({}, runtimeVars || {}, incomingControllerState || {});
         const thisAtVars = (runtimeVars && typeof runtimeVars === "object") ? runtimeVars : runtimeCtx;
         let statusRef = (thisAtVars.status && typeof thisAtVars.status === "object")
             ? thisAtVars.status
@@ -2399,9 +2416,14 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
         const initialCurrentAge = Number.isFinite(Number(opts.currentAge))
             ? num(opts.currentAge)
             : 0;
+        const initialLifetime = Number.isFinite(Number(opts.lifetime))
+            ? Math.max(1, int(opts.lifetime))
+            : (Number.isFinite(Number(visual.__resolvedLifetime))
+                ? Math.max(1, int(visual.__resolvedLifetime))
+                : 100);
         runtimeCtx.currentAge = Math.max(0, num(initialCurrentAge));
         runtimeCtx.__manualCurrentAge = false;
-        runtimeCtx.lifetime = 100;
+        runtimeCtx.lifetime = initialLifetime;
         runtimeCtx.textureSheet = num(runtimeCtx.textureSheet || 0);
         runtimeCtx.setColor = setColor;
         runtimeCtx.setSize = setSize;
@@ -2466,6 +2488,13 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
             } catch {
             }
         }
+
+        const nextControllerState = incomingControllerState ? { ...incomingControllerState } : {};
+        for (const name of controllerVarNames) {
+            if (!name) continue;
+            nextControllerState[name] = vars[name];
+        }
+        visual.__controllerState = nextControllerState;
 
         setColor(runtimeCtx.color);
         setSize(runtimeCtx.size);
@@ -2549,6 +2578,23 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
                 evalRuntimeVars.currentAge = resolvedCurrentAge;
             }
         }
+        const controllerVarDefs = Array.isArray(visualSource.controllerVars) ? visualSource.controllerVars : [];
+        const controllerVarNames = [];
+        let controllerState = (opts.controllerState && typeof opts.controllerState === "object")
+            ? { ...opts.controllerState }
+            : {};
+        for (const def of controllerVarDefs) {
+            const name = String(def?.name || "").trim();
+            if (!name) continue;
+            controllerVarNames.push(name);
+            if (Object.prototype.hasOwnProperty.call(controllerState, name)) continue;
+            controllerState[name] = this.resolvePreviewControllerVarInitialValue(def, runtimeVars, {
+                elapsedTick,
+                ageTick,
+                pointIndex,
+                thisAtVars: runtimeVars
+            });
+        }
         const controllerActions = Array.isArray(visualSource.controllerActions) ? visualSource.controllerActions : [];
         const visualSourceId = String(visualSource.id || card.id || cardId);
         for (let actionIdx = 0; actionIdx < controllerActions.length; actionIdx++) {
@@ -2560,8 +2606,14 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
                 ageTick,
                 pointIndex,
                 currentAge: resolvedCurrentAge,
+                lifetime: visual.__resolvedLifetime,
+                controllerState,
+                controllerVarNames,
                 compileKey
             });
+            if (visual.__controllerState && typeof visual.__controllerState === "object") {
+                controllerState = visual.__controllerState;
+            }
             const nextCurrentAge = Number(visual.__resolvedCurrentAge);
             if (Number.isFinite(nextCurrentAge)) {
                 resolvedCurrentAge = Math.max(0, nextCurrentAge);
@@ -2570,12 +2622,29 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
                 manualCurrentAge = true;
             }
         }
+        visual.__controllerState = controllerState;
         visual.__resolvedCurrentAge = resolvedCurrentAge;
         visual.__manualCurrentAge = manualCurrentAge;
         if (!visual.hasOwnProperty("__resolvedLifetime")) {
             visual.__resolvedLifetime = 100;
         }
         return visual;
+    }
+
+    resolvePreviewControllerVarInitialValue(def, runtimeVars = null, opts = {}) {
+        const type = String(def?.type || "Double").trim();
+        const expr = String(def?.expr || "").trim();
+        if (!expr) {
+            if (type === "Boolean") return false;
+            if (type === "String") return "";
+            return 0;
+        }
+        const out = this.evaluateExpressionWithRuntime(expr, runtimeVars, opts);
+        if (type === "Boolean") return !!out;
+        if (type === "Int" || type === "Long") return int(out);
+        if (type === "Float" || type === "Double") return num(out);
+        if (type === "String") return out == null ? "" : String(out);
+        return out;
     }
 
     isScriptAgeDependent(scriptRaw = "") {
@@ -2587,6 +2656,8 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
         if (!card) return false;
         const visualSource = this.resolvePreviewVisualSource(card);
         if (!visualSource) return false;
+        if (Array.isArray(visualSource.controllerVars) && visualSource.controllerVars.length) return true;
+        if (Array.isArray(visualSource.controllerActions) && visualSource.controllerActions.length) return true;
         for (const it of (visualSource.particleInit || [])) {
             const target = String(it?.target || "").trim().toLowerCase();
             if (target !== "color" && target !== "particlecolor" && target !== "particle.particlecolor"
@@ -3332,9 +3403,9 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
         return vars;
     }
 
-    evaluateNumericExpressionWithRuntime(exprRaw, runtimeVars = null, opts = {}) {
+    evaluateExpressionWithRuntime(exprRaw, runtimeVars = null, opts = {}) {
         const srcRaw = String(exprRaw || "").trim();
-        if (!srcRaw) return 0;
+        if (!srcRaw) return null;
         const src = transpileKotlinThisQualifierToJs(srcRaw).replace(/(\d+(?:\.\d+)?)[fFdDlL]\b/g, "$1");
         const elapsedTick = num(opts.elapsedTick);
         const ageTick = num(opts.ageTick);
@@ -3353,13 +3424,17 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
             if (this.previewNumericFnCache.size > 2048) this.previewNumericFnCache.clear();
             this.previewNumericFnCache.set(src, fn);
         }
-        if (typeof fn !== "function") return 0;
+        if (typeof fn !== "function") return null;
         try {
-            const out = fn(vars, vars.thisAt);
-            return Number.isFinite(Number(out)) ? Number(out) : 0;
+            return fn(vars, vars.thisAt);
         } catch {
-            return 0;
+            return null;
         }
+    }
+
+    evaluateNumericExpressionWithRuntime(exprRaw, runtimeVars = null, opts = {}) {
+        const out = this.evaluateExpressionWithRuntime(exprRaw, runtimeVars, opts);
+        return Number.isFinite(Number(out)) ? Number(out) : 0;
     }
 
     parseVecLikeValueWithRuntime(rawExpr, runtimeVars = null, opts = {}) {
