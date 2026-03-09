@@ -2690,22 +2690,25 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
         evalRuntimeVars.textureSheet = Number.isFinite(Number(runtimeVars?.textureSheet))
             ? int(runtimeVars.textureSheet)
             : 0;
+        const evalThisAtVars = (runtimeVars && typeof runtimeVars === "object") ? runtimeVars : evalRuntimeVars;
+        const evalScope = this.createRuntimeExpressionScope(elapsedTick, ageTick, pointIndex, evalRuntimeVars, true);
+        evalScope.thisAt = evalThisAtVars;
         for (const it of (visualSource.particleInit || [])) {
             const target = String(it.target || "").trim().toLowerCase();
             const expr = String(it.expr || "").trim();
             if (!expr) continue;
             if (target === "color" || target === "particlecolor" || target === "particle.particlecolor") {
-                const vec = this.parseVecLikeValueWithRuntime(expr, evalRuntimeVars, { elapsedTick, ageTick, pointIndex });
+                const vec = this.parseVecLikeValueWithRuntime(expr, evalRuntimeVars, { elapsedTick, ageTick, pointIndex, thisAtVars: evalThisAtVars, runtimeScope: evalScope });
                 visual.color = [clamp(num(vec.x), 0, 1), clamp(num(vec.y), 0, 1), clamp(num(vec.z), 0, 1)];
             }
             if (target === "size" || target === "particlesize" || target === "particle.particlesize") {
-                visual.size = Math.max(0.05, num(this.evaluateNumericExpressionWithRuntime(expr, evalRuntimeVars, { elapsedTick, ageTick, pointIndex })));
+                visual.size = Math.max(0.05, num(this.evaluateNumericExpressionWithRuntime(expr, evalRuntimeVars, { elapsedTick, ageTick, pointIndex, thisAtVars: evalThisAtVars, runtimeScope: evalScope })));
             }
             if (target === "alpha" || target === "particlealpha" || target === "particle.particlealpha") {
-                visual.alpha = clamp(num(this.evaluateNumericExpressionWithRuntime(expr, evalRuntimeVars, { elapsedTick, ageTick, pointIndex })), 0, 1);
+                visual.alpha = clamp(num(this.evaluateNumericExpressionWithRuntime(expr, evalRuntimeVars, { elapsedTick, ageTick, pointIndex, thisAtVars: evalThisAtVars, runtimeScope: evalScope })), 0, 1);
             }
             if (target === "lifetime" || target === "particle.lifetime") {
-                const nextLifetime = Math.max(1, int(this.evaluateNumericExpressionWithRuntime(expr, evalRuntimeVars, { elapsedTick, ageTick, pointIndex })));
+                const nextLifetime = Math.max(1, int(this.evaluateNumericExpressionWithRuntime(expr, evalRuntimeVars, { elapsedTick, ageTick, pointIndex, thisAtVars: evalThisAtVars, runtimeScope: evalScope })));
                 visual.__resolvedLifetime = nextLifetime;
                 evalRuntimeVars.lifetime = nextLifetime;
                 evalRuntimeVars.lifeTime = nextLifetime;
@@ -2715,7 +2718,7 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
                     resolvedCurrentAge = Math.max(0, num(resolvedCurrentAge));
                     manualCurrentAge = true;
                 } else {
-                    resolvedCurrentAge = Math.max(0, int(this.evaluateNumericExpressionWithRuntime(expr, evalRuntimeVars, { elapsedTick, ageTick, pointIndex })));
+                    resolvedCurrentAge = Math.max(0, int(this.evaluateNumericExpressionWithRuntime(expr, evalRuntimeVars, { elapsedTick, ageTick, pointIndex, thisAtVars: evalThisAtVars, runtimeScope: evalScope })));
                     manualCurrentAge = true;
                 }
                 evalRuntimeVars.currentAge = resolvedCurrentAge;
@@ -3512,7 +3515,7 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
         return cycle.play + dissolveAge;
     }
 
-    createRuntimeExpressionScope(elapsedTick = 0, ageTick = 0, pointIndex = 0, runtimeVars = null, includeVectors = true) {
+    primeRuntimeExpressionScope(scopeVars = null, elapsedTick = 0, ageTick = 0, pointIndex = 0, runtimeVars = null, includeVectors = true) {
         const baseVars = this.getExpressionVars(elapsedTick, ageTick, pointIndex, { includeVectors: includeVectors === true });
         const localVars = (runtimeVars && typeof runtimeVars === "object") ? runtimeVars : null;
         if (!localVars) return baseVars;
@@ -3523,18 +3526,24 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
             } catch {
             }
         }
-        const vars = Object.create(localVars);
+        const vars = (scopeVars && typeof scopeVars === "object") ? scopeVars : Object.create(localVars);
+        if (Object.getPrototypeOf(vars) !== localVars) {
+            try {
+                Object.setPrototypeOf(vars, localVars);
+            } catch {
+            }
+        }
         const defineLocal = (key, value) => {
             try {
-                Object.defineProperty(vars, key, {
-                    configurable: true,
-                    enumerable: true,
-                    writable: true,
-                    value
-                });
+                vars[key] = value;
             } catch {
                 try {
-                    vars[key] = value;
+                    Object.defineProperty(vars, key, {
+                        configurable: true,
+                        enumerable: true,
+                        writable: true,
+                        value
+                    });
                 } catch {
                 }
             }
@@ -3546,6 +3555,10 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
         return vars;
     }
 
+    createRuntimeExpressionScope(elapsedTick = 0, ageTick = 0, pointIndex = 0, runtimeVars = null, includeVectors = true) {
+        return this.primeRuntimeExpressionScope(null, elapsedTick, ageTick, pointIndex, runtimeVars, includeVectors);
+    }
+
     evaluateExpressionWithRuntime(exprRaw, runtimeVars = null, opts = {}) {
         const srcRaw = String(exprRaw || "").trim();
         if (!srcRaw) return null;
@@ -3555,7 +3568,9 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
         const pointIndex = int(opts.pointIndex || 0);
         const localVars = (runtimeVars && typeof runtimeVars === "object") ? runtimeVars : {};
         const thisAt = (opts.thisAtVars && typeof opts.thisAtVars === "object") ? opts.thisAtVars : localVars;
-        const vars = this.createRuntimeExpressionScope(elapsedTick, ageTick, pointIndex, localVars, true);
+        const vars = (opts.runtimeScope && typeof opts.runtimeScope === "object")
+            ? this.primeRuntimeExpressionScope(opts.runtimeScope, elapsedTick, ageTick, pointIndex, localVars, true)
+            : this.createRuntimeExpressionScope(elapsedTick, ageTick, pointIndex, localVars, true);
         vars.thisAt = thisAt;
         let fn = this.previewNumericFnCache.get(src);
         if (fn === undefined) {
@@ -3596,6 +3611,9 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
         const thisAtVars = (opts.thisAtVars && typeof opts.thisAtVars === "object")
             ? opts.thisAtVars
             : localVars;
+        const runtimeScope = (opts.runtimeScope && typeof opts.runtimeScope === "object")
+            ? this.primeRuntimeExpressionScope(opts.runtimeScope, elapsedTick, ageTick, pointIndex, localVars, true)
+            : null;
         const resolveRuntimeVec = (scope, key) => {
             if (!scope || typeof scope !== "object" || !key) return null;
             let value;
@@ -3631,10 +3649,11 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
         }
         const m = src.match(/(?:Vec3|RelativeLocation|Vector3f)\s*\(\s*([^,]+)\s*,\s*([^,]+)\s*,\s*([^)]+)\s*\)/i);
         if (m) {
+            const evalOpts = { elapsedTick, ageTick, pointIndex, thisAtVars, runtimeScope };
             return U.v(
-                this.evaluateNumericExpressionWithRuntime(m[1], localVars, { elapsedTick, ageTick, pointIndex, thisAtVars }),
-                this.evaluateNumericExpressionWithRuntime(m[2], localVars, { elapsedTick, ageTick, pointIndex, thisAtVars }),
-                this.evaluateNumericExpressionWithRuntime(m[3], localVars, { elapsedTick, ageTick, pointIndex, thisAtVars })
+                this.evaluateNumericExpressionWithRuntime(m[1], localVars, evalOpts),
+                this.evaluateNumericExpressionWithRuntime(m[2], localVars, evalOpts),
+                this.evaluateNumericExpressionWithRuntime(m[3], localVars, evalOpts)
             );
         }
         return this.parseVecLikeValue(srcRaw);

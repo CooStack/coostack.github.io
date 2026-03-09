@@ -3,7 +3,7 @@ import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { createKindDefs } from "../../points_builder/js/kinds.js";
 import { createBuilderTools } from "../../points_builder/js/builder.js";
 import { createExpressionRuntime } from "./expression_runtime.js?v=20260221_2";
-import { InlineCodeEditor, mergeCompletionGroups } from "./code_editor.js?v=20260302_1";
+import { InlineCodeEditor, mergeCompletionGroups } from "./code_editor.js?v=20260309_2";
 import {
     isVectorLiteralType,
     normalizeVectorCtor,
@@ -29,7 +29,7 @@ import {
     hasAngleOffsetEaseSpecialParams,
     formatAngleValue
 } from "./angle_offset_utils.js";
-import { installPreviewRuntimeMethods } from "./preview_runtime_mixin.js?v=20260309_25";
+import { installPreviewRuntimeMethods } from "./preview_runtime_mixin.js?v=20260309_26";
 import { installKotlinCodegenMethods } from "./kotlin_codegen_mixin.js?v=20260309_6";
 import { installCodeOutputMethods } from "./code_output_mixin.js";
 import { installExpressionEditorMethods } from "./expression_editor_mixin.js?v=20260309_7";

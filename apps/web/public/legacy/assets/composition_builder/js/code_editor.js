@@ -2,6 +2,21 @@ import { loadMonaco } from "../../code_tip/js/monacoLoader.js";
 import { createLanguageService } from "../../code_tip/js/languageJsTs.js";
 
 const MONACO_UI_FIX_STYLE_ID = "codetip-inline-monaco-ui-fix";
+let INLINE_CODE_EDITOR_SEQ = 0;
+const INLINE_RUNTIME_IDENTIFIER_SET = new Set([
+    "PI",
+    "age",
+    "tick",
+    "tickCount",
+    "index",
+    "rel",
+    "order",
+    "axis",
+    "scaleHelper",
+    "status",
+    "particle",
+    "thisAt"
+]);
 
 function ensureMonacoUiFixStyle() {
     if (typeof document === "undefined") return;
@@ -243,6 +258,15 @@ function normalizeLibEntries(libs) {
         }));
 }
 
+function isSuppressedInlineLanguageDiagnostic(problem) {
+    const msg = String(problem?.message || "").trim();
+    const missingName = /^Cannot find name ['"]([^'"]+)['"]/.exec(msg);
+    if (missingName && INLINE_RUNTIME_IDENTIFIER_SET.has(String(missingName[1] || "").trim())) {
+        return true;
+    }
+    return false;
+}
+
 function buildApiDtsFromCompletions(completions) {
     const reserved = new Set([
         "break", "case", "catch", "class", "const", "continue", "debugger", "default",
@@ -318,6 +342,7 @@ export class InlineCodeEditor {
         this.compact = compact === true;
         this.singleLine = singleLine === true;
         this.showToolbar = typeof showToolbar === "boolean" ? showToolbar : !this.compact;
+        this.inlineLibScope = `inline-${++INLINE_CODE_EDITOR_SEQ}`;
         this.disposed = false;
         this.monaco = null;
         this.editor = null;
@@ -487,10 +512,10 @@ export class InlineCodeEditor {
 
         const builtApiDts = buildApiDtsFromCompletions(this.completions);
         const mergedLibs = normalizeLibEntries([
-            { id: "inline-api", name: "__inline_api__.d.ts", content: builtApiDts, enabled: true },
+            { id: `inline-api-${this.inlineLibScope}`, name: `__inline_api__-${this.inlineLibScope}.d.ts`, content: builtApiDts, enabled: true },
             ...this.libs
         ]);
-        this.languageService.setExtraLibs("inline", mergedLibs);
+        this.languageService.setExtraLibs(this.inlineLibScope, mergedLibs);
 
         this.completionRegistration = this.languageService.registerCompletionProvider({
             provideCompletionItems: ({ model, position }) => {
@@ -614,10 +639,10 @@ export class InlineCodeEditor {
         if (this.languageService) {
             const builtApiDts = buildApiDtsFromCompletions(this.completions);
             const mergedLibs = normalizeLibEntries([
-                { id: "inline-api", name: "__inline_api__.d.ts", content: builtApiDts, enabled: true },
+                { id: `inline-api-${this.inlineLibScope}`, name: `__inline_api__-${this.inlineLibScope}.d.ts`, content: builtApiDts, enabled: true },
                 ...this.libs
             ]);
-            this.languageService.setExtraLibs("inline", mergedLibs);
+            this.languageService.setExtraLibs(this.inlineLibScope, mergedLibs);
         }
         this.runValidation();
     }
@@ -632,10 +657,10 @@ export class InlineCodeEditor {
         if (this.languageService) {
             const builtApiDts = buildApiDtsFromCompletions(this.completions);
             const mergedLibs = normalizeLibEntries([
-                { id: "inline-api", name: "__inline_api__.d.ts", content: builtApiDts, enabled: true },
+                { id: `inline-api-${this.inlineLibScope}`, name: `__inline_api__-${this.inlineLibScope}.d.ts`, content: builtApiDts, enabled: true },
                 ...this.libs
             ]);
-            this.languageService.setExtraLibs("inline", mergedLibs);
+            this.languageService.setExtraLibs(this.inlineLibScope, mergedLibs);
         }
         this.runValidation();
     }
@@ -695,7 +720,7 @@ export class InlineCodeEditor {
             message = this.customValidationResult.message || "表达式存在问题";
             invalid = true;
         } else {
-            const firstErr = this.languageDiagnostics.find((it) => String(it?.severity || "").toLowerCase() === "error");
+            const firstErr = this.languageDiagnostics.find((it) => String(it?.severity || "").toLowerCase() === "error" && !isSuppressedInlineLanguageDiagnostic(it));
             if (firstErr) {
                 message = `语法/类型错误: ${String(firstErr.message || "")}`;
                 invalid = true;
