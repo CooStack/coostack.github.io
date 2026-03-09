@@ -29,7 +29,7 @@ import {
     hasAngleOffsetEaseSpecialParams,
     formatAngleValue
 } from "./angle_offset_utils.js";
-import { installPreviewRuntimeMethods } from "./preview_runtime_mixin.js?v=20260309_26";
+import { installPreviewRuntimeMethods } from "./preview_runtime_mixin.js?v=20260309_32";
 import { installKotlinCodegenMethods } from "./kotlin_codegen_mixin.js?v=20260309_6";
 import { installCodeOutputMethods } from "./code_output_mixin.js";
 import { installExpressionEditorMethods } from "./expression_editor_mixin.js?v=20260309_7";
@@ -10538,4 +10538,9 @@ installPreviewRuntimeMethods(CompositionBuilderApp, {
 });
 
 const app = new CompositionBuilderApp();
+try {
+    const perfDebug = new URLSearchParams(globalThis?.location?.search || "").has("__perfDebug");
+    if (perfDebug) globalThis.__compositionBuilderApp = app;
+} catch {
+}
 app.init();

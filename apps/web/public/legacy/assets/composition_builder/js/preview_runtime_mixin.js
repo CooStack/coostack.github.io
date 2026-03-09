@@ -55,6 +55,9 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
         if (this.previewFoldSimpleActionCache && typeof this.previewFoldSimpleActionCache.clear === "function") {
             this.previewFoldSimpleActionCache.clear();
         }
+        if (this.previewVisualRuntimePlanCache && typeof this.previewVisualRuntimePlanCache.clear === "function") {
+            this.previewVisualRuntimePlanCache.clear();
+        }
         this.previewRuntimeGlobals = null;
         this.previewRuntimeAppliedTick = -1;
         this.compilePreviewScriptsFromState({ force: false });
@@ -600,6 +603,7 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
         const prevPersistentCurrentAges = this.previewPersistentCurrentAges;
         const prevPersistentLifetimes = this.previewPersistentLifetimes;
         const prevManualAgeFlags = this.previewManualAgeFlags;
+        const prevInitializedLifetimeFlags = this.previewInitializedLifetimeFlags;
         const prevPersistentControllerStates = this.previewPersistentControllerStates;
         this.previewPersistentCurrentAges = (canReuseRuntimeState
             && prevPersistentCurrentAges instanceof Float32Array
@@ -615,6 +619,11 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
             && prevManualAgeFlags instanceof Uint8Array
             && prevManualAgeFlags.length === count)
             ? new Uint8Array(prevManualAgeFlags)
+            : new Uint8Array(count);
+        this.previewInitializedLifetimeFlags = (canReuseRuntimeState
+            && prevInitializedLifetimeFlags instanceof Uint8Array
+            && prevInitializedLifetimeFlags.length === count)
+            ? new Uint8Array(prevInitializedLifetimeFlags)
             : new Uint8Array(count);
         this.previewPersistentControllerStates = (canReuseRuntimeState
             && Array.isArray(prevPersistentControllerStates)
@@ -653,7 +662,6 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
         const colors = this.pointsGeom.getAttribute("color")?.array;
         const sizes = this.pointsGeom.getAttribute("aSize")?.array;
         const alphas = this.pointsGeom.getAttribute("aAlpha")?.array;
-        if (!positions || !colors || !sizes || !alphas) return;
         let resolvedCurrentAges = this.previewFrameCurrentAges;
         if (!(resolvedCurrentAges instanceof Float32Array) || resolvedCurrentAges.length !== totalCount) {
             resolvedCurrentAges = new Float32Array(totalCount);
@@ -685,6 +693,11 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
             manualAgeFlags = new Uint8Array(totalCount);
             this.previewManualAgeFlags = manualAgeFlags;
         }
+        let initializedLifetimeFlags = this.previewInitializedLifetimeFlags;
+        if (!(initializedLifetimeFlags instanceof Uint8Array) || initializedLifetimeFlags.length !== totalCount) {
+            initializedLifetimeFlags = new Uint8Array(totalCount);
+            this.previewInitializedLifetimeFlags = initializedLifetimeFlags;
+        }
         let persistentControllerStates = this.previewPersistentControllerStates;
         if (!Array.isArray(persistentControllerStates) || persistentControllerStates.length !== totalCount) {
             persistentControllerStates = new Array(totalCount).fill(null);
@@ -704,16 +717,14 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
             this.previewRuntimeGlobals = this.buildPreviewRuntimeGlobals(0, 0, 0);
             this.previewRuntimeAppliedTick = -1;
             this.previewRuntimeCycleIndex = cycleIndex;
-            if (shouldResetPersistentRuntime) {
-                persistentCurrentAges.fill(0);
-                persistentLifetimes.fill(100);
-                manualAgeFlags.fill(0);
-                persistentControllerStates.fill(null);
-            }
+            persistentCurrentAges.fill(0);
+            persistentLifetimes.fill(100);
+            manualAgeFlags.fill(0);
+            initializedLifetimeFlags.fill(0);
+            persistentControllerStates.fill(null);
         }
         this.previewCanResumeRuntimeState = true;
-        const frameRuntimeGlobals = this.previewRuntimeGlobals;
-        for (let t = this.previewRuntimeAppliedTick + 1; t <= tickStep; t++) {
+        const frameRuntimeGlobals = this.previewRuntimeGlobals;        for (let t = this.previewRuntimeAppliedTick + 1; t <= tickStep; t++) {
             this.applyExpressionGlobalsOnce(runtimeActions, t, t, frameRuntimeGlobals, globalAxis);
         }
         if (tickStep > this.previewRuntimeAppliedTick) this.previewRuntimeAppliedTick = tickStep;
@@ -900,10 +911,10 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
                         }
                     }
                 }
-                let ageDependent = ownerVisualAgeDependentCache.get(owner);
-                if (ageDependent === undefined) {
-                    ageDependent = this.isCardVisualAgeDependent(card);
-                    ownerVisualAgeDependentCache.set(owner, ageDependent);
+                let visualDependency = ownerVisualAgeDependentCache.get(owner);
+                if (visualDependency === undefined) {
+                    visualDependency = this.getCardPreviewVisualDependency(card);
+                    ownerVisualAgeDependentCache.set(owner, visualDependency);
                 }
                 this.syncPreviewStatusWithCycle(frameRuntimeGlobals, cycleCfg, globalCycleAge, elapsedTick);
                 globalAge = this.resolvePreviewAgeWithStatus(ageBase, elapsedTick, cycleCfg, frameRuntimeGlobals);
@@ -982,7 +993,11 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
                     cardRuntimeHasExpression: shapeRuntimeLevels.some((lv) => !!lv.hasExpression),
                     cardRuntimeHasPointDependentExpression: shapeRuntimeLevels.some((lv) => !!lv.hasPointDependentExpression),
                     cardHasShapeOps: !!(card && card.dataType !== "single"),
-                    cardVisualAgeDependent: !!ageDependent,
+                    cardVisualAgeDependent: !!visualDependency?.ageDependent,
+                    cardVisualPointDependent: !!visualDependency?.pointDependent,
+                    cardVisualFramePointDependent: !!visualDependency?.framePointDependent,
+                    cardVisualInitPointDependentCurrentAge: !!visualDependency?.initPointDependentCurrentAge,
+                    cardVisualInitPointDependentLifetime: !!visualDependency?.initPointDependentLifetime,
                     visibleLimit,
                     localUnlockTickByIndex
                 };
@@ -1177,7 +1192,6 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
                 alphas[i] = 0;
                 continue;
             }
-
             const persistedCurrentAgeRaw = persistentCurrentAges[i];
             const persistedCurrentAge = Number.isFinite(Number(persistedCurrentAgeRaw))
                 ? Math.max(0, num(persistedCurrentAgeRaw))
@@ -1189,8 +1203,15 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
             const persistedControllerState = (persistentControllerStates[i] && typeof persistentControllerStates[i] === "object")
                 ? persistentControllerStates[i]
                 : null;
+            const needsInitCurrentAge = !!cached.cardVisualInitPointDependentCurrentAge && manualAgeFlags[i] !== 1;
+            const needsInitLifetime = !!cached.cardVisualInitPointDependentLifetime && initializedLifetimeFlags[i] !== 1;
+            const needsPerPointVisual = !skipExprPerPoint && (
+                !!cached.cardVisualFramePointDependent
+                || needsInitCurrentAge
+                || needsInitLifetime
+            );
             let pointVisual = null;
-            if (!skipExprPerPoint && cached.cardVisualAgeDependent) {
+            if (needsPerPointVisual) {
                 let byLocal = groupId >= 0 ? pointVisualCache[groupId] : null;
                 if (!byLocal) {
                     byLocal = [];
@@ -1205,6 +1226,7 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
                         currentAge: persistedCurrentAge,
                         lifetime: persistedLifetime,
                         keepInitializedCurrentAge: manualAgeFlags[i] === 1,
+                        keepInitializedLifetime: initializedLifetimeFlags[i] === 1,
                         controllerState: persistedControllerState,
                         pointIndex: localIndex
                     });
@@ -1220,6 +1242,7 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
                         currentAge: persistedCurrentAge,
                         lifetime: persistedLifetime,
                         keepInitializedCurrentAge: manualAgeFlags[i] === 1,
+                        keepInitializedLifetime: initializedLifetimeFlags[i] === 1,
                         controllerState: persistedControllerState,
                         pointIndex: 0
                     });
@@ -1230,10 +1253,16 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
                 persistentControllerStates[i] = pointVisual.__controllerState;
             }
 
-            const hasManualCurrentAge = pointVisual?.__manualCurrentAge === true;
+            const preserveInitializedCurrentAge = !needsPerPointVisual
+                && !!cached.cardVisualInitPointDependentCurrentAge
+                && manualAgeFlags[i] === 1;
+            let hasManualCurrentAge = pointVisual?.__manualCurrentAge === true;
             const resolvedCurrentAgeRaw = Number(pointVisual?.__resolvedCurrentAge);
             let resolvedCurrentAge;
-            if (hasManualCurrentAge && Number.isFinite(resolvedCurrentAgeRaw)) {
+            if (preserveInitializedCurrentAge) {
+                resolvedCurrentAge = persistedCurrentAge;
+                hasManualCurrentAge = true;
+            } else if (hasManualCurrentAge && Number.isFinite(resolvedCurrentAgeRaw)) {
                 resolvedCurrentAge = Math.max(0, resolvedCurrentAgeRaw);
             } else {
                 resolvedCurrentAge = 0;
@@ -1241,8 +1270,19 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
             resolvedCurrentAges[i] = resolvedCurrentAge;
             persistentCurrentAges[i] = resolvedCurrentAge;
             manualAgeFlags[i] = hasManualCurrentAge ? 1 : 0;
+            if (pointVisual?.__particleLifetimeInitialized === true || (!needsPerPointVisual
+                && !!cached.cardVisualInitPointDependentLifetime
+                && initializedLifetimeFlags[i] === 1)) {
+                initializedLifetimeFlags[i] = 1;
+            }
+            const preserveInitializedLifetime = !needsPerPointVisual
+                && !!cached.cardVisualInitPointDependentLifetime
+                && initializedLifetimeFlags[i] === 1;
             const resolvedLifetimeRaw = Number(pointVisual?.__resolvedLifetime);
-            if (Number.isFinite(resolvedLifetimeRaw) && resolvedLifetimeRaw >= 1) {
+            if (preserveInitializedLifetime) {
+                resolvedLifetimes[i] = persistedLifetime;
+                persistentLifetimes[i] = persistedLifetime;
+            } else if (Number.isFinite(resolvedLifetimeRaw) && resolvedLifetimeRaw >= 1) {
                 const nextLifetime = Math.max(1, int(resolvedLifetimeRaw));
                 resolvedLifetimes[i] = nextLifetime;
                 persistentLifetimes[i] = nextLifetime;
@@ -1279,9 +1319,7 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
     }
 
     isParticleTextureRenderable(pData) {
-        if (!pData || !pData.atlasReady || !pData.atlas) return false;
-        if (!(Number(pData.frames) > 0)) return false;
-        if (pData.textureLoadOk === false) return false;
+        if (!pData || !pData.atlasReady || !pData.atlas) return false;        if (pData.textureLoadOk === false) return false;
         return true;
     }
 
@@ -2409,12 +2447,29 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
         });
     }
 
+    isPreviewExpressionNonDeterministic(scriptRaw = "") {
+        const src = stripJsForLint(transpileKotlinThisQualifierToJs(scriptRaw));
+        if (!src) return false;
+        if (/\bRandom\b/.test(src)) return true;
+        if (/\bMath\s*\.\s*random\s*\(/.test(src)) return true;
+        return false;
+    }
+
     isPreviewExpressionPointDependent(scriptRaw = "") {
         const src = stripJsForLint(transpileKotlinThisQualifierToJs(scriptRaw));
         if (!src) return false;
+        if (this.isPreviewExpressionNonDeterministic(src)) return true;
         if (/\b(?:index|order|rel|point)\b/.test(src)) return true;
         if (/\bshapeRel\d+\b/.test(src)) return true;
         if (/\bshapeOrder\d+\b/.test(src)) return true;
+        return false;
+    }
+
+    doesPreviewExpressionReadVisualState(scriptRaw = "") {
+        const src = stripJsForLint(transpileKotlinThisQualifierToJs(scriptRaw));
+        if (!src) return false;
+        if (/\b(?:currentAge|lifetime|lifeTime|textureSheet)\b/.test(src)) return true;
+        if (/\bparticle\s*\.\s*(?:currentAge|lifetime|lifeTime|textureSheet)\b/.test(src)) return true;
         return false;
     }
 
@@ -2662,6 +2717,139 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
         visual.__manualCurrentAge = runtimeCtx.__manualCurrentAge === true;
         visual.__resolvedLifetime = Math.max(1, num(runtimeCtx.lifetime));
     }
+    ensurePreviewVisualRuntimePlanCache() {
+        if (!(this.previewVisualRuntimePlanCache instanceof Map)) {
+            this.previewVisualRuntimePlanCache = new Map();
+        }
+        return this.previewVisualRuntimePlanCache;
+    }
+
+    normalizePreviewVisualInitTarget(rawTarget = "") {
+        return String(rawTarget || "").trim().toLowerCase();
+    }
+
+    isPreviewVisualTimeDependent(scriptRaw = "") {
+        const src = stripJsForLint(transpileKotlinThisQualifierToJs(scriptRaw));
+        if (!src) return false;
+        if (/\b(?:age|tick|tickCount|currentAge|lifetime|lifeTime|textureSheet)\b/.test(src)) return true;
+        if (this.isPreviewExpressionNonDeterministic(src)) return true;
+        return false;
+    }
+
+    getPreviewVisualRuntimePlan(card) {
+        if (!card) return null;
+        const visualSource = this.resolvePreviewVisualSource(card);
+        if (!visualSource) return null;
+        const cache = this.ensurePreviewVisualRuntimePlanCache();
+        const cacheKey = String(visualSource.id || card.id || "").trim() || card;
+        const cached = cache.get(cacheKey);
+        if (cached && cached.visualSource === visualSource) return cached;
+        const visualSourceId = String(visualSource.id || card.id || "").trim();
+        const particleInit = [];
+        let ageDependent = false;
+        let framePointDependent = false;
+        let initPointDependentCurrentAge = false;
+        let initPointDependentLifetime = false;
+        let readsPointSpecificVisualState = false;
+        for (const raw of (Array.isArray(visualSource.particleInit) ? visualSource.particleInit : [])) {
+            const target = this.normalizePreviewVisualInitTarget(raw?.target || "");
+            const exprRaw = String(raw?.expr || "").trim();
+            if (!exprRaw) continue;
+            const expr = transpileKotlinThisQualifierToJs(exprRaw).replace(/(\d+(?:\.\d+)?)[fFdDlL]\b/g, "$1");
+            const exprPointDependent = this.isPreviewExpressionPointDependent(exprRaw);
+            const exprReadsVisualState = this.doesPreviewExpressionReadVisualState(exprRaw);
+            particleInit.push({ target, exprRaw, expr });
+            if (target === "currentage" || target === "age" || target === "particle.currentage") {
+                ageDependent = true;
+                if (exprPointDependent) initPointDependentCurrentAge = true;
+                continue;
+            }
+            if (target === "lifetime" || target === "particle.lifetime") {
+                if (exprPointDependent) initPointDependentLifetime = true;
+                if (this.isPreviewVisualTimeDependent(exprRaw)) ageDependent = true;
+                continue;
+            }
+            if (this.isPreviewVisualTimeDependent(exprRaw)) ageDependent = true;
+            if (exprPointDependent) framePointDependent = true;
+            if (exprReadsVisualState) readsPointSpecificVisualState = true;
+        }
+        const controllerVars = Array.isArray(visualSource.controllerVars)
+            ? visualSource.controllerVars.map((def) => ({ ...def, name: String(def?.name || "").trim(), exprRaw: String(def?.expr || "").trim() }))
+            : [];
+        for (const def of controllerVars) {
+            if (!def.exprRaw) continue;
+            if (this.isPreviewVisualTimeDependent(def.exprRaw)) ageDependent = true;
+            if (this.isPreviewExpressionPointDependent(def.exprRaw)) {
+                framePointDependent = true;
+            }
+            if (this.doesPreviewExpressionReadVisualState(def.exprRaw)) {
+                readsPointSpecificVisualState = true;
+            }
+        }
+        const controllerActions = [];
+        for (let actionIdx = 0; actionIdx < (Array.isArray(visualSource.controllerActions) ? visualSource.controllerActions.length : 0); actionIdx++) {
+            const action = visualSource.controllerActions[actionIdx];
+            const scriptRaw = String(action?.script || "").trim();
+            const compileKey = this.makePreviewControllerScriptCompileKey(visualSourceId, actionIdx);
+            controllerActions.push({ action, scriptRaw, compileKey });
+            if (!scriptRaw) continue;
+            ageDependent = true;
+            if (this.isPreviewExpressionPointDependent(scriptRaw)) {
+                framePointDependent = true;
+            }
+            if (this.doesPreviewExpressionReadVisualState(scriptRaw)) {
+                readsPointSpecificVisualState = true;
+            }
+        }
+        const pointDependent = framePointDependent || ((initPointDependentCurrentAge || initPointDependentLifetime) && readsPointSpecificVisualState);
+        const plan = {
+            visualSource,
+            visualSourceId,
+            particleInit,
+            controllerVars,
+            controllerActions,
+            dependency: {
+                ageDependent,
+                pointDependent,
+                framePointDependent,
+                initPointDependentCurrentAge,
+                initPointDependentLifetime,
+                readsPointSpecificVisualState
+            }
+        };
+        cache.set(cacheKey, plan);
+        return plan;
+    }
+
+    getCardPreviewVisualDependency(card) {
+        if (!card) return {
+            ageDependent: false,
+            pointDependent: false,
+            framePointDependent: false,
+            initPointDependentCurrentAge: false,
+            initPointDependentLifetime: false,
+            readsPointSpecificVisualState: false
+        };
+        const cache = (this.previewCardVisualAgeDependentCache instanceof Map)
+            ? this.previewCardVisualAgeDependentCache
+            : (this.previewCardVisualAgeDependentCache = new Map());
+        const cacheKey = String(card.id || "").trim() || card;
+        const cached = cache.get(cacheKey);
+        if (cached && typeof cached === "object") return cached;
+        const plan = this.getPreviewVisualRuntimePlan(card);
+        const dependency = (plan && plan.dependency && typeof plan.dependency === "object")
+            ? plan.dependency
+            : {
+                ageDependent: false,
+                pointDependent: false,
+                framePointDependent: false,
+                initPointDependentCurrentAge: false,
+                initPointDependentLifetime: false,
+                readsPointSpecificVisualState: false
+            };
+        cache.set(cacheKey, dependency);
+        return dependency;
+    }
 
     resolveCardPreviewVisual(cardId, opts = {}) {
         const runtimeVars = (opts.runtimeVars && typeof opts.runtimeVars === "object") ? opts.runtimeVars : null;
@@ -2669,16 +2857,19 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
         const ageTick = num(opts.ageTick);
         const pointIndex = int(opts.pointIndex || 0);
         const keepInitializedCurrentAge = opts.keepInitializedCurrentAge === true;
+        const keepInitializedLifetime = opts.keepInitializedLifetime === true;
         const fallback = { color: [1, 1, 1], size: 0.2, alpha: 1 };
         const card = this.getCardById(cardId);
         if (!card) return fallback;
-        const visualSource = this.resolvePreviewVisualSource(card);
+        const visualPlan = this.getPreviewVisualRuntimePlan(card);
+        const visualSource = visualPlan?.visualSource || this.resolvePreviewVisualSource(card);
         if (!visualSource) return fallback;
         const visual = { color: [...fallback.color], size: 0.2, alpha: 1 };
         let resolvedCurrentAge = Number.isFinite(Number(opts.currentAge))
             ? Math.max(0, num(opts.currentAge))
             : 0;
         let manualCurrentAge = false;
+        let particleLifetimeInitialized = false;
         const evalRuntimeVars = runtimeVars ? Object.create(runtimeVars) : {};
         evalRuntimeVars.currentAge = resolvedCurrentAge;
         evalRuntimeVars.lifetime = Number.isFinite(Number(opts.lifetime))
@@ -2693,8 +2884,9 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
         const evalThisAtVars = (runtimeVars && typeof runtimeVars === "object") ? runtimeVars : evalRuntimeVars;
         const evalScope = this.createRuntimeExpressionScope(elapsedTick, ageTick, pointIndex, evalRuntimeVars, true);
         evalScope.thisAt = evalThisAtVars;
-        for (const it of (visualSource.particleInit || [])) {
-            const target = String(it.target || "").trim().toLowerCase();
+        const particleInitEntries = Array.isArray(visualPlan?.particleInit) ? visualPlan.particleInit : [];
+        for (const it of particleInitEntries) {
+            const target = it.target;
             const expr = String(it.expr || "").trim();
             if (!expr) continue;
             if (target === "color" || target === "particlecolor" || target === "particle.particlecolor") {
@@ -2708,7 +2900,10 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
                 visual.alpha = clamp(num(this.evaluateNumericExpressionWithRuntime(expr, evalRuntimeVars, { elapsedTick, ageTick, pointIndex, thisAtVars: evalThisAtVars, runtimeScope: evalScope })), 0, 1);
             }
             if (target === "lifetime" || target === "particle.lifetime") {
-                const nextLifetime = Math.max(1, int(this.evaluateNumericExpressionWithRuntime(expr, evalRuntimeVars, { elapsedTick, ageTick, pointIndex, thisAtVars: evalThisAtVars, runtimeScope: evalScope })));
+                particleLifetimeInitialized = true;
+                const nextLifetime = keepInitializedLifetime
+                    ? Math.max(1, int(evalRuntimeVars.lifetime))
+                    : Math.max(1, int(this.evaluateNumericExpressionWithRuntime(expr, evalRuntimeVars, { elapsedTick, ageTick, pointIndex, thisAtVars: evalThisAtVars, runtimeScope: evalScope })));
                 visual.__resolvedLifetime = nextLifetime;
                 evalRuntimeVars.lifetime = nextLifetime;
                 evalRuntimeVars.lifeTime = nextLifetime;
@@ -2724,7 +2919,7 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
                 evalRuntimeVars.currentAge = resolvedCurrentAge;
             }
         }
-        const controllerVarDefs = Array.isArray(visualSource.controllerVars) ? visualSource.controllerVars : [];
+        const controllerVarDefs = Array.isArray(visualPlan?.controllerVars) ? visualPlan.controllerVars : [];
         const controllerVarNames = [];
         let controllerState = (opts.controllerState && typeof opts.controllerState === "object")
             ? { ...opts.controllerState }
@@ -2741,12 +2936,10 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
                 thisAtVars: runtimeVars
             });
         }
-        const controllerActions = Array.isArray(visualSource.controllerActions) ? visualSource.controllerActions : [];
-        const visualSourceId = String(visualSource.id || card.id || cardId);
+        const controllerActions = Array.isArray(visualPlan?.controllerActions) ? visualPlan.controllerActions : [];
         for (let actionIdx = 0; actionIdx < controllerActions.length; actionIdx++) {
-            const action = controllerActions[actionIdx];
-            const compileKey = this.makePreviewControllerScriptCompileKey(visualSourceId, actionIdx);
-            this.applyControllerScriptVisual(visual, String(action?.script || ""), {
+            const actionEntry = controllerActions[actionIdx] || {};
+            this.applyControllerScriptVisual(visual, String(actionEntry.scriptRaw || ""), {
                 runtimeVars,
                 elapsedTick,
                 ageTick,
@@ -2755,7 +2948,7 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
                 lifetime: visual.__resolvedLifetime,
                 controllerState,
                 controllerVarNames,
-                compileKey
+                compileKey: String(actionEntry.compileKey || "")
             });
             if (visual.__controllerState && typeof visual.__controllerState === "object") {
                 controllerState = visual.__controllerState;
@@ -2771,6 +2964,7 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
         visual.__controllerState = controllerState;
         visual.__resolvedCurrentAge = resolvedCurrentAge;
         visual.__manualCurrentAge = manualCurrentAge;
+        visual.__particleLifetimeInitialized = particleLifetimeInitialized;
         if (!visual.hasOwnProperty("__resolvedLifetime")) {
             visual.__resolvedLifetime = Math.max(1, num(evalRuntimeVars.lifetime));
         }
@@ -2799,31 +2993,7 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
     }
 
     isCardVisualAgeDependent(card) {
-        if (!card) return false;
-        const visualSource = this.resolvePreviewVisualSource(card);
-        if (!visualSource) return false;
-        if (Array.isArray(visualSource.controllerVars) && visualSource.controllerVars.length) return true;
-        if (Array.isArray(visualSource.controllerActions) && visualSource.controllerActions.length) return true;
-        for (const it of (visualSource.particleInit || [])) {
-            const target = String(it?.target || "").trim().toLowerCase();
-            if (target !== "color" && target !== "particlecolor" && target !== "particle.particlecolor"
-                && target !== "size" && target !== "particlesize" && target !== "particle.particlesize"
-                && target !== "alpha" && target !== "particlealpha" && target !== "particle.particlealpha"
-                && target !== "currentage" && target !== "age" && target !== "particle.currentage"
-                && target !== "lifetime" && target !== "particle.lifetime"
-                && target !== "texturesheet" && target !== "particle.texturesheet") {
-                continue;
-            }
-            const expr = String(it?.expr || "").trim();
-            if (!expr) continue;
-            if (target === "currentage" || target === "age" || target === "particle.currentage") return true;
-            if (this.isScriptAgeDependent(expr)) return true;
-            if (/\bRandom\b/.test(stripJsForLint(transpileKotlinThisQualifierToJs(expr)))) return true;
-        }
-        for (const action of (visualSource.controllerActions || [])) {
-            if (this.isScriptAgeDependent(String(action?.script || ""))) return true;
-        }
-        return false;
+        return !!this.getCardPreviewVisualDependency(card)?.ageDependent;
     }
 
     computeAnimateVisibleCount(list, ageTick, tick, index, runtimeVars = null) {
