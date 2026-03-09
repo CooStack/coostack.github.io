@@ -273,6 +273,7 @@ function buildApiDtsFromCompletions(completions) {
     lines.push("declare let rel: any;");
     lines.push("declare let order: any;");
     lines.push("declare let axis: any;");
+    lines.push("declare let scaleHelper: any;");
     lines.push("declare const status: any;");
     lines.push("declare let particle: any;");
     lines.push("declare let thisAt: any;");

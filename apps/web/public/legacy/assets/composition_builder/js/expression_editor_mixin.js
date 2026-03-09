@@ -297,6 +297,22 @@ export function installExpressionEditorMethods(CompositionBuilderApp, deps = {})
         ];
     }
 
+    resolveCodeEditorControllerVars(cardId = "", treePathRaw = "") {
+        const id = String(cardId || "").trim();
+        if (!id) return [];
+        const card = this.getCardById(id);
+        if (!card) return [];
+        const rawPath = String(treePathRaw || "").trim();
+        if (rawPath) {
+            try {
+                const node = this.getShapeNodeByPath(card, JSON.parse(rawPath));
+                if (node && Array.isArray(node.controllerVars)) return node.controllerVars;
+            } catch (_) {
+            }
+        }
+        return Array.isArray(card.controllerVars) ? card.controllerVars : [];
+    }
+
     getCodeEditorScopeInfo(textarea) {
         const none = { allowRel: false, allowOrder: false, maxShapeDepth: -1, sequencedDepths: [] };
         if (!(textarea instanceof HTMLTextAreaElement)) return none;
@@ -370,6 +386,7 @@ export function installExpressionEditorMethods(CompositionBuilderApp, deps = {})
             allowed.add(key);
         }
         const cardId = String(opts.cardId || "").trim();
+        const treePath = String(opts.treePath || "").trim();
         if (opts.allowScaleHelper === true && this.hasManualProjectScaleHelper()) {
             allowed.add("scaleHelper");
         }
@@ -397,14 +414,9 @@ export function installExpressionEditorMethods(CompositionBuilderApp, deps = {})
             const name = String(c?.name || "").trim();
             if (/^[A-Za-z_$][A-Za-z0-9_$]*$/.test(name)) allowed.add(name);
         }
-        if (cardId) {
-            const card = this.getCardById(cardId);
-            if (card) {
-                for (const v of (card.controllerVars || [])) {
-                    const name = String(v?.name || "").trim();
-                    if (/^[A-Za-z_$][A-Za-z0-9_$]*$/.test(name)) allowed.add(name);
-                }
-            }
+        for (const v of this.resolveCodeEditorControllerVars(cardId, treePath)) {
+            const name = String(v?.name || "").trim();
+            if (/^[A-Za-z_$][A-Za-z0-9_$]*$/.test(name)) allowed.add(name);
         }
         return allowed;
     }
@@ -455,10 +467,11 @@ export function installExpressionEditorMethods(CompositionBuilderApp, deps = {})
             return { valid: true, message: "" };
         }
         const cardId = String(textarea.dataset.cardId || "");
+        const treePath = String(textarea.dataset.treePath || "");
         const scope = this.getCodeEditorScopeInfo(textarea);
         const allowGrowthApi = this.isGrowthApiAllowedForCodeEditor(textarea);
         const allowScaleHelper = this.isScaleHelperAllowedForCodeEditor(textarea);
-        const result = this.validateJsExpressionSource(source, { cardId, scope, allowGrowthApi, allowScaleHelper });
+        const result = this.validateJsExpressionSource(source, { cardId, treePath, scope, allowGrowthApi, allowScaleHelper });
         if (result.valid) return result;
         return {
             valid: false,
@@ -468,10 +481,11 @@ export function installExpressionEditorMethods(CompositionBuilderApp, deps = {})
 
     buildCodeEditorApiDts(textarea, completions = []) {
         const cardId = String(textarea?.dataset?.cardId || "");
+        const treePath = String(textarea?.dataset?.treePath || "");
         const scope = this.getCodeEditorScopeInfo(textarea);
         const allowGrowthApi = this.isGrowthApiAllowedForCodeEditor(textarea);
         const allowScaleHelper = this.isScaleHelperAllowedForCodeEditor(textarea);
-        const allowed = this.getJsValidationAllowedIdentifiers({ cardId, scope, allowGrowthApi, allowScaleHelper });
+        const allowed = this.getJsValidationAllowedIdentifiers({ cardId, treePath, scope, allowGrowthApi, allowScaleHelper });
         const declared = new Map();
         const lines = [];
         const declareSymbol = (name, type = "any", mutable = false, opts = {}) => {
@@ -518,15 +532,10 @@ export function installExpressionEditorMethods(CompositionBuilderApp, deps = {})
             if (!name) continue;
             declareSymbol(name, "any", false);
         }
-        if (cardId) {
-            const card = this.getCardById(cardId);
-            if (card) {
-                for (const v of (card.controllerVars || [])) {
-                    const name = String(v?.name || "").trim();
-                    if (!name) continue;
-                    declareSymbol(name, "any", true);
-                }
-            }
+        for (const v of this.resolveCodeEditorControllerVars(cardId, treePath)) {
+            const name = String(v?.name || "").trim();
+            if (!name) continue;
+            declareSymbol(name, "any", true);
         }
         lines.push("declare function rotateToPoint(...args: any[]): any;");
         lines.push("declare function rotateAsAxis(...args: any[]): any;");
@@ -772,15 +781,11 @@ export function installExpressionEditorMethods(CompositionBuilderApp, deps = {})
 
         const cardVars = [];
         const cardId = String(textarea.dataset.cardId || "");
-        if (cardId) {
-            const card = this.getCardById(cardId);
-            if (card) {
-                for (const it of (card.controllerVars || [])) {
-                    const name = String(it.name || "").trim();
-                    if (!name) continue;
-                    cardVars.push({ label: name, detail: "控制器局部变量", priority: 245 });
-                }
-            }
+        const treePath = String(textarea.dataset.treePath || "");
+        for (const it of this.resolveCodeEditorControllerVars(cardId, treePath)) {
+            const name = String(it.name || "").trim();
+            if (!name) continue;
+            cardVars.push({ label: name, detail: "控制器局部变量", priority: 245 });
         }
         return mergeCompletionGroups(base, vars, cardVars);
     }

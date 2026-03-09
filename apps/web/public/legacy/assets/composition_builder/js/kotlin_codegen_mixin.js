@@ -442,6 +442,12 @@ export function installKotlinCodegenMethods(CompositionBuilderApp, deps = {}) {
                 let expr = this.rewriteCodeExpr(String(v.expr || "").trim(), className);
                 expr = rewriteStatus(expr, className);
                 if (!expr) expr = defaultLiteralForKotlinType(vType);
+                if (/^float$/i.test(vType)) {
+                    if (isPlainNumericLiteralText(expr)) expr = normalizeKotlinFloatLiteralText(expr);
+                    else if (!/\.toFloat\(\)\s*$/.test(expr)) expr = `(${expr}).toFloat()`;
+                } else if (/^double$/i.test(vType) && isPlainNumericLiteralText(expr)) {
+                    expr = normalizeKotlinDoubleLiteralText(expr);
+                }
                 lines.push(`${indentBase}    var ${vName}: ${vType} = ${expr}`);
             }
             for (const action of actions) {
@@ -557,6 +563,9 @@ export function installKotlinCodegenMethods(CompositionBuilderApp, deps = {}) {
         lines.push(`${indent}        .setDisplayerSupplier {`);
         lines.push(`${indent}            ParticleDisplayer.withSingle(${fx}(it))`);
         lines.push(`${indent}        }`);
+        const singleChain = this._buildTreeNodeSingleDataChainCodegen(node, card, className, `${indent}        `);
+        if (singleChain) lines.push(singleChain);
+        lines.push(`${indent}}`);
         const singlePseudo = {
             id: card.id,
             shapeDisplayActions: node.displayActions || [],
@@ -564,11 +573,8 @@ export function installKotlinCodegenMethods(CompositionBuilderApp, deps = {}) {
             growthAnimates: []
         };
         const scopeInfo = this.getShapeScopeInfoByRuntimeLevel(card, int(ctx?.depth || 1));
-        const singleActions = this.applyCardCompositionActions(singlePseudo, className, `${indent}        `, false, scopeInfo, actionCtx);
+        const singleActions = this.applyCardCompositionActions(singlePseudo, className, indent, false, scopeInfo, actionCtx);
         if (String(singleActions || "").trim()) lines.push(singleActions);
-        const singleChain = this._buildTreeNodeSingleDataChainCodegen(node, card, className, `${indent}        `);
-        if (singleChain) lines.push(singleChain);
-        lines.push(`${indent}}`);
     }
 
     _emitTreeNodeShapeApplyCodegen(lines, node, card, className, ctx, bindMode, pointExpr, builderExpr, dataLambdaHead, indent, isSequenced, depth, actionCtx) {
@@ -603,35 +609,11 @@ export function installKotlinCodegenMethods(CompositionBuilderApp, deps = {}) {
     }
 
     _buildTreeNodeSingleDataChainCodegen(node, card, className, indentBase) {
-        const lines = [];
-        const pinitList = Array.isArray(node.particleInit) ? node.particleInit : [];
-        if (pinitList.length) {
-            lines.push(`${indentBase}.addParticleInstanceInit {`);
-            for (const it of pinitList) {
-                const target = sanitizeKotlinIdentifier(it.target || "size", "size");
-                const expr = rewriteClassQualifier(String(it.expr || "0.0"), className);
-                lines.push(`${indentBase}    ${target} = ${expr}`);
-            }
-            lines.push(`${indentBase}}`);
-        }
-        const cvars = Array.isArray(node.controllerVars) ? node.controllerVars : [];
-        const cactions = Array.isArray(node.controllerActions) ? node.controllerActions : [];
-        if (cvars.length || cactions.length) {
-            lines.push(`${indentBase}.addController {`);
-            for (const v of cvars) {
-                const vName = sanitizeKotlinIdentifier(v.name || "v", "v");
-                const vType = v.type || "Double";
-                const vExpr = rewriteClassQualifier(String(v.expr || "0.0"), className);
-                lines.push(`${indentBase}    var ${vName}: ${vType} = ${vExpr}`);
-            }
-            for (const a of cactions) {
-                const na = normalizeControllerAction(a);
-                const aExpr = rewriteClassQualifier(String(na.expr || ""), className);
-                if (aExpr.trim()) lines.push(`${indentBase}    ${aExpr}`);
-            }
-            lines.push(`${indentBase}}`);
-        }
-        return lines.length ? lines.join("\n") : null;
+        return this.buildSingleDataChain({
+            particleInit: Array.isArray(node?.particleInit) ? node.particleInit : [],
+            controllerVars: Array.isArray(node?.controllerVars) ? node.controllerVars : [],
+            controllerActions: Array.isArray(node?.controllerActions) ? node.controllerActions : []
+        }, className, indentBase);
     }
 
     applyCardCompositionActions(card, className, innerIndent = "        ", supportsAnimate = false, scopeInfo = null, actionCtx = null) {

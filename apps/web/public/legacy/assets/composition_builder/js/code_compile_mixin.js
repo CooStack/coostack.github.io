@@ -15,6 +15,7 @@ export function installCodeCompileMethods(CompositionBuilderApp, deps = {}) {
         if (target.dataset.cardShapeChildDisplayField === "expression") return true;
         if (target.dataset.shapeLevelDisplayField === "expression") return true;
         if (target.dataset.cactField === "script") return true;
+        if (target.dataset.treeNodeCactField === "script") return true;
         return false;
     };
 
@@ -75,6 +76,30 @@ export function installCodeCompileMethods(CompositionBuilderApp, deps = {}) {
             return {
                 kind: "controller_script",
                 compileKey: this.makePreviewControllerScriptCompileKey(card.id, actionIdx),
+                source: String(action.script || "")
+            };
+        }
+        if (target.dataset.treeNodeCactField === "script") {
+            const actionIdx = parseIndex(target.dataset.treeNodeCactIdx);
+            if (actionIdx < 0) return null;
+            let node = null;
+            const rawTreePath = String(target.dataset.treePath || "").trim();
+            if (rawTreePath) {
+                try {
+                    node = this.getShapeNodeByPath(card, JSON.parse(rawTreePath));
+                } catch {
+                }
+            }
+            if (!node) node = this.getCurrentViewNode(card);
+            if (!node) return null;
+            const list = Array.isArray(node.controllerActions) ? node.controllerActions : [];
+            const action = list[actionIdx];
+            if (!action) return null;
+            const sourceId = String(node.id || card.id || "");
+            if (!sourceId) return null;
+            return {
+                kind: "controller_script",
+                compileKey: this.makePreviewControllerScriptCompileKey(sourceId, actionIdx),
                 source: String(action.script || "")
             };
         }

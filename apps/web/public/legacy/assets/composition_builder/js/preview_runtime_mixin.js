@@ -444,32 +444,37 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
                 else summary.failed += 1;
             }
         };
-
-        eatDisplayActions(this.state.displayActions || [], "display", "", -1);
-        for (const card of (Array.isArray(this.state.cards) ? this.state.cards : [])) {
-            if (!card || !card.id) continue;
-            eatDisplayActions(card.shapeDisplayActions || [], "shape_display", card.id, 0);
-            // traverse tree children for display actions
-            const eatTreeChildren = (children, depth) => {
-                if (!Array.isArray(children)) return;
-                for (const child of children) {
-                    if (!child) continue;
-                    eatDisplayActions(child.displayActions || [], "shape_level_display", card.id, depth);
-                    if (child.type !== "single" && Array.isArray(child.children)) {
-                        eatTreeChildren(child.children, depth + 1);
-                    }
-                }
-            };
-            eatTreeChildren(card.shapeChildren || [], 1);
-            const controllerActions = Array.isArray(card.controllerActions) ? card.controllerActions : [];
-            for (let i = 0; i < controllerActions.length; i++) {
-                const key = this.makePreviewControllerScriptCompileKey(card.id, i);
-                const res = this.compilePreviewControllerScript(key, String(controllerActions[i]?.script || ""), { force });
+        const eatControllerActions = (sourceId, list) => {
+            const id = String(sourceId || "").trim();
+            if (!id) return;
+            const arr = Array.isArray(list) ? list : [];
+            for (let i = 0; i < arr.length; i++) {
+                const key = this.makePreviewControllerScriptCompileKey(id, i);
+                const res = this.compilePreviewControllerScript(key, String(arr[i]?.script || ""), { force });
                 summary.total += 1;
                 if (res.ok) summary.compiled += 1;
                 else if (res.usedFallback) summary.fallback += 1;
                 else summary.failed += 1;
             }
+        };
+
+        eatDisplayActions(this.state.displayActions || [], "display", "", -1);
+        for (const card of (Array.isArray(this.state.cards) ? this.state.cards : [])) {
+            if (!card || !card.id) continue;
+            eatDisplayActions(card.shapeDisplayActions || [], "shape_display", card.id, 0);
+            eatControllerActions(card.id, card.controllerActions || []);
+            const eatTreeChildren = (children, depth) => {
+                if (!Array.isArray(children)) return;
+                for (const child of children) {
+                    if (!child) continue;
+                    eatDisplayActions(child.displayActions || [], "shape_level_display", card.id, depth);
+                    eatControllerActions(child.id, child.controllerActions || []);
+                    if (Array.isArray(child.children) && child.children.length) {
+                        eatTreeChildren(child.children, depth + 1);
+                    }
+                }
+            };
+            eatTreeChildren(card.shapeChildren || [], 1);
         }
         return summary;
     }
@@ -704,6 +709,7 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
         const levelOffsetRefsAll = this.previewLevelOffsetRefs;
 
         const sequencedRoot = this.state.compositionType === "sequenced";
+        const bypassRootSequencedGrowthCardId = this.getPreviewRootSequencedGrowthBypassCardId();
         const rootVirtualTotal = Math.max(1, int(this.previewRootVirtualTotal || this.state.cards.length || 1));
         const rootGrowthPlan = sequencedRoot
             ? this.buildSequencedRootGrowthPlan(runtimeActions, rootVirtualTotal, globalCycleAge, elapsedTick, {
@@ -729,6 +735,18 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
             const base = basePoints[i];
             const groupId = (pointGroupIndex && i < pointGroupIndex.length) ? int(pointGroupIndex[i]) : -1;
             const owner = groupId >= 0 ? (groupOwner[groupId] || ownerIds[i]) : ownerIds[i];
+            if (bypassRootSequencedGrowthCardId && String(owner || "") !== String(bypassRootSequencedGrowthCardId)) {
+                positions[i * 3 + 0] = base.x;
+                positions[i * 3 + 1] = base.y;
+                positions[i * 3 + 2] = base.z;
+                sizes[i] = 0;
+                alphas[i] = 0;
+                this.previewVisibleMask[i] = false;
+                resolvedCurrentAges[i] = 0;
+                persistentCurrentAges[i] = 0;
+                manualAgeFlags[i] = 0;
+                continue;
+            }
             const localIndex = int(ownerLocalIndex[i] || 0);
             const ownerCountSafe = groupId >= 0
                 ? Math.max(1, int(groupOwnerCount[groupId] || ownerPointCount[i] || 1))
@@ -745,8 +763,9 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
             const birthOffset = groupId >= 0
                 ? num(groupBirthOffset[groupId] || 0)
                 : num(birthOffsetList[i] || 0);
-            let rootDelayTick = sequencedRoot ? Math.max(0, rootVirtualIndex) : 0;
-            if (rootGrowthPlan?.hasSource) {
+            const disableRootSequencedGrowth = !!bypassRootSequencedGrowthCardId && String(owner || "") === String(bypassRootSequencedGrowthCardId);
+            let rootDelayTick = (sequencedRoot && !disableRootSequencedGrowth) ? Math.max(0, rootVirtualIndex) : 0;
+            if (!disableRootSequencedGrowth && rootGrowthPlan?.hasSource) {
                 const unlockTick = Number(rootGrowthPlan.unlockTickByIndex?.[rootVirtualIndex]);
                 if (Number.isFinite(unlockTick)) {
                     rootDelayTick = Math.max(0, num(unlockTick));
@@ -785,7 +804,13 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
                         }
                         if (shapeRuntimePack.hasExpression || !shapeRuntimePack.globalsApplied) {
                             for (const lv of shapeRuntimeLevels) {
-                                this.applyExpressionGlobalsOnce(lv.actions, runtimeElapsedTick, runtimeAgeTick, frameRuntimeGlobals, lv.axis || globalAxis);
+                                this.applyExpressionGlobalsOnce(
+                                    lv.actions,
+                                    runtimeElapsedTick,
+                                    runtimeAgeTick,
+                                    frameRuntimeGlobals,
+                                    lv.axis || globalAxis
+                                );
                             }
                             shapeRuntimePack.globalsApplied = true;
                         }
@@ -816,7 +841,13 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
                 let growthPlanCached = canReuseGrowthPlan ? growthPlanFrameCache.get(growthPlanKey) : null;
                 let visibleLimit = 0;
                 let localGrowthPlan = null;
-                if (growthPlanCached && typeof growthPlanCached === "object") {
+                if (disableRootSequencedGrowth) {
+                    visibleLimit = ownerCountSafe;
+                    localGrowthPlan = {
+                        visibleLimit: ownerCountSafe,
+                        unlockTickByIndex: new Array(ownerCountSafe).fill(0)
+                    };
+                } else if (growthPlanCached && typeof growthPlanCached === "object") {
                     visibleLimit = int(growthPlanCached.visibleLimit || 0);
                     localGrowthPlan = growthPlanCached.localGrowthPlan || null;
                 } else {
@@ -1230,6 +1261,7 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
         if (!calcTextureFrame || !getParticleDataByName) return;
         const resolvedCurrentAges = this.previewFrameCurrentAges;
         const resolvedLifetimes = this.previewFrameLifetimes;
+        const manualAgeFlags = this.previewManualAgeFlags;
         const ownerIds = this.previewOwners;
         const cardById = this.previewCardById;
         const pointTextureCfgs = Array.isArray(this.previewLeafTextureConfigs) ? this.previewLeafTextureConfigs : [];
@@ -1254,7 +1286,8 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
             const pData = getParticleDataByName(textureCfg.effectClass);
             if (!this.isParticleTextureRenderable(pData)) { frameIndices[i] = 0; continue; }
             const cached = groupId >= 0 ? groupRuntimeCache[groupId] : null;
-            const resolvedAgeRaw = resolvedCurrentAges?.[i];
+            const hasManualAge = !!(manualAgeFlags && manualAgeFlags[i] === 1);
+            const resolvedAgeRaw = hasManualAge ? resolvedCurrentAges?.[i] : 0;
             const age = Number.isFinite(Number(resolvedAgeRaw))
                 ? Math.max(0, num(resolvedAgeRaw))
                 : 0;
@@ -1450,6 +1483,8 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
         const rootPlan = (rootInfo.rootPlan && typeof rootInfo.rootPlan === "object")
             ? rootInfo.rootPlan
             : null;
+        const bypassRootSequencedGrowthCardId = this.getPreviewRootSequencedGrowthBypassCardId();
+        const disableRootSequencedGrowth = !!bypassRootSequencedGrowthCardId && String(ownerCardId || "") === String(bypassRootSequencedGrowthCardId);
         let rootVisibleCards = Number.POSITIVE_INFINITY;
         let hasRootGrowthSource = false;
 
@@ -1459,22 +1494,24 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
                 ? clamp(int(rootPlan.visibleCards || 0), 0, totalCards)
                 : Number.POSITIVE_INFINITY;
         } else {
-            if (sequencedRoot && this.state.compositionAnimates.length) {
+            if (sequencedRoot && !disableRootSequencedGrowth && this.state.compositionAnimates.length) {
                 const n = this.computeAnimateVisibleCount(this.state.compositionAnimates, globalCycleAge, rootElapsedTick, 0, runtimeScope);
                 rootVisibleCards = Math.min(rootVisibleCards, n);
                 hasRootGrowthSource = true;
             }
-            const rootExprCount = this.computeExpressionVisibleCount(globalRuntimeActions, totalCards, rootGrowthAge, {
-                scopeLevel: -1,
-                allowOrder: this.state.compositionType === "sequenced",
-                sequencedDepths: []
-            });
+            const rootExprCount = disableRootSequencedGrowth
+                ? Number.POSITIVE_INFINITY
+                : this.computeExpressionVisibleCount(globalRuntimeActions, totalCards, rootGrowthAge, {
+                    scopeLevel: -1,
+                    allowOrder: this.state.compositionType === "sequenced",
+                    sequencedDepths: []
+                });
             if (Number.isFinite(rootExprCount)) {
                 rootVisibleCards = Math.min(rootVisibleCards, rootExprCount);
                 hasRootGrowthSource = true;
             }
         }
-        if (sequencedRoot && !hasRootGrowthSource) return 0;
+        if (sequencedRoot && !disableRootSequencedGrowth && !hasRootGrowthSource) return 0;
         if (Number.isFinite(rootVisibleCards)) {
             const cardLimit = clamp(int(rootVisibleCards), 0, totalCards);
             if (virtualIndex >= cardLimit) return 0;
@@ -1560,6 +1597,42 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
             visibleLimit: previousVisible,
             unlockTickByIndex
         };
+    }
+
+    getPreviewRootSequencedGrowthBypassCardId() {
+        if (String(this.state?.settings?.leftPanelTab || "project") !== "cards") return null;
+        if (typeof this.getCardById !== "function" || typeof this.getCurrentViewNode !== "function") return null;
+        const cards = Array.isArray(this.state?.cards) ? this.state.cards : [];
+        const isSingleTreeViewCard = (card) => {
+            if (!card || !Array.isArray(card.viewPath) || !card.viewPath.length) return false;
+            const node = this.getCurrentViewNode(card);
+            if (!node) return false;
+            return String(node.type || "").trim() === "single";
+        };
+        const candidateIds = [];
+        const pushId = (raw) => {
+            const id = String(raw || "").trim();
+            if (!id || candidateIds.includes(id)) return;
+            candidateIds.push(id);
+        };
+        try {
+            const activeCardEl = document?.activeElement?.closest?.('.card[data-card-id]');
+            pushId(activeCardEl?.dataset?.cardId);
+        } catch {
+        }
+        if (this.selectedCardIds instanceof Set && this.selectedCardIds.size === 1) {
+            for (const id of this.selectedCardIds) pushId(id);
+        }
+        pushId(this.focusedCardId);
+        for (const id of candidateIds) {
+            const card = this.getCardById(id);
+            if (isSingleTreeViewCard(card)) return id;
+        }
+        return null;
+    }
+
+    shouldDisablePreviewRootSequencedGrowth() {
+        return !!this.getPreviewRootSequencedGrowthBypassCardId();
     }
 
     buildSequencedRootGrowthPlan(globalRuntimeActions, totalCards, globalCycleAge, elapsedTick, opts = null) {
@@ -2467,6 +2540,9 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
             }
         }
 
+        if (runtimeCtx.__manualCurrentAge !== true) {
+            runtimeCtx.currentAge = Math.max(0, num(initialCurrentAge));
+        }
         const nextControllerState = incomingControllerState ? { ...incomingControllerState } : {};
         for (const name of controllerVarNames) {
             if (!name) continue;

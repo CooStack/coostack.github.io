@@ -29,11 +29,11 @@ import {
     hasAngleOffsetEaseSpecialParams,
     formatAngleValue
 } from "./angle_offset_utils.js";
-import { installPreviewRuntimeMethods } from "./preview_runtime_mixin.js?v=20260309_5";
-import { installKotlinCodegenMethods } from "./kotlin_codegen_mixin.js?v=20260307_4";
+import { installPreviewRuntimeMethods } from "./preview_runtime_mixin.js?v=20260309_22";
+import { installKotlinCodegenMethods } from "./kotlin_codegen_mixin.js?v=20260309_6";
 import { installCodeOutputMethods } from "./code_output_mixin.js";
-import { installExpressionEditorMethods } from "./expression_editor_mixin.js?v=20260309_6";
-import { installCodeCompileMethods } from "./code_compile_mixin.js?v=20260220_1";
+import { installExpressionEditorMethods } from "./expression_editor_mixin.js?v=20260309_7";
+import { installCodeCompileMethods } from "./code_compile_mixin.js?v=20260309_2";
 import { installTargetPresetMethods } from "./target_preset_mixin.js";
 import {
     loadAllParticleData,
@@ -3619,6 +3619,18 @@ class CompositionBuilderApp {
     onCardFocusIn(e) {
         const target = e?.target;
         if (!target || !target.closest) return;
+        const cardEl = target.closest(".card[data-card-id]");
+        const focusCardId = String(cardEl?.dataset?.cardId || "");
+        if (focusCardId) {
+            const activeCard = this.getCardById(focusCardId);
+            if (activeCard && this.focusedCardId !== focusCardId) {
+                this.focusedCardId = focusCardId;
+                this.selectedCardIds = new Set([focusCardId]);
+                this.renderCards();
+                this.updatePreviewGeometry(this.previewPoints, this.previewOwners);
+                this.updateSelectionStatus();
+            }
+        }
         const subgroup = target.closest(".subgroup.collapsed[data-card-id][data-section-key]");
         if (!subgroup) return;
         const cardId = String(subgroup.dataset.cardId || "");
@@ -8524,6 +8536,55 @@ class CompositionBuilderApp {
         return Array.from(new Set(base));
     }
 
+    hasManualProjectScaleHelper() {
+        const projectScale = (this.state?.projectScale && typeof this.state.projectScale === "object")
+            ? this.state.projectScale
+            : null;
+        if (!projectScale) return false;
+        const type = String(projectScale.type || "none").trim();
+        if (!type || type === "none") return false;
+        return String(projectScale.runMode || "auto").trim() === "manual";
+    }
+
+    isControllerScriptEditor(textarea) {
+        if (!(textarea instanceof HTMLTextAreaElement)) return false;
+        return String(textarea.dataset.cactField || textarea.dataset.treeNodeCactField || "").trim() === "script";
+    }
+
+    isScaleHelperAllowedForCodeEditor(textarea) {
+        if (!this.hasManualProjectScaleHelper()) return false;
+        if (!(textarea instanceof HTMLTextAreaElement)) return false;
+        if (this.isControllerScriptEditor(textarea)) return false;
+        return textarea.dataset.displayField === "expression"
+            || textarea.dataset.cardShapeDisplayField === "expression"
+            || textarea.dataset.cardShapeChildDisplayField === "expression"
+            || textarea.dataset.shapeLevelDisplayField === "expression";
+    }
+
+    getProjectScaleHelperCompletionSnippets(textarea = null) {
+        if (!this.isScaleHelperAllowedForCodeEditor(textarea)) return [];
+        return [
+            "scaleHelper.doScale()",
+            "scaleHelper.doScaleReversed()"
+        ];
+    }
+
+    resolveCodeEditorControllerVars(cardId = "", treePathRaw = "") {
+        const id = String(cardId || "").trim();
+        if (!id) return [];
+        const card = this.getCardById(id);
+        if (!card) return [];
+        const rawPath = String(treePathRaw || "").trim();
+        if (rawPath) {
+            try {
+                const node = this.getShapeNodeByPath(card, JSON.parse(rawPath));
+                if (node && Array.isArray(node.controllerVars)) return node.controllerVars;
+            } catch (_) {
+            }
+        }
+        return Array.isArray(card.controllerVars) ? card.controllerVars : [];
+    }
+
     getCodeEditorScopeInfo(textarea) {
         const none = { allowRel: false, allowOrder: false, maxShapeDepth: -1, sequencedDepths: [] };
         if (!(textarea instanceof HTMLTextAreaElement)) return none;
@@ -8531,7 +8592,7 @@ class CompositionBuilderApp {
         if (!cardId) return none;
         const card = this.getCardById(cardId);
         if (!card) return none;
-        if (textarea.dataset.cactField === "script") {
+        if (this.isControllerScriptEditor(textarea)) {
             const levelFromRow = textarea.closest?.("[data-shape-level]")?.dataset?.shapeLevel;
             const rawLevel = textarea.dataset.shapeLevelIdx ?? levelFromRow;
             if (rawLevel !== undefined) {
@@ -8562,7 +8623,11 @@ class CompositionBuilderApp {
 
     getJsValidationAllowedIdentifiers(opts = {}) {
         const allowed = new Set();
-        for (const key of JS_LINT_GLOBALS) allowed.add(key);
+        const allowGrowthApi = opts.allowGrowthApi !== false;
+        for (const key of JS_LINT_GLOBALS) {
+            if (!allowGrowthApi && (key === "addSingle" || key === "addMultiple")) continue;
+            allowed.add(key);
+        }
         const scope = (opts.scope && typeof opts.scope === "object") ? opts.scope : null;
         if (scope?.allowRel) allowed.add("rel");
         if (scope?.allowOrder) allowed.add("order");
@@ -8587,15 +8652,14 @@ class CompositionBuilderApp {
             const name = String(c?.name || "").trim();
             if (/^[A-Za-z_$][A-Za-z0-9_$]*$/.test(name)) allowed.add(name);
         }
-        const cardId = String(opts.cardId || "");
-        if (cardId) {
-            const card = this.getCardById(cardId);
-            if (card) {
-                for (const v of (card.controllerVars || [])) {
-                    const name = String(v?.name || "").trim();
-                    if (/^[A-Za-z_$][A-Za-z0-9_$]*$/.test(name)) allowed.add(name);
-                }
-            }
+        const cardId = String(opts.cardId || "").trim();
+        const treePath = String(opts.treePath || "").trim();
+        if (opts.allowScaleHelper === true && this.hasManualProjectScaleHelper()) {
+            allowed.add("scaleHelper");
+        }
+        for (const v of this.resolveCodeEditorControllerVars(cardId, treePath)) {
+            const name = String(v?.name || "").trim();
+            if (/^[A-Za-z_$][A-Za-z0-9_$]*$/.test(name)) allowed.add(name);
         }
         return allowed;
     }
@@ -8635,18 +8699,129 @@ class CompositionBuilderApp {
         const isShapeDisplayExpr = textarea.dataset.cardShapeDisplayField === "expression";
         const isShapeChildDisplayExpr = textarea.dataset.cardShapeChildDisplayField === "expression";
         const isShapeLevelDisplayExpr = textarea.dataset.shapeLevelDisplayField === "expression";
-        const isControllerScript = textarea.dataset.cactField === "script";
+        const isControllerScript = this.isControllerScriptEditor(textarea);
         if (!isDisplayExpr && !isShapeDisplayExpr && !isShapeChildDisplayExpr && !isShapeLevelDisplayExpr && !isControllerScript) {
             return { valid: true, message: "" };
         }
         const cardId = String(textarea.dataset.cardId || "");
+        const treePath = String(textarea.dataset.treePath || "");
         const scope = this.getCodeEditorScopeInfo(textarea);
-        const result = this.validateJsExpressionSource(source, { cardId, scope });
+        const allowGrowthApi = this.isGrowthApiAllowedForCodeEditor(textarea);
+        const allowScaleHelper = this.isScaleHelperAllowedForCodeEditor(textarea);
+        const result = this.validateJsExpressionSource(source, { cardId, treePath, scope, allowGrowthApi, allowScaleHelper });
         if (result.valid) return result;
         return {
             valid: false,
-            message: `表达式存在问题，此表达式不生效。${result.message ? ` ${result.message}` : ""}`
+            message: `表达式存在问题，此表达式不生效${result.message ? ` ${result.message}` : ""}`
         };
+    }
+
+    buildCodeEditorApiDts(textarea, completions = []) {
+        const cardId = String(textarea?.dataset?.cardId || "");
+        const treePath = String(textarea?.dataset?.treePath || "");
+        const scope = this.getCodeEditorScopeInfo(textarea);
+        const allowGrowthApi = this.isGrowthApiAllowedForCodeEditor(textarea);
+        const allowScaleHelper = this.isScaleHelperAllowedForCodeEditor(textarea);
+        const allowed = this.getJsValidationAllowedIdentifiers({ cardId, treePath, scope, allowGrowthApi, allowScaleHelper });
+        const declared = new Map();
+        const lines = [];
+        const declareSymbol = (name, type = "any", mutable = false, opts = {}) => {
+            const id = String(name || "").trim();
+            if (!/^[A-Za-z_$][A-Za-z0-9_$]*$/.test(id)) return;
+            const prev = declared.get(id);
+            if (!prev) {
+                declared.set(id, { type, mutable: mutable === true });
+                return;
+            }
+            if (mutable === true && opts.keepReadonly !== true) prev.mutable = true;
+            if ((prev.type === "any" || opts.preferType === true) && type && type !== "any") prev.type = type;
+        };
+
+        const statusType = `{
+  displayStatus: number;
+  isDisable(): boolean;
+  disable(): void;
+  isEnable(): boolean;
+  enable(): void;
+  [key: string]: any;
+}`;
+        declareSymbol("Math", "Math");
+        declareSymbol("PI", "number");
+        declareSymbol("age", "number", true);
+        declareSymbol("tick", "number", true);
+        declareSymbol("tickCount", "number", true);
+        declareSymbol("index", "number", true);
+        declareSymbol("rel", "any", true);
+        declareSymbol("order", "any", true);
+        declareSymbol("axis", "any", true);
+        declareSymbol("thisAt", "any", true);
+        declareSymbol("particle", "any", true);
+        declareSymbol("status", statusType, false, { keepReadonly: true });
+
+        for (const g of (this.state.globalVars || [])) {
+            const name = String(g?.name || "").trim();
+            if (!name) continue;
+            declareSymbol(name, "any", g?.mutable !== false);
+        }
+        for (const c of (this.state.globalConsts || [])) {
+            const name = String(c?.name || "").trim();
+            if (!name) continue;
+            declareSymbol(name, "any", false);
+        }
+        for (const v of this.resolveCodeEditorControllerVars(cardId, treePath)) {
+            const name = String(v?.name || "").trim();
+            if (!name) continue;
+            declareSymbol(name, "any", true);
+        }
+        lines.push("declare function rotateToPoint(...args: any[]): any;");
+        lines.push("declare function rotateAsAxis(...args: any[]): any;");
+        lines.push("declare function rotateToWithAngle(...args: any[]): any;");
+        if (allowGrowthApi) {
+            lines.push("declare function addSingle(...args: any[]): any;");
+            lines.push("declare function addMultiple(...args: any[]): any;");
+        }
+        lines.push("declare function addPreTickAction(...args: any[]): any;");
+        lines.push("declare function setReversedScaleOnCompositionStatus(...args: any[]): any;");
+        if (allowScaleHelper) {
+            lines.push("declare const scaleHelper: { doScale(...args: any[]): any; doScaleReversed(...args: any[]): any; };");
+        }
+        lines.push("declare function RelativeLocation(...args: any[]): any;");
+        lines.push("declare namespace RelativeLocation { function yAxis(...args: any[]): any; }");
+        lines.push("declare function Vec3(...args: any[]): any;");
+        lines.push("declare function Vector3f(...args: any[]): any;");
+
+        for (const name of Array.from(allowed).sort((a, b) => a.localeCompare(b))) {
+            declareSymbol(name, "any", false);
+        }
+        for (const [name, meta] of declared.entries()) {
+            lines.push(`declare ${meta.mutable ? "let" : "const"} ${name}: ${meta.type || "any"};`);
+        }
+
+        const reservedFn = new Set(["if", "for", "while", "switch", "catch", "new"]);
+        const fnSet = new Set();
+        const completionList = Array.isArray(completions) ? completions : [];
+        for (const item of completionList) {
+            const src = String(item?.insertText || item?.label || "").trim();
+            const m = /^([A-Za-z_$][A-Za-z0-9_$]*)\s*\(/.exec(src);
+            if (!m) continue;
+            const fnName = String(m[1] || "");
+            if (!fnName || reservedFn.has(fnName) || fnSet.has(fnName)) continue;
+            fnSet.add(fnName);
+            lines.push(`declare function ${fnName}(...args: any[]): any;`);
+        }
+
+        return `${lines.join("\n")}\n`;
+    }
+
+    buildCodeEditorLibs(textarea, completions = []) {
+        return [
+            {
+                id: `composition-api-${String(textarea?.dataset?.codeTitle || "js")}`,
+                name: "__composition_builder_api__.d.ts",
+                content: this.buildCodeEditorApiDts(textarea, completions),
+                enabled: true
+            }
+        ];
     }
 
     refreshCodeEditors() {
@@ -8664,12 +8839,14 @@ class CompositionBuilderApp {
         }
         for (const ta of textareas) {
             const completions = this.getCodeEditorCompletions(ta);
+            const libs = this.buildCodeEditorLibs(ta, completions);
             const title = String(ta.dataset.codeTitle || "代码编辑");
             const validate = (source) => this.validateCodeEditorSource(ta, source);
             const existing = this.codeEditors.get(ta);
             if (existing) {
                 existing.setCompletions(completions);
                 existing.setValidator(validate);
+                existing.setLibs(libs);
                 continue;
             }
             const editor = new InlineCodeEditor({
@@ -8677,16 +8854,18 @@ class CompositionBuilderApp {
                 title,
                 completions,
                 autoSuggestMin: 1,
-                validate
+                validate,
+                libs
             });
             this.codeEditors.set(ta, editor);
         }
     }
 
     getCodeEditorCompletions(textarea) {
-        const isControllerScript = String(textarea?.dataset?.cactField || "") === "script";
+        const isControllerScript = this.isControllerScriptEditor(textarea);
         const projectClass = sanitizeKotlinClassName(this.state.projectName || "NewComposition");
         const scopeInfo = this.getCodeEditorScopeInfo(textarea);
+        const allowGrowthApi = this.isGrowthApiAllowedForCodeEditor(textarea);
         const base = isControllerScript
             ? [
                 { label: "if (...) { ... }", insertText: "if ($0) {\\n    \\n}", detail: "条件分支", priority: 220 },
@@ -8779,6 +8958,33 @@ class CompositionBuilderApp {
                 }
             }
         }
+        const isProjectDisplayExpr = !isControllerScript
+            && String(textarea?.dataset?.displayField || "") === "expression"
+            && !String(textarea?.dataset?.cardId || "").trim();
+        if (isProjectDisplayExpr && this.hasManualProjectScaleHelper()) {
+            base.push(
+                {
+                    label: "scaleHelper.doScale()",
+                    insertText: "scaleHelper.doScale()",
+                    detail: "项目缩放助手 API（手动模式）",
+                    priority: 262
+                },
+                {
+                    label: "scaleHelper.doScaleReversed()",
+                    insertText: "scaleHelper.doScaleReversed()",
+                    detail: "项目缩放助手 API（手动模式）",
+                    priority: 262
+                }
+            );
+        }
+        if (!allowGrowthApi) {
+            for (let i = base.length - 1; i >= 0; i--) {
+                const raw = String(base[i]?.insertText || base[i]?.label || "");
+                if (/^addSingle\s*\(/.test(raw) || /^addMultiple\s*\(/.test(raw)) {
+                    base.splice(i, 1);
+                }
+            }
+        }
 
         const vars = [];
         for (const g of this.state.globalVars) {
@@ -8805,15 +9011,11 @@ class CompositionBuilderApp {
 
         const cardVars = [];
         const cardId = String(textarea.dataset.cardId || "");
-        if (!isControllerScript && cardId) {
-            const card = this.getCardById(cardId);
-            if (card) {
-                for (const it of (card.controllerVars || [])) {
-                    const name = String(it.name || "").trim();
-                    if (!name) continue;
-                    cardVars.push({ label: name, detail: "控制器局部变量", priority: 245 });
-                }
-            }
+        const treePath = String(textarea.dataset.treePath || "");
+        for (const it of this.resolveCodeEditorControllerVars(cardId, treePath)) {
+            const name = String(it.name || "").trim();
+            if (!name) continue;
+            cardVars.push({ label: name, detail: "控制器局部变量", priority: 245 });
         }
         return mergeCompletionGroups(base, vars, cardVars);
     }
