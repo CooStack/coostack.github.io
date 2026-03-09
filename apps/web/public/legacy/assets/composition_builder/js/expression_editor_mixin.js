@@ -274,10 +274,15 @@ export function installExpressionEditorMethods(CompositionBuilderApp, deps = {})
         return String(projectScale.runMode || "auto").trim() === "manual";
     }
 
+    isControllerScriptEditor(textarea) {
+        if (!(textarea instanceof HTMLTextAreaElement)) return false;
+        return String(textarea.dataset.cactField || textarea.dataset.treeNodeCactField || "").trim() === "script";
+    }
+
     isScaleHelperAllowedForCodeEditor(textarea) {
         if (!this.hasManualProjectScaleHelper()) return false;
         if (!(textarea instanceof HTMLTextAreaElement)) return false;
-        if (textarea.dataset.cactField === "script") return false;
+        if (this.isControllerScriptEditor(textarea)) return false;
         return textarea.dataset.displayField === "expression"
             || textarea.dataset.cardShapeDisplayField === "expression"
             || textarea.dataset.cardShapeChildDisplayField === "expression"
@@ -299,7 +304,7 @@ export function installExpressionEditorMethods(CompositionBuilderApp, deps = {})
         if (!cardId) return none;
         const card = this.getCardById(cardId);
         if (!card) return none;
-        if (textarea.dataset.cactField === "script") {
+        if (this.isControllerScriptEditor(textarea)) {
             const levelFromRow = textarea.closest?.("[data-shape-level]")?.dataset?.shapeLevel;
             const rawLevel = textarea.dataset.shapeLevelIdx ?? levelFromRow;
             if (rawLevel !== undefined) {
@@ -351,7 +356,7 @@ export function installExpressionEditorMethods(CompositionBuilderApp, deps = {})
         if (textarea.dataset.cardShapeDisplayIdx !== undefined || textarea.dataset.cardShapeDisplayField === "expression") {
             return this.getShapeCompositionTypeAtDepth(card, 0) === "sequenced_shape";
         }
-        if (textarea.dataset.cactField === "script") {
+        if (this.isControllerScriptEditor(textarea)) {
             return this.getShapeCompositionTypeAtDepth(card, 0) === "sequenced_shape";
         }
         return this.getShapeCompositionTypeAtDepth(card, 0) === "sequenced_shape";
@@ -445,7 +450,7 @@ export function installExpressionEditorMethods(CompositionBuilderApp, deps = {})
         const isShapeDisplayExpr = textarea.dataset.cardShapeDisplayField === "expression";
         const isShapeChildDisplayExpr = textarea.dataset.cardShapeChildDisplayField === "expression";
         const isShapeLevelDisplayExpr = textarea.dataset.shapeLevelDisplayField === "expression";
-        const isControllerScript = textarea.dataset.cactField === "script";
+        const isControllerScript = this.isControllerScriptEditor(textarea);
         if (!isDisplayExpr && !isShapeDisplayExpr && !isShapeChildDisplayExpr && !isShapeLevelDisplayExpr && !isControllerScript) {
             return { valid: true, message: "" };
         }
@@ -512,6 +517,16 @@ export function installExpressionEditorMethods(CompositionBuilderApp, deps = {})
             const name = String(c?.name || "").trim();
             if (!name) continue;
             declareSymbol(name, "any", false);
+        }
+        if (cardId) {
+            const card = this.getCardById(cardId);
+            if (card) {
+                for (const v of (card.controllerVars || [])) {
+                    const name = String(v?.name || "").trim();
+                    if (!name) continue;
+                    declareSymbol(name, "any", true);
+                }
+            }
         }
         lines.push("declare function rotateToPoint(...args: any[]): any;");
         lines.push("declare function rotateAsAxis(...args: any[]): any;");
@@ -600,7 +615,7 @@ export function installExpressionEditorMethods(CompositionBuilderApp, deps = {})
     }
 
     getCodeEditorCompletions(textarea) {
-        const isControllerScript = String(textarea?.dataset?.cactField || "") === "script";
+        const isControllerScript = this.isControllerScriptEditor(textarea);
         const projectClass = sanitizeKotlinClassName(this.state.projectName || "NewComposition");
         const scopeInfo = this.getCodeEditorScopeInfo(textarea);
         const allowGrowthApi = this.isGrowthApiAllowedForCodeEditor(textarea);
@@ -757,7 +772,7 @@ export function installExpressionEditorMethods(CompositionBuilderApp, deps = {})
 
         const cardVars = [];
         const cardId = String(textarea.dataset.cardId || "");
-        if (!isControllerScript && cardId) {
+        if (cardId) {
             const card = this.getCardById(cardId);
             if (card) {
                 for (const it of (card.controllerVars || [])) {
