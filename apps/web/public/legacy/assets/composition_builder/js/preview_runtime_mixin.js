@@ -707,9 +707,8 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
         const levelBasesAll = this.previewLevelBases;
         const levelRefsAll = this.previewLevelRefs;
         const levelOffsetRefsAll = this.previewLevelOffsetRefs;
-
         const sequencedRoot = this.state.compositionType === "sequenced";
-        const bypassRootSequencedGrowthCardId = this.getPreviewRootSequencedGrowthBypassCardId();
+        const isolatedPreviewCardId = this.getPreviewIsolatedCardId();
         const rootVirtualTotal = Math.max(1, int(this.previewRootVirtualTotal || this.state.cards.length || 1));
         const rootGrowthPlan = sequencedRoot
             ? this.buildSequencedRootGrowthPlan(runtimeActions, rootVirtualTotal, globalCycleAge, elapsedTick, {
@@ -735,15 +734,13 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
             const base = basePoints[i];
             const groupId = (pointGroupIndex && i < pointGroupIndex.length) ? int(pointGroupIndex[i]) : -1;
             const owner = groupId >= 0 ? (groupOwner[groupId] || ownerIds[i]) : ownerIds[i];
-            if (bypassRootSequencedGrowthCardId && String(owner || "") !== String(bypassRootSequencedGrowthCardId)) {
+            if (isolatedPreviewCardId && String(owner || "") !== String(isolatedPreviewCardId)) {
                 positions[i * 3 + 0] = base.x;
                 positions[i * 3 + 1] = base.y;
                 positions[i * 3 + 2] = base.z;
                 sizes[i] = 0;
                 alphas[i] = 0;
                 this.previewVisibleMask[i] = false;
-                resolvedCurrentAges[i] = 0;
-                persistentCurrentAges[i] = 0;
                 manualAgeFlags[i] = 0;
                 continue;
             }
@@ -763,9 +760,9 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
             const birthOffset = groupId >= 0
                 ? num(groupBirthOffset[groupId] || 0)
                 : num(birthOffsetList[i] || 0);
-            const disableRootSequencedGrowth = !!bypassRootSequencedGrowthCardId && String(owner || "") === String(bypassRootSequencedGrowthCardId);
-            let rootDelayTick = (sequencedRoot && !disableRootSequencedGrowth) ? Math.max(0, rootVirtualIndex) : 0;
-            if (!disableRootSequencedGrowth && rootGrowthPlan?.hasSource) {
+            const disableRootSequencedGrowth = false;
+            let rootDelayTick = sequencedRoot ? Math.max(0, rootVirtualIndex) : 0;
+            if (rootGrowthPlan?.hasSource) {
                 const unlockTick = Number(rootGrowthPlan.unlockTickByIndex?.[rootVirtualIndex]);
                 if (Number.isFinite(unlockTick)) {
                     rootDelayTick = Math.max(0, num(unlockTick));
@@ -777,8 +774,7 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
             if (!cached) {
                 const ageBase = ((elapsedTick - birthOffset) % cycleTotal + cycleTotal) % cycleTotal;
                 let globalAge = this.resolvePreviewAgeWithStatus(ageBase, elapsedTick, cycleCfg, frameRuntimeGlobals);
-                const runtimeElapsedTick = Math.max(0, num(globalAge) - rootDelayTick);
-                const runtimeAgeTick = runtimeElapsedTick;
+                const runtimeElapsedTick = Math.max(0, num(globalAge) - rootDelayTick);                const runtimeAgeTick = runtimeElapsedTick;
                 const card = groupId >= 0
                     ? (groupCard[groupId] || null)
                     : this.getCardById(owner);
@@ -1599,16 +1595,10 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
         };
     }
 
-    getPreviewRootSequencedGrowthBypassCardId() {
+    getPreviewIsolatedCardId() {
+        if (this.state?.settings?.previewFocusSingleCard === false) return null;
         if (String(this.state?.settings?.leftPanelTab || "project") !== "cards") return null;
-        if (typeof this.getCardById !== "function" || typeof this.getCurrentViewNode !== "function") return null;
-        const cards = Array.isArray(this.state?.cards) ? this.state.cards : [];
-        const isSingleTreeViewCard = (card) => {
-            if (!card || !Array.isArray(card.viewPath) || !card.viewPath.length) return false;
-            const node = this.getCurrentViewNode(card);
-            if (!node) return false;
-            return String(node.type || "").trim() === "single";
-        };
+        if (typeof this.getCardById !== "function") return null;
         const candidateIds = [];
         const pushId = (raw) => {
             const id = String(raw || "").trim();
@@ -1616,7 +1606,7 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
             candidateIds.push(id);
         };
         try {
-            const activeCardEl = document?.activeElement?.closest?.('.card[data-card-id]');
+            const activeCardEl = document?.activeElement?.closest?.(".card[data-card-id]");
             pushId(activeCardEl?.dataset?.cardId);
         } catch {
         }
@@ -1626,13 +1616,17 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
         pushId(this.focusedCardId);
         for (const id of candidateIds) {
             const card = this.getCardById(id);
-            if (isSingleTreeViewCard(card)) return id;
+            if (card) return id;
         }
         return null;
     }
 
+    getPreviewRootSequencedGrowthBypassCardId() {
+        return null;
+    }
+
     shouldDisablePreviewRootSequencedGrowth() {
-        return !!this.getPreviewRootSequencedGrowthBypassCardId();
+        return false;
     }
 
     buildSequencedRootGrowthPlan(globalRuntimeActions, totalCards, globalCycleAge, elapsedTick, opts = null) {
@@ -1649,9 +1643,7 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
                 ? this.previewRuntimeGlobals
                 : null);
         const replayGlobalVars = baseRuntimeScope ? this.buildPreviewRuntimeGlobals(0, 0, 0) : null;
-        const replayStartAxis = (options.axis && typeof options.axis === "object")
-            ? this.parseJsVec(options.axis)
-            : this.resolveCompositionAxisDirection();
+        const replayStartAxis = options.axis || this.resolveCompositionAxisDirection();
         const hasReplayExpressions = !!(replayGlobalVars && Array.isArray(globalRuntimeActions)
             && globalRuntimeActions.some((act) => act?.type === "expression"));
 
@@ -1682,10 +1674,10 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
                 hasTickSource = true;
             }
 
-            if (hasTickSource) hasSource = true;
             let visible = hasTickSource ? clamp(int(visibleLimit), 0, maxCards) : 0;
             if (visible < previousVisible) visible = previousVisible;
             counts[t] = visible;
+            if (hasTickSource) hasSource = true;
             for (let idx = previousVisible; idx < visible; idx++) {
                 unlockTickByIndex[idx] = t;
             }

@@ -29,7 +29,7 @@ import {
     hasAngleOffsetEaseSpecialParams,
     formatAngleValue
 } from "./angle_offset_utils.js";
-import { installPreviewRuntimeMethods } from "./preview_runtime_mixin.js?v=20260309_23";
+import { installPreviewRuntimeMethods } from "./preview_runtime_mixin.js?v=20260309_25";
 import { installKotlinCodegenMethods } from "./kotlin_codegen_mixin.js?v=20260309_6";
 import { installCodeOutputMethods } from "./code_output_mixin.js";
 import { installExpressionEditorMethods } from "./expression_editor_mixin.js?v=20260309_7";
@@ -846,15 +846,15 @@ function normalizeStateShape(state) {
     next.compositionAxisManualZ = Number.isFinite(Number(next.compositionAxisManualZ)) ? num(next.compositionAxisManualZ) : axisParsed.z;
 
     next.settings.theme = String(next.settings.theme || "dark-1");
+    next.settings.theme = String(next.settings.theme || "dark-1");
     next.settings.paramStep = Math.max(0.000001, num(next.settings.paramStep || 0.1));
     next.settings.pointSize = Math.max(0.001, num(next.settings.pointSize || 1.5));
     next.settings.showAxes = next.settings.showAxes !== false;
     next.settings.showGrid = next.settings.showGrid === true ? true : false;
     next.settings.realtimeCode = next.settings.realtimeCode !== false;
+    next.settings.previewFocusSingleCard = next.settings.previewFocusSingleCard !== false;
     next.settings.leftPanelWidth = clamp(num(next.settings.leftPanelWidth || 586), 400, 1200);
-    next.settings.projectSectionHeight = clamp(num(next.settings.projectSectionHeight || 42), 20, 70);
-    next.settings.leftPanelTab = next.settings.leftPanelTab === "project" ? "project" : "cards";
-    next.projectScale = normalizeScaleHelperConfig(next.projectScale, { type: "none" });
+    next.settings.projectSectionHeight = clamp(num(next.settings.projectSectionHeight || 42), 20, 70);    next.projectScale = normalizeScaleHelperConfig(next.projectScale, { type: "none" });
 
     next.globalVars = next.globalVars.map((v) => normalizeGlobalVar(v));
     next.globalConsts = next.globalConsts.map((v) => normalizeGlobalConst(v));
@@ -936,6 +936,7 @@ function createDefaultState() {
             showAxes: true,
             showGrid: false,
             realtimeCode: true,
+            previewFocusSingleCard: true,
             leftPanelTab: "cards",
             leftPanelWidth: 586,
             projectSectionHeight: 42
@@ -1301,6 +1302,7 @@ class CompositionBuilderApp {
             themeSelect: document.getElementById("themeSelect"),
             chkAxes: document.getElementById("chkAxes"),
             chkGrid: document.getElementById("chkGrid"),
+            chkPreviewFocusSingleCard: document.getElementById("chkPreviewFocusSingleCard"),
             chkRealtimeCode2: document.getElementById("chkRealtimeCode2"),
             btnOpenHotkeys: document.getElementById("btnOpenHotkeys"),
             btnExportSettings: document.getElementById("btnExportSettings"),
@@ -1417,21 +1419,26 @@ class CompositionBuilderApp {
             if (this.grid) this.grid.visible = this.state.settings.showGrid;
             this.scheduleSave();
         });
+        d.chkPreviewFocusSingleCard.addEventListener("change", () => {
+            this.state.settings.previewFocusSingleCard = !!d.chkPreviewFocusSingleCard.checked;
+            this.updateSelectionStatus();
+            this.scheduleSave();
+        });
         d.chkRealtimeCode2.addEventListener("change", () => this.setRealtimeCode(d.chkRealtimeCode2.checked));
-        d.btnOpenHotkeys.addEventListener("click", () => {
+        d.btnOpenHotkeys?.addEventListener("click", () => {
             this.hideSettings();
             this.showHotkeys();
         });
-        d.btnExportSettings.addEventListener("click", () => this.exportSettings());
-        d.btnImportSettings.addEventListener("click", () => d.fileSettings.click());
-        d.fileSettings.addEventListener("change", () => this.importSettingsFromFile());
+        d.btnExportSettings?.addEventListener("click", () => this.exportSettings());
+        d.btnImportSettings?.addEventListener("click", () => d.fileSettings?.click());
+        d.fileSettings?.addEventListener("change", () => this.importSettingsFromFile());
 
-        d.hkMask.addEventListener("click", () => this.hideHotkeys());
-        d.btnCloseHotkeys.addEventListener("click", () => this.hideHotkeys());
-        d.btnCloseHotkeys2.addEventListener("click", () => this.hideHotkeys());
-        d.hkSearch.addEventListener("input", () => this.renderHotkeysList());
-        d.hkList.addEventListener("click", (e) => this.onHotkeyListClick(e));
-        d.btnHotkeysReset.addEventListener("click", () => this.resetHotkeys());
+        d.hkMask?.addEventListener("click", () => this.hideHotkeys());
+        d.hkSearch?.addEventListener("input", () => this.renderHotkeysList());
+        d.hkList?.addEventListener("click", (e) => this.onHotkeyListClick(e));
+        d.btnCloseHotkeys?.addEventListener("click", () => this.hideHotkeys());
+        d.btnCloseHotkeys2?.addEventListener("click", () => this.hideHotkeys());
+        d.btnHotkeysReset?.addEventListener("click", () => this.resetHotkeys());
 
         d.builderMask.addEventListener("click", () => this.hideBuilderModal());
         d.btnCloseBuilderModal.addEventListener("click", () => this.hideBuilderModal());
@@ -1613,6 +1620,7 @@ class CompositionBuilderApp {
         this.dom.themeSelect.value = s.theme;
         this.dom.chkAxes.checked = !!s.showAxes;
         this.dom.chkGrid.checked = !!s.showGrid;
+        this.dom.chkPreviewFocusSingleCard.checked = !!s.previewFocusSingleCard;
         if (this.dom.chkRealtimeCode) this.dom.chkRealtimeCode.checked = !!s.realtimeCode;
         this.dom.chkRealtimeCode2.checked = !!s.realtimeCode;
         this.switchLeftTab(String(s.leftPanelTab || "project"), { skipSave: true });
@@ -1627,6 +1635,7 @@ class CompositionBuilderApp {
         this.dom.leftPageCards?.classList.toggle("hidden", next !== "cards");
         this.dom.btnLeftTabProject?.classList.toggle("primary", next === "project");
         this.dom.btnLeftTabCards?.classList.toggle("primary", next === "cards");
+        this.updateSelectionStatus();
         if (!opts.skipSave) this.scheduleSave();
         this.onResize();
     }
@@ -1682,32 +1691,18 @@ class CompositionBuilderApp {
     }
 
     hideHotkeys() {
-        this.hotkeyCaptureActionId = null;
-        this.dom.hkHint.textContent = "点击“设置”后按下按键（Esc 取消，Backspace 清空）。";
+        this.hotkeyCaptureActionId = "";
+        if (this.dom?.hkHint) {
+            this.dom.hkHint.textContent = "点击“设置”后按下按键（Esc 取消，Backspace 清空）。";
+        }
         this.dom.hkModal.classList.add("hidden");
         this.dom.hkMask.classList.add("hidden");
     }
 
-    askThemeConfirm(opts = {}) {
-        const title = String(opts.title || "请确认").trim() || "请确认";
-        const message = String(opts.message || "确认执行该操作？").trim() || "确认执行该操作？";
-        const okText = String(opts.okText || "确定").trim() || "确定";
-        const cancelText = String(opts.cancelText || "取消").trim() || "取消";
-        const danger = opts.danger === true;
-
-        const d = this.dom || {};
-        if (!d.confirmMask || !d.confirmModal || !d.confirmTitle || !d.confirmMessage || !d.btnOkConfirmModal || !d.btnCancelConfirmModal) {
-            return Promise.resolve(confirm(message));
-        }
-
-        if (this.confirmResolver) this.resolveThemeConfirm(false);
-
-        d.confirmTitle.textContent = title;
-        d.confirmMessage.textContent = message;
-        d.btnOkConfirmModal.textContent = okText;
-        d.btnCancelConfirmModal.textContent = cancelText;
-        d.btnOkConfirmModal.classList.toggle("danger", danger);
-
+    showThemeConfirm(title, message) {
+        const d = this.dom;
+        d.confirmTitle.textContent = String(title || "请确认");
+        d.confirmMessage.textContent = String(message || "确认执行该操作？");
         d.confirmModal.classList.remove("hidden");
         d.confirmMask.classList.remove("hidden");
 
@@ -3879,9 +3874,11 @@ class CompositionBuilderApp {
         }
         const names = selected.slice(0, 3).map((c) => c.name || "未命名");
         const tail = selected.length > 3 ? ` +${selected.length - 3}` : "";
-        this.dom.statusSelection.textContent = `选中卡片: ${names.join(", ")}${tail}`;
+        const isolatedCardId = typeof this.getPreviewIsolatedCardId === "function" ? this.getPreviewIsolatedCardId() : null;
+        const isolatedCard = isolatedCardId && typeof this.getCardById === "function" ? this.getCardById(isolatedCardId) : null;
+        const focusTail = isolatedCard ? `（当前只显示 ${isolatedCard.name || "未命名"} 卡片）` : "";
+        this.dom.statusSelection.textContent = `选中卡片: ${names.join(", ")}${tail}${focusTail}`;
     }
-
     updatePreviewFps(now = performance.now()) {
         if (!this.dom?.statusFps) return;
         const ts = Number(now);
