@@ -29,7 +29,7 @@ import {
     hasAngleOffsetEaseSpecialParams,
     formatAngleValue
 } from "./angle_offset_utils.js";
-import { installPreviewRuntimeMethods } from "./preview_runtime_mixin.js?v=20260309_22";
+import { installPreviewRuntimeMethods } from "./preview_runtime_mixin.js?v=20260309_23";
 import { installKotlinCodegenMethods } from "./kotlin_codegen_mixin.js?v=20260309_6";
 import { installCodeOutputMethods } from "./code_output_mixin.js";
 import { installExpressionEditorMethods } from "./expression_editor_mixin.js?v=20260309_7";
@@ -396,9 +396,9 @@ const JS_LINT_GLOBALS = new Set([
 
 const CONTROLLER_SCOPE_RESERVED = new Set([
     "color", "particleColor", "size", "particleSize", "alpha", "particleAlpha",
-    "currentAge", "lifetime", "textureSheet", "status", "particle", "thisAt"
+    "age", "currentAge", "lifetime", "lifeTime", "textureSheet",
+    "tick", "tickCount", "index", "status", "particle", "thisAt"
 ]);
-
 function stripJsForLint(raw) {
     const src = String(raw || "");
     return src.replace(
@@ -7338,7 +7338,6 @@ class CompositionBuilderApp {
             if (CONTROLLER_SCOPE_RESERVED.has(k)) continue;
             vars[k] = v;
         }
-
         const particle = Object.create(this.controllerParticleProto);
         particle._ctx = runtimeCtx;
         vars.particle = particle;

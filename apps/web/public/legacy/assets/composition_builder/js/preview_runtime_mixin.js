@@ -2522,7 +2522,6 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
             if (CONTROLLER_SCOPE_RESERVED.has(k)) continue;
             vars[k] = v;
         }
-
         const particle = Object.create(this.controllerParticleProto);
         particle._ctx = runtimeCtx;
         vars.particle = particle;
