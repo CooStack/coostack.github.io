@@ -15,11 +15,48 @@ export function isNumericLiteral(v) {
     return Number.isFinite(n);
 }
 
+export function rewriteKotlinMathExpr(raw) {
+    let out = String(raw ?? "").trim();
+    if (!out) return "";
+    out = out.replace(/\bjava\.lang\.Math\./g, "kotlin.math.");
+    out = out.replace(/\bStrictMath\./g, "kotlin.math.");
+    out = out.replace(/\bMath\.PI\b/g, "kotlin.math.PI");
+    out = out.replace(/\bMath\.E\b/g, "kotlin.math.E");
+    out = out.replace(/\b(?:java\.lang\.|StrictMath\.)?Math\.random\s*\(\s*\)/g, "kotlin.random.Random.Default.nextDouble()");
+    const fnMap = {
+        abs: "abs",
+        acos: "acos",
+        asin: "asin",
+        atan: "atan",
+        atan2: "atan2",
+        ceil: "ceil",
+        cos: "cos",
+        exp: "exp",
+        floor: "floor",
+        log: "ln",
+        log10: "log10",
+        max: "max",
+        min: "min",
+        pow: "pow",
+        round: "round",
+        signum: "sign",
+        sin: "sin",
+        sqrt: "sqrt",
+        tan: "tan",
+        trunc: "truncate"
+    };
+    for (const [src, dst] of Object.entries(fnMap)) {
+        const re = new RegExp(`\\b(?:java\\.lang\\.|StrictMath\\.)?Math\\.${src}\\s*\\(`, "g");
+        out = out.replace(re, `kotlin.math.${dst}(`);
+    }
+    return out;
+}
+
 export function sanitizeKNumExpr(raw) {
-    const s = String(raw ?? "").trim();
+    const s = rewriteKotlinMathExpr(raw);
     if (!s) return "";
-    if (/^[A-Za-z_][A-Za-z0-9_]*$/.test(s)) return s;
-    return "";
+    if (/[;`{}\r\n]/.test(s)) return "";
+    return s;
 }
 
 export const fmtD = (n) => {
@@ -41,7 +78,7 @@ export const kSupplierVec3 = (x, y, z) => `Supplier { ${kVec3(x, y, z)} }`;
 export const kTrailingLambda = (expr, fallback = "this.pos") => {
     const raw = (expr ?? "").trim();
     let s = raw.length ? raw : fallback;
-    s = s.trim();
+    s = rewriteKotlinMathExpr(s.trim());
     if (s.startsWith("{") && s.endsWith("}")) {
         s = s.substring(1, s.length - 1).trim();
     }

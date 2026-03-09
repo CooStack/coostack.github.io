@@ -10098,9 +10098,46 @@ function hashString(s) {
     return h >>> 0;
 }
 
+function rewriteKotlinMathExpr(expr) {
+    let out = String(expr || "");
+    out = out.replace(/\bjava\.lang\.Math\./g, "kotlin.math.");
+    out = out.replace(/\bStrictMath\./g, "kotlin.math.");
+    out = out.replace(/\bMath\.PI\b/g, "kotlin.math.PI");
+    out = out.replace(/\bMath\.E\b/g, "kotlin.math.E");
+    out = out.replace(/\b(?:java\.lang\.|StrictMath\.)?Math\.random\s*\(\s*\)/g, "kotlin.random.Random.Default.nextDouble()");
+    const fnMap = {
+        abs: "abs",
+        acos: "acos",
+        asin: "asin",
+        atan: "atan",
+        atan2: "atan2",
+        ceil: "ceil",
+        cos: "cos",
+        exp: "exp",
+        floor: "floor",
+        log: "ln",
+        log10: "log10",
+        max: "max",
+        min: "min",
+        pow: "pow",
+        round: "round",
+        signum: "sign",
+        sin: "sin",
+        sqrt: "sqrt",
+        tan: "tan",
+        trunc: "truncate"
+    };
+    for (const [src, dst] of Object.entries(fnMap)) {
+        const re = new RegExp(`\\b(?:java\\.lang\\.|StrictMath\\.)?Math\\.${src}\\s*\\(`, "g");
+        out = out.replace(re, `kotlin.math.${dst}(`);
+    }
+    return out;
+}
+
 function rewriteClassQualifier(expr, className) {
     const cls = sanitizeKotlinClassName(className || "TestComposition");
-    return String(expr || "").replace(/this@[A-Za-z_][A-Za-z0-9_]*/g, `this@${cls}`);
+    const qualified = String(expr || "").replace(/this@[A-Za-z_][A-Za-z0-9_]*/g, `this@${cls}`);
+    return rewriteKotlinMathExpr(qualified);
 }
 
 function rewriteControllerStatusQualifier(expr, className) {

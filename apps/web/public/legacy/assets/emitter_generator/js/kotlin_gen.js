@@ -691,7 +691,7 @@ function buildLocalDataApplyLines(card) {
       const s1 = numOrExpr(a.end, 180);
       const rotate = numOrExpr(a.rotate, 0);
       const unit = String(e.arcUnit || a.unit || "deg");
-      const toRad = (v) => (unit === "rad") ? fmtD(v) : `${fmtD(v)} * Math.PI / 180.0`;
+      const toRad = (v) => (unit === "rad") ? fmtD(v) : `${fmtD(v)} * kotlin.math.PI / 180.0`;
       const canOrder = Number.isFinite(Number(s0)) && Number.isFinite(Number(s1));
       const start = canOrder ? Math.min(Number(s0), Number(s1)) : s0;
       const end = canOrder ? Math.max(Number(s0), Number(s1)) : s1;
@@ -754,11 +754,11 @@ function buildLocalDataApplyLines(card) {
       lines.push(pad(chainIndent + 4) + `repeat(count) {`);
       lines.push(pad(chainIndent + 8) + `val u = rand.nextDouble()`);
       lines.push(pad(chainIndent + 8) + `val v = rand.nextDouble()`);
-      lines.push(pad(chainIndent + 8) + `val theta = 2.0 * Math.PI * u`);
-      lines.push(pad(chainIndent + 8) + `val phi = Math.acos(2.0 * v - 1.0)`);
-      lines.push(pad(chainIndent + 8) + `val dx = Math.sin(phi) * Math.cos(theta)`);
-      lines.push(pad(chainIndent + 8) + `val dy = Math.cos(phi)`);
-      lines.push(pad(chainIndent + 8) + `val dz = Math.sin(phi) * Math.sin(theta)`);
+      lines.push(pad(chainIndent + 8) + `val theta = 2.0 * kotlin.math.PI * u`);
+      lines.push(pad(chainIndent + 8) + `val phi = kotlin.math.acos(2.0 * v - 1.0)`);
+      lines.push(pad(chainIndent + 8) + `val dx = kotlin.math.sin(phi) * kotlin.math.cos(theta)`);
+      lines.push(pad(chainIndent + 8) + `val dy = kotlin.math.cos(phi)`);
+      lines.push(pad(chainIndent + 8) + `val dz = kotlin.math.sin(phi) * kotlin.math.sin(theta)`);
       if (type === "sphere") {
         lines.push(pad(chainIndent + 8) + `val rr = ${fmtD(r)} * Math.cbrt(rand.nextDouble())`);
       } else {
@@ -952,7 +952,7 @@ function buildLocalDataApplyLines(card) {
     pbLines.push(" ".repeat(mapIndent + 4) + `val speed = ${dVar}.getRandomSpeed()`);
     pbLines.push(" ".repeat(mapIndent + 4) + `${tVar}.clone().apply {`);
     pbLines.push(" ".repeat(mapIndent + 8) + `maxAge = ${dVar}.getRandomParticleMaxAge()`);
-    pbLines.push(" ".repeat(mapIndent + 8) + `size = ${dVar}.getRandomSize().toFloat()`);
+    pbLines.push(" ".repeat(mapIndent + 8) + `size = ${dVar}.getRandomSize()`);
     if (velMode === "spawn_rel") {
       pbLines.push(" ".repeat(mapIndent + 8) + `val dir = rel.toVector()`);
       pbLines.push(" ".repeat(mapIndent + 8) + `velocity = if (dir.lengthSqr() < 1e-8) Vec3.ZERO else dir.normalize().scale(speed)`);
