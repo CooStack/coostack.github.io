@@ -1530,19 +1530,6 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
                 visibleLimit = Math.min(visibleLimit, levelLimit);
                 hasLocalGrowthSource = true;
             }
-        } else if (card.dataType === "single" && Array.isArray(card.controllerActions) && card.controllerActions.length) {
-            const controllerExprActions = card.controllerActions
-                .map((it) => normalizeControllerAction(it))
-                .map((it) => ({ type: "expression", expression: String(it.script || ""), fn: null }));
-            const n = this.computeExpressionVisibleCount(controllerExprActions, ownerCount, growthAge, {
-                scopeLevel: -1,
-                allowOrder: false,
-                sequencedDepths: []
-            });
-            if (Number.isFinite(n)) {
-                visibleLimit = Math.min(visibleLimit, n);
-                hasLocalGrowthSource = true;
-            }
         } else {
             const cardExprCount = this.computeExpressionVisibleCount(runtimeLevels[0]?.actions || [], ownerCount, growthAge, {
                 scopeLevel: int(runtimeLevels[0]?.scopeLevel || 0),
