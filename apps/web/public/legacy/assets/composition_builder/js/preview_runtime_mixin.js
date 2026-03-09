@@ -479,6 +479,58 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
         return summary;
     }
 
+    canReusePreviewRuntimeState(count, owners) {
+        const safeCount = Math.max(0, int(count || 0));
+        if (safeCount <= 0) return false;
+        const prevOwners = Array.isArray(this.previewRuntimeStateOwners) ? this.previewRuntimeStateOwners : null;
+        const prevOwnerLocalIndex = Array.isArray(this.previewRuntimeStateOwnerLocalIndex) ? this.previewRuntimeStateOwnerLocalIndex : null;
+        const prevRootVirtualIndex = Array.isArray(this.previewRuntimeStateRootVirtualIndex) ? this.previewRuntimeStateRootVirtualIndex : null;
+        const prevAnchorRef = Array.isArray(this.previewRuntimeStateAnchorRef) ? this.previewRuntimeStateAnchorRef : null;
+        const prevLocalRef = Array.isArray(this.previewRuntimeStateLocalRef) ? this.previewRuntimeStateLocalRef : null;
+        const prevBirthOffsets = Array.isArray(this.previewRuntimeStateBirthOffsets) ? this.previewRuntimeStateBirthOffsets : null;
+        if (!prevOwners || !prevOwnerLocalIndex || !prevRootVirtualIndex || !prevAnchorRef || !prevLocalRef || !prevBirthOffsets) {
+            return false;
+        }
+        if (prevOwners.length !== safeCount
+            || prevOwnerLocalIndex.length !== safeCount
+            || prevRootVirtualIndex.length !== safeCount
+            || prevAnchorRef.length !== safeCount
+            || prevLocalRef.length !== safeCount
+            || prevBirthOffsets.length !== safeCount) {
+            return false;
+        }
+        const ownerLocalIndex = Array.isArray(this.previewOwnerLocalIndex) ? this.previewOwnerLocalIndex : [];
+        const rootVirtualIndex = Array.isArray(this.previewRootVirtualIndex) ? this.previewRootVirtualIndex : [];
+        const anchorRef = Array.isArray(this.previewAnchorRef) ? this.previewAnchorRef : [];
+        const localRef = Array.isArray(this.previewLocalRef) ? this.previewLocalRef : [];
+        const birthOffsets = Array.isArray(this.previewBirthOffsets) ? this.previewBirthOffsets : [];
+        if (ownerLocalIndex.length !== safeCount
+            || rootVirtualIndex.length !== safeCount
+            || anchorRef.length !== safeCount
+            || localRef.length !== safeCount
+            || birthOffsets.length !== safeCount) {
+            return false;
+        }
+        for (let i = 0; i < safeCount; i++) {
+            if (String(prevOwners[i] || "") !== String(owners?.[i] || "")) return false;
+            if (int(prevOwnerLocalIndex[i] || 0) !== int(ownerLocalIndex[i] || 0)) return false;
+            if (int(prevRootVirtualIndex[i] || 0) !== int(rootVirtualIndex[i] || 0)) return false;
+            if (int(prevAnchorRef[i] || 0) !== int(anchorRef[i] || 0)) return false;
+            if (int(prevLocalRef[i] || 0) !== int(localRef[i] || 0)) return false;
+            if (int(num(prevBirthOffsets[i] || 0) * 1000) !== int(num(birthOffsets[i] || 0) * 1000)) return false;
+        }
+        return true;
+    }
+
+    snapshotPreviewRuntimeStateLayout(owners) {
+        this.previewRuntimeStateOwners = Array.isArray(owners) ? owners.slice() : [];
+        this.previewRuntimeStateOwnerLocalIndex = Array.isArray(this.previewOwnerLocalIndex) ? this.previewOwnerLocalIndex.slice() : [];
+        this.previewRuntimeStateRootVirtualIndex = Array.isArray(this.previewRootVirtualIndex) ? this.previewRootVirtualIndex.slice() : [];
+        this.previewRuntimeStateAnchorRef = Array.isArray(this.previewAnchorRef) ? this.previewAnchorRef.slice() : [];
+        this.previewRuntimeStateLocalRef = Array.isArray(this.previewLocalRef) ? this.previewLocalRef.slice() : [];
+        this.previewRuntimeStateBirthOffsets = Array.isArray(this.previewBirthOffsets) ? this.previewBirthOffsets.slice() : [];
+    }
+
     updatePreviewGeometry(points, owners) {
         if (!this.pointsGeom) return;
         const count = points.length;
@@ -544,8 +596,33 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
             frameIndices.fill(0);
             this.pointsGeom.attributes.aFrameIndex.needsUpdate = true;
         }
-        this.previewPersistentCurrentAges = new Float32Array(count);
-        this.previewPersistentControllerStates = new Array(count).fill(null);
+        const canReuseRuntimeState = this.canReusePreviewRuntimeState(count, owners);
+        const prevPersistentCurrentAges = this.previewPersistentCurrentAges;
+        const prevPersistentLifetimes = this.previewPersistentLifetimes;
+        const prevManualAgeFlags = this.previewManualAgeFlags;
+        const prevPersistentControllerStates = this.previewPersistentControllerStates;
+        this.previewPersistentCurrentAges = (canReuseRuntimeState
+            && prevPersistentCurrentAges instanceof Float32Array
+            && prevPersistentCurrentAges.length === count)
+            ? new Float32Array(prevPersistentCurrentAges)
+            : new Float32Array(count);
+        this.previewPersistentLifetimes = (canReuseRuntimeState
+            && prevPersistentLifetimes instanceof Float32Array
+            && prevPersistentLifetimes.length === count)
+            ? new Float32Array(prevPersistentLifetimes)
+            : new Float32Array(count).fill(100);
+        this.previewManualAgeFlags = (canReuseRuntimeState
+            && prevManualAgeFlags instanceof Uint8Array
+            && prevManualAgeFlags.length === count)
+            ? new Uint8Array(prevManualAgeFlags)
+            : new Uint8Array(count);
+        this.previewPersistentControllerStates = (canReuseRuntimeState
+            && Array.isArray(prevPersistentControllerStates)
+            && prevPersistentControllerStates.length === count)
+            ? prevPersistentControllerStates.slice()
+            : new Array(count).fill(null);
+        this.previewCanResumeRuntimeState = canReuseRuntimeState;
+        this.snapshotPreviewRuntimeStateLayout(owners);
         this.syncTextureUniforms();
         this.pointsGeom.computeBoundingSphere();
         if (this.pointsMat) this.pointsMat.size = this.state.settings.pointSize;
@@ -597,6 +674,12 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
             persistentCurrentAges = new Float32Array(totalCount);
             this.previewPersistentCurrentAges = persistentCurrentAges;
         }
+        let persistentLifetimes = this.previewPersistentLifetimes;
+        if (!(persistentLifetimes instanceof Float32Array) || persistentLifetimes.length !== totalCount) {
+            persistentLifetimes = new Float32Array(totalCount);
+            persistentLifetimes.fill(100);
+            this.previewPersistentLifetimes = persistentLifetimes;
+        }
         let manualAgeFlags = this.previewManualAgeFlags;
         if (!(manualAgeFlags instanceof Uint8Array) || manualAgeFlags.length !== totalCount) {
             manualAgeFlags = new Uint8Array(totalCount);
@@ -614,16 +697,21 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
         });
         const globalAxis = this.resolveCompositionAxisDirection();
         const tickStep = Math.max(0, Math.floor(globalCycleAge));
-        if (!this.previewRuntimeGlobals
-            || tickStep < this.previewRuntimeAppliedTick
-            || this.previewRuntimeCycleIndex !== cycleIndex) {
+        const shouldResetPersistentRuntime = tickStep < this.previewRuntimeAppliedTick
+            || this.previewRuntimeCycleIndex !== cycleIndex
+            || this.previewCanResumeRuntimeState === false;
+        if (!this.previewRuntimeGlobals || shouldResetPersistentRuntime) {
             this.previewRuntimeGlobals = this.buildPreviewRuntimeGlobals(0, 0, 0);
             this.previewRuntimeAppliedTick = -1;
             this.previewRuntimeCycleIndex = cycleIndex;
-            persistentCurrentAges.fill(0);
-            manualAgeFlags.fill(0);
-            persistentControllerStates.fill(null);
+            if (shouldResetPersistentRuntime) {
+                persistentCurrentAges.fill(0);
+                persistentLifetimes.fill(100);
+                manualAgeFlags.fill(0);
+                persistentControllerStates.fill(null);
+            }
         }
+        this.previewCanResumeRuntimeState = true;
         const frameRuntimeGlobals = this.previewRuntimeGlobals;
         for (let t = this.previewRuntimeAppliedTick + 1; t <= tickStep; t++) {
             this.applyExpressionGlobalsOnce(runtimeActions, t, t, frameRuntimeGlobals, globalAxis);
@@ -1087,9 +1175,6 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
                 colors[i * 3 + 2] = 0;
                 sizes[i] = 0.01;
                 alphas[i] = 0;
-                resolvedCurrentAges[i] = 0;
-                persistentCurrentAges[i] = 0;
-                manualAgeFlags[i] = 0;
                 continue;
             }
 
@@ -1097,6 +1182,10 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
             const persistedCurrentAge = Number.isFinite(Number(persistedCurrentAgeRaw))
                 ? Math.max(0, num(persistedCurrentAgeRaw))
                 : 0;
+            const persistedLifetimeRaw = persistentLifetimes[i];
+            const persistedLifetime = (Number.isFinite(Number(persistedLifetimeRaw)) && persistedLifetimeRaw >= 1)
+                ? Math.max(1, int(persistedLifetimeRaw))
+                : 100;
             const persistedControllerState = (persistentControllerStates[i] && typeof persistentControllerStates[i] === "object")
                 ? persistentControllerStates[i]
                 : null;
@@ -1114,6 +1203,7 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
                         elapsedTick: pointElapsedTick,
                         ageTick: pointAgeTick,
                         currentAge: persistedCurrentAge,
+                        lifetime: persistedLifetime,
                         keepInitializedCurrentAge: manualAgeFlags[i] === 1,
                         controllerState: persistedControllerState,
                         pointIndex: localIndex
@@ -1128,6 +1218,7 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
                         elapsedTick: cached.elapsedTick,
                         ageTick: cached.age,
                         currentAge: persistedCurrentAge,
+                        lifetime: persistedLifetime,
                         keepInitializedCurrentAge: manualAgeFlags[i] === 1,
                         controllerState: persistedControllerState,
                         pointIndex: 0
@@ -1152,7 +1243,12 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
             manualAgeFlags[i] = hasManualCurrentAge ? 1 : 0;
             const resolvedLifetimeRaw = Number(pointVisual?.__resolvedLifetime);
             if (Number.isFinite(resolvedLifetimeRaw) && resolvedLifetimeRaw >= 1) {
-                resolvedLifetimes[i] = resolvedLifetimeRaw;
+                const nextLifetime = Math.max(1, int(resolvedLifetimeRaw));
+                resolvedLifetimes[i] = nextLifetime;
+                persistentLifetimes[i] = nextLifetime;
+            } else {
+                resolvedLifetimes[i] = persistedLifetime;
+                persistentLifetimes[i] = persistedLifetime;
             }
 
             let rgb = pointVisual.__linearColor;
@@ -2585,9 +2681,11 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
         let manualCurrentAge = false;
         const evalRuntimeVars = runtimeVars ? Object.create(runtimeVars) : {};
         evalRuntimeVars.currentAge = resolvedCurrentAge;
-        evalRuntimeVars.lifetime = Number.isFinite(Number(runtimeVars?.lifetime))
-            ? Math.max(1, int(runtimeVars.lifetime))
-            : 100;
+        evalRuntimeVars.lifetime = Number.isFinite(Number(opts.lifetime))
+            ? Math.max(1, int(opts.lifetime))
+            : (Number.isFinite(Number(runtimeVars?.lifetime))
+                ? Math.max(1, int(runtimeVars.lifetime))
+                : 100);
         evalRuntimeVars.lifeTime = evalRuntimeVars.lifetime;
         evalRuntimeVars.textureSheet = Number.isFinite(Number(runtimeVars?.textureSheet))
             ? int(runtimeVars.textureSheet)
@@ -2671,7 +2769,7 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
         visual.__resolvedCurrentAge = resolvedCurrentAge;
         visual.__manualCurrentAge = manualCurrentAge;
         if (!visual.hasOwnProperty("__resolvedLifetime")) {
-            visual.__resolvedLifetime = 100;
+            visual.__resolvedLifetime = Math.max(1, num(evalRuntimeVars.lifetime));
         }
         return visual;
     }
