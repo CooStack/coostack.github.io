@@ -640,10 +640,17 @@ export function installKotlinCodegenMethods(CompositionBuilderApp, deps = {}) {
 
     _emitScaleHelperCodegen(lines, scale, indent) {
         if (scale.type === "bezier") {
+            const tick = Math.max(1, int(scale.tick));
+            const c1x = num(scale.c1x);
+            const c1y = num(scale.c1y) - num(scale.min);
+            const c1z = num(scale.c1z);
+            const c2x = num(scale.c2x) - tick;
+            const c2y = num(scale.c2y) - num(scale.max);
+            const c2z = num(scale.c2z);
             lines.push(
-                `${indent}loadScaleHelperBezierValue(${formatKotlinDoubleLiteral(scale.min)}, ${formatKotlinDoubleLiteral(scale.max)}, ${Math.max(1, int(scale.tick))}, ` +
-                `RelativeLocation(${formatKotlinDoubleLiteral(scale.c1x)}, ${formatKotlinDoubleLiteral(scale.c1y)}, ${formatKotlinDoubleLiteral(scale.c1z)}), ` +
-                `RelativeLocation(${formatKotlinDoubleLiteral(scale.c2x)}, ${formatKotlinDoubleLiteral(scale.c2y)}, ${formatKotlinDoubleLiteral(scale.c2z)}))`
+                `${indent}loadScaleHelperBezierValue(${formatKotlinDoubleLiteral(scale.min)}, ${formatKotlinDoubleLiteral(scale.max)}, ${tick}, ` +
+                `RelativeLocation(${formatKotlinDoubleLiteral(c1x)}, ${formatKotlinDoubleLiteral(c1y)}, ${formatKotlinDoubleLiteral(c1z)}), ` +
+                `RelativeLocation(${formatKotlinDoubleLiteral(c2x)}, ${formatKotlinDoubleLiteral(c2y)}, ${formatKotlinDoubleLiteral(c2z)}))`
             );
         } else if (scale.type === "linear") {
             lines.push(`${indent}loadScaleValue(${formatKotlinDoubleLiteral(scale.min)}, ${formatKotlinDoubleLiteral(scale.max)}, ${Math.max(1, int(scale.tick))})`);
