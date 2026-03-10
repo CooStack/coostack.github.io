@@ -321,7 +321,8 @@ export function installKotlinCodegenMethods(CompositionBuilderApp, deps = {}) {
             const countLiteral = formatKotlinDoubleLiteral(Math.max(1, int(offsetCfg.count)));
             const dataExpr = this.emitCompositionDataExpr(card, className, sequencedRoot, "                        ", {
                 angleOffsetExpr: angleVar,
-                angleOffsetConfig: offsetCfg
+                angleOffsetConfig: offsetCfg,
+                suppressNodeAngleOffsetIds: offsetCfg?.hoistedFromNodeId ? [offsetCfg.hoistedFromNodeId] : []
             });
             return [
                 `        val ${countVar} = ${Math.max(1, int(offsetCfg.count))}`,
@@ -357,7 +358,8 @@ export function installKotlinCodegenMethods(CompositionBuilderApp, deps = {}) {
             const countLiteral = formatKotlinDoubleLiteral(Math.max(1, int(offsetCfg.count)));
             const dataExpr = this.emitCompositionDataExpr(card, className, sequencedRoot, "                    ", {
                 angleOffsetExpr: angleVar,
-                angleOffsetConfig: offsetCfg
+                angleOffsetConfig: offsetCfg,
+                suppressNodeAngleOffsetIds: offsetCfg?.hoistedFromNodeId ? [offsetCfg.hoistedFromNodeId] : []
             });
             return [
                 `        val ${countVar} = ${Math.max(1, int(offsetCfg.count))}`,
@@ -385,7 +387,10 @@ export function installKotlinCodegenMethods(CompositionBuilderApp, deps = {}) {
                 angleOffsetExpr: String(opts.angleOffsetExpr || "").trim(),
                 angleOffsetConfig: (opts.angleOffsetConfig && typeof opts.angleOffsetConfig === "object")
                     ? opts.angleOffsetConfig
-                    : null
+                    : null,
+                suppressNodeAngleOffsetIds: Array.isArray(opts.suppressNodeAngleOffsetIds)
+                    ? opts.suppressNodeAngleOffsetIds.map((it) => String(it || "").trim()).filter(Boolean)
+                    : []
             }
             : null;
         if (sequencedRoot) {
@@ -496,13 +501,19 @@ export function installKotlinCodegenMethods(CompositionBuilderApp, deps = {}) {
         lines.push(`    ${cls}(it).apply {`);
         if (axisExpr) lines.push(`        axis = ${axisExpr}`);
         const children = card.shapeChildren || [];
-        for (const child of children) {
-            this._emitTreeNodeApplyBlockCodegen(lines, child, card, className, rootCtx, "        ", actionCtx);
-        }
+        this._emitTreeNodeChildrenApplyCodegen(lines, children, card, className, rootCtx, "        ", actionCtx);
         lines.push(this.applyCardCompositionActions(card, className, "        ", isSequenced, rootScopeInfo, actionCtx));
         lines.push("    }");
         lines.push(")");
         return lines.join("\n");
+    }
+
+    _emitTreeNodeChildrenApplyCodegen(lines, children, card, className, parentCtx, indent, actionCtx) {
+        const nodes = Array.isArray(children) ? children : [];
+        if (!nodes.length) return;
+        for (const child of nodes) {
+            this._emitTreeNodeApplyBlockCodegen(lines, child, card, className, parentCtx, indent, actionCtx);
+        }
     }
 
     _emitScaleHelperCodegen(lines, scale, indent) {
@@ -517,8 +528,9 @@ export function installKotlinCodegenMethods(CompositionBuilderApp, deps = {}) {
         }
     }
 
-    _emitTreeNodeApplyBlockCodegen(lines, node, card, className, parentCtx, indent, actionCtx) {
+    _emitTreeNodeApplyBlockCodegen(lines, node, card, className, parentCtx, indent, actionCtx, opts = null) {
         if (!node) return;
+        const options = (opts && typeof opts === "object") ? opts : null;
         const nodeType = node.type || "single";
         const bindMode = node.bindMode === "builder" ? "builder" : "point";
         const pointExpr = relExpr(node.point?.x, node.point?.y, node.point?.z);
@@ -527,7 +539,12 @@ export function installKotlinCodegenMethods(CompositionBuilderApp, deps = {}) {
         const depth = parentCtx ? int(parentCtx.depth) + 1 : 1;
         const ctx = this.createShapeDataLambdaContext(depth, isSequenced, parentCtx);
         const dataLambdaHead = this.formatShapeDataLambdaParams(ctx);
-        const offsetCfg = this.resolveShapeLevelAngleOffsetConfig(node, className);
+        const suppressNodeAngleOffsetIds = Array.isArray(actionCtx?.suppressNodeAngleOffsetIds)
+            ? actionCtx.suppressNodeAngleOffsetIds.map((it) => String(it || "").trim()).filter(Boolean)
+            : [];
+        const suppressOwnAngleOffset = options?.suppressOwnAngleOffset === true
+            || suppressNodeAngleOffsetIds.includes(String(node?.id || "").trim());
+        const offsetCfg = suppressOwnAngleOffset ? null : this.resolveShapeLevelAngleOffsetConfig(node, className);
         if (offsetCfg) {
             const angleOffsetCount = Math.max(1, int(offsetCfg.count));
             const angleOffsetCountLiteral = formatKotlinDoubleLiteral(angleOffsetCount);
@@ -592,9 +609,7 @@ export function installKotlinCodegenMethods(CompositionBuilderApp, deps = {}) {
         lines.push(`${indent}                ${cls}(it).apply {`);
         if (axisExpr) lines.push(`${indent}                    axis = ${axisExpr}`);
         const children = node.children || [];
-        for (const child of children) {
-            this._emitTreeNodeApplyBlockCodegen(lines, child, card, className, ctx, `${indent}                    `, actionCtx);
-        }
+        this._emitTreeNodeChildrenApplyCodegen(lines, children, card, className, ctx, `${indent}                    `, actionCtx);
         const pseudo = { id: card.id, shapeDisplayActions: node.displayActions || [], shapeScale: scale, growthAnimates: node.growthAnimates || [] };
         const scopeInfo = this.getShapeScopeInfoByRuntimeLevel(card, depth);
         const actions = this.applyCardCompositionActions(pseudo, className, `${indent}                    `, isSequenced, scopeInfo, actionCtx);
@@ -626,6 +641,9 @@ export function installKotlinCodegenMethods(CompositionBuilderApp, deps = {}) {
         const shapeScale = normalizeScaleHelperConfig(card.shapeScale, { type: "none" });
         const hasShapeScale = shapeScale.type !== "none";
         const needReverseScale = hasShapeScale && shapeScale.reversedOnDisable;
+        if (hasShapeScale) {
+            this._emitScaleHelperCodegen(lines, shapeScale, innerIndent);
+        }
         const appendOffsetAnimator = (targetLines, callIndent = `${innerIndent}    `) => {
             if (!useAngleOffsetAnimator) return;
             const glowTick = Math.max(1, int(offsetCfg.glowTick || 20));
@@ -650,9 +668,8 @@ export function installKotlinCodegenMethods(CompositionBuilderApp, deps = {}) {
             targetLines.push(`${callIndent}    timeline.doTick()`);
             targetLines.push(`${callIndent}}`);
         };
-        if (displayActions.length || useAngleOffsetAnimator || hasShapeScale || needReverseScale) {
+        if (displayActions.length || useAngleOffsetAnimator || needReverseScale) {
             const blockLines = [];
-            if (hasShapeScale) this._emitScaleHelperCodegen(blockLines, shapeScale, `${innerIndent}    `);
             if (useAngleOffsetAnimator) appendOffsetAnimator(blockLines);
             for (let i = 0; i < displayActions.length; i++) {
                 const act = displayActions[i];
@@ -709,26 +726,19 @@ export function installKotlinCodegenMethods(CompositionBuilderApp, deps = {}) {
         const actions = this.state.displayActions || [];
         const projectScale = normalizeScaleHelperConfig(this.state.projectScale, { type: "none" });
         const hasProjectScaleHelper = projectScale.type !== "none";
-        const projectScaleAuto = hasProjectScaleHelper && projectScale.runMode !== "manual";
+        const projectScaleManual = hasProjectScaleHelper && String(projectScale.runMode || "auto").trim() === "manual";
+        const projectScaleAuto = hasProjectScaleHelper && !projectScaleManual;
         const needReverseScale = projectScaleAuto && projectScale.reversedOnDisable;
-        if (!actions.length && !projectScaleAuto) {
-            return [
-                "    override fun onDisplay() {",
-                "    }"
-            ].join("\n");
-        }
-        const lines = [];
-        lines.push("    override fun onDisplay() {");
-        lines.push("        addPreTickAction {");
+        const bodyLines = [];
         if (projectScaleAuto) {
             if (needReverseScale) {
-                lines.push("            if (status.isEnable()) {");
-                lines.push("                scaleHelper.doScale()");
-                lines.push("            } else {");
-                lines.push("                scaleHelper.doScaleReversed()");
-                lines.push("            }");
+                bodyLines.push("            if (status.isEnable()) {");
+                bodyLines.push("                scaleHelper.doScale()");
+                bodyLines.push("            } else {");
+                bodyLines.push("                scaleHelper.doScaleReversed()");
+                bodyLines.push("            }");
             } else {
-                lines.push("            scaleHelper.doScale()");
+                bodyLines.push("            scaleHelper.doScale()");
             }
         }
         for (const raw of actions) {
@@ -738,18 +748,31 @@ export function installKotlinCodegenMethods(CompositionBuilderApp, deps = {}) {
                 ? this.rewriteCodeExpr(String(act.angleExpr || "0.0"), className)
                 : U.angleToKotlinRadExpr(num(act.angleValue), normalizeAngleUnit(act.angleUnit));
             if (act.type === "rotateToPoint") {
-                lines.push(`            rotateToPoint(${toExpr})`);
+                bodyLines.push(`            rotateToPoint(${toExpr})`);
             } else if (act.type === "rotateAsAxis") {
-                lines.push(`            rotateAsAxis(${angleExpr})`);
+                bodyLines.push(`            rotateAsAxis(${angleExpr})`);
             } else if (act.type === "rotateToWithAngle") {
-                lines.push(`            rotateToWithAngle(${toExpr}, ${angleExpr})`);
+                bodyLines.push(`            rotateToWithAngle(${toExpr}, ${angleExpr})`);
             } else if (act.type === "expression") {
                 const rawExpr = String(act.expression || "").trim();
-                const check = this.validateJsExpressionSource(rawExpr, { cardId: "" });
+                const check = this.validateJsExpressionSource(rawExpr, {
+                    cardId: "",
+                    allowScaleHelper: projectScaleManual
+                });
                 const expr = this.rewriteCodeExpr(rawExpr, className);
-                if (expr && check.valid) lines.push(translateJsBlockToKotlin(expr, "            "));
+                if (expr && check.valid) bodyLines.push(translateJsBlockToKotlin(expr, "            "));
             }
         }
+        if (!bodyLines.length) {
+            return [
+                "    override fun onDisplay() {",
+                "    }"
+            ].join("\n");
+        }
+        const lines = [];
+        lines.push("    override fun onDisplay() {");
+        lines.push("        addPreTickAction {");
+        lines.push(...bodyLines);
         lines.push("        }");
         lines.push("    }");
         return lines.join("\n");

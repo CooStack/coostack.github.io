@@ -78,9 +78,10 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
         const rootOffsetIndexList = [];
         const rootVirtualIndexList = [];
         const leafTextureConfigs = [];
+        const leafVisualSources = [];
         const getRootRepeatCount = (card) => {
             if (!card || card.dataType === "single") return 1;
-            const cfg = this.resolvePreviewAngleOffsetConfig(card);
+            const cfg = this.resolvePreviewCardAngleOffsetConfig(card);
             return cfg ? Math.max(1, int(cfg.count || 1)) : 1;
         };
         const rootVirtualStarts = new Map();
@@ -96,6 +97,7 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
             const len = Math.max(1, src.length);
             const rootStart = int(rootVirtualStarts.get(card?.id) || 0);
             const cardTextureCfg = this.resolvePreviewTextureConfigForCard(card);
+            const cardVisualSource = this.resolvePreviewVisualSource(card) || card;
             for (let idx = 0; idx < src.length; idx++) {
                 const p = src[idx];
                 const v = U.v(num(p?.x), num(p?.y), num(p?.z));
@@ -116,13 +118,14 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
                 rootOffsetIndexList.push(0);
                 rootVirtualIndexList.push(rootStart);
                 leafTextureConfigs.push(cardTextureCfg);
+                leafVisualSources.push(cardVisualSource);
             }
         };
         const appendShapePoints = (card, anchors, locals) => {
             const anchorList = Array.isArray(anchors) ? anchors : [];
             const localList = Array.isArray(locals) ? locals : [];
             if (!anchorList.length || !localList.length) return;
-            const rootOffsetCfg = this.resolvePreviewAngleOffsetConfig(card);
+            const rootOffsetCfg = this.resolvePreviewCardAngleOffsetConfig(card);
             const repeatCount = rootOffsetCfg ? Math.max(1, int(rootOffsetCfg.count || 1)) : 1;
             const rootStart = int(rootVirtualStarts.get(card?.id) || 0);
             const clonePointCount = Math.max(1, anchorList.length * localList.length);
@@ -135,6 +138,7 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
                         const l = U.v(num(tupleSum?.x), num(tupleSum?.y), num(tupleSum?.z));
                         const tupleLevels = Array.isArray(tuple.levels) ? tuple.levels : [];
                         const tupleTextureCfg = tuple.textureCfg || this.resolvePreviewTextureConfigForCard(card);
+                        const tupleVisualSource = tuple.visualSource || card;
                         points.push(U.v(a.x + l.x, a.y + l.y, a.z + l.z));
                         owners.push(card.id);
                         birthOffsets.push(0);
@@ -147,11 +151,18 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
                         levelBases.push(tupleLevels.map((it) => U.v(num(it?.vec?.x), num(it?.vec?.y), num(it?.vec?.z))));
                         levelRefs.push(tupleLevels.map((it) => int(it?.ref || 0)));
                         levelOffsetRefs.push(tupleLevels.map((it) => int(it?.offsetIndex ?? 0)));
-                        levelMetas.push(tupleLevels.map((it) => ({ node: it?.node || null, depth: int(it?.depth || 0) })));
+                        levelMetas.push(tupleLevels.map((it) => ({
+                            node: it?.node || null,
+                            sharedNode: it?.sharedNode || null,
+                            sharedMode: String(it?.sharedMode || ""),
+                            sharedOffsetIndex: int(it?.sharedOffsetIndex ?? 0),
+                            depth: int(it?.depth || 0)
+                        })));
                         useLocalOpsList.push(true);
                         rootOffsetIndexList.push(repeatIndex);
                         rootVirtualIndexList.push(rootStart + repeatIndex);
                         leafTextureConfigs.push(tupleTextureCfg);
+                        leafVisualSources.push(tupleVisualSource);
                     }
                 }
             }
@@ -198,6 +209,7 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
         this.previewRootVirtualIndex = rootVirtualIndexList;
         this.previewRootVirtualTotal = rootVirtualTotal;
         this.previewLeafTextureConfigs = leafTextureConfigs;
+        this.previewLeafVisualSources = leafVisualSources;
         this.rebuildPreviewRuntimeIndex();
         this.previewAnimStart = performance.now();
         this.updatePreviewGeometry(points, owners);
@@ -566,21 +578,26 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
         this.previewAlphaFactors = new Array(count).fill(1);
         const visualCache = new Map();
         const linearColorCache = new Map();
+        const pointVisualSources = Array.isArray(this.previewLeafVisualSources) ? this.previewLeafVisualSources : [];
         for (let i = 0; i < count; i++) {
             const p = points[i];
             positions[i * 3 + 0] = p.x;
             positions[i * 3 + 1] = p.y;
             positions[i * 3 + 2] = p.z;
             const owner = owners[i];
-            let visual = visualCache.get(owner);
+            const pointVisualSource = pointVisualSources[i] || null;
+            const visualKey = pointVisualSource
+                ? `${String(owner || "")}|${String(pointVisualSource.id || "__card__")}`
+                : String(owner || "");
+            let visual = visualCache.get(visualKey);
             if (!visual) {
-                visual = this.resolveCardPreviewVisual(owner);
-                visualCache.set(owner, visual);
+                visual = this.resolveCardPreviewVisual(owner, { visualSource: pointVisualSource });
+                visualCache.set(visualKey, visual);
             }
-            let rgb = linearColorCache.get(owner);
+            let rgb = linearColorCache.get(visualKey);
             if (!rgb) {
                 rgb = srgbRgbToLinearArray(visual.color);
-                linearColorCache.set(owner, rgb);
+                linearColorCache.set(visualKey, rgb);
             }
             colors[i * 3 + 0] = rgb[0];
             colors[i * 3 + 1] = rgb[1];
@@ -1068,7 +1085,20 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
                 const ownerCard = this.getCardById(owner);
                 const tupleHasPointDependentExpression = !!(ownerCard && levelMetaList.length && levelMetaList.some((meta) => {
                     const runtime = this.resolvePreviewTupleLevelRuntime(ownerCard, cached, meta, cached.elapsedTick, cached.age, skipExprPerPoint, frameRuntimeGlobals, globalAxis);
-                    return !!runtime?.hasPointDependentExpression;
+                    if (runtime?.hasPointDependentExpression) return true;
+                    const sharedNode = meta?.sharedNode || null;
+                    if (!sharedNode || sharedNode === meta?.node) return false;
+                    const sharedRuntime = this.resolvePreviewTupleLevelRuntime(
+                        ownerCard,
+                        cached,
+                        { node: sharedNode, depth: int(meta?.depth || 0) },
+                        cached.elapsedTick,
+                        cached.age,
+                        skipExprPerPoint,
+                        frameRuntimeGlobals,
+                        globalAxis
+                    );
+                    return !!sharedRuntime?.hasPointDependentExpression;
                 }));
                 const localCacheable = !cached.cardRuntimeHasPointDependentExpression && !tupleHasPointDependentExpression;
                 let localsByBirth = groupId >= 0 ? localCache[groupId] : null;
@@ -1091,35 +1121,57 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
                     let localSum = U.v(0, 0, 0);
                     const transformedLevelRels = [];
                     const transformedLevelOrders = [];
+                    const cascadeLevelRuntimes = [];
                     for (let lvIdx = 0; lvIdx < levelBaseList.length; lvIdx++) {
                         const lvBase = levelBaseList[lvIdx] || U.v(0, 0, 0);
                         const lvPointRef = int(levelRefList[lvIdx] ?? localRef);
-                        const sharedOffsetRef = lvIdx === 0
-                            ? rootOffsetIndex
-                            : int(levelOffsetRefList[lvIdx - 1] ?? lvPointRef);
                         const currentOffsetRef = int(levelOffsetRefList[lvIdx] ?? lvPointRef);
                         const lvMeta = levelMetaList[lvIdx] || null;
-                        const sharedRuntime = runtimeLevels[lvIdx] || null;
-                        const currentRuntime = (ownerCard && lvMeta?.node && String(lvMeta.node.type || "") === "single")
+                        const sharedNode = lvMeta?.sharedNode || null;
+                        const sharedMode = String(lvMeta?.sharedMode || "").trim();
+                        const sharedOffsetRef = lvMeta && Number.isFinite(Number(lvMeta.sharedOffsetIndex))
+                            ? int(lvMeta.sharedOffsetIndex)
+                            : rootOffsetIndex;
+                        const cardRootRuntime = lvIdx === 0 ? (runtimeLevels[0] || null) : null;
+                        const sharedRuntime = (ownerCard && sharedNode)
+                            ? this.resolvePreviewTupleLevelRuntime(
+                                ownerCard,
+                                cached,
+                                { node: sharedNode, depth: int(lvMeta?.depth || 0) },
+                                cached.elapsedTick,
+                                cached.age,
+                                skipExprPerPoint,
+                                frameRuntimeGlobals,
+                                globalAxis
+                            )
+                            : null;
+                        const currentRuntime = (ownerCard && lvMeta?.node)
                             ? this.resolvePreviewTupleLevelRuntime(ownerCard, cached, lvMeta, cached.elapsedTick, cached.age, skipExprPerPoint, frameRuntimeGlobals, globalAxis)
                             : null;
+                        const sharedNodeType = String(sharedNode?.type || "single");
+                        const currentNodeType = String(lvMeta?.node?.type || "single");
                         let lvPoint = U.clone(lvBase);
-                        const applyLevelRuntime = (runtime, offsetRef) => {
+                        const applyLevelRuntime = (runtime, offsetRef, opts = {}, actionPointRef = lvPointRef) => {
                             if (!runtime) return;
+                            const mode = opts.mode === "angleOnly" ? "angleOnly" : "full";
+                            const skipAngleOffset = opts.skipAngleOffset === true;
+                            const runtimePointRef = Number.isFinite(Number(actionPointRef)) ? int(actionPointRef) : lvPointRef;
                             const lvActionElapsed = cached.elapsedTick;
                             const lvActionAge = cached.age;
                             const lvScaleAge = cached.age;
-                            const cardScale = this.resolveScaleFactor(runtime.scale, lvScaleAge, cycleCfg, {
-                                fadeAgeTick: cached.statusAge
-                            });
-                            lvPoint = this.applyScaleFactorToPoint(lvPoint, cardScale);
-                            if (runtime.angleOffset) {
+                            if (mode !== "angleOnly") {
+                                const cardScale = this.resolveScaleFactor(runtime.scale, lvScaleAge, cycleCfg, {
+                                    fadeAgeTick: cached.statusAge
+                                });
+                                lvPoint = this.applyScaleFactorToPoint(lvPoint, cardScale);
+                            }
+                            if (!skipAngleOffset && runtime.angleOffset) {
                                 const offsetAngle = this.resolvePreviewAngleOffsetRotation(
                                     runtime.angleOffset,
                                     offsetRef,
                                     lvActionElapsed,
                                     lvActionAge,
-                                    lvPointRef,
+                                    runtimePointRef,
                                     frameRuntimeGlobals,
                                     elapsedTick
                                 );
@@ -1127,7 +1179,7 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
                                     lvPoint = U.rotateAroundAxis(lvPoint, runtime.axis || globalAxis, offsetAngle);
                                 }
                             }
-                            if (runtime.actions && runtime.actions.length) {
+                            if (mode !== "angleOnly" && runtime.actions && runtime.actions.length) {
                                 const shapeScope = {
                                     rel: anchorBase,
                                     order: int(localIndex),
@@ -1139,7 +1191,7 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
                                     runtime.actions,
                                     lvActionElapsed,
                                     lvActionAge,
-                                    lvPointRef,
+                                    runtimePointRef,
                                     runtime.axis || globalAxis,
                                     {
                                         skipExpression: skipExprPerPoint,
@@ -1150,8 +1202,53 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
                                 );
                             }
                         };
-                        applyLevelRuntime(sharedRuntime, sharedOffsetRef);
-                        applyLevelRuntime(currentRuntime, currentOffsetRef);
+                        for (const desc of cascadeLevelRuntimes) {
+                            applyLevelRuntime(desc.runtime, desc.offsetRef, {
+                                mode: desc.mode,
+                                skipAngleOffset: desc.skipAngleOffset
+                            }, desc.pointRef);
+                        }
+                        if (cardRootRuntime) {
+                            applyLevelRuntime(cardRootRuntime, rootOffsetIndex, { mode: "full" });
+                        }
+                        if (sharedRuntime) {
+                            applyLevelRuntime(sharedRuntime, sharedOffsetRef, { mode: sharedMode || "full" });
+                        }
+                        const sharedTargetsCurrentNode = !!(sharedNode && lvMeta?.node && sharedNode === lvMeta.node);
+                        const needCurrentRuntime = !!currentRuntime && !(sharedTargetsCurrentNode && (sharedMode || "full") === "full");
+                        if (needCurrentRuntime) {
+                            applyLevelRuntime(currentRuntime, currentOffsetRef, {
+                                mode: "full",
+                                skipAngleOffset: sharedTargetsCurrentNode && sharedMode === "angleOnly"
+                            });
+                        }
+                        if (cardRootRuntime && ownerCard && String(ownerCard.dataType || "single") !== "single") {
+                            cascadeLevelRuntimes.push({
+                                runtime: cardRootRuntime,
+                                offsetRef: rootOffsetIndex,
+                                mode: "full",
+                                skipAngleOffset: false,
+                                pointRef: lvPointRef
+                            });
+                        }
+                        if (sharedRuntime && sharedNodeType !== "single") {
+                            cascadeLevelRuntimes.push({
+                                runtime: sharedRuntime,
+                                offsetRef: sharedOffsetRef,
+                                mode: sharedMode || "full",
+                                skipAngleOffset: false,
+                                pointRef: lvPointRef
+                            });
+                        }
+                        if (needCurrentRuntime && currentNodeType !== "single") {
+                            cascadeLevelRuntimes.push({
+                                runtime: currentRuntime,
+                                offsetRef: currentOffsetRef,
+                                mode: "full",
+                                skipAngleOffset: sharedTargetsCurrentNode && sharedMode === "angleOnly",
+                                pointRef: lvPointRef
+                            });
+                        }
                         transformedLevelRels[lvIdx] = lvPoint;
                         transformedLevelOrders[lvIdx] = lvPointRef;
                         localSum.x += num(lvPoint.x);
@@ -1203,34 +1300,77 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
             const persistedControllerState = (persistentControllerStates[i] && typeof persistentControllerStates[i] === "object")
                 ? persistentControllerStates[i]
                 : null;
-            const needsInitCurrentAge = !!cached.cardVisualInitPointDependentCurrentAge && manualAgeFlags[i] !== 1;
-            const needsInitLifetime = !!cached.cardVisualInitPointDependentLifetime && initializedLifetimeFlags[i] !== 1;
+            const pointVisualSources = Array.isArray(this.previewLeafVisualSources) ? this.previewLeafVisualSources : [];
+            const pointVisualSource = pointVisualSources[i] || null;
+            const ownerCardRef = groupId >= 0 ? (groupCard[groupId] || null) : this.getCardById(owner);
+            const hasPerLeafVisualSource = !!pointVisualSource && pointVisualSource !== ownerCardRef;
+            const sourceVisualDependency = ownerCardRef
+                ? this.getCardPreviewVisualDependency(ownerCardRef, pointVisualSource ? { visualSource: pointVisualSource } : {})
+                : null;
+            const visualFramePointDependent = pointVisualSource
+                ? !!sourceVisualDependency?.framePointDependent
+                : !!cached.cardVisualFramePointDependent;
+            const visualInitPointDependentCurrentAge = pointVisualSource
+                ? !!sourceVisualDependency?.initPointDependentCurrentAge
+                : !!cached.cardVisualInitPointDependentCurrentAge;
+            const visualInitPointDependentLifetime = pointVisualSource
+                ? !!sourceVisualDependency?.initPointDependentLifetime
+                : !!cached.cardVisualInitPointDependentLifetime;
+            const needsInitCurrentAge = visualInitPointDependentCurrentAge && manualAgeFlags[i] !== 1;
+            const needsInitLifetime = visualInitPointDependentLifetime && initializedLifetimeFlags[i] !== 1;
             const needsPerPointVisual = !skipExprPerPoint && (
-                !!cached.cardVisualFramePointDependent
+                visualFramePointDependent
                 || needsInitCurrentAge
                 || needsInitLifetime
             );
+            const canShareLeafVisualBySource = hasPerLeafVisualSource && !needsPerPointVisual;
             let pointVisual = null;
-            if (needsPerPointVisual) {
-                let byLocal = groupId >= 0 ? pointVisualCache[groupId] : null;
-                if (!byLocal) {
-                    byLocal = [];
-                    if (groupId >= 0) pointVisualCache[groupId] = byLocal;
+            if (needsPerPointVisual || canShareLeafVisualBySource) {
+                let groupVisualBucket = groupId >= 0 ? pointVisualCache[groupId] : null;
+                if (!groupVisualBucket || typeof groupVisualBucket !== "object" || Array.isArray(groupVisualBucket)) {
+                    groupVisualBucket = { byLocal: [], bySource: new Map() };
+                    if (groupId >= 0) pointVisualCache[groupId] = groupVisualBucket;
                 }
-                pointVisual = byLocal[localIndex];
-                if (!pointVisual) {
-                    pointVisual = this.resolveCardPreviewVisual(owner, {
-                        runtimeVars: frameRuntimeGlobals,
-                        elapsedTick: pointElapsedTick,
-                        ageTick: pointAgeTick,
-                        currentAge: persistedCurrentAge,
-                        lifetime: persistedLifetime,
-                        keepInitializedCurrentAge: manualAgeFlags[i] === 1,
-                        keepInitializedLifetime: initializedLifetimeFlags[i] === 1,
-                        controllerState: persistedControllerState,
-                        pointIndex: localIndex
-                    });
-                    byLocal[localIndex] = pointVisual;
+                if (needsPerPointVisual) {
+                    const byLocal = Array.isArray(groupVisualBucket.byLocal) ? groupVisualBucket.byLocal : (groupVisualBucket.byLocal = []);
+                    pointVisual = byLocal[localIndex];
+                    if (!pointVisual) {
+                        pointVisual = this.resolveCardPreviewVisual(owner, {
+                            runtimeVars: frameRuntimeGlobals,
+                            elapsedTick: pointElapsedTick,
+                            ageTick: pointAgeTick,
+                            currentAge: persistedCurrentAge,
+                            lifetime: persistedLifetime,
+                            keepInitializedCurrentAge: manualAgeFlags[i] === 1,
+                            keepInitializedLifetime: initializedLifetimeFlags[i] === 1,
+                            controllerState: persistedControllerState,
+                            pointIndex: localIndex,
+                            visualSource: pointVisualSource
+                        });
+                        byLocal[localIndex] = pointVisual;
+                    }
+                } else {
+                    const bySource = (groupVisualBucket.bySource instanceof Map)
+                        ? groupVisualBucket.bySource
+                        : (groupVisualBucket.bySource = new Map());
+                    const sourceOwnerCard = ownerCardRef || this.getCardById(owner) || { id: owner };
+                    const sourceCacheKey = this.makePreviewVisualSourceCacheKey(sourceOwnerCard, pointVisualSource);
+                    pointVisual = bySource.get(sourceCacheKey) || null;
+                    if (!pointVisual) {
+                        pointVisual = this.resolveCardPreviewVisual(owner, {
+                            runtimeVars: frameRuntimeGlobals,
+                            elapsedTick: cached.elapsedTick,
+                            ageTick: cached.age,
+                            currentAge: persistedCurrentAge,
+                            lifetime: persistedLifetime,
+                            keepInitializedCurrentAge: manualAgeFlags[i] === 1,
+                            keepInitializedLifetime: initializedLifetimeFlags[i] === 1,
+                            controllerState: persistedControllerState,
+                            pointIndex: 0,
+                            visualSource: pointVisualSource
+                        });
+                        bySource.set(sourceCacheKey, pointVisual);
+                    }
                 }
             } else {
                 pointVisual = groupId >= 0 ? ownerVisualCache[groupId] : null;
@@ -1244,7 +1384,8 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
                         keepInitializedCurrentAge: manualAgeFlags[i] === 1,
                         keepInitializedLifetime: initializedLifetimeFlags[i] === 1,
                         controllerState: persistedControllerState,
-                        pointIndex: 0
+                        pointIndex: 0,
+                        visualSource: pointVisualSource
                     });
                     if (groupId >= 0) ownerVisualCache[groupId] = pointVisual;
                 }
@@ -1367,20 +1508,47 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
         return this.resolvePreviewTextureConfigForCard(card);
     }
 
-    resolvePreviewVisualSource(card) {
-        if (!card) return null;
-        if (String(card.dataType || "single") === "single") return card;
-        const findLeaf = (children) => {
-            if (!Array.isArray(children)) return null;
+    collectPreviewVisualSources(card) {
+        if (!card) return [];
+        if (String(card.dataType || "single") === "single") return [card];
+        const out = [];
+        const seen = new Set();
+        const push = (source) => {
+            if (!source || typeof source !== "object") return;
+            const key = String(source.id || "").trim();
+            if (key) {
+                if (seen.has(key)) return;
+                seen.add(key);
+            }
+            out.push(source);
+        };
+        const walk = (children) => {
+            if (!Array.isArray(children)) return;
             for (const child of children) {
                 if (!child) continue;
-                if (String(child.type || "single") === "single") return child;
-                const found = findLeaf(child.children);
-                if (found) return found;
+                if (String(child.type || "single") === "single") {
+                    push(child);
+                    continue;
+                }
+                walk(child.children);
             }
-            return null;
         };
-        return findLeaf(card.shapeChildren || []) || card;
+        walk(card.shapeChildren || []);
+        if (!out.length) push(card);
+        return out;
+    }
+
+    resolvePreviewVisualSource(card) {
+        const sources = this.collectPreviewVisualSources(card);
+        return sources[0] || card || null;
+    }
+
+    makePreviewVisualSourceCacheKey(card, visualSource = null) {
+        const cardKey = String(card?.id || "").trim() || "__card__";
+        const source = (visualSource && typeof visualSource === "object") ? visualSource : card;
+        const sourceKey = String(source?.id || "").trim();
+        if (!sourceKey || source === card) return `${cardKey}|__card__`;
+        return `${cardKey}|${sourceKey}`;
     }
 
     updatePreviewFrameIndices(elapsedTick, cycleCfg, groupRuntimeCache, pointGroupIndex, totalCount) {
@@ -2092,8 +2260,9 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
         const scope = opts?.scope === "project" ? "project" : "local";
         if (scope !== "project") cfg.runMode = "auto";
         if (cfg.type === "none") return 1;
+        const tickMax = Math.max(1, int(cfg.tick || 1));
         if (scope === "project" && cfg.runMode === "manual") {
-            return this.evalScaleCurve(cfg, 0, Math.max(1, int(cfg.tick || 1)));
+            return this.evalScaleCurve(cfg, 0, tickMax);
         }
         const cycle = cycleCfg || this.getPreviewCycleConfig();
         const age = num(ageTick);
@@ -2103,7 +2272,6 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
         const fadeStart = cycle.play;
         const inFade = fadeAgeBase >= fadeStart;
         const fadeAge = Math.max(0, fadeAgeBase - fadeStart);
-        const tickMax = Math.max(1, int(cfg.tick || 1));
         const growTick = Math.min(tickMax, Math.max(0, age));
         let curveTick = growTick;
         if (cfg.reversedOnDisable && inFade) {
@@ -2196,44 +2364,78 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
         return out;
     }
 
+    resolvePreviewCardAngleOffsetConfig(card) {
+        if (!card || card.dataType === "single") return null;
+        return this.resolvePreviewAngleOffsetConfig(card);
+    }
+
+    clonePreviewTupleLevels(levelsBase = []) {
+        return (Array.isArray(levelsBase) ? levelsBase : []).map((lv) => ({
+            vec: U.v(num(lv?.vec?.x), num(lv?.vec?.y), num(lv?.vec?.z)),
+            ref: int(lv?.ref || 0),
+            offsetIndex: int(lv?.offsetIndex ?? 0),
+            node: lv?.node || null,
+            sharedNode: lv?.sharedNode || null,
+            sharedMode: String(lv?.sharedMode || ""),
+            sharedOffsetIndex: int(lv?.sharedOffsetIndex ?? 0),
+            depth: int(lv?.depth || 0)
+        }));
+    }
+
     buildShapeLocalTuplesForPreview(card) {
         if (!card || card.dataType === "single") return [];
         const children = card.shapeChildren || [];
         if (!children.length) return [];
+        return this._buildTreeChildrenTuplesForPreview(children, U.v(0, 0, 0), [], card);
+    }
+
+    _buildTreeChildrenTuplesForPreview(children, parentSum, parentLevels, rootCard = null) {
+        const childList = Array.isArray(children) ? children : [];
+        if (!childList.length) return [];
         let allTuples = [];
-        for (const child of children) {
-            const childTuples = this._buildTreeNodeTuplesForPreview(child, U.v(0, 0, 0), [], card);
+        for (const child of childList) {
+            const childTuples = this._buildTreeNodeTuplesForPreview(child, parentSum, parentLevels, rootCard);
             allTuples = allTuples.concat(childTuples);
         }
         return allTuples;
     }
 
-    _buildTreeNodeTuplesForPreview(node, parentSum, parentLevels, rootCard = null) {
+    _buildTreeNodeTuplesForPreview(node, parentSum, parentLevels, rootCard = null, opts = null) {
         if (!node) return [];
+        const options = (opts && typeof opts === "object") ? opts : null;
+        const sharedLevelNode = options?.sharedLevelNode || null;
+        const sharedLevelMode = String(options?.sharedLevelMode || "").trim() || "angleOnly";
+        const sharedLevelIndex = Number.isFinite(Number(options?.sharedLevelIndex)) ? int(options.sharedLevelIndex) : 0;
+        const suppressOwnAngleOffset = options?.suppressOwnAngleOffset === true;
         const src = this.resolveShapeSourcePoints(node.bindMode, node.point, node.builderState);
         if (!src.length) return [];
         const nodeType = String(node.type || "single");
-        const offsetCfg = this.resolvePreviewAngleOffsetConfig(node);
+        const offsetCfg = suppressOwnAngleOffset ? null : this.resolvePreviewAngleOffsetConfig(node);
         const repeatCount = offsetCfg ? Math.max(1, int(offsetCfg.count || 1)) : 1;
         const leafTextureCfg = this.resolvePreviewTextureConfigForShapeLeaf(node, rootCard);
+        const buildLevelEntry = (sv, ref, ownOffsetIndex, depth) => ({
+            vec: U.clone(sv),
+            ref: int(ref || 0),
+            offsetIndex: int(ownOffsetIndex ?? 0),
+            node,
+            sharedNode: sharedLevelNode || (nodeType !== "single" ? node : null),
+            sharedMode: sharedLevelNode ? sharedLevelMode : (nodeType !== "single" ? "full" : ""),
+            sharedOffsetIndex: sharedLevelNode ? sharedLevelIndex : int(ownOffsetIndex ?? 0),
+            depth: int(depth || 0)
+        });
         const emitLeafTuples = (points, sumBase, levelsBase) => {
             const results = [];
             for (let si = 0; si < points.length; si++) {
                 const p = points[si];
                 const sv = U.v(num(p?.x), num(p?.y), num(p?.z));
                 for (let ri = 0; ri < repeatCount; ri++) {
-                    const levels = levelsBase.map((lv) => ({
-                        vec: U.v(num(lv?.vec?.x), num(lv?.vec?.y), num(lv?.vec?.z)),
-                        ref: int(lv?.ref || 0),
-                        offsetIndex: int(lv?.offsetIndex ?? 0),
-                        node: lv?.node || null,
-                        depth: int(lv?.depth || 0)
-                    }));
-                    levels.push({ vec: U.clone(sv), ref: si, offsetIndex: ri, node, depth: levelsBase.length + 1 });
+                    const levels = this.clonePreviewTupleLevels(levelsBase);
+                    levels.push(buildLevelEntry(sv, si, ri, levelsBase.length + 1));
                     results.push({
                         sum: U.v(num(sumBase?.x) + sv.x, num(sumBase?.y) + sv.y, num(sumBase?.z) + sv.z),
                         levels,
-                        textureCfg: leafTextureCfg
+                        textureCfg: leafTextureCfg,
+                        visualSource: node
                     });
                 }
             }
@@ -2243,7 +2445,6 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
             return emitLeafTuples(src, parentSum, parentLevels);
         }
         const nodeChildren = node.children || [];
-        // 非 single 节点若未配置 children，仍然按叶子节点产出点，避免并列分支丢失。
         if (!nodeChildren.length) {
             return emitLeafTuples(src, parentSum, parentLevels);
         }
@@ -2253,18 +2454,10 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
             const sv = U.v(num(p?.x), num(p?.y), num(p?.z));
             const newSum = U.v(num(parentSum?.x) + sv.x, num(parentSum?.y) + sv.y, num(parentSum?.z) + sv.z);
             for (let ri = 0; ri < repeatCount; ri++) {
-                const newLevels = parentLevels.map((lv) => ({
-                    vec: U.v(num(lv?.vec?.x), num(lv?.vec?.y), num(lv?.vec?.z)),
-                    ref: int(lv?.ref || 0),
-                    offsetIndex: int(lv?.offsetIndex ?? 0),
-                    node: lv?.node || null,
-                    depth: int(lv?.depth || 0)
-                }));
-                newLevels.push({ vec: U.clone(sv), ref: si, offsetIndex: ri, node, depth: parentLevels.length + 1 });
-                for (const child of nodeChildren) {
-                    const childTuples = this._buildTreeNodeTuplesForPreview(child, newSum, newLevels, rootCard);
-                    allTuples = allTuples.concat(childTuples);
-                }
+                const newLevels = this.clonePreviewTupleLevels(parentLevels);
+                newLevels.push(buildLevelEntry(sv, si, ri, parentLevels.length + 1));
+                const childTuples = this._buildTreeChildrenTuplesForPreview(nodeChildren, newSum, newLevels, rootCard);
+                allTuples = allTuples.concat(childTuples);
             }
         }
         return allTuples;
@@ -2323,7 +2516,7 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
             growthAnimates: card.dataType === "sequenced_shape" ? (card.growthAnimates || []) : [],
             axis: this.resolveRelativeDirection(card.shapeAxisExpr || card.shapeAxisPreset || "RelativeLocation.yAxis()"),
             scale: normalizeScaleHelperConfig(card.shapeScale, { type: "none" }),
-            angleOffset: this.resolvePreviewAngleOffsetConfig(card),
+            angleOffset: this.resolvePreviewCardAngleOffsetConfig(card),
             actions: rootActions,
             hasExpression: !!rootActions.__hasExpression,
             hasPointDependentExpression: this.isPreviewActionsPointDependent(rootActions)
@@ -2341,6 +2534,7 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
             cardId: card.id,
             scopeLevel: depth
         });
+        const suppressOwnAngleOffset = false;
         return {
             scopeLevel: depth,
             ancestorSequencedDepths: scope.sequencedDepths,
@@ -2348,7 +2542,7 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
             growthAnimates: node.type === "sequenced_shape" ? (node.growthAnimates || []) : [],
             axis: this.resolveRelativeDirection(node.axisExpr || node.axisPreset || "RelativeLocation.yAxis()"),
             scale: normalizeScaleHelperConfig(node.scale, { type: "none" }),
-            angleOffset: this.resolvePreviewAngleOffsetConfig(node),
+            angleOffset: suppressOwnAngleOffset ? null : this.resolvePreviewAngleOffsetConfig(node),
             actions,
             hasExpression: !!actions.__hasExpression,
             hasPointDependentExpression: this.isPreviewActionsPointDependent(actions)
@@ -2379,6 +2573,7 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
         if (!children || !children.length) return;
         const node = children[0];
         if (!node) return;
+        if (String(node.type || "single") === "single") return;
         const runtimeLevel = this.buildPreviewRuntimeLevelForNode(card, node, depth, elapsedTick, skipExpression);
         if (runtimeLevel) levels.push(runtimeLevel);
         this._collectTreeNodeRuntimeLevels(card, node.children || [], levels, depth + 1, elapsedTick, skipExpression);
@@ -2736,15 +2931,17 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
         return false;
     }
 
-    getPreviewVisualRuntimePlan(card) {
+    getPreviewVisualRuntimePlan(card, opts = {}) {
         if (!card) return null;
-        const visualSource = this.resolvePreviewVisualSource(card);
+        const visualSource = (opts.visualSource && typeof opts.visualSource === "object")
+            ? opts.visualSource
+            : this.resolvePreviewVisualSource(card);
         if (!visualSource) return null;
         const cache = this.ensurePreviewVisualRuntimePlanCache();
-        const cacheKey = String(visualSource.id || card.id || "").trim() || card;
+        const cacheKey = this.makePreviewVisualSourceCacheKey(card, visualSource);
         const cached = cache.get(cacheKey);
         if (cached && cached.visualSource === visualSource) return cached;
-        const visualSourceId = String(visualSource.id || card.id || "").trim();
+        const visualSourceId = String(visualSource.id || card.id || "").trim() || cacheKey;
         const particleInit = [];
         let ageDependent = false;
         let framePointDependent = false;
@@ -2821,8 +3018,8 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
         return plan;
     }
 
-    getCardPreviewVisualDependency(card) {
-        if (!card) return {
+    getCardPreviewVisualDependency(card, opts = {}) {
+        const empty = {
             ageDependent: false,
             pointDependent: false,
             framePointDependent: false,
@@ -2830,24 +3027,37 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
             initPointDependentLifetime: false,
             readsPointSpecificVisualState: false
         };
+        if (!card) return empty;
         const cache = (this.previewCardVisualAgeDependentCache instanceof Map)
             ? this.previewCardVisualAgeDependentCache
             : (this.previewCardVisualAgeDependentCache = new Map());
-        const cacheKey = String(card.id || "").trim() || card;
-        const cached = cache.get(cacheKey);
+        const visualSource = (opts.visualSource && typeof opts.visualSource === "object") ? opts.visualSource : null;
+        if (visualSource) {
+            const cacheKey = this.makePreviewVisualSourceCacheKey(card, visualSource);
+            const cached = cache.get(cacheKey);
+            if (cached && typeof cached === "object") return cached;
+            const plan = this.getPreviewVisualRuntimePlan(card, { visualSource });
+            const dependency = (plan && plan.dependency && typeof plan.dependency === "object")
+                ? plan.dependency
+                : { ...empty };
+            cache.set(cacheKey, dependency);
+            return dependency;
+        }
+        const aggregateKey = `${String(card.id || "").trim() || "__card__"}|__aggregate__`;
+        const cached = cache.get(aggregateKey);
         if (cached && typeof cached === "object") return cached;
-        const plan = this.getPreviewVisualRuntimePlan(card);
-        const dependency = (plan && plan.dependency && typeof plan.dependency === "object")
-            ? plan.dependency
-            : {
-                ageDependent: false,
-                pointDependent: false,
-                framePointDependent: false,
-                initPointDependentCurrentAge: false,
-                initPointDependentLifetime: false,
-                readsPointSpecificVisualState: false
-            };
-        cache.set(cacheKey, dependency);
+        const dependency = { ...empty };
+        const sources = this.collectPreviewVisualSources(card);
+        for (const source of sources) {
+            const part = this.getCardPreviewVisualDependency(card, { visualSource: source });
+            dependency.ageDependent = dependency.ageDependent || !!part?.ageDependent;
+            dependency.pointDependent = dependency.pointDependent || !!part?.pointDependent;
+            dependency.framePointDependent = dependency.framePointDependent || !!part?.framePointDependent;
+            dependency.initPointDependentCurrentAge = dependency.initPointDependentCurrentAge || !!part?.initPointDependentCurrentAge;
+            dependency.initPointDependentLifetime = dependency.initPointDependentLifetime || !!part?.initPointDependentLifetime;
+            dependency.readsPointSpecificVisualState = dependency.readsPointSpecificVisualState || !!part?.readsPointSpecificVisualState;
+        }
+        cache.set(aggregateKey, dependency);
         return dependency;
     }
 
@@ -2861,8 +3071,9 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
         const fallback = { color: [1, 1, 1], size: 0.2, alpha: 1 };
         const card = this.getCardById(cardId);
         if (!card) return fallback;
-        const visualPlan = this.getPreviewVisualRuntimePlan(card);
-        const visualSource = visualPlan?.visualSource || this.resolvePreviewVisualSource(card);
+        const requestedVisualSource = (opts.visualSource && typeof opts.visualSource === "object") ? opts.visualSource : null;
+        const visualPlan = this.getPreviewVisualRuntimePlan(card, { visualSource: requestedVisualSource });
+        const visualSource = visualPlan?.visualSource || requestedVisualSource || this.resolvePreviewVisualSource(card);
         if (!visualSource) return fallback;
         const visual = { color: [...fallback.color], size: 0.2, alpha: 1 };
         let resolvedCurrentAge = Number.isFinite(Number(opts.currentAge))
@@ -3264,6 +3475,9 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
     }
 
     isSameFoldedDirection(a, b, eps = 1e-7) {
+        const aExpr = typeof a === "string" ? String(a || "").trim() : "";
+        const bExpr = typeof b === "string" ? String(b || "").trim() : "";
+        if (aExpr || bExpr) return !!aExpr && aExpr === bExpr;
         if (!a || !b) return false;
         const ax = num(a.x);
         const ay = num(a.y);
@@ -3288,10 +3502,10 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
                 last.anglePerTick = num(last.anglePerTick) + num(cur.anglePerTick);
                 continue;
             }
-            if (last && last.type === "rotateToPoint" && cur.type === "rotateToPoint" && this.isSameFoldedDirection(last.to, cur.to)) {
+            if (last && last.type === "rotateToPoint" && cur.type === "rotateToPoint" && this.isSameFoldedDirection(last.toExpr || last.to, cur.toExpr || cur.to)) {
                 continue;
             }
-            if (last && last.type === "rotateToWithAngle" && cur.type === "rotateToWithAngle" && this.isSameFoldedDirection(last.to, cur.to)) {
+            if (last && last.type === "rotateToWithAngle" && cur.type === "rotateToWithAngle" && this.isSameFoldedDirection(last.toExpr || last.to, cur.toExpr || cur.to)) {
                 last.anglePerTick = num(last.anglePerTick) + num(cur.anglePerTick);
                 continue;
             }
@@ -3303,7 +3517,8 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
                 ...cur,
                 to: (cur.to && typeof cur.to === "object")
                     ? { x: num(cur.to.x), y: num(cur.to.y), z: num(cur.to.z) }
-                    : cur.to
+                    : cur.to,
+                toExpr: String(cur.toExpr || "").trim()
             });
         }
         return out;
@@ -3384,8 +3599,8 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
             const toExpr = String(mRotateToPoint[1] || "").trim();
             if (!toExpr || dynamicTokenRe.test(toExpr)) return null;
             const toVec = this.tryParseFoldableStaticVecExpr(toExpr, elapsedTick);
-            if (!toVec) return null;
-            return { type: "rotateToPoint", to: this.parseJsVec(toVec) };
+            if (toVec) return { type: "rotateToPoint", to: this.parseJsVec(toVec) };
+            return { type: "rotateToPoint", toExpr };
         }
         const mRotateToWithAngle = stmt.match(/^rotateToWithAngle\s*\(\s*([\s\S]+)\s*\)$/);
         if (mRotateToWithAngle) {
@@ -3394,8 +3609,7 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
             const toExpr = String(args[0] || "").trim();
             const angleExpr = String(args[1] || "").trim();
             if (!toExpr || !angleExpr || dynamicTokenRe.test(toExpr) || dynamicTokenRe.test(angleExpr)) return null;
-            const toVec = this.tryParseFoldableStaticVecExpr(toExpr, elapsedTick);
-            if (!toVec || !this.isFoldableStaticNumericExpr(angleExpr)) return null;
+            if (!this.isFoldableStaticNumericExpr(angleExpr)) return null;
             const anglePerTick = num(this.evaluateNumericExpression(angleExpr, {
                 elapsedTick: num(elapsedTick),
                 ageTick: num(elapsedTick),
@@ -3403,7 +3617,9 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
                 includeVectors: false
             }));
             if (!Number.isFinite(anglePerTick)) return null;
-            return { type: "rotateToWithAngle", to: this.parseJsVec(toVec), anglePerTick };
+            const toVec = this.tryParseFoldableStaticVecExpr(toExpr, elapsedTick);
+            if (toVec) return { type: "rotateToWithAngle", to: this.parseJsVec(toVec), anglePerTick };
+            return { type: "rotateToWithAngle", toExpr, anglePerTick };
         }
         return null;
     }
@@ -3461,15 +3677,52 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
             ? startAxis
             : this.parseJsVec(startAxis || this.resolveCompositionAxisDirection());
         const accum = Math.max(0, num(elapsedTick));
+        const resolveNativeActionDirection = (nativeAction) => {
+            if (!nativeAction || typeof nativeAction !== "object") return null;
+            const direct = (nativeAction.to && typeof nativeAction.to === "object"
+                && Number.isFinite(nativeAction.to.x)
+                && Number.isFinite(nativeAction.to.y)
+                && Number.isFinite(nativeAction.to.z))
+                ? nativeAction.to
+                : null;
+            if (direct) return direct;
+            const directExpr = String(nativeAction.to || "").trim();
+            if (directExpr) {
+                const parsed = this.parseJsVec(directExpr);
+                if (parsed && Number.isFinite(parsed.x) && Number.isFinite(parsed.y) && Number.isFinite(parsed.z)) return parsed;
+            }
+            const expr = String(nativeAction.toExpr || "").trim();
+            if (!expr) return null;
+            const stamp = `${int(Math.round(num(elapsedTick) * 1000))}|${int(Math.round(num(ageTick) * 1000))}`;
+            if (nativeAction.__cpbDirCacheStamp === stamp
+                && nativeAction.__cpbDirCache
+                && Number.isFinite(Number(nativeAction.__cpbDirCache.x))
+                && Number.isFinite(Number(nativeAction.__cpbDirCache.y))
+                && Number.isFinite(Number(nativeAction.__cpbDirCache.z))) {
+                return nativeAction.__cpbDirCache;
+            }
+            const vec = this.parseVecLikeValueWithRuntime(expr, runtimeVars, {
+                elapsedTick,
+                ageTick,
+                pointIndex,
+                thisAtVars: runtimeVars
+            });
+            if (!vec || !Number.isFinite(Number(vec.x)) || !Number.isFinite(Number(vec.y)) || !Number.isFinite(Number(vec.z))) {
+                return null;
+            }
+            const parsed = this.parseJsVec(vec);
+            nativeAction.__cpbDirCacheStamp = stamp;
+            nativeAction.__cpbDirCache = { x: num(parsed.x), y: num(parsed.y), z: num(parsed.z) };
+            return nativeAction.__cpbDirCache;
+        };
         const applyNativeAction = (nativeAction) => {
             if (!nativeAction || typeof nativeAction !== "object") return false;
             if (nativeAction.type === "growth_add") {
                 return true;
             }
             if (nativeAction.type === "rotateToPoint") {
-                const dir = (nativeAction.to && typeof nativeAction.to === "object" && Number.isFinite(nativeAction.to.x) && Number.isFinite(nativeAction.to.y) && Number.isFinite(nativeAction.to.z))
-                    ? nativeAction.to
-                    : this.parseJsVec(nativeAction.to);
+                const dir = resolveNativeActionDirection(nativeAction);
+                if (!dir) return true;
                 p = this.rotatePointToDirection(p, dir, axis);
                 axis = U.clone(dir);
                 return true;
@@ -3481,9 +3734,8 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
                 return true;
             }
             if (nativeAction.type === "rotateToWithAngle") {
-                const dir = (nativeAction.to && typeof nativeAction.to === "object" && Number.isFinite(nativeAction.to.x) && Number.isFinite(nativeAction.to.y) && Number.isFinite(nativeAction.to.z))
-                    ? nativeAction.to
-                    : this.parseJsVec(nativeAction.to);
+                const dir = resolveNativeActionDirection(nativeAction);
+                if (!dir) return true;
                 p = this.rotatePointToDirection(p, dir, axis);
                 const perTick = num(nativeAction.anglePerTick ?? nativeAction.angle ?? 0);
                 const angle = ((perTick * accum) % (Math.PI * 2) + Math.PI * 2) % (Math.PI * 2);
@@ -3918,8 +4170,8 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
                     dt = 0;
                     accum = 0;
                 }
-                if (dt > 0 && dt <= MAX_ACCUM_DT) {
-                    accum += speed * dt;
+                if (dt > 0) {
+                    accum += speed * Math.min(dt, MAX_ACCUM_DT);
                 }
             }
             runtimeVars[accKey] = accum;
@@ -4003,8 +4255,9 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
                         dt = 0;
                         phaseValue = 0;
                     }
-                    if (dt > 0 && dt <= MAX_ACCUM_DT) {
-                        phaseValue += reversed ? -dt : dt;
+                    if (dt > 0) {
+                        const clampedDt = Math.min(dt, MAX_ACCUM_DT);
+                        phaseValue += reversed ? -clampedDt : clampedDt;
                     }
                 }
                 phaseTick = clamp(phaseValue, 0, tickMax);

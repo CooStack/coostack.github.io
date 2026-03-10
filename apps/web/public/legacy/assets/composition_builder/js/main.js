@@ -29,8 +29,8 @@ import {
     hasAngleOffsetEaseSpecialParams,
     formatAngleValue
 } from "./angle_offset_utils.js";
-import { installPreviewRuntimeMethods } from "./preview_runtime_mixin.js?v=20260309_32";
-import { installKotlinCodegenMethods } from "./kotlin_codegen_mixin.js?v=20260309_7";
+import { installPreviewRuntimeMethods } from "./preview_runtime_mixin.js?v=20260310_42";
+import { installKotlinCodegenMethods } from "./kotlin_codegen_mixin.js?v=20260310_13";
 import { installCodeOutputMethods } from "./code_output_mixin.js";
 import { installExpressionEditorMethods } from "./expression_editor_mixin.js?v=20260309_7";
 import { installCodeCompileMethods } from "./code_compile_mixin.js?v=20260309_2";
@@ -3376,7 +3376,21 @@ class CompositionBuilderApp {
             return;
         }
 
+        if (t.dataset.treeNodePinitColorIdx !== undefined) {
+            const treePathRaw = String(t.dataset.treePath || "[]");
+            const treePath = t.dataset.treePath ? JSON.parse(t.dataset.treePath) : null;
+            const node = treePath ? this.getShapeNodeByPath(card, treePath) : this.getCurrentViewNode(card);
+            if (!node || !Array.isArray(node.particleInit)) return;
+            const item = node.particleInit[int(t.dataset.treeNodePinitColorIdx)];
+            if (!item) return;
+            this.updateParticleInitColorValue(item, t.value);
+            this.syncTreeNodeParticleInitInlineInputs(card.id, treePathRaw, t.dataset.treeNodePinitColorIdx, item);
+            this.afterValueMutate({ rebuildPreview: true });
+            return;
+        }
+
         if (t.dataset.treeNodePinitIdx !== undefined) {
+            const treePathRaw = String(t.dataset.treePath || "[]");
             const treePath = t.dataset.treePath ? JSON.parse(t.dataset.treePath) : null;
             const node = treePath ? this.getShapeNodeByPath(card, treePath) : this.getCurrentViewNode(card);
             if (!node || !Array.isArray(node.particleInit)) return;
@@ -3397,6 +3411,7 @@ class CompositionBuilderApp {
             } else if (field === "expr") {
                 item.expr = String(t.value || "");
                 item.exprPreset = this.resolveParticleInitPresetExpr(item.expr, item.target);
+                this.syncTreeNodeParticleInitInlineInputs(card.id, treePathRaw, t.dataset.treeNodePinitIdx, item);
                 this.afterValueMutate({ rebuildPreview: true });
             }
             return;
@@ -5859,6 +5874,21 @@ class CompositionBuilderApp {
         }
     }
 
+
+    syncTreeNodeParticleInitInlineInputs(cardId, treePathRaw, pinitIdx, item) {
+        const idx = int(pinitIdx);
+        const rawPath = String(treePathRaw || "").trim();
+        if (idx < 0 || !rawPath || !item || !this.dom?.cardsRoot) return;
+        if (!this.isParticleInitVectorTarget(item.target)) return;
+        const root = this.dom.cardsRoot;
+        const matches = Array.from(root.querySelectorAll(`input[data-card-id=\"${cardId}\"][data-tree-node-pinit-color-idx=\"${idx}\"]`));
+        const colorInput = matches.find((el) => String(el?.dataset?.treePath || "").trim() === rawPath) || null;
+        if (!colorInput) return;
+        const parsed = this.exprRuntime.parseVecLikeValue(item.expr || this.getParticleInitDefaultExprByTarget(item.target));
+        if (document.activeElement !== colorInput) {
+            colorInput.value = vectorToHex01(parsed.x, parsed.y, parsed.z);
+        }
+    }
     renderParticleInitRows(card) {
         const list = Array.isArray(card?.particleInit) ? card.particleInit : [];
         return list.map((it, pIdx) => {
