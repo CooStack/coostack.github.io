@@ -33,6 +33,7 @@ export function installKotlinCodegenMethods(CompositionBuilderApp, deps = {}) {
     class KotlinCodegenMixin {
     generateKotlin() {
         const className = sanitizeKotlinClassName(this.state.projectName || "NewComposition");
+        const packageName = this.normalizeGeneratedPackageName(this.state.packageName || "cn.coostack.compositions");
         const sequencedRoot = this.state.compositionType === "sequenced";
         const baseClass = sequencedRoot ? "AutoSequencedParticleComposition" : "AutoParticleComposition";
         const imports = [
@@ -53,6 +54,19 @@ export function installKotlinCodegenMethods(CompositionBuilderApp, deps = {}) {
             "import java.util.TreeMap",
             "import org.joml.Vector3f"
         ];
+        if (this.stateUsesBezierScaleHelper()) {
+            imports.push("import cn.coostack.cooparticlesapi.utils.helper.impl.composition.CompositionBezierScaleHelper");
+        }
+        if (this.stateUsesFourierSeriesBuilder()) {
+            imports.push("import cn.coostack.cooparticlesapi.utils.builder.FourierSeriesBuilder");
+        }
+        if (this.stateUsesTextureSheetParticleRenderType()) {
+            imports.push("import net.minecraft.client.particle.ParticleRenderType");
+        }
+        if (this.stateUsesTextureSheetCooTextureSheet()) {
+            imports.push("import cn.coostack.cooparticlesapi.particles.impl.CooParticleTextureSheet");
+        }
+        const importList = Array.from(new Set(imports));
 
         const body = [];
         body.push("@CooAutoRegister");
@@ -62,10 +76,99 @@ export function installKotlinCodegenMethods(CompositionBuilderApp, deps = {}) {
         const initBlock = this.buildInitBlock(className, sequencedRoot);
         if (initBlock) body.push(initBlock);
         body.push(this.buildParticlesMethod(className, sequencedRoot));
+        const removeMethod = this.buildRemoveMethod();
+        if (removeMethod) body.push(removeMethod);
         body.push(this.buildOnDisplayMethod(className));
         body.push("}");
 
-        return [...imports, "", ...body].join("\n").replace(/\n{3,}/g, "\n\n");
+        const head = packageName ? [`package ${packageName}`, ""] : [];
+        return [...head, ...importList, "", ...body].join("\n").replace(/\n{3,}/g, "\n\n");
+    }
+
+    normalizeGeneratedPackageName(raw = "") {
+        let text = String(raw || "").trim();
+        if (!text) text = "cn.coostack.compositions";
+        text = text.replace(/^package\s+/i, "").replace(/;+\s*$/g, "").trim();
+        return text || "cn.coostack.compositions";
+    }
+
+    iterateParticleInitEntries(visitor) {
+        if (typeof visitor !== "function") return;
+        const walkNodes = (nodes, card) => {
+            for (const node of (Array.isArray(nodes) ? nodes : [])) {
+                for (const item of (Array.isArray(node?.particleInit) ? node.particleInit : [])) {
+                    visitor(item, card, node);
+                }
+                if (Array.isArray(node?.children) && node.children.length) {
+                    walkNodes(node.children, card);
+                }
+            }
+        };
+        for (const card of (Array.isArray(this.state.cards) ? this.state.cards : [])) {
+            for (const item of (Array.isArray(card?.particleInit) ? card.particleInit : [])) {
+                visitor(item, card, null);
+            }
+            walkNodes(card?.shapeChildren || [], card);
+        }
+    }
+
+    builderStateUsesKind(builderState, kindName = "") {
+        const expected = String(kindName || "").trim();
+        if (!expected) return false;
+        const walk = (node) => {
+            if (!node || typeof node !== "object") return false;
+            if (String(node.kind || "").trim() === expected) return true;
+            if (Array.isArray(node.children) && node.children.some((child) => walk(child))) return true;
+            if (Array.isArray(node.terms) && node.terms.some((child) => walk(child))) return true;
+            return false;
+        };
+        const roots = Array.isArray(builderState?.root?.children)
+            ? builderState.root.children
+            : (Array.isArray(builderState?.children) ? builderState.children : []);
+        return roots.some((node) => walk(node));
+    }
+
+    stateUsesFourierSeriesBuilder() {
+        const cardUsesFourier = (card) => this.builderStateUsesKind(card?.builderState, "add_fourier_series");
+        const nodeUsesFourier = (nodes) => {
+            for (const node of (Array.isArray(nodes) ? nodes : [])) {
+                if (this.builderStateUsesKind(node?.builderState, "add_fourier_series")) return true;
+                if (Array.isArray(node?.children) && nodeUsesFourier(node.children)) return true;
+            }
+            return false;
+        };
+        for (const card of (Array.isArray(this.state.cards) ? this.state.cards : [])) {
+            if (cardUsesFourier(card)) return true;
+            if (nodeUsesFourier(card?.shapeChildren || [])) return true;
+        }
+        return false;
+    }
+
+    stateUsesBezierScaleHelper() {
+        const projectScale = normalizeScaleHelperConfig(this.state.projectScale, { type: "none" });
+        return String(projectScale?.type || "none") === "bezier";
+    }
+
+    stateUsesTextureSheetLiteral(pattern) {
+        let found = false;
+        const matcher = pattern instanceof RegExp ? pattern : null;
+        this.iterateParticleInitEntries((item) => {
+            if (found) return;
+            const target = String(item?.target || "").trim().toLowerCase();
+            if (target !== "texturesheet") return;
+            const source = String(item?.codegenExpr || item?.codegenExprPreset || item?.expr || "").trim();
+            if (!source || !matcher) return;
+            found = matcher.test(source);
+        });
+        return found;
+    }
+
+    stateUsesTextureSheetParticleRenderType() {
+        return this.stateUsesTextureSheetLiteral(/\bParticleRenderType\s*\./);
+    }
+
+    stateUsesTextureSheetCooTextureSheet() {
+        return this.stateUsesTextureSheetLiteral(/\bCooParticleTextureSheet\s*\./);
     }
 
     buildClassFields(className) {
@@ -237,6 +340,15 @@ export function installKotlinCodegenMethods(CompositionBuilderApp, deps = {}) {
     resolveShapeLevelAngleOffsetConfig(level, className) {
         if (!level) return null;
         return this.resolveAngleOffsetConfig(level, className);
+    }
+
+    createDescendantActionCtx(actionCtx) {
+        if (!actionCtx || typeof actionCtx !== "object") return null;
+        const suppressNodeAngleOffsetIds = Array.isArray(actionCtx.suppressNodeAngleOffsetIds)
+            ? actionCtx.suppressNodeAngleOffsetIds.map((it) => String(it || "").trim()).filter(Boolean)
+            : [];
+        if (!suppressNodeAngleOffsetIds.length) return null;
+        return { suppressNodeAngleOffsetIds };
     }
 
     normalizeVectorCtorNumericLiteral(rawArg, mode = "double") {
@@ -427,9 +539,16 @@ export function installKotlinCodegenMethods(CompositionBuilderApp, deps = {}) {
         if (Array.isArray(card.particleInit) && card.particleInit.length) {
             lines.push(`${indentBase}.addParticleInstanceInit {`);
             for (const it of card.particleInit) {
-                const target = sanitizeKotlinIdentifier(it.target || "size", "size");
-                let expr = this.rewriteCodeExpr(String(it.expr || "").trim(), className);
-                expr = normalizeParticleExpr(target, expr);
+                const targetRaw = String(it?.target || "size").trim();
+                const target = sanitizeKotlinIdentifier(targetRaw || "size", "size");
+                const isTextureSheetTarget = targetRaw.toLowerCase() === "texturesheet";
+                const exprRaw = isTextureSheetTarget
+                    ? String(it?.codegenExpr || it?.codegenExprPreset || it?.expr || "").trim()
+                    : String(it?.expr || "").trim();
+                let expr = this.rewriteCodeExpr(exprRaw, className);
+                if (!isTextureSheetTarget) {
+                    expr = normalizeParticleExpr(target, expr);
+                }
                 if (!expr) continue;
                 lines.push(`${indentBase}    ${target} = ${expr}`);
             }
@@ -503,7 +622,8 @@ export function installKotlinCodegenMethods(CompositionBuilderApp, deps = {}) {
         lines.push(`    ${cls}(it).apply {`);
         if (axisExpr) lines.push(`        axis = ${axisExpr}`);
         const children = card.shapeChildren || [];
-        this._emitTreeNodeChildrenApplyCodegen(lines, children, card, className, rootCtx, "        ", actionCtx);
+        const childActionCtx = this.createDescendantActionCtx(actionCtx);
+        this._emitTreeNodeChildrenApplyCodegen(lines, children, card, className, rootCtx, "        ", childActionCtx);
         lines.push(this.applyCardCompositionActions(card, className, "        ", isSequenced, rootScopeInfo, actionCtx));
         lines.push("    }");
         lines.push(")");
@@ -611,7 +731,8 @@ export function installKotlinCodegenMethods(CompositionBuilderApp, deps = {}) {
         lines.push(`${indent}                ${cls}(it).apply {`);
         if (axisExpr) lines.push(`${indent}                    axis = ${axisExpr}`);
         const children = node.children || [];
-        this._emitTreeNodeChildrenApplyCodegen(lines, children, card, className, ctx, `${indent}                    `, actionCtx);
+        const childActionCtx = this.createDescendantActionCtx(actionCtx);
+        this._emitTreeNodeChildrenApplyCodegen(lines, children, card, className, ctx, `${indent}                    `, childActionCtx);
         const pseudo = { id: card.id, shapeDisplayActions: node.displayActions || [], shapeScale: scale, growthAnimates: node.growthAnimates || [] };
         const scopeInfo = this.getShapeScopeInfoByRuntimeLevel(card, depth);
         const actions = this.applyCardCompositionActions(pseudo, className, `${indent}                    `, isSequenced, scopeInfo, actionCtx);
@@ -724,6 +845,19 @@ export function installKotlinCodegenMethods(CompositionBuilderApp, deps = {}) {
         return lines.join("\n");
     }
 
+    buildRemoveMethod() {
+        if (this.state.enableRemoveStatusOverride !== true) return "";
+        return [
+            "    override fun remove() {",
+            "        if (status.isDisable()) {",
+            "            super.remove()",
+            "        } else {",
+            "            status.disable()",
+            "        }",
+            "    }"
+        ].join("\n");
+    }
+
     buildOnDisplayMethod(className) {
         const actions = this.state.displayActions || [];
         const projectScale = normalizeScaleHelperConfig(this.state.projectScale, { type: "none" });
@@ -778,7 +912,8 @@ export function installKotlinCodegenMethods(CompositionBuilderApp, deps = {}) {
         lines.push("        }");
         lines.push("    }");
         return lines.join("\n");
-    }    }
+    }
+    }
 
     for (const key of Object.getOwnPropertyNames(KotlinCodegenMixin.prototype)) {
         if (key === "constructor") continue;

@@ -1121,8 +1121,10 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
                     let localSum = U.v(0, 0, 0);
                     const transformedLevelRels = [];
                     const transformedLevelOrders = [];
-                    const cascadeLevelRuntimes = [];
+                    let cascadeLevelRuntimes = [];
                     for (let lvIdx = 0; lvIdx < levelBaseList.length; lvIdx++) {
+                        const activeCascadeLevelRuntimes = cascadeLevelRuntimes;
+                        cascadeLevelRuntimes = [];
                         const lvBase = levelBaseList[lvIdx] || U.v(0, 0, 0);
                         const lvPointRef = int(levelRefList[lvIdx] ?? localRef);
                         const currentOffsetRef = int(levelOffsetRefList[lvIdx] ?? lvPointRef);
@@ -1202,7 +1204,7 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
                                 );
                             }
                         };
-                        for (const desc of cascadeLevelRuntimes) {
+                        for (const desc of activeCascadeLevelRuntimes) {
                             applyLevelRuntime(desc.runtime, desc.offsetRef, {
                                 mode: desc.mode,
                                 skipAngleOffset: desc.skipAngleOffset
@@ -1220,15 +1222,6 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
                             applyLevelRuntime(currentRuntime, currentOffsetRef, {
                                 mode: "full",
                                 skipAngleOffset: sharedTargetsCurrentNode && sharedMode === "angleOnly"
-                            });
-                        }
-                        if (cardRootRuntime && ownerCard && String(ownerCard.dataType || "single") !== "single") {
-                            cascadeLevelRuntimes.push({
-                                runtime: cardRootRuntime,
-                                offsetRef: rootOffsetIndex,
-                                mode: "full",
-                                skipAngleOffset: false,
-                                pointRef: lvPointRef
                             });
                         }
                         if (sharedRuntime && sharedNodeType !== "single") {

@@ -171,6 +171,14 @@ function normalizeCardSectionCollapse(raw) {
     return base;
 }
 
+function normalizeKotlinPackageName(raw, fallback = "cn.coostack.compositions") {
+    let text = String(raw || "").trim();
+    if (!text) text = fallback;
+    text = text.replace(/^package\s+/i, "").replace(/;+\s*$/g, "").trim();
+    if (!text) text = fallback;
+    return text;
+}
+
 const KOTLIN_IDENTIFIER_KEYWORDS = new Set([
     "as", "break", "class", "continue", "do", "else", "false", "for", "fun", "if", "in", "interface", "is",
     "null", "object", "package", "return", "super", "this", "throw", "true", "try", "typealias", "typeof",
@@ -672,12 +680,18 @@ function normalizeShapeTreeNode(raw = {}, index = 0) {
     x.growthAnimates = Array.isArray(x.growthAnimates) ? x.growthAnimates.map((it) => normalizeAnimate(it)) : [];
     x.effectClass = String(x.effectClass || DEFAULT_EFFECT_CLASS);
     x.useTexture = x.useTexture !== false;
-    x.particleInit = Array.isArray(x.particleInit) ? x.particleInit.map((it) => ({
-        id: it?.id || uid(),
-        target: String(it?.target || "size"),
-        expr: String(it?.expr || ""),
-        exprPreset: String(it?.exprPreset || "")
-    })) : [];
+    x.particleInit = Array.isArray(x.particleInit) ? x.particleInit.map((it) => {
+        const exprPreset = String(it?.exprPreset || "");
+        const codegenExprPreset = String(it?.codegenExprPreset || "");
+        return {
+            id: it?.id || uid(),
+            target: String(it?.target || "size"),
+            expr: String(it?.expr || exprPreset || ""),
+            exprPreset,
+            codegenExpr: String(it?.codegenExpr || codegenExprPreset || ""),
+            codegenExprPreset
+        };
+    }) : [];
     x.controllerVars = Array.isArray(x.controllerVars) ? x.controllerVars.map((it) => ({
         id: it?.id || uid(),
         name: String(it?.name || "tick"),
@@ -713,12 +727,15 @@ function normalizeCard(card, index = 0) {
     x.controllerVars = Array.isArray(x.controllerVars) ? x.controllerVars : [];
     x.particleInit = x.particleInit.map((it) => {
         const preset = String(it?.exprPreset || "");
+        const codegenPreset = String(it?.codegenExprPreset || "");
         const expr = String(it?.expr || preset || "");
         return {
             id: it?.id || uid(),
             target: String(it?.target || "size"),
             expr,
-            exprPreset: preset
+            exprPreset: preset,
+            codegenExpr: String(it?.codegenExpr || codegenPreset || ""),
+            codegenExprPreset: codegenPreset
         };
     });
     x.controllerVars = x.controllerVars.map((it) => ({ id: it.id || uid(), name: String(it.name || "tick"), type: String(it.type || "Boolean"), expr: String(it.expr || "true") }));
@@ -834,6 +851,8 @@ function normalizeStateShape(state) {
     if (!Array.isArray(next.cards)) next.cards = [];
 
     next.projectName = String(next.projectName || "NewComposition");
+    next.packageName = normalizeKotlinPackageName(next.packageName, "cn.coostack.compositions");
+    next.enableRemoveStatusOverride = next.enableRemoveStatusOverride === true;
     next.compositionType = next.compositionType === "sequenced" ? "sequenced" : "particle";
     next.previewPlayTicks = Math.max(1, int(next.previewPlayTicks || 70));
     next.disabledInterval = Math.max(0, int(next.disabledInterval || 0));
@@ -854,7 +873,8 @@ function normalizeStateShape(state) {
     next.settings.realtimeCode = next.settings.realtimeCode !== false;
     next.settings.previewFocusSingleCard = next.settings.previewFocusSingleCard !== false;
     next.settings.leftPanelWidth = clamp(num(next.settings.leftPanelWidth || 586), 400, 1200);
-    next.settings.projectSectionHeight = clamp(num(next.settings.projectSectionHeight || 42), 20, 70);    next.projectScale = normalizeScaleHelperConfig(next.projectScale, { type: "none" });
+    next.settings.projectSectionHeight = clamp(num(next.settings.projectSectionHeight || 42), 20, 70);
+    next.projectScale = normalizeScaleHelperConfig(next.projectScale, { type: "none" });
 
     next.globalVars = next.globalVars.map((v) => normalizeGlobalVar(v));
     next.globalConsts = next.globalConsts.map((v) => normalizeGlobalConst(v));
@@ -901,6 +921,8 @@ function normalizeStateShape(state) {
 function createDefaultState() {
     return normalizeStateShape({
         projectName: "NewComposition",
+        packageName: "cn.coostack.compositions",
+        enableRemoveStatusOverride: false,
         compositionType: "particle",
         previewPlayTicks: 70,
         disabledInterval: 0,
@@ -2168,6 +2190,15 @@ class CompositionBuilderApp {
             this.state.projectName = String(target.value || "");
             return;
         }
+        if (field === "packageName") {
+            this.state.packageName = normalizeKotlinPackageName(target.value, "cn.coostack.compositions");
+            if (target && document.activeElement !== target) target.value = this.state.packageName;
+            return;
+        }
+        if (field === "enableRemoveStatusOverride") {
+            this.state.enableRemoveStatusOverride = target?.checked === true;
+            return;
+        }
         if (field === "compositionType") {
             this.state.compositionType = target.value === "sequenced" ? "sequenced" : "particle";
             return;
@@ -2920,7 +2951,7 @@ class CompositionBuilderApp {
                     const node = treePath ? this.getShapeNodeByPath(card, treePath) : null;
                     if (node) {
                         if (!Array.isArray(node.particleInit)) node.particleInit = [];
-                        node.particleInit.push({ id: uid(), target: "size", expr: "", exprPreset: "" });
+                        node.particleInit.push({ id: uid(), target: "size", expr: "", exprPreset: "", codegenExpr: "", codegenExprPreset: "" });
                     }
                     break;
                 }
@@ -3108,7 +3139,7 @@ class CompositionBuilderApp {
                     const node = this.getCurrentViewNode(card);
                     if (node) {
                         if (!Array.isArray(node.particleInit)) node.particleInit = [];
-                        node.particleInit.push({ id: uid(), target: "size", expr: "", exprPreset: "" });
+                        node.particleInit.push({ id: uid(), target: "size", expr: "", exprPreset: "", codegenExpr: "", codegenExprPreset: "" });
                     }
                     break;
                 }
@@ -3396,9 +3427,9 @@ class CompositionBuilderApp {
             if (!node || !Array.isArray(node.particleInit)) return;
             const item = node.particleInit[int(t.dataset.treeNodePinitIdx)];
             if (!item) return;
-            const field = t.dataset.treeNodePinitField;
+            const field = String(t.dataset.treeNodePinitField || "");
             if (field === "target") {
-                item.target = t.value;
+                item.target = String(t.value || "size");
                 item.expr = "";
                 item.exprPreset = "";
                 this.afterStructureMutate({ rerenderCards: true, rebuildPreview: true, rerenderProject: false });
@@ -3413,6 +3444,16 @@ class CompositionBuilderApp {
                 item.exprPreset = this.resolveParticleInitPresetExpr(item.expr, item.target);
                 this.syncTreeNodeParticleInitInlineInputs(card.id, treePathRaw, t.dataset.treeNodePinitIdx, item);
                 this.afterValueMutate({ rebuildPreview: true });
+            } else if (field === "codegenExprPreset") {
+                const prevPreset = String(item.codegenExprPreset || "").trim();
+                item.codegenExprPreset = String(t.value || "");
+                if (item.codegenExprPreset) item.codegenExpr = item.codegenExprPreset;
+                else if (prevPreset && !String(item.codegenExpr || "").trim()) item.codegenExpr = "";
+                this.afterValueMutate({ rebuildPreview: false, rerenderCards: true });
+            } else if (field === "codegenExpr") {
+                item.codegenExpr = String(t.value || "");
+                item.codegenExprPreset = this.resolveParticleInitCodegenPresetExpr(item.codegenExpr, item.target);
+                this.afterValueMutate({ rebuildPreview: false });
             }
             return;
         }
@@ -3495,6 +3536,20 @@ class CompositionBuilderApp {
                 this.afterValueMutate({ rebuildPreview: true });
                 return;
             }
+            if (field === "codegenExprPreset") {
+                const prevPreset = String(item.codegenExprPreset || "").trim();
+                item.codegenExprPreset = String(t.value || "");
+                if (item.codegenExprPreset) item.codegenExpr = item.codegenExprPreset;
+                else if (prevPreset && !String(item.codegenExpr || "").trim()) item.codegenExpr = "";
+                this.afterValueMutate({ rebuildPreview: false, rerenderCards: true });
+                return;
+            }
+            if (field === "codegenExpr") {
+                item.codegenExpr = String(t.value || "");
+                item.codegenExprPreset = this.resolveParticleInitCodegenPresetExpr(item.codegenExpr, item.target);
+                this.afterValueMutate({ rebuildPreview: false });
+                return;
+            }
             this.applyObjectField(item, field, t);
             this.afterValueMutate({ rebuildPreview: true });
             return;
@@ -3561,6 +3616,20 @@ class CompositionBuilderApp {
                 item.expr = String(t.value || "");
                 item.exprPreset = this.resolveParticleInitPresetExpr(item.expr, item.target);
                 this.afterValueMutate({ rebuildPreview: true });
+                return;
+            }
+            if (field === "codegenExprPreset") {
+                const prevPreset = String(item.codegenExprPreset || "").trim();
+                item.codegenExprPreset = String(t.value || "");
+                if (item.codegenExprPreset) item.codegenExpr = item.codegenExprPreset;
+                else if (prevPreset && !String(item.codegenExpr || "").trim()) item.codegenExpr = "";
+                this.afterValueMutate({ rebuildPreview: false, rerenderCards: true });
+                return;
+            }
+            if (field === "codegenExpr") {
+                item.codegenExpr = String(t.value || "");
+                item.codegenExprPreset = this.resolveParticleInitCodegenPresetExpr(item.codegenExpr, item.target);
+                this.afterValueMutate({ rebuildPreview: false });
                 return;
             }
             this.applyObjectField(item, field, t);
@@ -4056,7 +4125,9 @@ class CompositionBuilderApp {
             id: uid(),
             target,
             expr: this.getParticleInitDefaultExprByTarget(target),
-            exprPreset: ""
+            exprPreset: "",
+            codegenExpr: "",
+            codegenExprPreset: ""
         });
     }
 
@@ -4756,12 +4827,20 @@ class CompositionBuilderApp {
                         </select>
                     </label>
                     <label class="field">
+                        <span>包名</span>
+                        <input class="input" data-pf="packageName" value="${esc(s.packageName || "cn.coostack.compositions")}" placeholder="cn.coostack.compositions"/>
+                    </label>
+                    <label class="field">
                         <span>消散延迟 (tick)</span>
                         <input class="input" type="number" min="0" step="1" data-pf="disabledInterval" value="${esc(String(s.disabledInterval))}"/>
                     </label>
                     <label class="field">
                         <span>播放时长 (tick, 不含消散)</span>
                         <input class="input" type="number" min="1" step="1" data-pf="previewPlayTicks" value="${esc(String(s.previewPlayTicks || 70))}"/>
+                    </label>
+                    <label class="field">
+                        <span>是否开启移除状态设置</span>
+                        <span class="chk"><input type="checkbox" data-pf="enableRemoveStatusOverride" ${s.enableRemoveStatusOverride === true ? "checked" : ""}/>开启</span>
                     </label>
                 </div>
                 <div class="subgroup">
@@ -5291,12 +5370,20 @@ class CompositionBuilderApp {
         const list = Array.isArray(node?.particleInit) ? node.particleInit : [];
         return list.map((it, pIdx) => {
             const targetOptions = this.getParticleInitTargetOptionsHtml(it.target);
-            const presetSelected = String(it.exprPreset || "").trim() || this.resolveParticleInitPresetExpr(it.expr || "", it.target);
-            const valuePresetOptions = this.getParticleInitValuePresetOptionsHtml(presetSelected, it.target);
+            const codegenOnly = this.isParticleInitCodegenOnlyTarget(it.target);
+            const presetSelected = codegenOnly
+                ? (String(it.codegenExprPreset || "").trim() || this.resolveParticleInitCodegenPresetExpr(it.codegenExpr || "", it.target))
+                : (String(it.exprPreset || "").trim() || this.resolveParticleInitPresetExpr(it.expr || "", it.target));
+            const valuePresetOptions = codegenOnly
+                ? this.getParticleInitCodegenValuePresetOptionsHtml(presetSelected, it.target)
+                : this.getParticleInitValuePresetOptionsHtml(presetSelected, it.target);
             const manualVisible = !presetSelected;
-            const manualPlaceholder = this.getParticleInitDefaultExprByTarget(it.target);
-            const isVectorTarget = this.isParticleInitVectorTarget(it.target);
-            const parsedVector = this.exprRuntime.parseVecLikeValue(it.expr || manualPlaceholder);
+            const manualPlaceholder = codegenOnly
+                ? this.getParticleInitCodegenDefaultExprByTarget(it.target)
+                : this.getParticleInitDefaultExprByTarget(it.target);
+            const manualValue = codegenOnly ? String(it.codegenExpr || "") : String(it.expr || "");
+            const isVectorTarget = !codegenOnly && this.isParticleInitVectorTarget(it.target);
+            const parsedVector = this.exprRuntime.parseVecLikeValue((!codegenOnly ? it.expr : "") || manualPlaceholder);
             const colorHex = vectorToHex01(parsedVector.x, parsedVector.y, parsedVector.z);
             const valueClass = [
                 "pinit-value",
@@ -5306,12 +5393,15 @@ class CompositionBuilderApp {
             const colorPicker = (manualVisible && isVectorTarget)
                 ? `<input class="input vector-color pinit-color" type="color" data-card-id="${cardId}" data-tree-path="${tp}" data-tree-node-pinit-color-idx="${pIdx}" value="${esc(colorHex)}" title="打开调色板"/>`
                 : "";
+            const fieldPrefix = "data-tree-node-pinit-field";
+            const codegenNote = codegenOnly ? '<div class="mini-note">仅代码生成，不影响预览</div>' : "";
             return `
                 <div class="kv-row grid-pinit">
                     <select class="input" data-card-id="${cardId}" data-tree-path="${tp}" data-tree-node-pinit-idx="${pIdx}" data-tree-node-pinit-field="target">${targetOptions}</select>
                     <div class="${valueClass}">
-                        <select class="input expr-input" data-card-id="${cardId}" data-tree-path="${tp}" data-tree-node-pinit-idx="${pIdx}" data-tree-node-pinit-field="exprPreset">${valuePresetOptions}</select>
-                        <input class="input expr-input mono ${manualVisible ? "" : "pinit-manual-hidden"}" data-card-id="${cardId}" data-tree-path="${tp}" data-tree-node-pinit-idx="${pIdx}" data-tree-node-pinit-field="expr" value="${esc(it.expr || "")}" placeholder="${esc(manualPlaceholder)}"/>
+                        ${codegenNote}
+                        <select class="input expr-input" data-card-id="${cardId}" data-tree-path="${tp}" data-tree-node-pinit-idx="${pIdx}" ${fieldPrefix}="${codegenOnly ? "codegenExprPreset" : "exprPreset"}">${valuePresetOptions}</select>
+                        <input class="input expr-input mono ${manualVisible ? "" : "pinit-manual-hidden"}" data-card-id="${cardId}" data-tree-path="${tp}" data-tree-node-pinit-idx="${pIdx}" ${fieldPrefix}="${codegenOnly ? "codegenExpr" : "expr"}" value="${esc(manualValue)}" placeholder="${esc(manualPlaceholder)}"/>
                         ${colorPicker}
                     </div>
                     <button class="btn small" data-act="remove-tree-node-pinit" data-card-id="${cardId}" data-tree-path="${tp}" data-idx="${pIdx}">删除</button>
@@ -5893,12 +5983,20 @@ class CompositionBuilderApp {
         const list = Array.isArray(card?.particleInit) ? card.particleInit : [];
         return list.map((it, pIdx) => {
             const targetOptions = this.getParticleInitTargetOptionsHtml(it.target);
-            const presetSelected = String(it.exprPreset || "").trim() || this.resolveParticleInitPresetExpr(it.expr || "", it.target);
-            const valuePresetOptions = this.getParticleInitValuePresetOptionsHtml(presetSelected, it.target);
+            const codegenOnly = this.isParticleInitCodegenOnlyTarget(it.target);
+            const presetSelected = codegenOnly
+                ? (String(it.codegenExprPreset || "").trim() || this.resolveParticleInitCodegenPresetExpr(it.codegenExpr || "", it.target))
+                : (String(it.exprPreset || "").trim() || this.resolveParticleInitPresetExpr(it.expr || "", it.target));
+            const valuePresetOptions = codegenOnly
+                ? this.getParticleInitCodegenValuePresetOptionsHtml(presetSelected, it.target)
+                : this.getParticleInitValuePresetOptionsHtml(presetSelected, it.target);
             const manualVisible = !presetSelected;
-            const manualPlaceholder = this.getParticleInitDefaultExprByTarget(it.target);
-            const isVectorTarget = this.isParticleInitVectorTarget(it.target);
-            const parsedVector = this.exprRuntime.parseVecLikeValue(it.expr || manualPlaceholder);
+            const manualPlaceholder = codegenOnly
+                ? this.getParticleInitCodegenDefaultExprByTarget(it.target)
+                : this.getParticleInitDefaultExprByTarget(it.target);
+            const manualValue = codegenOnly ? String(it.codegenExpr || "") : String(it.expr || "");
+            const isVectorTarget = !codegenOnly && this.isParticleInitVectorTarget(it.target);
+            const parsedVector = this.exprRuntime.parseVecLikeValue((!codegenOnly ? it.expr : "") || manualPlaceholder);
             const colorHex = vectorToHex01(parsedVector.x, parsedVector.y, parsedVector.z);
             const valueClass = [
                 "pinit-value",
@@ -5908,12 +6006,14 @@ class CompositionBuilderApp {
             const colorPicker = (manualVisible && isVectorTarget)
                 ? `<input class="input vector-color pinit-color" type="color" data-card-id="${card.id}" data-pinit-color-idx="${pIdx}" value="${esc(colorHex)}" title="打开调色板"/>`
                 : "";
+            const codegenNote = codegenOnly ? '<div class="mini-note">仅代码生成，不影响预览</div>' : "";
             return `
                 <div class="kv-row grid-pinit">
                     <select class="input" data-card-id="${card.id}" data-pinit-idx="${pIdx}" data-pinit-field="target">${targetOptions}</select>
                     <div class="${valueClass}">
-                        <select class="input expr-input" data-card-id="${card.id}" data-pinit-idx="${pIdx}" data-pinit-field="exprPreset">${valuePresetOptions}</select>
-                        <input class="input expr-input mono ${manualVisible ? "" : "pinit-manual-hidden"}" data-card-id="${card.id}" data-pinit-idx="${pIdx}" data-pinit-field="expr" value="${esc(it.expr || "")}" placeholder="${esc(manualPlaceholder)}"/>
+                        ${codegenNote}
+                        <select class="input expr-input" data-card-id="${card.id}" data-pinit-idx="${pIdx}" data-pinit-field="${codegenOnly ? "codegenExprPreset" : "exprPreset"}">${valuePresetOptions}</select>
+                        <input class="input expr-input mono ${manualVisible ? "" : "pinit-manual-hidden"}" data-card-id="${card.id}" data-pinit-idx="${pIdx}" data-pinit-field="${codegenOnly ? "codegenExpr" : "expr"}" value="${esc(manualValue)}" placeholder="${esc(manualPlaceholder)}"/>
                         ${colorPicker}
                     </div>
                     <button class="btn small" data-act="remove-pinit" data-card-id="${card.id}" data-idx="${pIdx}">删除</button>

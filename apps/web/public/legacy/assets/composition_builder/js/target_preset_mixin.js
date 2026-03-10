@@ -75,7 +75,7 @@ export function installTargetPresetMethods(CompositionBuilderApp, deps = {}) {
         if (target === "size" || target === "particleSize") return `${target} (粒子大小)`;
         if (target === "particleAlpha" || target === "alpha") return `${target} (透明度)`;
         if (target === "currentAge" || target === "age") return `${target} (年龄)`;
-        if (target === "textureSheet") return "textureSheet (贴图序号)";
+        if (target === "textureSheet") return "textureSheet (代码生成, 不影响预览)";
         if (target === "color" || target === "particleColor") return `${target} (颜色 Vector3f)`;
         return target;
     }
@@ -83,6 +83,29 @@ export function installTargetPresetMethods(CompositionBuilderApp, deps = {}) {
     isParticleInitVectorTarget(targetRaw = "") {
         const target = String(targetRaw || "").trim().toLowerCase();
         return target === "color" || target === "particlecolor" || target === "particle.particlecolor";
+    }
+
+    isParticleInitCodegenOnlyTarget(targetRaw = "") {
+        const target = String(targetRaw || "").trim().toLowerCase();
+        return target === "texturesheet";
+    }
+
+    getParticleInitTextureSheetCodegenOptions() {
+        return [
+            "ParticleRenderType.TERRAIN_SHEET",
+            "ParticleRenderType.PARTICLE_SHEET_OPAQUE",
+            "ParticleRenderType.PARTICLE_SHEET_TRANSLUCENT",
+            "ParticleRenderType.PARTICLE_SHEET_LIT",
+            "ParticleRenderType.CUSTOM",
+            "ParticleRenderType.NO_RENDER",
+            "CooParticleTextureSheet.ADDITION_BLEND",
+            "CooParticleTextureSheet.ADDITION_BLEND_TRANSLUCENT"
+        ];
+    }
+
+    getParticleInitCodegenDefaultExprByTarget(targetRaw = "") {
+        if (this.isParticleInitCodegenOnlyTarget(targetRaw)) return "ParticleRenderType.PARTICLE_SHEET_TRANSLUCENT";
+        return this.getParticleInitDefaultExprByTarget(targetRaw);
     }
 
     getParticleInitDefaultExprByTarget(targetRaw = "") {
@@ -140,6 +163,27 @@ export function installTargetPresetMethods(CompositionBuilderApp, deps = {}) {
             return `<option value="${esc(val)}" ${active ? "selected" : ""}>${esc(it.label)}</option>`;
         }).join("");
     }
+
+    getParticleInitCodegenValuePresetOptionsHtml(selectedExpr = "", targetRaw = "") {
+        const selected = String(selectedExpr || "").trim();
+        if (!this.isParticleInitCodegenOnlyTarget(targetRaw)) {
+            return this.getParticleInitValuePresetOptionsHtml(selected, targetRaw);
+        }
+        const rows = [{ value: "", label: "手动输入字符串" }];
+        for (const value of this.getParticleInitTextureSheetCodegenOptions()) {
+            rows.push({ value, label: value });
+        }
+        const used = new Set(rows.map((it) => String(it.value || "")));
+        if (selected && !used.has(selected)) {
+            rows.unshift({ value: selected, label: `${selected}（当前值）` });
+        }
+        return rows.map((it) => {
+            const val = String(it.value || "");
+            const active = selected ? (val === selected) : (!val);
+            return `<option value="${esc(val)}" ${active ? "selected" : ""}>${esc(it.label)}</option>`;
+        }).join("");
+    }
+
     resolveParticleInitPresetExpr(exprRaw = "", targetRaw = "") {
         const expr = String(exprRaw || "").trim();
         if (!expr) return "";
@@ -177,6 +221,15 @@ export function installTargetPresetMethods(CompositionBuilderApp, deps = {}) {
             if (expr === name) return expr;
         }
         return "";
+    }
+
+    resolveParticleInitCodegenPresetExpr(exprRaw = "", targetRaw = "") {
+        const expr = String(exprRaw || "").trim();
+        if (!expr) return "";
+        if (!this.isParticleInitCodegenOnlyTarget(targetRaw)) {
+            return this.resolveParticleInitPresetExpr(expr, targetRaw);
+        }
+        return this.getParticleInitTextureSheetCodegenOptions().includes(expr) ? expr : "";
     }
 
     }
