@@ -64,7 +64,7 @@ export function installKotlinCodegenMethods(CompositionBuilderApp, deps = {}) {
             imports.push("import net.minecraft.client.particle.ParticleRenderType");
         }
         if (this.stateUsesTextureSheetCooTextureSheet()) {
-            imports.push("import cn.coostack.cooparticlesapi.particles.impl.CooParticleTextureSheet");
+            imports.push("import cn.coostack.cooparticlesapi.particles.CooParticleTextureSheet");
         }
         const importList = Array.from(new Set(imports));
 
