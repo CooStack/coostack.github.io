@@ -211,6 +211,51 @@ export const COMMAND_META = {
         },
     },
 
+    ParticleToroidalCirculationCommand: {
+        title: "ToroidalCirculation 环面回流",
+        desc: "在一圈局部区域里制造翻卷回流，适合蘑菇云帽檐/烟团边缘。",
+        notice: "它修改粒子速度，不修改 billboard 朝向；适合做帽檐翻卷、向内回卷和缓慢抬升。",
+        fields: [
+            { k: "centerMode", t: "select", def: "const", opts: [["const", "常量 Vec3"], ["expr", "Kotlin 表达式"]] },
+            { k: "centerX", t: "number", step: 0.01, def: 0.0 },
+            { k: "centerY", t: "number", step: 0.01, def: 0.0 },
+            { k: "centerZ", t: "number", step: 0.01, def: 0.0 },
+            { k: "centerExpr", t: "text", def: "this.pos" },
+            { k: "axisX", t: "number", step: 0.01, def: 0.0 },
+            { k: "axisY", t: "number", step: 0.01, def: 1.0 },
+            { k: "axisZ", t: "number", step: 0.01, def: 0.0 },
+            { k: "ringRadius", t: "number", step: 0.01, def: 3.0 },
+            { k: "radialThickness", t: "number", step: 0.01, def: 1.2 },
+            { k: "axialThickness", t: "number", step: 0.01, def: 0.8 },
+            { k: "circulationStrength", t: "number", step: 0.01, def: 0.35 },
+            { k: "outwardStrength", t: "number", step: 0.01, def: 0.0 },
+            { k: "upwardStrength", t: "number", step: 0.01, def: 0.0 },
+            { k: "followStrength", t: "number", step: 0.01, def: 0.12 },
+            { k: "maxStep", t: "number", step: 0.01, def: 0.6 },
+            { k: "useLifeCurve", t: "bool", def: false },
+        ],
+        toKotlin: (c) => {
+            const p = c.params;
+            const centerLine = (p.centerMode === "expr")
+                ? `.center${makeVecSupplierLine("expr", p.centerExpr, 0, 0, 0, "this.pos")}`
+                : `.center${makeVecSupplierLine("const", "", p.centerX, p.centerY, p.centerZ, "this.pos")}`;
+            return chain([
+                `ParticleToroidalCirculationCommand()`,
+                centerLine,
+                `.axis(${kVec3(p.axisX, p.axisY, p.axisZ)})`,
+                `.ringRadius(${fmtD(p.ringRadius)})`,
+                `.radialThickness(${fmtD(p.radialThickness)})`,
+                `.axialThickness(${fmtD(p.axialThickness)})`,
+                `.circulationStrength(${fmtD(p.circulationStrength)})`,
+                `.outwardStrength(${fmtD(p.outwardStrength)})`,
+                `.upwardStrength(${fmtD(p.upwardStrength)})`,
+                `.followStrength(${fmtD(p.followStrength)})`,
+                `.maxStep(${fmtD(p.maxStep)})`,
+                `.useLifeCurve(${fmtB(p.useLifeCurve)})`,
+            ]);
+        },
+    },
+
     ParticleRotationForceCommand: {
         title: "RotationForce 切向旋转力",
         fields: [
@@ -387,6 +432,18 @@ const COMMAND_TIPS = {
     ParticleNoiseCommand: { strength: "噪声强度", frequency: "空间频率", speed: "时间滚动速度", affectY: "Y 轴影响", clampSpeed: "限速", useLifeCurve: "是否生命周期调制" },
     ParticleDragCommand: { damping: "阻尼强度", minSpeed: "最小速度阈值", linear: "额外线性阻力" },
     ParticleFlowFieldCommand: { amplitude: "振幅", frequency: "空间频率", timeScale: "时间缩放", phaseOffset: "相位偏移", worldOffsetX: "世界偏移X", worldOffsetY: "世界偏移Y", worldOffsetZ: "世界偏移Z" },
+    ParticleToroidalCirculationCommand: {
+        centerExpr: "环流中心表达式；做蘑菇云时一般填帽子中心。",
+        ringRadius: "翻卷带主半径，也就是帽檐离中心的距离。",
+        radialThickness: "环面径向厚度，决定翻卷带的宽度。",
+        axialThickness: "环面轴向厚度，决定翻卷带上下厚度。",
+        circulationStrength: "翻卷力度，负数表示反向翻卷。",
+        outwardStrength: "向外撑开的附加力度。",
+        upwardStrength: "沿主轴向上抬升的附加力度。",
+        followStrength: "往翻卷带中心回拉的力度，太小容易散开。",
+        maxStep: "单 tick 最大速度修正量；<=0 表示不限制。",
+        useLifeCurve: "按生命周期逐渐减弱。",
+    },
     ParticleGravityCommand: { emitterRef: "ClassParticleEmitters 引用名" },
     ParticleInheritVelocityCommand: {
         sourceExpr: "默认建议：emitter.emitterVelocity；可改成自定义 source 表达式",

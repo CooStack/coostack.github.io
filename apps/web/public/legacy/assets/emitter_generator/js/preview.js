@@ -1479,6 +1479,11 @@ export function initPreview(ctx = {}) {
         return p.normalize();
     }
 
+    function smooth01(t) {
+        const clamped = clamp(Number(t) || 0, 0, 1);
+        return clamped * clamped * (3.0 - 2.0 * clamped);
+    }
+
     function hashString32(raw) {
         const s = String(raw ?? "");
         let h = 2166136261 >>> 0;
@@ -1808,6 +1813,88 @@ export function initPreview(ctx = {}) {
                     .add(tang.multiplyScalar(swirlStrength * falloff))
                     .add(inward.multiplyScalar(radialPull * falloff))
                     .add(axis.clone().multiplyScalar(axialLift * falloff));
+
+                particle.vel.add(dv);
+                break;
+            }
+
+            case "ParticleToroidalCirculationCommand": {
+                const cx = num(p.centerX, 0), cy = num(p.centerY, 0), cz = num(p.centerZ, 0);
+
+                const ax0 = num(p.axisX, 0), ay0 = num(p.axisY, 1), az0 = num(p.axisZ, 0);
+                const axis = new THREE.Vector3(ax0, ay0, az0);
+                const axisLen = axis.length();
+                if (axisLen < 1e-9) axis.set(0, 1, 0);
+                else axis.multiplyScalar(1.0 / axisLen);
+
+                const ringRadius = num(p.ringRadius, 3.0);
+                const radialThickness = Math.max(1e-6, num(p.radialThickness, 1.2, null, { min: 1e-6 }));
+                const axialThickness = Math.max(1e-6, num(p.axialThickness, 0.8, null, { min: 1e-6 }));
+                const circulationStrength = num(p.circulationStrength, 0.35);
+                const outwardStrength = num(p.outwardStrength, 0.0);
+                const upwardStrength = num(p.upwardStrength, 0.0);
+                const followStrength = num(p.followStrength, 0.12);
+                const maxStep = num(p.maxStep, 0.6);
+                const useLifeCurve = !!p.useLifeCurve;
+
+                const fallbackCenter = new THREE.Vector3(cx, cy, cz);
+                const center = (String(p.centerMode || "const") === "expr")
+                    ? (parseSourceVecExpr(p.centerExpr, (v, def) => num(v, def)) || fallbackCenter)
+                    : fallbackCenter;
+                const rel = particle.pos.clone().sub(center);
+
+                const axialDistance = rel.dot(axis);
+                const planar = rel.clone().sub(axis.clone().multiplyScalar(axialDistance));
+                const planarLen = planar.length();
+                const radialDir = (planarLen < 1e-9)
+                    ? anyPerpToAxis(axis)
+                    : planar.clone().multiplyScalar(1.0 / planarLen);
+
+                const qr = planarLen - ringRadius;
+                const qh = axialDistance;
+                const normalizedDistance = Math.sqrt(
+                    (qr * qr) / (radialThickness * radialThickness)
+                    + (qh * qh) / (axialThickness * axialThickness)
+                );
+                if (normalizedDistance >= 1.0) break;
+
+                const bandWeight = smooth01(1.0 - normalizedDistance);
+                const lifeMul = (useLifeCurve && particle.life > 0)
+                    ? clamp(1.0 - (particle.age / particle.life), 0.0, 1.0)
+                    : 1.0;
+                const weight = bandWeight * lifeMul;
+                if (weight <= 1e-9) break;
+
+                const circulationVector = radialDir.clone().multiplyScalar(-qh / axialThickness)
+                    .add(axis.clone().multiplyScalar(qr / radialThickness));
+                const circulationDir = (circulationVector.lengthSq() > 1e-12)
+                    ? circulationVector.normalize()
+                    : new THREE.Vector3(0, 0, 0);
+
+                const toBandCenter = radialDir.clone().multiplyScalar(-qr)
+                    .add(axis.clone().multiplyScalar(-qh));
+                const followDir = (toBandCenter.lengthSq() > 1e-12)
+                    ? toBandCenter.normalize()
+                    : new THREE.Vector3(0, 0, 0);
+
+                const dv = new THREE.Vector3(0, 0, 0);
+                if (circulationDir.lengthSq() > 1e-12) {
+                    dv.add(circulationDir.multiplyScalar(circulationStrength * weight));
+                }
+                if (outwardStrength !== 0.0) {
+                    dv.add(radialDir.clone().multiplyScalar(outwardStrength * weight));
+                }
+                if (upwardStrength !== 0.0) {
+                    dv.add(axis.clone().multiplyScalar(upwardStrength * weight));
+                }
+                if (followStrength !== 0.0 && followDir.lengthSq() > 1e-12) {
+                    dv.add(followDir.multiplyScalar(followStrength * weight));
+                }
+
+                const dvLen = dv.length();
+                if (maxStep > 0.0 && dvLen > maxStep && dvLen > 1e-9) {
+                    dv.multiplyScalar(maxStep / dvLen);
+                }
 
                 particle.vel.add(dv);
                 break;
