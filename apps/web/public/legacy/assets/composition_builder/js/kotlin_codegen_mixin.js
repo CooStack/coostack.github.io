@@ -214,6 +214,8 @@ export function installKotlinCodegenMethods(CompositionBuilderApp, deps = {}) {
 
     resolveAngleOffsetConfig(raw, className) {
         if (!raw || raw.angleOffsetEnabled !== true) return null;
+        const rawType = String(raw.type || raw.dataType || "").trim();
+        if (rawType === "single") return null;
         const count = Math.max(1, int(raw.angleOffsetCount || 1));
         if (count <= 1) return null;
         const glowTick = Math.max(1, int(raw.angleOffsetGlowTick || 20));
