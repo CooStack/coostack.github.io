@@ -213,8 +213,8 @@ export const COMMAND_META = {
 
     ParticleToroidalCirculationCommand: {
         title: "ToroidalCirculation 环面回流",
-        desc: "在一圈局部区域里制造翻卷回流，适合蘑菇云帽檐/烟团边缘。",
-        notice: "它修改粒子速度，不修改 billboard 朝向；适合做帽檐翻卷、向内回卷和缓慢抬升。",
+        desc: "在一圈局部区域里制造翻卷回流，优先扭转当前速度方向，适合蘑菇云帽檐/烟团边缘。",
+        notice: "它修改粒子速度，不修改 billboard 朝向；翻卷会跟当前速度一起变化，所以减速后卷动也会自然变慢。",
         fields: [
             { k: "centerMode", t: "select", def: "const", opts: [["const", "常量 Vec3"], ["expr", "Kotlin 表达式"]] },
             { k: "centerX", t: "number", step: 0.01, def: 0.0 },
@@ -437,10 +437,10 @@ const COMMAND_TIPS = {
         ringRadius: "翻卷带主半径，也就是帽檐离中心的距离。",
         radialThickness: "环面径向厚度，决定翻卷带的宽度。",
         axialThickness: "环面轴向厚度，决定翻卷带上下厚度。",
-        circulationStrength: "翻卷力度，负数表示反向翻卷。",
-        outwardStrength: "向外撑开的附加力度。",
-        upwardStrength: "沿主轴向上抬升的附加力度。",
-        followStrength: "往翻卷带中心回拉的力度，太小容易散开。",
+        circulationStrength: "翻卷转向力度，负数表示反向翻卷。",
+        outwardStrength: "向外撑开的附加偏转；仅在翻卷带内生效。",
+        upwardStrength: "沿主轴向上抬升的附加偏转；仅在翻卷带内生效。",
+        followStrength: "带外回带/导向力度；更像把速度导回卷动区，而不是持续硬拉。",
         maxStep: "单 tick 最大速度修正量；<=0 表示不限制。",
         useLifeCurve: "按生命周期逐渐减弱。",
     },

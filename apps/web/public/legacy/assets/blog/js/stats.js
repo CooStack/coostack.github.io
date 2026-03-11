@@ -16,6 +16,7 @@
   }
 
   async function refreshOnce() {
+
     const avatarEl = $("#avatarImg");
     if (!avatarEl) return;
 

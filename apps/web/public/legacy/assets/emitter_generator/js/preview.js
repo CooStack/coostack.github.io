@@ -1166,9 +1166,19 @@ export function initPreview(ctx = {}) {
         }
     }
 
+    function getEmitterCommandOrigin(card) {
+        const e = (card && card.emitter) ? card.emitter : {};
+        return new THREE.Vector3(
+            evalNumberExpr(e.offset?.x, 0),
+            evalNumberExpr(e.offset?.y, 0),
+            evalNumberExpr(e.offset?.z, 0)
+        );
+    }
+
     function makeParticle(card, spawnCtx = null) {
         const pp = (card && card.particle) ? card.particle : {};
-        const pos = sampleEmitterPosition(card, spawnCtx);
+        const emitterPos = getEmitterCommandOrigin(card);
+        const pos = sampleEmitterPosition(card, spawnCtx, emitterPos);
         const vars = sim.behaviorRuntime.vars || {};
         const tick = Number(sim.behaviorRuntime.tick) || 0;
         const num = (v, def = 0, min = null, max = null) => evalNumberFast(v, def, 0, 0, 0, 0, tick, vars, false, min, max);
@@ -1210,6 +1220,7 @@ export function initPreview(ctx = {}) {
         return {
             pos,
             prevPos: pos.clone(),
+            emitterPos: emitterPos.clone(),
             vel: vdir,
             age: 0,
             life,
@@ -1237,15 +1248,13 @@ export function initPreview(ctx = {}) {
         return vec.applyQuaternion(q);
     }
 
-    function sampleEmitterPosition(card, spawnCtx = null) {
+    function sampleEmitterPosition(card, spawnCtx = null, emitterPos = null) {
         const e = (card && card.emitter) ? card.emitter : {};
         const pp = (card && card.particle) ? card.particle : {};
         const t = e.type || "point";
-        const off = new THREE.Vector3(
-            evalNumberExpr(e.offset?.x, 0),
-            evalNumberExpr(e.offset?.y, 0),
-            evalNumberExpr(e.offset?.z, 0)
-        );
+        const off = (emitterPos && emitterPos.isVector3)
+            ? emitterPos.clone()
+            : getEmitterCommandOrigin(card);
         if (t === "points_builder") {
             const source = Array.isArray(spawnCtx?.builderPoints)
                 ? spawnCtx.builderPoints
@@ -1520,26 +1529,88 @@ export function initPreview(ctx = {}) {
         return vec.applyEuler(euler);
     }
 
-    function parseSourceVecExpr(raw, evalNumber) {
+    function splitTopLevelArgs(text) {
+        const parts = [];
+        let depth = 0;
+        let start = 0;
+        for (let i = 0; i < text.length; i++) {
+            const ch = text[i];
+            if (ch === "(") depth += 1;
+            else if (ch === ")") depth = Math.max(0, depth - 1);
+            else if (ch === "," && depth === 0) {
+                parts.push(text.slice(start, i).trim());
+                start = i + 1;
+            }
+        }
+        const tail = text.slice(start).trim();
+        if (tail) parts.push(tail);
+        return parts;
+    }
+
+    function parseSourceVecExpr(raw, evalNumber, context = null) {
         const text = String(raw || "").trim();
         if (!text) return null;
-        let m = /^Vec3\s*\((.+),(.+),(.+)\)\s*$/.exec(text);
-        if (!m) {
-            const parts = text.split(",").map((it) => it.trim());
-            if (parts.length === 3) {
-                return new THREE.Vector3(
-                    evalNumber(parts[0], 0),
-                    evalNumber(parts[1], 0),
-                    evalNumber(parts[2], 0)
-                );
-            }
-            return null;
+
+        const emitterPos = (context?.emitterPos && context.emitterPos.isVector3)
+            ? context.emitterPos.clone()
+            : new THREE.Vector3(0, 0, 0);
+
+        const parseVecArgs = (argsText) => {
+            const parts = splitTopLevelArgs(argsText);
+            if (parts.length !== 3) return null;
+            return new THREE.Vector3(
+                evalNumber(parts[0], 0),
+                evalNumber(parts[1], 0),
+                evalNumber(parts[2], 0)
+            );
+        };
+
+        const vec3Match = /^Vec3\s*\((.*)\)\s*$/.exec(text);
+        if (vec3Match) {
+            return parseVecArgs(vec3Match[1]);
         }
-        return new THREE.Vector3(
-            evalNumber(m[1], 0),
-            evalNumber(m[2], 0),
-            evalNumber(m[3], 0)
-        );
+
+        if (text === "this.pos") {
+            return emitterPos;
+        }
+
+        if (!text.startsWith("this.pos")) {
+            return parseVecArgs(text);
+        }
+
+        const result = emitterPos;
+        let rest = text.slice("this.pos".length).trim();
+        while (rest.length) {
+            let op = null;
+            if (rest.startsWith(".add")) op = "add";
+            else if (rest.startsWith(".subtract")) op = "subtract";
+            else return null;
+
+            const openIdx = rest.indexOf("(");
+            if (openIdx < 0) return null;
+
+            let depth = 0;
+            let closeIdx = -1;
+            for (let i = openIdx; i < rest.length; i++) {
+                const ch = rest[i];
+                if (ch === "(") depth += 1;
+                else if (ch === ")") {
+                    depth -= 1;
+                    if (depth === 0) {
+                        closeIdx = i;
+                        break;
+                    }
+                }
+            }
+            if (closeIdx < 0) return null;
+
+            const delta = parseVecArgs(rest.slice(openIdx + 1, closeIdx));
+            if (!delta) return null;
+            if (op === "add") result.add(delta);
+            else result.sub(delta);
+            rest = rest.slice(closeIdx + 1).trim();
+        }
+        return result;
     }
 
     function normalizeRootLifecycleMode(rawMode) {
@@ -1837,10 +1908,7 @@ export function initPreview(ctx = {}) {
                 const maxStep = num(p.maxStep, 0.6);
                 const useLifeCurve = !!p.useLifeCurve;
 
-                const fallbackCenter = new THREE.Vector3(cx, cy, cz);
-                const center = (String(p.centerMode || "const") === "expr")
-                    ? (parseSourceVecExpr(p.centerExpr, (v, def) => num(v, def)) || fallbackCenter)
-                    : fallbackCenter;
+                const center = new THREE.Vector3(cx, cy, cz);
                 const rel = particle.pos.clone().sub(center);
 
                 const axialDistance = rel.dot(axis);
@@ -1851,48 +1919,61 @@ export function initPreview(ctx = {}) {
                     : planar.clone().multiplyScalar(1.0 / planarLen);
 
                 const qr = planarLen - ringRadius;
-                const qh = axialDistance;
-                const normalizedDistance = Math.sqrt(
-                    (qr * qr) / (radialThickness * radialThickness)
-                    + (qh * qh) / (axialThickness * axialThickness)
-                );
-                if (normalizedDistance >= 1.0) break;
+                const localRadial = qr / radialThickness;
+                const localAxial = axialDistance / axialThickness;
+                const normalizedDistance = Math.sqrt(localRadial * localRadial + localAxial * localAxial);
 
-                const bandWeight = smooth01(1.0 - normalizedDistance);
+                const insideBand = normalizedDistance < 1.0;
+                const bandWeight = insideBand ? smooth01(1.0 - normalizedDistance) : 0.0;
+                const outerDistance = Math.max(0.0, normalizedDistance - 1.0);
+                const captureWeight = outerDistance > 0.0
+                    ? (1.0 / (1.0 + outerDistance * outerDistance * 4.0))
+                    : 0.0;
                 const lifeMul = (useLifeCurve && particle.life > 0)
                     ? clamp(1.0 - (particle.age / particle.life), 0.0, 1.0)
                     : 1.0;
-                const weight = bandWeight * lifeMul;
-                if (weight <= 1e-9) break;
+                if (lifeMul <= 1e-9) break;
 
-                const circulationVector = radialDir.clone().multiplyScalar(-qh / axialThickness)
-                    .add(axis.clone().multiplyScalar(qr / radialThickness));
-                const circulationDir = (circulationVector.lengthSq() > 1e-12)
-                    ? circulationVector.normalize()
+                const currentVelocity = (particle.vel.lengthSq() > 1e-12)
+                    ? particle.vel.clone()
                     : new THREE.Vector3(0, 0, 0);
+                const currentSpeed = currentVelocity.length();
+                if (currentSpeed <= 1e-9) break;
+                const currentDir = currentVelocity.clone().multiplyScalar(1.0 / currentSpeed);
 
-                const toBandCenter = radialDir.clone().multiplyScalar(-qr)
-                    .add(axis.clone().multiplyScalar(-qh));
-                const followDir = (toBandCenter.lengthSq() > 1e-12)
-                    ? toBandCenter.normalize()
-                    : new THREE.Vector3(0, 0, 0);
+                const circulationVector = radialDir.clone().multiplyScalar(-localAxial)
+                    .add(axis.clone().multiplyScalar(localRadial));
+                const toBandCenter = radialDir.clone().multiplyScalar(-localRadial)
+                    .add(axis.clone().multiplyScalar(-localAxial));
 
-                const dv = new THREE.Vector3(0, 0, 0);
-                if (circulationDir.lengthSq() > 1e-12) {
-                    dv.add(circulationDir.multiplyScalar(circulationStrength * weight));
+                const desiredFlow = new THREE.Vector3(0, 0, 0);
+                const circulationWeight = bandWeight * lifeMul;
+                if (circulationStrength !== 0.0 && circulationWeight > 1e-9 && circulationVector.lengthSq() > 1e-12) {
+                    desiredFlow.add(circulationVector.multiplyScalar(circulationStrength * circulationWeight));
                 }
-                if (outwardStrength !== 0.0) {
-                    dv.add(radialDir.clone().multiplyScalar(outwardStrength * weight));
+                if (insideBand && outwardStrength !== 0.0 && circulationWeight > 1e-9) {
+                    desiredFlow.add(radialDir.clone().multiplyScalar(outwardStrength * circulationWeight));
                 }
-                if (upwardStrength !== 0.0) {
-                    dv.add(axis.clone().multiplyScalar(upwardStrength * weight));
-                }
-                if (followStrength !== 0.0 && followDir.lengthSq() > 1e-12) {
-                    dv.add(followDir.multiplyScalar(followStrength * weight));
+                if (insideBand && upwardStrength !== 0.0 && circulationWeight > 1e-9) {
+                    desiredFlow.add(axis.clone().multiplyScalar(upwardStrength * circulationWeight));
                 }
 
+                const captureMul = captureWeight * lifeMul;
+                if (followStrength !== 0.0 && captureMul > 1e-9 && toBandCenter.lengthSq() > 1e-12) {
+                    desiredFlow.add(toBandCenter.clone().normalize().multiplyScalar(followStrength * captureMul));
+                }
+
+                const desiredFlowLen = desiredFlow.length();
+                if (desiredFlowLen <= 1e-9) break;
+                const desiredDir = desiredFlow.clone().multiplyScalar(1.0 / desiredFlowLen);
+                const turnedDir = currentDir.clone().add(desiredDir.multiplyScalar(desiredFlowLen));
+                const turnedLen = turnedDir.length();
+                if (turnedLen <= 1e-12) break;
+                turnedDir.multiplyScalar(1.0 / turnedLen);
+
+                const dv = turnedDir.multiplyScalar(currentSpeed).sub(currentVelocity);
                 const dvLen = dv.length();
-                if (maxStep > 0.0 && dvLen > maxStep && dvLen > 1e-9) {
+                if (maxStep > 0.0 && dvLen > maxStep) {
                     dv.multiplyScalar(maxStep / dvLen);
                 }
 
@@ -2110,7 +2191,7 @@ export function initPreview(ctx = {}) {
 
                 let source = new THREE.Vector3(0, 0, 0);
                 if (String(p.sourceMode || "emitter_velocity") === "custom") {
-                    const parsed = parseSourceVecExpr(p.sourceExpr, (v, def) => num(v, def));
+                    const parsed = parseSourceVecExpr(p.sourceExpr, (v, def) => num(v, def), { emitterPos: particle.emitterPos });
                     if (parsed) source.copy(parsed);
                 } else if (particle.emitterVelocity && particle.emitterVelocity.isVector3) {
                     source.copy(particle.emitterVelocity);
