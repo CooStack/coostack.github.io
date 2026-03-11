@@ -73,7 +73,7 @@ export const fmtD = (n) => {
 export const fmtB = (b) => (b ? "true" : "false");
 
 export const kVec3 = (x, y, z) => `Vec3(${fmtD(x)}, ${fmtD(y)}, ${fmtD(z)})`;
-export const kSupplierVec3 = (x, y, z) => `Supplier { ${kVec3(x, y, z)} }`;
+export const kSupplierVec3 = (x, y, z) => ` { ${kVec3(x, y, z)} }`;
 
 export const kTrailingLambda = (expr, fallback = "this.pos") => {
     const raw = (expr ?? "").trim();
