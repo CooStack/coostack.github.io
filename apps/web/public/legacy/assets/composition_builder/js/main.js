@@ -1721,10 +1721,29 @@ class CompositionBuilderApp {
         this.dom.hkMask.classList.add("hidden");
     }
 
-    showThemeConfirm(title, message) {
+    askThemeConfirm(options = {}) {
         const d = this.dom;
-        d.confirmTitle.textContent = String(title || "请确认");
-        d.confirmMessage.textContent = String(message || "确认执行该操作？");
+        const config = options && typeof options === "object"
+            ? options
+            : { title: options, message: arguments[1] };
+        const title = String(config.title || "请确认");
+        const message = String(config.message || "确认执行该操作？");
+        const okText = String(config.okText || "确定");
+        const cancelText = String(config.cancelText || "取消");
+        const danger = !!config.danger;
+
+        if (typeof this.confirmResolver === "function") {
+            this.resolveThemeConfirm(false);
+        }
+
+        d.confirmTitle.textContent = title;
+        d.confirmMessage.textContent = message;
+        if (d.btnCancelConfirmModal) d.btnCancelConfirmModal.textContent = cancelText;
+        if (d.btnOkConfirmModal) {
+            d.btnOkConfirmModal.textContent = okText;
+            d.btnOkConfirmModal.classList.toggle("danger", danger);
+            d.btnOkConfirmModal.classList.toggle("primary", !danger);
+        }
         d.confirmModal.classList.remove("hidden");
         d.confirmMask.classList.remove("hidden");
 
@@ -1755,6 +1774,10 @@ class CompositionBuilderApp {
         return new Promise((resolve) => {
             this.confirmResolver = resolve;
         });
+    }
+
+    showThemeConfirm(title, message) {
+        return this.askThemeConfirm({ title, message });
     }
 
     resolveThemeConfirm(accepted) {

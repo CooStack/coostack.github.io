@@ -47,7 +47,9 @@ function normalizeFieldParam(field, rawValue) {
 
 function makeVecSupplierLine(mode, expr, x, y, z, fallbackExpr) {
     if (mode === "expr") return kTrailingLambda(expr, fallbackExpr);
-    return `(${kSupplierVec3(x, y, z)})`;
+    const base = String(fallbackExpr ?? "").trim();
+    if (!base) return `(${kSupplierVec3(x, y, z)})`;
+    return kTrailingLambda(`${base}.add(${fmtD(x)}, ${fmtD(y)}, ${fmtD(z)})`, base);
 }
 
 export const COMMAND_META = {
