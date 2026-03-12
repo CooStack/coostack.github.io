@@ -1823,7 +1823,7 @@ export function initCardSystem(ctx = {}) {
     function setupDnD(handleEl, cardEl, node, listRef, getIdx, ownerNode = null) {
         const isNestedDropTarget = (target) => {
             if (!target || !target.closest) return false;
-            const zone = target.closest(".subcards, .dropzone");
+            const zone = target.closest(".subcards, .dropzone, .builder-drop-surface");
             return !!zone && cardEl.contains(zone);
         };
         handleEl.setAttribute("draggable", "true");
@@ -3432,11 +3432,13 @@ export function initCardSystem(ctx = {}) {
                 if (!opts.paramsOnly && !node.folded) {
                     const block = document.createElement("div");
                     block.className = "subblock";
+                    block.classList.add("builder-drop-surface");
                     if (Number.isFinite(node.subWidth)) {
                         const w = Math.max(240, node.subWidth);
                         node.subWidth = w;
                         block.style.width = `${w}px`;
                     }
+                    setupListDropZone(block, () => node.children, () => node);
 
                     const head = document.createElement("div");
                     head.className = "subblock-head";
@@ -3563,11 +3565,13 @@ export function initCardSystem(ctx = {}) {
                 if (!node.folded) {
                     const block = document.createElement("div");
                     block.className = "subblock";
+                    block.classList.add("builder-drop-surface");
                     if (Number.isFinite(node.subWidth)) {
                         const w = Math.max(240, node.subWidth);
                         node.subWidth = w;
                         block.style.width = `${w}px`;
                     }
+                    setupListDropZone(block, () => node.children, () => node);
 
                     const head = document.createElement("div");
                     head.className = "subblock-head";
