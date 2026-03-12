@@ -3,7 +3,12 @@ import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { createKindDefs } from "../../points_builder/js/kinds.js";
 import { createBuilderTools } from "../../points_builder/js/builder.js";
 import { createExpressionRuntime } from "./expression_runtime.js?v=20260221_2";
-import { InlineCodeEditor, mergeCompletionGroups } from "./code_editor.js?v=20260309_2";
+import { InlineCodeEditor, mergeCompletionGroups } from "./code_editor.js?v=20260312_3";
+import {
+    normalizeAlphaHelperConfig,
+    ALPHA_HELPER_TYPES,
+    ALPHA_HELPER_RUN_MODES
+} from "./alpha_helper_utils.js";
 import {
     isVectorLiteralType,
     normalizeVectorCtor,
@@ -29,10 +34,10 @@ import {
     hasAngleOffsetEaseSpecialParams,
     formatAngleValue
 } from "./angle_offset_utils.js";
-import { installPreviewRuntimeMethods } from "./preview_runtime_mixin.js?v=20260310_43";
-import { installKotlinCodegenMethods } from "./kotlin_codegen_mixin.js?v=20260310_14";
+import { installPreviewRuntimeMethods } from "./preview_runtime_mixin.js?v=20260312_44";
+import { installKotlinCodegenMethods } from "./kotlin_codegen_mixin.js?v=20260312_15";
 import { installCodeOutputMethods } from "./code_output_mixin.js";
-import { installExpressionEditorMethods } from "./expression_editor_mixin.js?v=20260309_7";
+import { installExpressionEditorMethods } from "./expression_editor_mixin.js?v=20260312_8";
 import { installCodeCompileMethods } from "./code_compile_mixin.js?v=20260309_2";
 import { installTargetPresetMethods } from "./target_preset_mixin.js";
 import {
@@ -874,6 +879,7 @@ function normalizeStateShape(state) {
     next.settings.previewFocusSingleCard = next.settings.previewFocusSingleCard !== false;
     next.settings.leftPanelWidth = clamp(num(next.settings.leftPanelWidth || 586), 400, 1200);
     next.settings.projectSectionHeight = clamp(num(next.settings.projectSectionHeight || 42), 20, 70);
+    next.projectAlpha = normalizeAlphaHelperConfig(next.projectAlpha, { type: "none" });
     next.projectScale = normalizeScaleHelperConfig(next.projectScale, { type: "none" });
 
     next.globalVars = next.globalVars.map((v) => normalizeGlobalVar(v));
@@ -932,6 +938,15 @@ function createDefaultState() {
         compositionAxisManualX: 0,
         compositionAxisManualY: 1,
         compositionAxisManualZ: 0,
+        projectAlpha: {
+            type: "none",
+            runMode: "auto",
+            min: 0.0,
+            max: 1.0,
+            tick: 20,
+            startMax: false,
+            decreaseOnDisable: false
+        },
         projectScale: {
             type: "none",
             runMode: "auto",
@@ -2107,6 +2122,11 @@ class CompositionBuilderApp {
             this.afterValueMutate({ rebuildPreview: true, rerenderProject: ["type", "runMode"].includes(t.dataset.projectScaleField) });
             return;
         }
+        if (t.dataset.projectAlphaField) {
+            this.applyProjectAlphaField(t.dataset.projectAlphaField, t);
+            this.afterValueMutate({ rebuildPreview: true, rerenderProject: ["type", "runMode"].includes(t.dataset.projectAlphaField) });
+            return;
+        }
         if (t.dataset.axisField) {
             this.applyProjectAxisField(t.dataset.axisField, t);
             const rerender = ["axisPreset", "axisManualCtor"].includes(t.dataset.axisField);
@@ -2186,6 +2206,12 @@ class CompositionBuilderApp {
             // Fallback for environments where <select> only emits "change".
             this.applyProjectScaleField(t.dataset.projectScaleField, t);
             this.afterValueMutate({ rebuildPreview: true, rerenderProject: ["type", "runMode"].includes(t.dataset.projectScaleField) });
+            return;
+        }
+        if (t.dataset.projectAlphaField) {
+            // Fallback for environments where <select> only emits "change".
+            this.applyProjectAlphaField(t.dataset.projectAlphaField, t);
+            this.afterValueMutate({ rebuildPreview: true, rerenderProject: ["type", "runMode"].includes(t.dataset.projectAlphaField) });
             return;
         }
         if (t.dataset.axisField) {
@@ -2380,6 +2406,36 @@ class CompositionBuilderApp {
         }
         if (["min", "max", "c1x", "c1y", "c1z", "c2x", "c2y", "c2z"].includes(field)) {
             scale[field] = num(target.value);
+        }
+    }
+
+    applyProjectAlphaField(field, target) {
+        const alpha = Object.assign({}, normalizeAlphaHelperConfig(this.state.projectAlpha, { type: "none" }));
+        this.state.projectAlpha = alpha;
+        if (field === "type") {
+            const next = String(target.value || "none");
+            alpha.type = ALPHA_HELPER_TYPES.includes(next) ? next : "none";
+            return;
+        }
+        if (field === "runMode") {
+            const next = String(target.value || "auto");
+            alpha.runMode = ALPHA_HELPER_RUN_MODES.includes(next) ? next : "auto";
+            return;
+        }
+        if (field === "startMax") {
+            alpha.startMax = !!target.checked;
+            return;
+        }
+        if (field === "decreaseOnDisable") {
+            alpha.decreaseOnDisable = !!target.checked;
+            return;
+        }
+        if (field === "tick") {
+            alpha.tick = Math.max(1, int(target.value || 1));
+            return;
+        }
+        if (field === "min" || field === "max") {
+            alpha[field] = num(target.value);
         }
     }
 
@@ -4892,6 +4948,9 @@ class CompositionBuilderApp {
                     scope: "project",
                     scale: s.projectScale
                 })}
+                ${this.renderAlphaHelperEditor({
+                    alpha: s.projectAlpha
+                })}
             </div>
 
             <div class="section-block">
@@ -5592,6 +5651,78 @@ class CompositionBuilderApp {
             <div class="subgroup"${sectionKeyAttr}>
                 <div class="subgroup-title">${esc(title)}</div>
                 ${body}
+            </div>
+        `;
+    }
+
+    renderAlphaHelperEditor(opts = {}) {
+        const title = String(opts.title || "透明度助手（仅项目层）");
+        const alpha = normalizeAlphaHelperConfig(opts.alpha, { type: "none" });
+        const runMode = alpha.runMode === "manual" ? "manual" : "auto";
+        const typeSelect = `
+            <label class="field">
+                <span>Alpha Helper</span>
+                <select class="input" data-project-alpha-field="type">
+                    <option value="none" ${alpha.type === "none" ? "selected" : ""}>不使用</option>
+                    <option value="alpha" ${alpha.type === "alpha" ? "selected" : ""}>CompositionAlphaHelper</option>
+                </select>
+            </label>
+        `;
+        const runModeSelect = `
+            <label class="field">
+                <span>运行模式</span>
+                <select class="input" data-project-alpha-field="runMode">
+                    <option value="auto" ${runMode === "auto" ? "selected" : ""}>自动（系统调用）</option>
+                    <option value="manual" ${runMode === "manual" ? "selected" : ""}>手动（表达式调用）</option>
+                </select>
+            </label>
+        `;
+        if (alpha.type === "none") {
+            return `
+                <div class="subgroup">
+                    <div class="subgroup-title">${esc(title)}</div>
+                    <div class="grid3">
+                        ${typeSelect}
+                        ${runModeSelect}
+                        <div class="mini-note">只作用于最外层项目 Composition</div>
+                    </div>
+                </div>
+            `;
+        }
+        return `
+            <div class="subgroup">
+                <div class="subgroup-title">${esc(title)}</div>
+                <div class="grid3">
+                    ${typeSelect}
+                    ${runModeSelect}
+                    <label class="chk">
+                        <input type="checkbox" data-project-alpha-field="startMax" ${alpha.startMax ? "checked" : ""}/>
+                        <span>最大开始</span>
+                    </label>
+                </div>
+                <div class="grid3">
+                    <label class="chk">
+                        <input type="checkbox" data-project-alpha-field="decreaseOnDisable" ${alpha.decreaseOnDisable ? "checked" : ""}/>
+                        <span>消散时变淡</span>
+                    </label>
+                </div>
+                ${runMode === "manual"
+                    ? '<div class="mini-note">手动模式下不会自动调用透明度助手，仅项目 display 表达式可使用 alphaHelper.increaseAlpha() / alphaHelper.decreaseAlpha() 等方法。</div>'
+                    : `<div class="mini-note">自动模式会在启用时 increaseAlpha()，${alpha.decreaseOnDisable ? "消散时 decreaseAlpha()" : "消散时保持当前透明度"}。</div>`}
+                <div class="grid3">
+                    <label class="field">
+                        <span>最小不透明度</span>
+                        <input class="input" type="number" min="0" max="1" step="${this.state.settings.paramStep}" data-project-alpha-field="min" value="${esc(formatNumberCompact(alpha.min))}"/>
+                    </label>
+                    <label class="field">
+                        <span>最大不透明度</span>
+                        <input class="input" type="number" min="0" max="1" step="${this.state.settings.paramStep}" data-project-alpha-field="max" value="${esc(formatNumberCompact(alpha.max))}"/>
+                    </label>
+                    <label class="field">
+                        <span>不透明时长 (tick)</span>
+                        <input class="input" type="number" min="1" step="1" data-project-alpha-field="tick" value="${esc(String(alpha.tick))}"/>
+                    </label>
+                </div>
             </div>
         `;
     }
@@ -10629,6 +10760,7 @@ installCodeOutputMethods(CompositionBuilderApp, {
 installExpressionEditorMethods(CompositionBuilderApp, {
     int,
     esc,
+    normalizeAlphaHelperConfig,
     sanitizeKotlinClassName,
     transpileKotlinThisQualifierToJs,
     findFirstUnknownJsIdentifier,
@@ -10654,6 +10786,7 @@ installKotlinCodegenMethods(CompositionBuilderApp, {
     normalizeAnimate,
     normalizeControllerAction,
     normalizeDisplayAction,
+    normalizeAlphaHelperConfig,
     normalizeScaleHelperConfig,
     normalizeShapeNestedLevel,
     sanitizeKotlinClassName,
@@ -10683,6 +10816,7 @@ installPreviewRuntimeMethods(CompositionBuilderApp, {
     normalizeAnimate,
     normalizeControllerAction,
     normalizeDisplayAction,
+    normalizeAlphaHelperConfig,
     normalizeScaleHelperConfig,
     normalizeShapeNestedLevel,
     ensureStatusHelperMethods,

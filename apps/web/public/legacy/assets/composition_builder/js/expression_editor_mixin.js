@@ -2,6 +2,7 @@ export function installExpressionEditorMethods(CompositionBuilderApp, deps = {})
     const {
         int,
         esc,
+        normalizeAlphaHelperConfig,
         sanitizeKotlinClassName,
         transpileKotlinThisQualifierToJs,
         findFirstUnknownJsIdentifier,
@@ -250,6 +251,9 @@ export function installExpressionEditorMethods(CompositionBuilderApp, deps = {})
         for (const snippet of this.getProjectScaleHelperCompletionSnippets(textarea)) {
             base.push(snippet);
         }
+        for (const snippet of this.getProjectAlphaHelperCompletionSnippets(textarea)) {
+            base.push(snippet);
+        }
         for (const g of this.state.globalVars) {
             const name = String(g.name || "").trim();
             if (!name) continue;
@@ -294,6 +298,35 @@ export function installExpressionEditorMethods(CompositionBuilderApp, deps = {})
         return [
             "scaleHelper.doScale()",
             "scaleHelper.doScaleReversed()"
+        ];
+    }
+
+    hasManualProjectAlphaHelper() {
+        const projectAlpha = normalizeAlphaHelperConfig(this.state?.projectAlpha, { type: "none" });
+        if (projectAlpha.type === "none") return false;
+        return String(projectAlpha.runMode || "auto").trim() === "manual";
+    }
+
+    isAlphaHelperAllowedForCodeEditor(textarea) {
+        if (!this.hasManualProjectAlphaHelper()) return false;
+        if (!(textarea instanceof HTMLTextAreaElement)) return false;
+        if (this.isControllerScriptEditor(textarea)) return false;
+        return textarea.dataset.displayField === "expression"
+            && !String(textarea.dataset.cardId || "").trim();
+    }
+
+    getProjectAlphaHelperCompletionSnippets(textarea = null) {
+        if (!this.isAlphaHelperAllowedForCodeEditor(textarea)) return [];
+        return [
+            "alphaHelper.increaseAlpha()",
+            "alphaHelper.decreaseAlpha()",
+            "alphaHelper.resetAlphaMin()",
+            "alphaHelper.resetAlphaMax()",
+            "alphaHelper.toggleAlpha(1.0)",
+            "alphaHelper.doAlphaTo(0)",
+            "alphaHelper.getCurrentAlpha()",
+            "alphaHelper.over()",
+            "alphaHelper.isZero()"
         ];
     }
 
@@ -390,6 +423,9 @@ export function installExpressionEditorMethods(CompositionBuilderApp, deps = {})
         if (opts.allowScaleHelper === true && this.hasManualProjectScaleHelper()) {
             allowed.add("scaleHelper");
         }
+        if (opts.allowAlphaHelper === true && this.hasManualProjectAlphaHelper()) {
+            allowed.add("alphaHelper");
+        }
         const scope = (opts.scope && typeof opts.scope === "object") ? opts.scope : null;
         if (scope?.allowRel) allowed.add("rel");
         if (scope?.allowOrder) allowed.add("order");
@@ -471,7 +507,8 @@ export function installExpressionEditorMethods(CompositionBuilderApp, deps = {})
         const scope = this.getCodeEditorScopeInfo(textarea);
         const allowGrowthApi = this.isGrowthApiAllowedForCodeEditor(textarea);
         const allowScaleHelper = this.isScaleHelperAllowedForCodeEditor(textarea);
-        const result = this.validateJsExpressionSource(source, { cardId, treePath, scope, allowGrowthApi, allowScaleHelper });
+        const allowAlphaHelper = this.isAlphaHelperAllowedForCodeEditor(textarea);
+        const result = this.validateJsExpressionSource(source, { cardId, treePath, scope, allowGrowthApi, allowScaleHelper, allowAlphaHelper });
         if (result.valid) return result;
         return {
             valid: false,
@@ -485,7 +522,8 @@ export function installExpressionEditorMethods(CompositionBuilderApp, deps = {})
         const scope = this.getCodeEditorScopeInfo(textarea);
         const allowGrowthApi = this.isGrowthApiAllowedForCodeEditor(textarea);
         const allowScaleHelper = this.isScaleHelperAllowedForCodeEditor(textarea);
-        const allowed = this.getJsValidationAllowedIdentifiers({ cardId, treePath, scope, allowGrowthApi, allowScaleHelper });
+        const allowAlphaHelper = this.isAlphaHelperAllowedForCodeEditor(textarea);
+        const allowed = this.getJsValidationAllowedIdentifiers({ cardId, treePath, scope, allowGrowthApi, allowScaleHelper, allowAlphaHelper });
         const declared = new Map();
         const lines = [];
         const declareSymbol = (name, type = "any", mutable = false, opts = {}) => {
@@ -548,6 +586,9 @@ export function installExpressionEditorMethods(CompositionBuilderApp, deps = {})
         lines.push("declare function setReversedScaleOnCompositionStatus(...args: any[]): any;");
         if (allowScaleHelper) {
             lines.push("declare const scaleHelper: { doScale(...args: any[]): any; doScaleReversed(...args: any[]): any; };");
+        }
+        if (allowAlphaHelper) {
+            lines.push("declare const alphaHelper: { increaseAlpha(...args: any[]): any; decreaseAlpha(...args: any[]): any; resetAlphaMin(...args: any[]): any; resetAlphaMax(...args: any[]): any; toggleAlpha(...args: any[]): any; doAlphaTo(...args: any[]): any; getCurrentAlpha(...args: any[]): any; over(...args: any[]): any; isZero(...args: any[]): any; };");
         }
         lines.push("declare function RelativeLocation(...args: any[]): any;");
         lines.push("declare namespace RelativeLocation { function yAxis(...args: any[]): any; }");
@@ -717,6 +758,64 @@ export function installExpressionEditorMethods(CompositionBuilderApp, deps = {})
                     insertText: "scaleHelper.doScaleReversed()",
                     detail: "项目缩放助手 API（手动模式）",
                     priority: 262
+                }
+            );
+        }
+        if (isProjectDisplayExpr && this.hasManualProjectAlphaHelper()) {
+            base.push(
+                {
+                    label: "alphaHelper.increaseAlpha()",
+                    insertText: "alphaHelper.increaseAlpha()",
+                    detail: "项目透明度助手 API（手动模式）",
+                    priority: 263
+                },
+                {
+                    label: "alphaHelper.decreaseAlpha()",
+                    insertText: "alphaHelper.decreaseAlpha()",
+                    detail: "项目透明度助手 API（手动模式）",
+                    priority: 263
+                },
+                {
+                    label: "alphaHelper.resetAlphaMin()",
+                    insertText: "alphaHelper.resetAlphaMin()",
+                    detail: "项目透明度助手 API（手动模式）",
+                    priority: 262
+                },
+                {
+                    label: "alphaHelper.resetAlphaMax()",
+                    insertText: "alphaHelper.resetAlphaMax()",
+                    detail: "项目透明度助手 API（手动模式）",
+                    priority: 262
+                },
+                {
+                    label: "alphaHelper.toggleAlpha(alpha)",
+                    insertText: "alphaHelper.toggleAlpha($0)",
+                    detail: "项目透明度助手 API（手动模式）",
+                    priority: 261
+                },
+                {
+                    label: "alphaHelper.doAlphaTo(tick)",
+                    insertText: "alphaHelper.doAlphaTo($0)",
+                    detail: "项目透明度助手 API（手动模式）",
+                    priority: 261
+                },
+                {
+                    label: "alphaHelper.getCurrentAlpha()",
+                    insertText: "alphaHelper.getCurrentAlpha()",
+                    detail: "项目透明度助手 API（手动模式）",
+                    priority: 261
+                },
+                {
+                    label: "alphaHelper.over()",
+                    insertText: "alphaHelper.over()",
+                    detail: "项目透明度助手 API（手动模式）",
+                    priority: 260
+                },
+                {
+                    label: "alphaHelper.isZero()",
+                    insertText: "alphaHelper.isZero()",
+                    detail: "项目透明度助手 API（手动模式）",
+                    priority: 260
                 }
             );
         }

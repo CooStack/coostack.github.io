@@ -6,6 +6,7 @@ export function installKotlinCodegenMethods(CompositionBuilderApp, deps = {}) {
         normalizeAnimate,
         normalizeControllerAction,
         normalizeDisplayAction,
+        normalizeAlphaHelperConfig,
         normalizeScaleHelperConfig,
         sanitizeKotlinClassName,
         sanitizeKotlinIdentifier,
@@ -54,8 +55,14 @@ export function installKotlinCodegenMethods(CompositionBuilderApp, deps = {}) {
             "import java.util.TreeMap",
             "import org.joml.Vector3f"
         ];
+        if (this.stateUsesLinearScaleHelper()) {
+            imports.push("import cn.coostack.cooparticlesapi.utils.helper.impl.composition.CompositionScaleHelper");
+        }
         if (this.stateUsesBezierScaleHelper()) {
             imports.push("import cn.coostack.cooparticlesapi.utils.helper.impl.composition.CompositionBezierScaleHelper");
+        }
+        if (this.stateUsesAlphaHelper()) {
+            imports.push("import cn.coostack.cooparticlesapi.utils.helper.impl.composition.CompositionAlphaHelper");
         }
         if (this.stateUsesFourierSeriesBuilder()) {
             imports.push("import cn.coostack.cooparticlesapi.utils.builder.FourierSeriesBuilder");
@@ -149,6 +156,16 @@ export function installKotlinCodegenMethods(CompositionBuilderApp, deps = {}) {
         return String(projectScale?.type || "none") === "bezier";
     }
 
+    stateUsesLinearScaleHelper() {
+        const projectScale = normalizeScaleHelperConfig(this.state.projectScale, { type: "none" });
+        return String(projectScale?.type || "none") === "linear";
+    }
+
+    stateUsesAlphaHelper() {
+        const projectAlpha = normalizeAlphaHelperConfig(this.state.projectAlpha, { type: "none" });
+        return String(projectAlpha?.type || "none") !== "none";
+    }
+
     stateUsesTextureSheetLiteral(pattern) {
         let found = false;
         const matcher = pattern instanceof RegExp ? pattern : null;
@@ -227,6 +244,11 @@ export function installKotlinCodegenMethods(CompositionBuilderApp, deps = {}) {
             }
             lines.push("");
         }
+        const projectAlpha = normalizeAlphaHelperConfig(this.state.projectAlpha, { type: "none" });
+        if (projectAlpha.type !== "none") {
+            lines.push(`    private val alphaHelper = CompositionAlphaHelper(${formatKotlinDoubleLiteral(projectAlpha.min)}, ${formatKotlinDoubleLiteral(projectAlpha.max)}, ${Math.max(1, int(projectAlpha.tick))})`);
+            lines.push("");
+        }
 
         while (lines.length && lines[lines.length - 1] === "") lines.pop();
         return lines.join("\n");
@@ -242,6 +264,13 @@ export function installKotlinCodegenMethods(CompositionBuilderApp, deps = {}) {
         const projectScale = normalizeScaleHelperConfig(this.state.projectScale, { type: "none" });
         if (projectScale.type !== "none") {
             lines.push("        scaleHelper.loadControler(this)");
+        }
+        const projectAlpha = normalizeAlphaHelperConfig(this.state.projectAlpha, { type: "none" });
+        if (projectAlpha.type !== "none") {
+            lines.push("        alphaHelper.loadControler(this)");
+            if (projectAlpha.startMax === true) {
+                lines.push("        alphaHelper.resetAlphaMax()");
+            }
         }
         const disabled = Math.max(0, int(this.state.disabledInterval || 0));
         if (disabled > 0) lines.push(`        setDisabledInterval(${disabled})`);
@@ -868,9 +897,13 @@ export function installKotlinCodegenMethods(CompositionBuilderApp, deps = {}) {
     buildOnDisplayMethod(className) {
         const actions = this.state.displayActions || [];
         const projectScale = normalizeScaleHelperConfig(this.state.projectScale, { type: "none" });
+        const projectAlpha = normalizeAlphaHelperConfig(this.state.projectAlpha, { type: "none" });
         const hasProjectScaleHelper = projectScale.type !== "none";
         const projectScaleManual = hasProjectScaleHelper && String(projectScale.runMode || "auto").trim() === "manual";
         const projectScaleAuto = hasProjectScaleHelper && !projectScaleManual;
+        const hasProjectAlphaHelper = projectAlpha.type !== "none";
+        const projectAlphaManual = hasProjectAlphaHelper && String(projectAlpha.runMode || "auto").trim() === "manual";
+        const projectAlphaAuto = hasProjectAlphaHelper && !projectAlphaManual;
         const needReverseScale = projectScaleAuto && projectScale.reversedOnDisable;
         const bodyLines = [];
         if (projectScaleAuto) {
@@ -882,6 +915,17 @@ export function installKotlinCodegenMethods(CompositionBuilderApp, deps = {}) {
                 bodyLines.push("            }");
             } else {
                 bodyLines.push("            scaleHelper.doScale()");
+            }
+        }
+        if (projectAlphaAuto) {
+            if (projectAlpha.decreaseOnDisable === true) {
+                bodyLines.push("            if (status.isDisable()) {");
+                bodyLines.push("                alphaHelper.decreaseAlpha()");
+                bodyLines.push("            } else {");
+                bodyLines.push("                alphaHelper.increaseAlpha()");
+                bodyLines.push("            }");
+            } else {
+                bodyLines.push("            alphaHelper.increaseAlpha()");
             }
         }
         for (const raw of actions) {
@@ -900,7 +944,8 @@ export function installKotlinCodegenMethods(CompositionBuilderApp, deps = {}) {
                 const rawExpr = String(act.expression || "").trim();
                 const check = this.validateJsExpressionSource(rawExpr, {
                     cardId: "",
-                    allowScaleHelper: projectScaleManual
+                    allowScaleHelper: projectScaleManual,
+                    allowAlphaHelper: projectAlphaManual
                 });
                 const expr = this.rewriteCodeExpr(rawExpr, className);
                 if (expr && check.valid) bodyLines.push(translateJsBlockToKotlin(expr, "            "));

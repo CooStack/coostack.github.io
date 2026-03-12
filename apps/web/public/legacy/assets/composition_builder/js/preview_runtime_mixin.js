@@ -10,6 +10,7 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
         normalizeAnimate,
         normalizeControllerAction,
         normalizeDisplayAction,
+        normalizeAlphaHelperConfig,
         normalizeScaleHelperConfig,
         ensureStatusHelperMethods,
         stripJsForLint,
@@ -573,6 +574,7 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
         const colors = this.pointsGeom.getAttribute("color").array;
         const sizes = this.pointsGeom.getAttribute("aSize").array;
         const alphas = this.pointsGeom.getAttribute("aAlpha").array;
+        const initialProjectAlpha = this.resolveProjectAlphaPreviewInitialValue(this.state?.projectAlpha);
         this.previewVisibleMask = new Array(count).fill(true);
         this.previewSizeFactors = new Array(count).fill(1);
         this.previewAlphaFactors = new Array(count).fill(1);
@@ -603,9 +605,10 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
             colors[i * 3 + 1] = rgb[1];
             colors[i * 3 + 2] = rgb[2];
             sizes[i] = Math.max(0.05, num(visual.size));
-            alphas[i] = clamp(num(visual.alpha), 0, 1);
+            const baseAlpha = clamp(num(visual.alpha), 0, 1);
+            alphas[i] = clamp(baseAlpha * initialProjectAlpha, 0, 1);
             this.previewSizeFactors[i] = Math.max(0.05, num(visual.size));
-            this.previewAlphaFactors[i] = clamp(num(visual.alpha), 0, 1);
+            this.previewAlphaFactors[i] = alphas[i];
         }
         this.pointsGeom.attributes.position.needsUpdate = true;
         this.pointsGeom.attributes.color.needsUpdate = true;
@@ -725,6 +728,9 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
             skipExpression: skipExprPerPoint,
             scope: "display"
         });
+        const projectAlphaCfg = normalizeAlphaHelperConfig(this.state?.projectAlpha, { type: "none" });
+        const projectAlphaAuto = projectAlphaCfg.type !== "none"
+            && String(projectAlphaCfg.runMode || "auto").trim() !== "manual";
         const globalAxis = this.resolveCompositionAxisDirection();
         const tickStep = Math.max(0, Math.floor(globalCycleAge));
         const shouldResetPersistentRuntime = tickStep < this.previewRuntimeAppliedTick
@@ -741,11 +747,19 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
             persistentControllerStates.fill(null);
         }
         this.previewCanResumeRuntimeState = true;
-        const frameRuntimeGlobals = this.previewRuntimeGlobals;        for (let t = this.previewRuntimeAppliedTick + 1; t <= tickStep; t++) {
+        const frameRuntimeGlobals = this.previewRuntimeGlobals;
+        for (let t = this.previewRuntimeAppliedTick + 1; t <= tickStep; t++) {
+            const tickStatus = this.syncPreviewStatusWithCycle(frameRuntimeGlobals, cycleCfg, t, t);
+            if (projectAlphaAuto) {
+                const shouldDecrease = projectAlphaCfg.decreaseOnDisable === true
+                    && !!(tickStatus && typeof tickStatus.isDisable === "function" && tickStatus.isDisable());
+                this.advanceProjectAlphaPreviewState(frameRuntimeGlobals, projectAlphaCfg, shouldDecrease ? -1 : 1);
+            }
             this.applyExpressionGlobalsOnce(runtimeActions, t, t, frameRuntimeGlobals, globalAxis);
         }
         if (tickStep > this.previewRuntimeAppliedTick) this.previewRuntimeAppliedTick = tickStep;
         this.syncPreviewStatusWithCycle(frameRuntimeGlobals, cycleCfg, globalCycleAge, globalCycleAge);
+        const projectAlphaFactor = this.getProjectAlphaPreviewValue(frameRuntimeGlobals, projectAlphaCfg);
 
         if (!this.previewPointGroupIndex || this.previewPointGroupIndex.length !== totalCount) {
             this.rebuildPreviewRuntimeIndex();
@@ -1434,7 +1448,7 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
             colors[i * 3 + 1] = rgb[1];
             colors[i * 3 + 2] = rgb[2];
             sizes[i] = Math.max(0.05, num(pointVisual.size));
-            alphas[i] = clamp(num(pointVisual.alpha), 0, 1);
+            alphas[i] = clamp(clamp(num(pointVisual.alpha), 0, 1) * projectAlphaFactor, 0, 1);
             this.previewVisibleMask[i] = true;
             visible++;
         }
@@ -2224,6 +2238,15 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
                     vars.thisAt = thisAt;
                     const noop = () => {};
                     const scaleHelperApi = { doScale: noop, doScaleReversed: noop };
+                    const alphaHelperState = scopeLevel < 0
+                        ? this.cloneProjectAlphaPreviewState(thisAt, this.state?.projectAlpha)
+                        : null;
+                    const alphaHelperApi = scopeLevel < 0
+                        ? this.createProjectAlphaHelperApi(thisAt, this.state?.projectAlpha, {
+                            mutating: false,
+                            localState: alphaHelperState
+                        })
+                        : this.createProjectAlphaHelperApi(null, { type: "none" }, { mutating: false });
                     const addSingle = () => {
                         visible += 1;
                     };
@@ -2232,6 +2255,7 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
                     };
                     vars.rotateToPoint = noop;
                     vars.scaleHelper = scaleHelperApi;
+                    vars.alphaHelper = alphaHelperApi;
                     try {
                         fn(vars, U.v(0, 0, 0), noop, noop, noop, addSingle, addMultiple, thisAt);
                     } catch {
@@ -2326,6 +2350,237 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
         const s = num(scaleFactor);
         if (Math.abs(s - 1) <= 1e-9) return point;
         return U.v(point.x * s, point.y * s, point.z * s);
+    }
+
+    resolveProjectAlphaPreviewInitialValue(rawAlphaCfg) {
+        const cfg = normalizeAlphaHelperConfig(rawAlphaCfg, { type: "none" });
+        if (cfg.type === "none") return 1;
+        return cfg.startMax ? num(cfg.max) : 1;
+    }
+
+    ensureProjectAlphaPreviewState(runtimeVars, rawAlphaCfg = null) {
+        if (!runtimeVars || typeof runtimeVars !== "object") return null;
+        const cfg = normalizeAlphaHelperConfig(rawAlphaCfg, { type: "none" });
+        const stateKey = "__cpbProjectAlphaState";
+        if (cfg.type === "none") {
+            if (Object.prototype.hasOwnProperty.call(runtimeVars, stateKey)) {
+                delete runtimeVars[stateKey];
+            }
+            return null;
+        }
+        const tickMax = Math.max(1, int(cfg.tick || 1));
+        const minAlpha = num(cfg.min);
+        const maxAlpha = num(cfg.max);
+        let state = runtimeVars[stateKey];
+        const needsInit = !state
+            || typeof state !== "object"
+            || int(state.tick) !== tickMax
+            || num(state.min) !== minAlpha
+            || num(state.max) !== maxAlpha
+            || !!state.startMax !== !!cfg.startMax;
+        if (needsInit) {
+            state = {
+                current: cfg.startMax ? tickMax : 0,
+                alpha: cfg.startMax ? maxAlpha : 1,
+                min: minAlpha,
+                max: maxAlpha,
+                tick: tickMax,
+                startMax: !!cfg.startMax
+            };
+            runtimeVars[stateKey] = state;
+            return state;
+        }
+        if (!Number.isFinite(Number(state.current))) {
+            state.current = cfg.startMax ? tickMax : 0;
+        }
+        if (!Number.isFinite(Number(state.alpha))) {
+            state.alpha = cfg.startMax ? maxAlpha : 1;
+        }
+        state.min = minAlpha;
+        state.max = maxAlpha;
+        state.tick = tickMax;
+        state.startMax = !!cfg.startMax;
+        return state;
+    }
+
+    cloneProjectAlphaPreviewState(runtimeVars, rawAlphaCfg = null) {
+        const cfg = normalizeAlphaHelperConfig(rawAlphaCfg, { type: "none" });
+        if (cfg.type === "none") return null;
+        const state = this.ensureProjectAlphaPreviewState(runtimeVars, cfg);
+        if (state && typeof state === "object") {
+            return { ...state };
+        }
+        const tickMax = Math.max(1, int(cfg.tick || 1));
+        return {
+            current: cfg.startMax ? tickMax : 0,
+            alpha: this.resolveProjectAlphaPreviewInitialValue(cfg),
+            min: num(cfg.min),
+            max: num(cfg.max),
+            tick: tickMax,
+            startMax: !!cfg.startMax
+        };
+    }
+
+    syncProjectAlphaPreviewStateValue(state, rawAlphaCfg = null, currentRaw = 0) {
+        const cfg = normalizeAlphaHelperConfig(rawAlphaCfg, { type: "none" });
+        if (!state || typeof state !== "object" || cfg.type === "none") return 1;
+        const tickMax = Math.max(1, int(cfg.tick || 1));
+        const nextCurrent = clamp(int(currentRaw), 0, tickMax);
+        state.current = nextCurrent;
+        state.min = num(cfg.min);
+        state.max = num(cfg.max);
+        state.tick = tickMax;
+        state.startMax = !!cfg.startMax;
+        if (nextCurrent <= 0) {
+            state.alpha = num(cfg.min);
+            return state.alpha;
+        }
+        if (nextCurrent >= tickMax) {
+            state.alpha = num(cfg.max);
+            return state.alpha;
+        }
+        const progress = nextCurrent / tickMax;
+        state.alpha = num(cfg.min) + (num(cfg.max) - num(cfg.min)) * progress;
+        return state.alpha;
+    }
+
+    advanceProjectAlphaPreviewState(runtimeVars, rawAlphaCfg = null, delta = 0) {
+        const cfg = normalizeAlphaHelperConfig(rawAlphaCfg, { type: "none" });
+        const state = this.ensureProjectAlphaPreviewState(runtimeVars, cfg);
+        if (!state || cfg.type === "none") return 1;
+        const step = int(delta);
+        if (step > 0) {
+            if (int(state.current || 0) >= int(state.tick || 1)) return num(state.alpha);
+            return this.syncProjectAlphaPreviewStateValue(state, cfg, int(state.current || 0) + 1);
+        }
+        if (step < 0) {
+            if (int(state.current || 0) <= 0) return num(state.alpha);
+            return this.syncProjectAlphaPreviewStateValue(state, cfg, int(state.current || 0) - 1);
+        }
+        return num(state.alpha);
+    }
+
+    toggleProjectAlphaPreviewState(runtimeVars, rawAlphaCfg = null, alphaRaw = 0) {
+        const cfg = normalizeAlphaHelperConfig(rawAlphaCfg, { type: "none" });
+        const state = this.ensureProjectAlphaPreviewState(runtimeVars, cfg);
+        if (!state || cfg.type === "none") return 1;
+        const targetAlpha = num(alphaRaw);
+        const tickMax = Math.max(1, int(cfg.tick || 1));
+        if (targetAlpha <= num(cfg.min)) {
+            return this.syncProjectAlphaPreviewStateValue(state, cfg, 0);
+        }
+        if (targetAlpha >= num(cfg.max)) {
+            return this.syncProjectAlphaPreviewStateValue(state, cfg, tickMax);
+        }
+        const step = Math.abs(num(cfg.max) - num(cfg.min)) / tickMax;
+        if (step <= 1e-9) {
+            return this.syncProjectAlphaPreviewStateValue(state, cfg, 0);
+        }
+        const point = targetAlpha - num(cfg.min);
+        const tick = Math.round(point / step);
+        return this.syncProjectAlphaPreviewStateValue(state, cfg, tick);
+    }
+
+    getProjectAlphaPreviewValue(runtimeVars, rawAlphaCfg = null) {
+        const cfg = normalizeAlphaHelperConfig(rawAlphaCfg, { type: "none" });
+        if (cfg.type === "none") return 1;
+        const state = this.ensureProjectAlphaPreviewState(runtimeVars, cfg);
+        if (!state) return this.resolveProjectAlphaPreviewInitialValue(cfg);
+        return num(state.alpha);
+    }
+
+    createProjectAlphaHelperApi(runtimeVars, rawAlphaCfg = null, opts = {}) {
+        const cfg = normalizeAlphaHelperConfig(rawAlphaCfg, { type: "none" });
+        const localState = (opts.localState && typeof opts.localState === "object") ? opts.localState : null;
+        const canMutate = opts.mutating === true || !!localState;
+        const tickMax = Math.max(1, int(cfg.tick || 1));
+        const readState = () => {
+            if (localState) return localState;
+            return this.ensureProjectAlphaPreviewState(runtimeVars, cfg);
+        };
+        const writeState = (current) => {
+            const state = readState();
+            if (!state) return null;
+            this.syncProjectAlphaPreviewStateValue(state, cfg, current);
+            return state;
+        };
+        const stepState = (delta) => {
+            const state = readState();
+            if (!state) return null;
+            const current = int(state.current || 0);
+            if (int(delta) > 0) {
+                if (current >= tickMax) return state;
+                return writeState(current + 1);
+            }
+            if (int(delta) < 0) {
+                if (current <= 0) return state;
+                return writeState(current - 1);
+            }
+            return state;
+        };
+        const toggleState = (alpha) => {
+            const state = readState();
+            if (!state) return null;
+            const targetAlpha = num(alpha);
+            if (targetAlpha <= num(cfg.min)) return writeState(0);
+            if (targetAlpha >= num(cfg.max)) return writeState(tickMax);
+            const step = Math.abs(num(cfg.max) - num(cfg.min)) / tickMax;
+            if (step <= 1e-9) return writeState(0);
+            const point = targetAlpha - num(cfg.min);
+            return writeState(Math.round(point / step));
+        };
+        const noop = () => {};
+        if (cfg.type === "none") {
+            return {
+                increaseAlpha: noop,
+                decreaseAlpha: noop,
+                resetAlphaMin: noop,
+                resetAlphaMax: noop,
+                toggleAlpha: noop,
+                doAlphaTo: noop,
+                over: () => false,
+                isZero: () => true,
+                getCurrentAlpha: () => 1
+            };
+        }
+        return {
+            increaseAlpha: () => {
+                if (!canMutate) return;
+                stepState(1);
+            },
+            decreaseAlpha: () => {
+                if (!canMutate) return;
+                stepState(-1);
+            },
+            resetAlphaMin: () => {
+                if (!canMutate) return;
+                writeState(0);
+            },
+            resetAlphaMax: () => {
+                if (!canMutate) return;
+                writeState(tickMax);
+            },
+            toggleAlpha: (alpha) => {
+                if (!canMutate) return;
+                toggleState(alpha);
+            },
+            doAlphaTo: (current) => {
+                if (!canMutate) return;
+                writeState(current);
+            },
+            over: () => {
+                const state = readState();
+                return !!state && int(state.current || 0) >= tickMax;
+            },
+            isZero: () => {
+                const state = readState();
+                return !state || int(state.current || 0) <= 0;
+            },
+            getCurrentAlpha: () => {
+                const state = readState();
+                return state ? num(state.alpha) : this.resolveProjectAlphaPreviewInitialValue(cfg);
+            }
+        };
     }
 
     getShapeLeafType(card) {
@@ -4226,6 +4481,9 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
         const projectScaleCfg = normalizeScaleHelperConfig(this.state?.projectScale, { type: "none" });
         const projectScaleManual = projectScaleCfg.type !== "none"
             && String(projectScaleCfg.runMode || "auto") === "manual";
+        const projectAlphaCfg = normalizeAlphaHelperConfig(this.state?.projectAlpha, { type: "none" });
+        const projectAlphaManual = projectAlphaCfg.type !== "none"
+            && String(projectAlphaCfg.runMode || "auto") === "manual";
         const applyProjectScale = (reversed = false) => {
             if (!projectScaleManual) return;
             const tickMax = Math.max(1, int(projectScaleCfg.tick || 1));
@@ -4275,8 +4533,18 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
                 applyProjectScale(true);
             }
         };
+        const alphaHelperState = (!shapeScope && projectAlphaManual && !persistExpressionVars)
+            ? this.cloneProjectAlphaPreviewState(runtimeVars, projectAlphaCfg)
+            : null;
+        const alphaHelperApi = (!shapeScope && projectAlphaManual)
+            ? this.createProjectAlphaHelperApi(runtimeVars, projectAlphaCfg, {
+                mutating: persistExpressionVars,
+                localState: alphaHelperState
+            })
+            : this.createProjectAlphaHelperApi(null, { type: "none" }, { mutating: false });
         vars.rotateToPoint = api.rotateToPoint;
         vars.scaleHelper = scaleHelperApi;
+        vars.alphaHelper = alphaHelperApi;
         vars.thisAt = thisAt;
         vars.axis = U.clone(api.axis);
         try {

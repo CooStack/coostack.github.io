@@ -12,6 +12,7 @@ const INLINE_RUNTIME_IDENTIFIER_SET = new Set([
     "rel",
     "order",
     "axis",
+    "alphaHelper",
     "scaleHelper",
     "status",
     "particle",
@@ -297,13 +298,14 @@ function buildApiDtsFromCompletions(completions) {
     lines.push("declare let rel: any;");
     lines.push("declare let order: any;");
     lines.push("declare let axis: any;");
+    lines.push("declare let alphaHelper: any;");
     lines.push("declare let scaleHelper: any;");
     lines.push("declare const status: any;");
     lines.push("declare let particle: any;");
     lines.push("declare let thisAt: any;");
     for (const name of Array.from(vars).sort((a, b) => a.localeCompare(b))) {
         if (reserved.has(name)) continue;
-        if (/^(Math|PI|age|tick|tickCount|index|status|particle|thisAt|rel|order|axis)$/.test(name)) continue;
+        if (/^(Math|PI|age|tick|tickCount|index|status|particle|thisAt|rel|order|axis|alphaHelper|scaleHelper)$/.test(name)) continue;
         // Use let to avoid false "assignment to constant" diagnostics for project symbols.
         lines.push(`declare let ${name}: any;`);
     }
