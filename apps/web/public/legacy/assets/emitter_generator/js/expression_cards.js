@@ -609,7 +609,7 @@ function booleanExprToKotlin(expr, ctxMap = {}) {
     const check = validateBooleanExpr(out);
     if (!check.ok) return "false";
     out = out.replace(/!==/g, "!=").replace(/===/g, "==");
-    out = out.replace(/\bMath\.abs\s*\(/g, "kotlin.math.abs(");
+    out = out.replace(/\bMath\.abs\s*\(/g, "abs(");
     const mapKeys = ["age", "maxAge", "life", "sign", "respawnCount", "tick", "reason"];
     for (const key of mapKeys) {
         let target = String(ctxMap?.[key] || "").trim();
@@ -985,8 +985,8 @@ export function conditionFilterToKotlin(filter, ctxMap = {}, opts = {}) {
                     rightExpr = `((${calcC}).toDouble())`;
                 }
                 const resultCmp = normalizeCalcResultCmp(cfg.calcResultCmp);
-                if (resultCmp === "==") cmp = `(kotlin.math.abs((${leftExpr}) - (${rightExpr})) <= 1e-6)`;
-                else if (resultCmp === "!=") cmp = `(kotlin.math.abs((${leftExpr}) - (${rightExpr})) > 1e-6)`;
+                if (resultCmp === "==") cmp = `(abs((${leftExpr}) - (${rightExpr})) <= 1e-6)`;
+                else if (resultCmp === "!=") cmp = `(abs((${leftExpr}) - (${rightExpr})) > 1e-6)`;
                 else cmp = `((${leftExpr}) ${resultCmp} (${rightExpr}))`;
             }
         } else {

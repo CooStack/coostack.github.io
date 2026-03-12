@@ -118,7 +118,7 @@ export function initHotkeysSystem(ctx) {
                 return true;
             }
             if (tag === "TEXTAREA") {
-                if ((node.id === "kotlinOutCmd" || node.id === "kotlinOutEmitter") && node.readOnly) return false;
+                if (node.id === "kotlinOutEmitter" && node.readOnly) return false;
                 return true;
             }
             if (node.isContentEditable) return true;

@@ -15,7 +15,7 @@
         }
     </script>
     <script src="https://cdn.jsdelivr.net/npm/noisejs@2.1.0/index.min.js"></script>
-    <link rel="stylesheet" href="./assets/emitter_generator/css/style.css?v=20260224_8"/>
+    <link rel="stylesheet" href="./assets/emitter_generator/css/style.css?v=20260312_5"/>
     <script src="./assets/src/js/compat/spa-router-bridge.js"></script>
 </head>
 
@@ -29,11 +29,16 @@
                 <div class="title">粒子发射器可视化</div>
                 <div class="sub">
                     生成 Kotlin：<code
-                >val command = ParticleCommandQueue().add(...)</code>
+                >class GeneratedEmitter(pos: Vec3, world: Level?) : AutoParticleEmitters(pos, world)</code>
                 </div>
             </div>
         </div>
         <div class="top-actions">
+            <div class="page-switch">
+                <button class="btn primary" id="btnPageEditor" type="button">编辑</button>
+                <button class="btn" id="btnPageCode" type="button">代码</button>
+            </div>
+            <div class="sep"></div>
             <button class="btn" id="btnPlay">▶ 预览</button>
             <button class="btn" id="btnPause">⏸ 暂停</button>
             <button class="btn" id="btnClear">🧹 清空粒子</button>
@@ -44,13 +49,10 @@
             <button class="btn" id="btnImportJson" title="从 JSON 导入">📥 从JSON导入</button>
             <button class="btn" id="btnExportJson" title="导出为 JSON">📤 导出为 JSON</button>
             <button class="btn danger" id="btnResetAll" title="重置为默认">⟲ 重置</button>
-            <div class="sep"></div>
-            <button class="btn primary" id="btnGen" style="display:none;">🧾 生成 Kotlin</button>
-            <button class="btn" id="btnCopy" style="display:none;">📋 复制代码</button>
         </div>
     </header>
 
-    <main class="main">
+    <main id="pageEditor" class="main page page-editor">
         <!-- 左侧参数栏 -->
         <section class="panel left">
             <div class="panel-title">粒子发射器</div>
@@ -79,7 +81,7 @@
             <div class="panel-subtitle behavior-config-title">页面切换</div>
             <div class="config-tabs" id="cfgPageTabs">
                 <button class="config-tab active" type="button" data-cfg-tab="emitters">发射器卡片</button>
-                <button class="config-tab" type="button" data-cfg-tab="kotlin">Kotlin 生成选项</button>
+                <button class="config-tab" type="button" data-cfg-tab="kotlin">项目设置</button>
                 <button class="config-tab" type="button" data-cfg-tab="tick">doTick 表达式</button>
                 <button class="config-tab" type="button" data-cfg-tab="death">死亡行为</button>
             </div>
@@ -90,17 +92,18 @@
             </div>
 
             <div id="cfgPageKotlin" class="cfg-page">
-                <div class="panel-subtitle">Kotlin 生成选项</div>
+                <div class="panel-subtitle">项目设置</div>
                 <div class="grid2">
                     <div class="field">
-                        <label>变量名</label>
-                        <input id="kVarName" type="text" value="command"/>
+                        <label>类名</label>
+                        <input id="kClassName" type="text" value="GeneratedEmitter"/>
                     </div>
                     <div class="field">
-                        <label>Supplier / emitter 引用名</label>
-                        <input id="kRefName" type="text" value="emitter"/>
+                        <label>包名（可空）</label>
+                        <input id="kPackageName" type="text" value="" placeholder="cn.coostack.generated.emitters"/>
                     </div>
                 </div>
+                <div class="hint">和 Composition Builder 一样，这里维护生成类的项目级信息。代码页只输出整合后的完整 Emitter Kotlin 类。</div>
                 <div class="panel-subtitle">总发射器生命周期（父级）</div>
                 <div class="grid3">
                     <div class="field"><label>模式</label><select id="rootLifecycleMode" class="input"><option value="once">once（单次）</option><option value="interval">interval（按间隔持续）</option><option value="interval_n_tick">interval_n_tick（按间隔，持续 N tick）</option></select></div>
@@ -228,7 +231,7 @@
                 预览相机操作：<strong>中键旋转</strong> /
                 <strong>右键平移</strong> / <strong>方向键平移</strong> /
                 <strong>滚轮缩放</strong>。<br/>
-                可生成命令队列代码与发射器参数代码（Emitter 输出）。
+                代码页直接生成整合后的完整 Emitter Kotlin 类。
             </div>
         </section>
 
@@ -252,27 +255,6 @@
                     </button>
                 </div>
             </div>
-            <div id="previewResizer" class="preview-resizer" aria-hidden="true"></div>
-
-            <div class="panel-title kotlin-title" style="margin-top: 12px">
-                <span>Kotlin 输出</span>
-                <div class="kotlin-tabs">
-                    <button class="kotlin-tab active" data-tab="command">Command</button>
-                    <button class="kotlin-tab" data-tab="emitter">Emitter</button>
-                </div>
-            </div>
-            <div class="kotlin-toolbar">
-                <div class="kotlin-actions">
-                    <button class="btn primary" id="btnGenKotlin">🧾 生成 Kotlin</button>
-                    <button class="btn" id="btnCopyKotlin">📋 复制代码</button>
-                </div>
-                <div class="kotlin-note">代码高亮已启用，复制会按当前页面输出。</div>
-            </div>
-            <div id="kotlinBody" class="kotlin-body">
-                <pre id="kotlinOutCmd" class="kotlin-out code code-highlight" aria-readonly="true"></pre>
-                <pre id="kotlinOutEmitter" class="kotlin-out code code-highlight hidden" aria-readonly="true"></pre>
-            </div>
-            <div id="kotlinResizer" class="kotlin-resizer" aria-hidden="true"></div>
         </section>
 
         <div class="resizer resizer-right" data-resizer="right" aria-hidden="true"></div>
@@ -295,6 +277,24 @@
             </div>
         </section>
     </main>
+
+    <section id="pageCode" class="page page-code hidden">
+        <div class="panel code-panel">
+            <div class="panel-title kotlin-title">
+                <span>Kotlin 输出</span>
+            </div>
+            <div class="kotlin-toolbar">
+                <div class="kotlin-actions">
+                    <button class="btn primary" id="btnGenKotlin">🧾 生成 Kotlin</button>
+                    <button class="btn" id="btnCopyKotlin">📋 复制代码</button>
+                </div>
+                <div class="kotlin-note">代码页固定输出整合后的完整 Emitter 类。</div>
+            </div>
+            <div id="kotlinBody" class="kotlin-body">
+                <pre id="kotlinOutEmitter" class="kotlin-out code code-highlight" aria-readonly="true"></pre>
+            </div>
+        </div>
+    </section>
 
     <!-- 设置 -->
     <div id="settingsMask" class="modal-mask hidden"></div>
@@ -414,7 +414,7 @@
     </footer>
 </div>
 <!-- app -->
-<script type="module" src="./assets/src/js/pages/generator.page.js"></script>
+<script type="module" src="./assets/src/js/pages/generator.page.js?v=20260312_8"></script>
 
 <!-- modal / file input -->
 <div id="modalMask" class="modal-mask hidden" aria-hidden="true">

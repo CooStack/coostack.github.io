@@ -1,11 +1,11 @@
 
 import { COMMAND_META, newCommand, normalizeCommand, humanFieldName, cloneDefaultCommands } from "./command_meta.js";
 import { initPreview } from "./preview.js";
-import { genCommandKotlin, genEmitterKotlin } from "./kotlin_gen.js";
+import { genEmitterKotlin } from "./kotlin_gen.js?v=20260312_6";
 import { initSettingsSystem } from "./settings.js";
-import { initHotkeysSystem } from "./hotkeys.js";
+import { initHotkeysSystem } from "./hotkeys.js?v=20260312_7";
 import { initLayoutSystem } from "./layout.js";
-import { clamp, safeNum, escapeHtml, deepCopy, deepAssign } from "./utils.js";
+import { clamp, safeNum, escapeHtml, deepCopy, deepAssign } from "./utils.js?v=20260312_6";
 import { normalizeFloatCurve, sampleFloatCurve } from "./command_curve.js";
 import { InlineCodeEditor, mergeCompletionGroups } from "../../composition_builder/js/code_editor.js?v=20260220_5";
 import {
@@ -18,7 +18,7 @@ import {
     createConditionRule,
     normalizeConditionFilter,
     validateBooleanExpr,
-} from "./expression_cards.js";
+} from "./expression_cards.js?v=20260312_6";
 import {
     createEmitterVar,
     createTickAction,
@@ -78,6 +78,7 @@ import {
 
         "particle.colorStart": "生命周期开始颜色（life=0）。",
         "particle.colorEnd": "生命周期结束颜色（life=end）。",
+        "particle.colorOverLifeEnabled": "是否启用生命周期颜色变化；关闭时只使用单一颜色。",
         "particle.lifeMin": "生命周期最小值（tick）。",
         "particle.lifeMax": "生命周期最大值（tick）。",
         "particle.sizeMin": "粒子大小下限（预览点大小）。",
@@ -191,7 +192,8 @@ import {
             velSpeedMax: 1.2,
             visibleRange: 128,
             colorStart: "#4df3ff",
-            colorEnd: "#d04dff",
+            colorEnd: "#4df3ff",
+            colorOverLifeEnabled: false,
         },
         template: {
             effectClass: "ControlableEndRodEffect",
@@ -223,6 +225,8 @@ import {
         ticksPerSecond: 20,
         fullscreen: false,
         kotlin: {
+            className: "GeneratedEmitter",
+            packageName: "",
             varName: "command",
             kRefName: "emitter",
         },
@@ -604,7 +608,8 @@ import {
         particle.velSpeedMax = normalizeNumExpr(particle.velSpeedMax, 1.2, { min: 0 });
         particle.visibleRange = normalizeNumExpr(particle.visibleRange, 128, { min: 1 });
         particle.colorStart = (particle.colorStart || "#4df3ff").trim();
-        particle.colorEnd = (particle.colorEnd || "#d04dff").trim();
+        particle.colorEnd = (particle.colorEnd || particle.colorStart || "#4df3ff").trim();
+        particle.colorOverLifeEnabled = !!particle.colorOverLifeEnabled;
 
         const lifeMinN = maybeNumericLiteral(particle.lifeMin);
         const lifeMaxN = maybeNumericLiteral(particle.lifeMax);
@@ -898,12 +903,11 @@ import {
         toast("已清空 PointsBuilder 形状", "success");
     }
 
-    const KOTLIN_TAB_KEY = "pe_kotlin_tab_v1";
     const KOTLIN_HEIGHT_KEY = "pe_kotlin_height_v1";
     const PREVIEW_HEIGHT_KEY = "pe_preview_height_v1";
     const CONFIG_PAGE_KEY = "pe_cfg_page_v2";
-    let activeKotlinTab = "command";
-    const kotlinCache = { command: "", emitter: "" };
+    const PAGE_VIEW_KEY = "pe_page_view_v1";
+    let kotlinCache = "";
 
     function toast(msg, type = "info") {
         const text = String(msg ?? "").trim();
@@ -925,6 +929,186 @@ import {
         }, 2200);
     }
 
+    let lifecycleSignDialog = null;
+
+    function getEmitterLiteralSign(card) {
+        return parseSignInputValue(card?.template?.sign);
+    }
+
+    function findEmittersByLiteralSign(sign, opts = {}) {
+        const excludeIds = new Set((Array.isArray(opts.excludeIds) ? opts.excludeIds : []).map((it) => String(it)));
+        const out = [];
+        for (const card of state.emitters) {
+            if (!card) continue;
+            if (excludeIds.has(String(card.id))) continue;
+            if (getEmitterLiteralSign(card) !== sign) continue;
+            out.push(card);
+        }
+        return out;
+    }
+
+    function syncLifecycleColorGroupBySign(sourceId, fields = []) {
+        const source = getEmitterById(sourceId);
+        if (!source || !source.particle || !source.particle.colorOverLifeEnabled) return false;
+        const signValue = getEmitterLiteralSign(source);
+        if (signValue == null) return false;
+        const peers = findEmittersByLiteralSign(signValue, { excludeIds: [sourceId] });
+        if (!peers.length) return false;
+
+        const fieldList = Array.isArray(fields) ? fields.filter(Boolean) : [];
+        if (!fieldList.length) return false;
+
+        let changed = false;
+        for (const peer of peers) {
+            if (!peer || !peer.particle || !peer.particle.colorOverLifeEnabled) continue;
+            let peerChanged = false;
+            for (const field of fieldList) {
+                const nextValue = getByPath(source, field);
+                if (getByPath(peer, field) === nextValue) continue;
+                setByPath(peer, field, nextValue);
+                peerChanged = true;
+            }
+            if (!peerChanged) continue;
+            sanitizeEmitterCard(peer);
+            for (const field of fieldList) {
+                updateEmitterInputValue(peer.id, field, getByPath(peer, field));
+            }
+            const $peerCard = $(`#emitList .emitCard[data-id="${peer.id}"]`);
+            if ($peerCard.length) {
+                setColorLifecycleSection($peerCard, peer.particle && peer.particle.colorOverLifeEnabled);
+            }
+            changed = true;
+        }
+        return changed;
+    }
+
+    function findNextAvailableEmitterSign(baseSign = 0) {
+        let next = Number.isFinite(Number(baseSign)) ? Math.trunc(Number(baseSign)) + 1 : 1;
+        const used = new Set(state.emitters.map((card) => getEmitterLiteralSign(card)).filter((it) => it != null));
+        while (used.has(next)) next += 1;
+        return next;
+    }
+
+    function removeLifecycleSignDialog() {
+        if (!lifecycleSignDialog) return;
+        lifecycleSignDialog.mask?.remove();
+        lifecycleSignDialog.modal?.remove();
+        lifecycleSignDialog = null;
+    }
+
+    function commitLifecycleEnableState(cardId, opts = {}) {
+        const card = getEmitterById(cardId);
+        if (!card) return false;
+        const enabled = opts.enabled !== false;
+        card.particle.colorOverLifeEnabled = enabled;
+
+        if (enabled && Array.isArray(opts.applyPeerIds) && opts.applyPeerIds.length) {
+            const peerIds = new Set(opts.applyPeerIds.map((it) => String(it)));
+            for (const peer of state.emitters) {
+                if (!peer || !peerIds.has(String(peer.id))) continue;
+                peer.particle.colorOverLifeEnabled = true;
+                peer.particle.colorStart = card.particle.colorStart;
+                peer.particle.colorEnd = card.particle.colorEnd;
+                sanitizeEmitterCard(peer);
+            }
+        }
+
+        if (enabled && opts.newSign != null) {
+            card.template.sign = Math.trunc(Number(opts.newSign));
+        }
+
+        sanitizeEmitterCard(card);
+        cardHistory.push();
+        renderEmitterList();
+        scheduleSave();
+        autoGenKotlin();
+        if (typeof renderEmitterSyncMenu === "function" && emitterSync && emitterSync.open) renderEmitterSyncMenu();
+        return true;
+    }
+
+    function openLifecycleSignDialog(cardId, sameSignCards, signValue, inputEl) {
+        removeLifecycleSignDialog();
+        const card = getEmitterById(cardId);
+        if (!card) return;
+        const suggestedSign = findNextAvailableEmitterSign(signValue);
+
+        const mask = document.createElement("div");
+        mask.className = "modal-mask";
+        const modal = document.createElement("div");
+        modal.className = "modal lifecycle-sign-modal";
+        modal.innerHTML = [
+            `<div class="modal-head">`,
+            `  <div class="modal-title">生命周期颜色变化需要唯一 Sign</div>`,
+            `  <button class="modal-close" type="button" aria-label="关闭">×</button>`,
+            `</div>`,
+            `<div class="modal-body">`,
+            `  <div>当前发射器与 <strong>${sameSignCards.length}</strong> 个发射器共用了 sign <code>${escapeHtml(String(signValue))}</code>。`,
+            `  开启生命周期颜色变化后，会按 sign 生成颜色逻辑，所以你需要改成新 sign，或者一起应用到所有相同 sign 的发射器。</div>`,
+            `  <div class="field">`,
+            `    <label>新 Sign:</label>`,
+            `    <input class="input lifecycle-sign-input" type="number" step="1" value="${escapeHtml(String(suggestedSign))}" />`,
+            `  </div>`,
+            `</div>`,
+            `<div class="modal-actions">`,
+            `  <button class="btn primary lifecycle-sign-confirm" type="button">确认修改新sign</button>`,
+            `  <button class="btn lifecycle-sign-apply" type="button">应用相同sign</button>`,
+            `  <button class="btn lifecycle-sign-cancel" type="button">取消</button>`,
+            `</div>`,
+        ].join("");
+
+        const close = (revert = false) => {
+            if (revert && inputEl) {
+                inputEl.checked = false;
+            }
+            removeLifecycleSignDialog();
+        };
+
+        const input = modal.querySelector(".lifecycle-sign-input");
+        const onConfirmNewSign = () => {
+            const nextSign = parseSignInputValue(input?.value);
+            if (nextSign == null) {
+                toast("新 Sign 必须是整数", "error");
+                input?.focus();
+                return;
+            }
+            const conflicts = findEmittersByLiteralSign(nextSign, { excludeIds: [cardId] });
+            if (conflicts.length) {
+                toast(`Sign ${nextSign} 已被其他发射器占用`, "error");
+                input?.focus();
+                input?.select?.();
+                return;
+            }
+            close(false);
+            commitLifecycleEnableState(cardId, { enabled: true, newSign: nextSign });
+        };
+
+        modal.querySelector(".modal-close")?.addEventListener("click", () => close(true));
+        modal.querySelector(".lifecycle-sign-cancel")?.addEventListener("click", () => close(true));
+        modal.querySelector(".lifecycle-sign-apply")?.addEventListener("click", () => {
+            close(false);
+            commitLifecycleEnableState(cardId, {
+                enabled: true,
+                applyPeerIds: sameSignCards.map((it) => it.id),
+            });
+        });
+        modal.querySelector(".lifecycle-sign-confirm")?.addEventListener("click", onConfirmNewSign);
+        mask.addEventListener("click", () => close(true));
+        input?.addEventListener("keydown", (e) => {
+            if (e.key === "Enter") {
+                e.preventDefault();
+                onConfirmNewSign();
+            } else if (e.key === "Escape") {
+                e.preventDefault();
+                close(true);
+            }
+        });
+
+        document.body.appendChild(mask);
+        document.body.appendChild(modal);
+        lifecycleSignDialog = { mask, modal };
+        setTimeout(() => input?.focus(), 0);
+    }
+
     function downloadText(filename, text, mime = "text/plain") {
         const blob = new Blob([text], { type: `${mime};charset=utf-8` });
         const a = document.createElement("a");
@@ -936,13 +1120,11 @@ import {
         setTimeout(() => URL.revokeObjectURL(a.href), 200);
     }
 
-    function setKotlinOut(kind, text) {
-        const el = (kind === "emitter")
-            ? document.getElementById("kotlinOutEmitter")
-            : document.getElementById("kotlinOutCmd");
+    function setKotlinOut(text) {
+        const el = document.getElementById("kotlinOutEmitter");
         if (!el) return;
         const raw = String(text ?? "");
-        kotlinCache[kind] = raw;
+        kotlinCache = raw;
         const hl = window.CodeHighlighter && typeof window.CodeHighlighter.highlightKotlin === "function"
             ? window.CodeHighlighter.highlightKotlin
             : null;
@@ -955,17 +1137,14 @@ import {
         ensureEmitterBehaviorState();
         state.emitters.forEach(sanitizeEmitterCard);
         forEachAllCommands((cmd) => sanitizeCommandLifeFilter(cmd));
-        const cmdText = genCommandKotlin(state);
         const emitterText = genEmitterKotlin(state);
-        setKotlinOut("command", cmdText);
-        setKotlinOut("emitter", emitterText);
+        setKotlinOut(emitterText);
     }
     globalThis.autoGenKotlin = autoGenKotlin;
 
     function copyKotlin() {
-        const kind = (activeKotlinTab === "emitter") ? "emitter" : "command";
-        if (!kotlinCache[kind]) autoGenKotlin();
-        const text = kotlinCache[kind] || "";
+        if (!kotlinCache) autoGenKotlin();
+        const text = kotlinCache || "";
         if (!text) return;
 
         const fallback = () => {
@@ -994,35 +1173,46 @@ import {
         }
     }
 
-    function applyKotlinTab(tab) {
-        const next = (tab === "emitter") ? "emitter" : "command";
-        activeKotlinTab = next;
+    function applyMainPage(page) {
+        const next = (page === "code") ? "code" : "editor";
         try {
-            localStorage.setItem(KOTLIN_TAB_KEY, next);
+            localStorage.setItem(PAGE_VIEW_KEY, next);
         } catch {}
 
-        document.querySelectorAll(".kotlin-tab").forEach((el) => {
-            el.classList.toggle("active", el.dataset && el.dataset.tab === next);
-        });
-        const cmd = document.getElementById("kotlinOutCmd");
-        const emit = document.getElementById("kotlinOutEmitter");
-        if (cmd) cmd.classList.toggle("hidden", next !== "command");
-        if (emit) emit.classList.toggle("hidden", next !== "emitter");
+        const pageEditor = document.getElementById("pageEditor");
+        const pageCode = document.getElementById("pageCode");
+        const btnPageEditor = document.getElementById("btnPageEditor");
+        const btnPageCode = document.getElementById("btnPageCode");
+        const isCode = next === "code";
+
+        if (pageEditor) pageEditor.classList.toggle("hidden", isCode);
+        if (pageCode) pageCode.classList.toggle("hidden", !isCode);
+        if (btnPageEditor) btnPageEditor.classList.toggle("primary", !isCode);
+        if (btnPageCode) btnPageCode.classList.toggle("primary", isCode);
+
+        if (isCode) {
+            autoGenKotlin();
+        } else {
+            requestAnimationFrame(() => {
+                if (preview) preview.resizeRenderer();
+                if (layoutSystem) layoutSystem.applyLayoutState(true);
+            });
+        }
     }
 
-    function initKotlinTabs() {
-        const tabs = Array.from(document.querySelectorAll(".kotlin-tab"));
-        if (!tabs.length) return;
-        let saved = "";
-        try { saved = localStorage.getItem(KOTLIN_TAB_KEY) || ""; } catch {}
-        if (saved !== "command" && saved !== "emitter") {
-            const cur = tabs.find(t => t.classList.contains("active"));
-            saved = (cur && cur.dataset && cur.dataset.tab) ? cur.dataset.tab : "command";
-        }
-        applyKotlinTab(saved);
-        tabs.forEach((btn) => {
-            btn.addEventListener("click", () => applyKotlinTab(btn.dataset.tab));
-        });
+    function initMainPages() {
+        const btnPageEditor = document.getElementById("btnPageEditor");
+        const btnPageCode = document.getElementById("btnPageCode");
+        if (!btnPageEditor || !btnPageCode) return;
+
+        btnPageEditor.addEventListener("click", () => applyMainPage("editor"));
+        btnPageCode.addEventListener("click", () => applyMainPage("code"));
+
+        let saved = "editor";
+        try {
+            saved = localStorage.getItem(PAGE_VIEW_KEY) || "editor";
+        } catch {}
+        applyMainPage(saved);
     }
 
     function applyConfigPage(tab) {
@@ -1061,7 +1251,17 @@ import {
         const previewWrap = document.getElementById("viewportWrap");
         const kotlinBody = document.getElementById("kotlinBody");
         const panel = document.querySelector(".panel.center");
-        if (!resizer || !previewWrap || !kotlinBody || !panel) return;
+        if (!previewWrap) return;
+        if (!resizer || !kotlinBody || !panel) {
+            previewWrap.style.height = "";
+            try {
+                localStorage.removeItem(PREVIEW_HEIGHT_KEY);
+            } catch {}
+            requestAnimationFrame(() => {
+                if (preview) preview.resizeRenderer();
+            });
+            return;
+        }
         if (initPreviewResizer._bound) return;
         initPreviewResizer._bound = true;
 
@@ -1327,6 +1527,14 @@ function setVelocitySection($card, mode) {
     const m = (mode === "spawn_rel") ? "spawn_rel" : "fixed";
     $card.find(".vel-field").removeClass("active");
     $card.find(`.vel-field[data-vel="${m}"]`).addClass("active");
+}
+
+function setColorLifecycleSection($card, enabled) {
+    if (!$card || !$card.length) return;
+    const on = !!enabled;
+    $card.find(".emitColorLifecycleFields").toggleClass("hidden", !on);
+    const $label = $card.find('.field:has(.emitInput[data-key="particle.colorStart"]) label').first();
+    if ($label.length) $label.text(on ? "开始颜色（life=0）" : "粒子颜色");
 }
 
 
@@ -2396,8 +2604,8 @@ function setVelocitySection($card, mode) {
     function applyStateToForm() {
         ensureCommandQueuesState();
         $("#ticksPerSecond").val(state.ticksPerSecond);
-        $("#kVarName").val(state.kotlin.varName);
-        $("#kRefName").val(state.kotlin.kRefName);
+        $("#kClassName").val(state.kotlin.className || "GeneratedEmitter");
+        $("#kPackageName").val(state.kotlin.packageName || "");
         state.rootLifecycle = normalizeRootLifecycle(state.rootLifecycle);
         $("#rootLifecycleMode").val(state.rootLifecycle.mode);
         $("#rootLifecycleInterval").val(state.rootLifecycle.intervalTick);
@@ -2414,8 +2622,8 @@ function setVelocitySection($card, mode) {
 
     function readBaseForm() {
         state.ticksPerSecond = Math.max(1, safeNum($("#ticksPerSecond").val(), 20));
-        state.kotlin.varName = ($("#kVarName").val() || "command").trim() || "command";
-        state.kotlin.kRefName = ($("#kRefName").val() || "emitter").trim() || "emitter";
+        state.kotlin.className = ($("#kClassName").val() || "GeneratedEmitter").trim() || "GeneratedEmitter";
+        state.kotlin.packageName = ($("#kPackageName").val() || "").trim();
         state.rootLifecycle = normalizeRootLifecycle({
             mode: $("#rootLifecycleMode").val(),
             intervalTick: $("#rootLifecycleInterval").val(),
@@ -2531,13 +2739,17 @@ function setVelocitySection($card, mode) {
                 `      </div>`,
                 `    </div>`,
                 `    <div class="hint">偏移量用于预览：发射器整体位置平移（不改变形状参数）。</div>`,
-                `    <div class="panel-subtitle">颜色渐变（生命周期）</div>`,
+                `    <div class="panel-subtitle">粒子颜色</div>`,
+                `    <label class="life-color-toggle">`,
+                `      <input class="emitInput" data-key="particle.colorOverLifeEnabled" data-type="bool-check" type="checkbox"${card.particle && card.particle.colorOverLifeEnabled ? " checked" : ""} />`,
+                `      <span>开启生命周期颜色变化</span>`,
+                `    </label>`,
                 `    <div class="grid2">`,
                 `      <div class="field">`,
-                `        <label>开始颜色（life=0）</label>`,
+                `        <label>${card.particle && card.particle.colorOverLifeEnabled ? "开始颜色（life=0）" : "粒子颜色"}</label>`,
                 `        <input class="emitInput" data-key="particle.colorStart" data-type="color" type="color" value="${esc(card.particle.colorStart)}" />`,
                 `      </div>`,
-                `      <div class="field">`,
+                `      <div class="field emitColorLifecycleFields${card.particle && card.particle.colorOverLifeEnabled ? "" : " hidden"}">`,
                 `        <label>结束颜色（life=end）</label>`,
                 `        <input class="emitInput" data-key="particle.colorEnd" data-type="color" type="color" value="${esc(card.particle.colorEnd)}" />`,
                 `      </div>`,
@@ -2881,6 +3093,7 @@ function setVelocitySection($card, mode) {
             setEmissionSection($card, card.emission.mode);
             setFaceToCameraSection($card, (card.template && card.template.faceToCamera === false) ? false : true);
             setVelocitySection($card, card.particle && card.particle.velMode);
+            setColorLifecycleSection($card, card.particle && card.particle.colorOverLifeEnabled);
             applyEmitterTips($card);
 
             if (emitterSync && emitterSync.selectedIds && emitterSync.selectedIds.has(card.id)) {
@@ -3000,6 +3213,7 @@ function setVelocitySection($card, mode) {
             const type = el && el.dataset ? String(el.dataset.type || "") : "";
             let val = getByPath(card, key);
             if (type === "bool") $(el).val(val ? "1" : "0");
+            else if (type === "bool-check") $(el).prop("checked", !!val);
             else if (type === "color") $(el).val(val || "#ffffff");
             else $(el).val(val ?? "");
         });
@@ -3007,6 +3221,7 @@ function setVelocitySection($card, mode) {
         setEmissionSection($root, card.emission.mode);
         setFaceToCameraSection($root, (card.template && card.template.faceToCamera === false) ? false : true);
         setVelocitySection($root, card.particle && card.particle.velMode);
+        setColorLifecycleSection($root, card.particle && card.particle.colorOverLifeEnabled);
     }
 
     function setAllEmittersCollapsed(collapsed) {
@@ -3124,6 +3339,7 @@ function setVelocitySection($card, mode) {
         "particle.vel.y",
         "particle.vel.z",
         "particle.visibleRange",
+        "particle.colorOverLifeEnabled",
         "particle.colorStart",
         "particle.colorEnd",
     ];
@@ -3156,6 +3372,7 @@ function setVelocitySection($card, mode) {
         if (!$input.length) return;
         const type = String($input.data("type") || "");
         if (type === "bool") $input.val(value ? "1" : "0");
+        else if (type === "bool-check") $input.prop("checked", !!value);
         else $input.val(value ?? "");
     }
 
@@ -3197,6 +3414,7 @@ function setVelocitySection($card, mode) {
                 }
                 if (kind === "template") {
                     setFaceToCameraSection($targetCard, (target.template && target.template.faceToCamera === false) ? false : true);
+                    setColorLifecycleSection($targetCard, target.particle && target.particle.colorOverLifeEnabled);
                 }
             }
         }
@@ -3310,6 +3528,7 @@ function setVelocitySection($card, mode) {
         const $mirror = $card.find(`.emitInput[data-key="${path}"]`);
         if (!$mirror.length) return;
         if (type === "bool") $mirror.val(value ? "1" : "0");
+        else if (type === "bool-check") $mirror.prop("checked", !!value);
         else $mirror.val(value ?? "");
     }
 
@@ -3339,6 +3558,7 @@ function setVelocitySection($card, mode) {
         const type = String($input.data("type") || "");
         let value = $input.val();
         const oldValue = getByPath(card, path);
+        let sameSignLifecycleChanged = false;
 
         if (type === "kident") {
             const raw = String(value ?? "").trim();
@@ -3367,9 +3587,33 @@ function setVelocitySection($card, mode) {
                 value = parseNumOrExprInput(value, 0);
             } else if (type === "bool") {
                 value = (value === "1" || value === "true");
+            } else if (type === "bool-check") {
+                value = $input.is(":checked");
             }
+
+            if (path === "particle.colorOverLifeEnabled" && value) {
+                const signValue = getEmitterLiteralSign(card);
+                if (signValue == null) {
+                    toast("开启生命周期颜色变化前，sign 必须是整数常量", "error");
+                    $input.prop("checked", false);
+                    if (sourceId) mirrorEmitterInputValue(id, path, type, false);
+                    return;
+                }
+                const sameSignCards = findEmittersByLiteralSign(signValue, { excludeIds: [id] });
+                if (sameSignCards.length) {
+                    openLifecycleSignDialog(id, sameSignCards, signValue, $input.get(0));
+                    if (sourceId) mirrorEmitterInputValue(id, path, type, false);
+                    return;
+                }
+            }
+
             setByPath(card, path, value);
             sanitizeEmitterCard(card);
+            sameSignLifecycleChanged = (
+                (path === "particle.colorStart" || path === "particle.colorEnd")
+                && card.particle
+                && card.particle.colorOverLifeEnabled
+            ) ? syncLifecycleColorGroupBySign(id, [path]) : false;
 
             // external 开关变化时，需要校验外放 template/data 不可重名
             if (path === "externalData" || path === "externalTemplate") {
@@ -3380,6 +3624,18 @@ function setVelocitySection($card, mode) {
                     sanitizeEmitterCard(card);
                     $input.val(oldValue ? "1" : "0");
                     if (sourceId) mirrorEmitterInputValue(id, path, type, oldValue);
+                    return;
+                }
+            }
+            if (path === "template.sign" && card.particle && card.particle.colorOverLifeEnabled) {
+                const signValue = getEmitterLiteralSign(card);
+                const sameSignCards = signValue == null ? [] : findEmittersByLiteralSign(signValue, { excludeIds: [id] });
+                if (signValue == null || sameSignCards.length) {
+                    toast("开启生命周期颜色变化时，sign 必须是唯一整数", "error");
+                    setByPath(card, path, oldValue);
+                    sanitizeEmitterCard(card);
+                    $input.val(oldValue ?? "");
+                    if (sourceId) mirrorEmitterInputValue(id, path, type, oldValue ?? "");
                     return;
                 }
             }
@@ -3417,6 +3673,12 @@ function setVelocitySection($card, mode) {
                 setVelocitySection($syncWrap, card.particle && card.particle.velMode);
             }
         }
+        if (path === "particle.colorOverLifeEnabled") {
+            setColorLifecycleSection($card, card.particle && card.particle.colorOverLifeEnabled);
+            if ($syncWrap && $syncWrap.length) {
+                setColorLifecycleSection($syncWrap, card.particle && card.particle.colorOverLifeEnabled);
+            }
+        }
 
         const canSync = emitterSync && emitterSync.open && emitterSync.selectedIds
             && emitterSync.selectedIds.has(id)
@@ -3447,7 +3709,7 @@ function setVelocitySection($card, mode) {
         if (syncChanged) {
             renderEmitterList();
             if (!editingSync) renderEmitterSyncMenu();
-        } else if (!editingSync && emitterSync && emitterSync.open && (path === "externalData" || path === "externalTemplate")) {
+        } else if (!editingSync && emitterSync && emitterSync.open && ((path === "externalData" || path === "externalTemplate") || sameSignLifecycleChanged)) {
             renderEmitterSyncMenu();
         }
     }
@@ -8755,12 +9017,15 @@ function setVelocitySection($card, mode) {
             scheduleSave();
         });
 
-        $("#kVarName, #kRefName").on("input change", function () {
-            const nextVar = ($("#kVarName").val() || "command").trim() || "command";
-            const nextRef = ($("#kRefName").val() || "emitter").trim() || "emitter";
-            if (nextVar === state.kotlin.varName && nextRef === state.kotlin.kRefName) return;
-            state.kotlin.varName = nextVar;
-            state.kotlin.kRefName = nextRef;
+        $("#kClassName, #kPackageName").on("input change", function () {
+            const nextClass = ($("#kClassName").val() || "GeneratedEmitter").trim() || "GeneratedEmitter";
+            const nextPackage = ($("#kPackageName").val() || "").trim();
+            if (
+                nextClass === state.kotlin.className
+                && nextPackage === state.kotlin.packageName
+            ) return;
+            state.kotlin.className = nextClass;
+            state.kotlin.packageName = nextPackage;
             scheduleHistoryPush();
             scheduleSave();
             autoGenKotlin();
@@ -8909,10 +9174,10 @@ function setVelocitySection($card, mode) {
 
         window.addEventListener("resize", () => layoutSystem.applyLayoutState(true));
 
-        initKotlinTabs();
         initConfigPages();
         initKotlinResizer();
         initPreviewResizer();
+        initMainPages();
     }
 
     $(document).ready(() => {

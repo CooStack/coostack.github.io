@@ -18,11 +18,11 @@ export function isNumericLiteral(v) {
 export function rewriteKotlinMathExpr(raw) {
     let out = String(raw ?? "").trim();
     if (!out) return "";
-    out = out.replace(/\bjava\.lang\.Math\./g, "kotlin.math.");
-    out = out.replace(/\bStrictMath\./g, "kotlin.math.");
-    out = out.replace(/\bMath\.PI\b/g, "kotlin.math.PI");
-    out = out.replace(/\bMath\.E\b/g, "kotlin.math.E");
-    out = out.replace(/\b(?:java\.lang\.|StrictMath\.)?Math\.random\s*\(\s*\)/g, "kotlin.random.Random.Default.nextDouble()");
+    out = out.replace(/\bjava\.lang\.Math\./g, "Math.");
+    out = out.replace(/\bStrictMath\./g, "Math.");
+    out = out.replace(/\bMath\.PI\b/g, "PI");
+    out = out.replace(/\bMath\.E\b/g, "E");
+    out = out.replace(/\b(?:java\.lang\.|StrictMath\.)?Math\.random\s*\(\s*\)/g, "Random.Default.nextDouble()");
     const fnMap = {
         abs: "abs",
         acos: "acos",
@@ -47,7 +47,7 @@ export function rewriteKotlinMathExpr(raw) {
     };
     for (const [src, dst] of Object.entries(fnMap)) {
         const re = new RegExp(`\\b(?:java\\.lang\\.|StrictMath\\.)?Math\\.${src}\\s*\\(`, "g");
-        out = out.replace(re, `kotlin.math.${dst}(`);
+        out = out.replace(re, `${dst}(`);
     }
     return out;
 }

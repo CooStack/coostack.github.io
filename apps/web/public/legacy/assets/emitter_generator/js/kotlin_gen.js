@@ -12,6 +12,27 @@ function safeIdent(raw, fallback) {
   return t.length ? t : fallback;
 }
 
+function safePackageName(raw, fallback = "") {
+  const text = String(raw ?? "")
+    .trim()
+    .replace(/^package\s+/i, "")
+    .replace(/;+$/g, "");
+  if (!text) return fallback;
+  const parts = text
+    .split(".")
+    .map((part) => safeIdent(part, ""))
+    .filter(Boolean);
+  return parts.length ? parts.join(".") : fallback;
+}
+
+function indentBlock(text, spaces) {
+  const pad = " ".repeat(spaces);
+  return String(text ?? "")
+    .split("\n")
+    .map((line) => `${pad}${line}`)
+    .join("\n");
+}
+
 function fmtF(n) {
   // Kotlin Float literal
   const x = Number(n);
@@ -70,6 +91,16 @@ function fmtHex(hex) {
   return "#ffffff";
 }
 
+function hexToRgb01(hex) {
+  const normalized = fmtHex(hex).slice(1);
+  const value = Number.parseInt(normalized, 16);
+  return {
+    r: ((value >> 16) & 255) / 255,
+    g: ((value >> 8) & 255) / 255,
+    b: (value & 255) / 255,
+  };
+}
+
 function normalizeRootLifecycleMode(rawMode) {
   const modeRaw = String(rawMode || "interval").trim().toLowerCase();
   if (modeRaw === "once") return "once";
@@ -95,6 +126,7 @@ function normalizeRootLifecycle(raw) {
 
 function buildEmitterDataApplyLines(card) {
   const p = card?.particle || {};
+  const colorEnd = p.colorOverLifeEnabled ? p.colorEnd : p.colorStart;
   const lines = [];
 
   // Keep field names aligned with UI defaults.
@@ -111,7 +143,7 @@ function buildEmitterDataApplyLines(card) {
   lines.push(`velSpeedMax = ${fmtD(p.velSpeedMax ?? 0)}`);
   lines.push(`visibleRange = ${fmtI(p.visibleRange)}`);
   lines.push(`colorStart = "${fmtHex(p.colorStart)}"`);
-  lines.push(`colorEnd = "${fmtHex(p.colorEnd)}"`);
+  lines.push(`colorEnd = "${fmtHex(colorEnd)}"`);
   return lines;
 }
 
@@ -313,7 +345,8 @@ function buildEmitterLocationsBlock(card, dataName) {
   return lines;
 }
 
-export function genCommandKotlin(state) {
+export function genCommandKotlin(state, settings = {}) {
+  const includeImportComments = settings.includeImportComments !== false;
   const legacyVarName = safeIdent(state?.kotlin?.varName, "command");
   const kRefName = safeIdent(state?.kotlin?.kRefName, "emitter");
 
@@ -338,6 +371,26 @@ export function genCommandKotlin(state) {
     if (s.length === 1) return `data.sign == ${fmtI(s[0])}`;
     return `data.sign in setOf(${s.map((x) => fmtI(x)).join(", ")})`;
   };
+
+  const lifecycleColorRules = (() => {
+    const out = [];
+    const usedSigns = new Set();
+    const emitters = Array.isArray(state?.emitters) ? state.emitters : [];
+    for (const card of emitters) {
+      if (!card || card.enabled === false) continue;
+      const particle = card.particle || {};
+      if (!particle.colorOverLifeEnabled) continue;
+      const signNum = Number(card?.template?.sign);
+      if (!Number.isFinite(signNum)) continue;
+      const sign = Math.trunc(signNum);
+      if (usedSigns.has(sign)) continue;
+      usedSigns.add(sign);
+      const start = hexToRgb01(particle.colorStart);
+      const end = hexToRgb01(particle.colorEnd || particle.colorStart);
+      out.push({ sign, start, end });
+    }
+    return out;
+  })();
 
   const lifePredicate = (lifeFilter) => {
     const normalized = normalizeConditionFilter(lifeFilter, { allowReason: false });
@@ -398,10 +451,14 @@ export function genCommandKotlin(state) {
   });
 
   const lines = [];
-  lines.push(`// file-level imports:`);
-  lines.push(`// import cn.coostack.cooparticlesapi.network.particle.emitters.command.*`);
-  lines.push(`// import cn.coostack.cooparticlesapi.network.particle.emitters.command.curve.*`);
-  lines.push("");
+  if (includeImportComments) {
+    lines.push(`// file-level imports:`);
+    lines.push(`// import cn.coostack.cooparticlesapi.network.particle.emitters.command.*`);
+    lines.push(`// import cn.coostack.cooparticlesapi.network.particle.emitters.command.curve.*`);
+    lines.push(`// import kotlin.math.*`);
+    lines.push(`// import kotlin.random.Random`);
+    lines.push("");
+  }
   for (const queue of queueInfos) {
     lines.push(`val ${queue.varName} = ParticleCommandQueue()`);
     for (const c of queue.commands) {
@@ -434,6 +491,20 @@ export function genCommandKotlin(state) {
   lines.push(`    posLerpProgress: Float`);
   lines.push(`) {`);
   lines.push(`    controler.addPreTickAction {`);
+  if (lifecycleColorRules.length) {
+    lines.push(`        val colorLifeProgress = if (this.lifetime <= 0) 1f else (this.currentAge.toFloat() / this.lifetime.toFloat()).coerceIn(0f, 1f)`);
+    lines.push(`        when (data.sign) {`);
+    for (const rule of lifecycleColorRules) {
+      lines.push(`            ${fmtI(rule.sign)} -> {`);
+      lines.push(`                this.color = Vector3f(`);
+      lines.push(`                    ${fmtF(rule.start.r)} + (${fmtF(rule.end.r)} - ${fmtF(rule.start.r)}) * colorLifeProgress,`);
+      lines.push(`                    ${fmtF(rule.start.g)} + (${fmtF(rule.end.g)} - ${fmtF(rule.start.g)}) * colorLifeProgress,`);
+      lines.push(`                    ${fmtF(rule.start.b)} + (${fmtF(rule.end.b)} - ${fmtF(rule.start.b)}) * colorLifeProgress`);
+      lines.push(`                )`);
+      lines.push(`            }`);
+    }
+    lines.push(`        }`);
+  }
   if (!queueInfos.length) {
     lines.push(`        // no command queues`);
   } else {
@@ -452,11 +523,10 @@ export function genCommandKotlin(state) {
   lines.push(`}`);
   return lines.join("\n");
 }
-export function genEmitterKotlin(state, settings = {}) {
+
+function genEmitterBodyKotlin(state, settings = {}) {
   const rawEmitters = Array.isArray(state?.emitters) ? state.emitters : [];
   const emitters = rawEmitters.filter(c => c && c.enabled !== false);
-
-  if (!emitters.length) return "";
 
   // Kotlin variable naming:
   // - Per emitter card: vars.template / vars.data
@@ -633,7 +703,7 @@ function buildLocalDataApplyLines(card) {
       lines.push(pad(chainIndent + 12) + `locs.add(RelativeLocation(${fmtD(ox)}, ${fmtD(oy)}, ${fmtD(oz)}))`);
       lines.push(pad(chainIndent + 8) + "}");
       lines.push(pad(chainIndent + 4) + "} else {");
-      lines.push(pad(chainIndent + 8) + "val rand = kotlin.random.Random.Default");
+      lines.push(pad(chainIndent + 8) + "val rand = Random.Default");
       lines.push(pad(chainIndent + 8) + "repeat(count) {");
       lines.push(pad(chainIndent + 12) + "val base = source[rand.nextInt(source.size)]");
       lines.push(pad(chainIndent + 12) + `locs.add(RelativeLocation(base.x + ${fmtD(ox)}, base.y + ${fmtD(oy)}, base.z + ${fmtD(oz)}))`);
@@ -691,7 +761,7 @@ function buildLocalDataApplyLines(card) {
       const s1 = numOrExpr(a.end, 180);
       const rotate = numOrExpr(a.rotate, 0);
       const unit = String(e.arcUnit || a.unit || "deg");
-      const toRad = (v) => (unit === "rad") ? fmtD(v) : `${fmtD(v)} * kotlin.math.PI / 180.0`;
+      const toRad = (v) => (unit === "rad") ? fmtD(v) : `${fmtD(v)} * PI / 180.0`;
       const canOrder = Number.isFinite(Number(s0)) && Number.isFinite(Number(s1));
       const start = canOrder ? Math.min(Number(s0), Number(s1)) : s0;
       const end = canOrder ? Math.max(Number(s0), Number(s1)) : s1;
@@ -708,7 +778,7 @@ function buildLocalDataApplyLines(card) {
           const startRad = toRad(start);
           const endRad = toRad(end);
           const rotateRad = toRad(rotate);
-          const extentExpr = `kotlin.math.abs(${endRad} - ${startRad})`;
+          const extentExpr = `abs(${endRad} - ${startRad})`;
           const midExpr = `((${startRad} + ${endRad}) / 2.0) + (${rotateRad})`;
           addChainLine(
             `.addRadianCenter(${fmtD(r)}, ${countExpr}, ${extentExpr}, ${midExpr})`
@@ -748,19 +818,19 @@ function buildLocalDataApplyLines(card) {
       const r = numOrExpr(sph.r, 1);
 
       addChainLine(".addWith {");
-      lines.push(pad(chainIndent + 4) + `val rand = kotlin.random.Random.Default`);
+      lines.push(pad(chainIndent + 4) + `val rand = Random.Default`);
       lines.push(pad(chainIndent + 4) + `val locs = arrayListOf<RelativeLocation>()`);
       lines.push(pad(chainIndent + 4) + `val count = ${countExpr}`);
       lines.push(pad(chainIndent + 4) + `repeat(count) {`);
       lines.push(pad(chainIndent + 8) + `val u = rand.nextDouble()`);
       lines.push(pad(chainIndent + 8) + `val v = rand.nextDouble()`);
-      lines.push(pad(chainIndent + 8) + `val theta = 2.0 * kotlin.math.PI * u`);
-      lines.push(pad(chainIndent + 8) + `val phi = kotlin.math.acos(2.0 * v - 1.0)`);
-      lines.push(pad(chainIndent + 8) + `val dx = kotlin.math.sin(phi) * kotlin.math.cos(theta)`);
-      lines.push(pad(chainIndent + 8) + `val dy = kotlin.math.cos(phi)`);
-      lines.push(pad(chainIndent + 8) + `val dz = kotlin.math.sin(phi) * kotlin.math.sin(theta)`);
+      lines.push(pad(chainIndent + 8) + `val theta = 2.0 * PI * u`);
+      lines.push(pad(chainIndent + 8) + `val phi = acos(2.0 * v - 1.0)`);
+      lines.push(pad(chainIndent + 8) + `val dx = sin(phi) * cos(theta)`);
+      lines.push(pad(chainIndent + 8) + `val dy = cos(phi)`);
+      lines.push(pad(chainIndent + 8) + `val dz = sin(phi) * sin(theta)`);
       if (type === "sphere") {
-        lines.push(pad(chainIndent + 8) + `val rr = ${fmtD(r)} * Math.cbrt(rand.nextDouble())`);
+        lines.push(pad(chainIndent + 8) + `val rr = ${fmtD(r)} * cbrt(rand.nextDouble())`);
       } else {
         lines.push(pad(chainIndent + 8) + `val rr = ${fmtD(r)}`);
       }
@@ -778,7 +848,7 @@ function buildLocalDataApplyLines(card) {
       const surface = !!b.surface;
 
       addChainLine(".addWith {");
-      lines.push(pad(chainIndent + 4) + `val rand = kotlin.random.Random.Default`);
+      lines.push(pad(chainIndent + 4) + `val rand = Random.Default`);
       lines.push(pad(chainIndent + 4) + `val locs = arrayListOf<RelativeLocation>()`);
       lines.push(pad(chainIndent + 4) + `val count = ${countExpr}`);
       lines.push(pad(chainIndent + 4) + `val density = ${fmtD(density)}`);
@@ -786,11 +856,11 @@ function buildLocalDataApplyLines(card) {
       lines.push(pad(chainIndent + 4) + `val pw = 1.0 + 3.0 * density`);
       lines.push(pad(chainIndent + 4) + `repeat(count) {`);
       lines.push(pad(chainIndent + 8) + `val u0x = rand.nextDouble() - 0.5`);
-      lines.push(pad(chainIndent + 8) + `var x = (if (u0x < 0.0) -1.0 else 1.0) * Math.pow(Math.abs(u0x), pw) * ${fmtD(bx)}`);
+      lines.push(pad(chainIndent + 8) + `var x = (if (u0x < 0.0) -1.0 else 1.0) * pow(abs(u0x), pw) * ${fmtD(bx)}`);
       lines.push(pad(chainIndent + 8) + `val u0y = rand.nextDouble() - 0.5`);
-      lines.push(pad(chainIndent + 8) + `var y = (if (u0y < 0.0) -1.0 else 1.0) * Math.pow(Math.abs(u0y), pw) * ${fmtD(by)}`);
+      lines.push(pad(chainIndent + 8) + `var y = (if (u0y < 0.0) -1.0 else 1.0) * pow(abs(u0y), pw) * ${fmtD(by)}`);
       lines.push(pad(chainIndent + 8) + `val u0z = rand.nextDouble() - 0.5`);
-      lines.push(pad(chainIndent + 8) + `var z = (if (u0z < 0.0) -1.0 else 1.0) * Math.pow(Math.abs(u0z), pw) * ${fmtD(bz)}`);
+      lines.push(pad(chainIndent + 8) + `var z = (if (u0z < 0.0) -1.0 else 1.0) * pow(abs(u0z), pw) * ${fmtD(bz)}`);
       lines.push(pad(chainIndent + 8) + `if (surface) {`);
       lines.push(pad(chainIndent + 12) + `when (rand.nextInt(3)) {`);
       lines.push(pad(chainIndent + 16) + `0 -> x = (if (rand.nextDouble() < 0.5) -0.5 else 0.5) * ${fmtD(bx)}`);
@@ -901,7 +971,7 @@ function buildLocalDataApplyLines(card) {
     } else if (mode === "burst") {
       const interval = numOrExpr(card?.emission?.burstInterval, 0.5);
       const intervalVar = `intervalTicks${n}`;
-      openLines.push(`${" ".repeat(innerIndent)}val ${intervalVar} = Math.round(${fmtD(interval)} / tickSec).toInt().coerceAtLeast(1)`);
+      openLines.push(`${" ".repeat(innerIndent)}val ${intervalVar} = round(${fmtD(interval)} / tickSec).toInt().coerceAtLeast(1)`);
       pushWrap(`if ((tick - 1) % ${intervalVar} == 0) {`);
     }
 
@@ -985,4 +1055,51 @@ function buildLocalDataApplyLines(card) {
   }
 
   return out.join("\n");
+}
+
+export function genEmitterKotlin(state, settings = {}) {
+  const className = safeIdent(state?.kotlin?.className, "GeneratedEmitter");
+  const packageName = safePackageName(state?.kotlin?.packageName, "");
+  const baseClass = safeIdent(state?.kotlin?.baseClass, "AutoParticleEmitters");
+  const commandText = genCommandKotlin(state, { includeImportComments: false }).trim();
+  const emitterBodyText = genEmitterBodyKotlin(state, settings).trim();
+  const imports = [
+    "import cn.coostack.cooparticlesapi.annotations.CodecField",
+    "import cn.coostack.cooparticlesapi.annotations.CooAutoRegister",
+    "import cn.coostack.cooparticlesapi.network.particle.emitters.*",
+    "import cn.coostack.cooparticlesapi.network.particle.emitters.command.*",
+    "import cn.coostack.cooparticlesapi.network.particle.emitters.command.curve.*",
+    "import cn.coostack.cooparticlesapi.particles.CooParticleTextureSheet",
+    "import cn.coostack.cooparticlesapi.particles.control.ParticleControler",
+    "import cn.coostack.cooparticlesapi.particles.impl.*",
+    "import cn.coostack.cooparticlesapi.utils.RelativeLocation",
+    "import cn.coostack.cooparticlesapi.utils.builder.PointsBuilder",
+    "import net.minecraft.client.particle.ParticleRenderType",
+    "import net.minecraft.world.level.Level",
+    "import net.minecraft.world.phys.Vec3",
+    "import org.joml.Vector3f",
+    "import java.util.function.Supplier",
+    "import kotlin.math.*",
+    "import kotlin.random.Random",
+  ];
+  const lines = [];
+  if (packageName) {
+    lines.push(`package ${packageName}`);
+    lines.push("");
+  }
+  lines.push(...imports);
+  lines.push("");
+  lines.push("@CooAutoRegister");
+  lines.push(`class ${className}(pos: Vec3, world: Level?) : ${baseClass}(pos, world) {`);
+  if (commandText) {
+    lines.push(indentBlock(commandText, 4));
+  }
+  if (commandText && emitterBodyText) {
+    lines.push("");
+  }
+  if (emitterBodyText) {
+    lines.push(indentBlock(emitterBodyText, 4));
+  }
+  lines.push("}");
+  return lines.join("\n").replace(/\n{3,}/g, "\n\n");
 }

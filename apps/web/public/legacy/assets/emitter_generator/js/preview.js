@@ -1211,7 +1211,9 @@ export function initPreview(ctx = {}) {
         }
 
         const c0 = hexToRgb01(pp.colorStart || "#ffffff");
-        const c1 = hexToRgb01(pp.colorEnd || "#ffffff");
+        const c1 = pp.colorOverLifeEnabled
+            ? hexToRgb01(pp.colorEnd || pp.colorStart || "#ffffff")
+            : { ...c0 };
         const faceToCamera = (card?.template?.faceToCamera !== false);
         const pitch = faceToCamera ? 0 : num(card?.template?.pitch, 0);
         const yaw = faceToCamera ? 0 : num(card?.template?.yaw, 0);
