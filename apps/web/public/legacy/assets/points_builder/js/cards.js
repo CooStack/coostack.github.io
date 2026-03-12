@@ -969,6 +969,7 @@ export function initCardSystem(ctx = {}) {
         ensureAxisInList,
         isBuilderContainerKind,
         showToast,
+        clearEmptyBuilderCards,
         pickReasonableFocusAfterDelete,
         bindCardBodyResizer,
         bindSubblockWidthResizer,
@@ -1442,6 +1443,26 @@ export function initCardSystem(ctx = {}) {
         const { collapseBtn, expandBtn } = makeCollapseAllButtons(null, () => (getState()?.root?.children || []), true);
         tools.appendChild(collapseBtn);
         tools.appendChild(expandBtn);
+
+        const appendCleanupBtn = (kind, text, emptyMsg, successLabel) => {
+            if (typeof clearEmptyBuilderCards !== "function") return;
+            const btn = document.createElement("button");
+            btn.type = "button";
+            btn.className = "btn small";
+            btn.textContent = text;
+            btn.title = `清理空 ${successLabel} 卡片`;
+            btn.addEventListener("click", () => {
+                const removed = clearEmptyBuilderCards(kind);
+                if (!removed) {
+                    if (typeof showToast === "function") showToast(emptyMsg, "info");
+                    return;
+                }
+                if (typeof showToast === "function") showToast(`已清理 ${removed} 个空的 ${successLabel} 卡片`, "success");
+            });
+            tools.appendChild(btn);
+        };
+        appendCleanupBtn("add_builder", "清空空的Builder", "没有可清理的空的 addBuilder 卡片", "addBuilder");
+        appendCleanupBtn("add_with", "清空空的With", "没有可清理的空的 addWith 卡片", "addWith");
 
         const filterUi = createFilterControls(null, renderCards, true);
         const syncUi = createParamSyncControls();

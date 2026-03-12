@@ -1,6 +1,6 @@
 import * as THREE from "three";
 import {OrbitControls} from "three/addons/controls/OrbitControls.js";
-import { createCardInputs, initCardSystem } from "./cards.js";
+import { createCardInputs, initCardSystem } from "./cards.js?v=20260313_3";
 import { initFilterSystem } from "./filters.js";
 import { initHotkeysSystem } from "./hotkeys.js";
 import { createKindDefs } from "./kinds.js";
@@ -40,6 +40,8 @@ function initPointsBuilderMain() {
 
     const btnAddCard = document.getElementById("btnAddCard");
     const btnQuickOffset = document.getElementById("btnQuickOffset");
+    const btnClearEmptyAddBuilder = document.getElementById("btnClearEmptyAddBuilder");
+    const btnClearEmptyAddWith = document.getElementById("btnClearEmptyAddWith");
     const btnPickLine = document.getElementById("btnPickLine");
     const btnPickTriangle = document.getElementById("btnPickTriangle");
     const pickPointBtns = Array.from(document.querySelectorAll("#btnPickPoint"));
@@ -2064,6 +2066,93 @@ function initPointsBuilderMain() {
         return true;
     }
 
+    function matchesEmptyBuilderKind(node, kind) {
+        if (!node) return false;
+        const targetKind = (kind === "with_builder") ? "add_builder" : kind;
+        if (targetKind === "add_builder") {
+            return node.kind === "add_builder" || node.kind === "with_builder";
+        }
+        return node.kind === targetKind;
+    }
+
+    function collectEmptyBuilderContexts(kind, list = state.root.children, depth = 1, out = []) {
+        const arr = Array.isArray(list) ? list : [];
+        for (let i = 0; i < arr.length; i++) {
+            const node = arr[i];
+            if (!node) continue;
+            if (isBuilderContainerKind(node.kind) && Array.isArray(node.children) && node.children.length) {
+                collectEmptyBuilderContexts(kind, node.children, depth + 1, out);
+            }
+            if (!matchesEmptyBuilderKind(node, kind)) continue;
+            if (Array.isArray(node.children) && node.children.length) continue;
+            out.push({ id: node.id || null, parentList: arr, index: i, depth });
+        }
+        return out;
+    }
+
+    function clearEmptyBuilderCards(kind) {
+        const targetKind = (kind === "with_builder") ? "add_builder" : kind;
+        let rows = collectEmptyBuilderContexts(targetKind);
+        if (!rows.length) return 0;
+        const removedIds = new Set();
+        const sel = (typeof getCardSelectionIds === "function") ? getCardSelectionIds() : null;
+        const selectedIdsBefore = sel ? Array.from(sel).filter(Boolean) : [];
+        const focusCtxBeforeDelete = (focusedNodeId && rows.some((row) => row.id === focusedNodeId))
+            ? findAnyCardContextById(focusedNodeId)
+            : null;
+        historyCapture(`clear_empty_${targetKind}`);
+        while (rows.length) {
+            rows.sort((a, b) => {
+                if (a.parentList === b.parentList) return b.index - a.index;
+                return b.depth - a.depth;
+            });
+            for (const row of rows) {
+                const list = row.parentList;
+                if (!Array.isArray(list)) continue;
+                const current = (row.index >= 0 && row.index < list.length) ? list[row.index] : null;
+                if (current && current.id === row.id) {
+                    if (!matchesEmptyBuilderKind(current, targetKind)) continue;
+                    if (Array.isArray(current.children) && current.children.length) continue;
+                    list.splice(row.index, 1);
+                    if (row.id) removedIds.add(row.id);
+                    continue;
+                }
+                const at = list.findIndex((item) => item && item.id === row.id);
+                if (at < 0) continue;
+                const found = list[at];
+                if (!matchesEmptyBuilderKind(found, targetKind)) continue;
+                if (Array.isArray(found.children) && found.children.length) continue;
+                list.splice(at, 1);
+                if (row.id) removedIds.add(row.id);
+            }
+            rows = collectEmptyBuilderContexts(targetKind);
+        }
+        if (!removedIds.size) return 0;
+        const keptSelectionIds = normalizeActionTargetIds(
+            selectedIdsBefore.filter((id) => !removedIds.has(id))
+        );
+        if (typeof clearCardSelectionIds === "function") clearCardSelectionIds();
+        if (keptSelectionIds.length && typeof setCardSelectionIds === "function") {
+            setCardSelectionIds(keptSelectionIds, {
+                replace: true,
+                focus: false,
+                reveal: false,
+                syncWithParamSync: true,
+                syncStrictKind: false
+            });
+        }
+        let nextFocus = null;
+        if (focusedNodeId && !removedIds.has(focusedNodeId) && findAnyCardContextById(focusedNodeId)) {
+            nextFocus = focusedNodeId;
+        } else if (focusCtxBeforeDelete) {
+            nextFocus = pickReasonableFocusAfterDelete(focusCtxBeforeDelete);
+        }
+        setFocusedNode(nextFocus, false);
+        ensureAxisEverywhere();
+        renderAll();
+        return removedIds.size;
+    }
+
     function collectSelectedRowsForDuplicate(opts = {}) {
         const mirrorOnly = opts.mirrorOnly === true;
         const sel = (typeof getCardSelectionIds === "function") ? getCardSelectionIds() : null;
@@ -2515,6 +2604,7 @@ function initPointsBuilderMain() {
     let viewBoxPending = null; // { pointerId,startX,startY,ctrlKey,shiftKey }
     let viewBoxSelecting = false;
     let viewBoxRect = null; // {left,top,right,bottom}
+    let viewBoxPointSelectionByOwner = new Map(); // ownerId -> Set(pointIndex)
     const _viewProjTmp = new THREE.Vector3();
 
     function isRightLike(ev) {
@@ -4289,6 +4379,69 @@ function clearViewBoxState(pointerId = null) {
     if (pointerId !== null && pointerId !== undefined) releaseViewBoxPointer(pointerId);
 }
 
+function normalizeViewBoxPointSelection(selectionMap) {
+    const out = new Map();
+    if (!(selectionMap instanceof Map)) return out;
+    for (const [ownerId, source] of selectionMap.entries()) {
+        if (!ownerId) continue;
+        const bucket = new Set();
+        if (source instanceof Set) {
+            for (const idx of source) {
+                if (Number.isInteger(idx) && idx >= 0) bucket.add(idx);
+            }
+        } else if (Array.isArray(source)) {
+            for (const idx of source) {
+                if (Number.isInteger(idx) && idx >= 0) bucket.add(idx);
+            }
+        } else if (Number.isInteger(source) && source >= 0) {
+            bucket.add(source);
+        }
+        if (bucket.size) out.set(ownerId, bucket);
+    }
+    return out;
+}
+
+function clearViewBoxPointSelection() {
+    viewBoxPointSelectionByOwner = new Map();
+}
+
+function setViewBoxPointSelection(selectionMap, options = {}) {
+    const additive = options.additive === true;
+    const normalized = normalizeViewBoxPointSelection(selectionMap);
+    if (!additive) {
+        viewBoxPointSelectionByOwner = normalized;
+        return;
+    }
+    if (!normalized.size) return;
+    const merged = normalizeViewBoxPointSelection(viewBoxPointSelectionByOwner);
+    for (const [ownerId, bucket] of normalized.entries()) {
+        if (!merged.has(ownerId)) merged.set(ownerId, new Set());
+        const target = merged.get(ownerId);
+        for (const idx of bucket) target.add(idx);
+    }
+    viewBoxPointSelectionByOwner = merged;
+}
+
+function getViewBoxPointIndicesForOwner(ownerId) {
+    if (!ownerId || !(viewBoxPointSelectionByOwner instanceof Map)) return [];
+    const bucket = viewBoxPointSelectionByOwner.get(ownerId);
+    if (!bucket || !bucket.size) return [];
+    return Array.from(bucket)
+        .filter((idx) => Number.isInteger(idx) && idx >= 0 && (!lastPoints || idx < lastPoints.length) && ownerIdForPointIndex(idx) === ownerId)
+        .sort((a, b) => a - b);
+}
+
+function getViewBoxSelectedOwnerIds() {
+    if (!(viewBoxPointSelectionByOwner instanceof Map) || !viewBoxPointSelectionByOwner.size) return [];
+    const out = [];
+    for (const ownerId of viewBoxPointSelectionByOwner.keys()) {
+        if (!ownerId) continue;
+        if (!getViewBoxPointIndicesForOwner(ownerId).length) continue;
+        out.push(ownerId);
+    }
+    return normalizeActionTargetIds(out);
+}
+
 function shouldStartViewBox(ev) {
     if (!renderer || !renderer.domElement) return false;
     if (!ev || ev.button !== 0) return false;
@@ -4361,9 +4514,12 @@ function projectPointToClient(p) {
     return { x, y };
 }
 
-function collectOwnerIdsInViewBox(rect) {
-    if (!rect || !lastPoints || !lastPoints.length) return [];
+function collectViewBoxSelection(rect) {
+    if (!rect || !lastPoints || !lastPoints.length) {
+        return { ownerIds: [], pointIndicesByOwner: new Map() };
+    }
     const counts = new Map();
+    const pointIndicesByOwner = new Map();
     for (let i = 0; i < lastPoints.length; i++) {
         const p = lastPoints[i];
         if (!p) continue;
@@ -4373,23 +4529,37 @@ function collectOwnerIdsInViewBox(rect) {
         if (!sp) continue;
         if (sp.x < rect.left || sp.x > rect.right || sp.y < rect.top || sp.y > rect.bottom) continue;
         counts.set(ownerId, (counts.get(ownerId) || 0) + 1);
+        if (!pointIndicesByOwner.has(ownerId)) pointIndicesByOwner.set(ownerId, []);
+        pointIndicesByOwner.get(ownerId).push(i);
     }
-    return Array.from(counts.entries())
+    const ownerIds = Array.from(counts.entries())
         .sort((a, b) => b[1] - a[1])
         .map(([id]) => id);
+    return { ownerIds, pointIndicesByOwner };
+}
+
+function collectOwnerIdsInViewBox(rect) {
+    return collectViewBoxSelection(rect).ownerIds;
 }
 
 function applyViewBoxSelection(ownerIds, options = {}) {
     const ids = Array.isArray(ownerIds) ? ownerIds.filter(Boolean) : [];
     const replace = !options.additive;
+    const pointIndicesByOwner = options.pointIndicesByOwner instanceof Map ? options.pointIndicesByOwner : new Map();
     blurActiveElementForCanvas();
+    if (pointIndicesByOwner.size) {
+        setViewBoxPointSelection(pointIndicesByOwner, { additive: !!options.additive });
+    } else if (replace) {
+        clearViewBoxPointSelection();
+    }
     if (typeof setCardSelectionIds === "function") {
         setCardSelectionIds(ids, {
             replace,
             focus: false,
             reveal: false,
             syncWithParamSync: true,
-            syncStrictKind: true
+            syncStrictKind: true,
+            keepPointSelection: true
         });
     }
     if (!ids.length) {
@@ -4409,8 +4579,11 @@ function finishViewBoxSelection(ev) {
     clearViewBoxState(pointerId);
     if (!active || !rect) return false;
     if ((rect.right - rect.left) < 3 && (rect.bottom - rect.top) < 3) return false;
-    const ids = collectOwnerIdsInViewBox(rect);
-    applyViewBoxSelection(ids, { additive });
+    const selection = collectViewBoxSelection(rect);
+    applyViewBoxSelection(selection.ownerIds, {
+        additive,
+        pointIndicesByOwner: selection.pointIndicesByOwner
+    });
     armCanvasClickSuppress(ev);
     return true;
 }
@@ -5325,7 +5498,9 @@ function onCanvasDblClick(ev) {
         if (kx === "tox") return "to";
         if (kx === "cx") return "center";
         if (kx === "x") return "point";
-        return kx.replace(/x$/, "") || "point";
+        const base = kx.replace(/x$/, "");
+        if (/^p\d+$/i.test(base) || /^h\d+$/i.test(base)) return base.toUpperCase();
+        return base || "point";
     }
 
     function buildPointPickStatus() {
@@ -5343,6 +5518,8 @@ function onCanvasDblClick(ev) {
     function setPointPickTarget(target) {
         pointPickTarget = target || null;
         if (pointPickTarget) activeVecTarget = pointPickTarget;
+        if (pointPickMode && pointPickTarget && pointPickHoverPoint) queuePointPickPreview(pointPickHoverPoint);
+        else if (!pointPickTarget) hidePointPickPreview();
         refreshPointPickStatus();
     }
 
@@ -5377,6 +5554,7 @@ function onCanvasDblClick(ev) {
     function fallbackPointLabelByPrefix(prefix, kind = "") {
         const p = String(prefix || "");
         if (!p) return (kind === "axis" ? "axis" : "point");
+        if (/^p\d+$/i.test(p) || /^h\d+$/i.test(p)) return p.toUpperCase();
         if (p === "s") return "start";
         if (p === "e") return "end";
         if (p === "o") return "origin";
@@ -5448,6 +5626,148 @@ function onCanvasDblClick(ev) {
         return null;
     }
 
+    function targetKeysSignature(target) {
+        if (!target || !target.keys) return "";
+        return `${target.keys.x || ""}|${target.keys.y || ""}|${target.keys.z || ""}`;
+    }
+
+    function pointPickGroupLabel(group) {
+        const xKey = Array.isArray(group) ? String(group[0] || "") : "";
+        if (!xKey || xKey === "x") return "point";
+        return fallbackPointLabelByPrefix(xKey.replace(/x$/, ""), "point");
+    }
+
+    function buildPointPickTargetForGroup(node, group, targets) {
+        if (!node || !Array.isArray(group) || group.length < 3) return null;
+        const [xKey, yKey, zKey] = group;
+        const matched = findTargetByKeys(targets, xKey, yKey, zKey);
+        if (matched) return matched;
+        const p = node.params || (node.params = {});
+        return {
+            obj: p,
+            keys: { x: xKey, y: yKey, z: zKey },
+            inputs: null,
+            label: pointPickGroupLabel(group),
+            onChange: () => renderAll()
+        };
+    }
+
+    function getPointPickGroupPoint(node, group) {
+        if (!node || !node.params || !Array.isArray(group) || group.length < 3) return null;
+        const [xKey, yKey, zKey] = group;
+        const x = num(node.params[xKey]);
+        const y = num(node.params[yKey]);
+        const z = num(node.params[zKey]);
+        if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) return null;
+        return { x, y, z };
+    }
+
+    function collectLineEndpointTargetsForPointIndices(nodeId, pointIndices, targets) {
+        const indices = Array.from(new Set(
+            (Array.isArray(pointIndices) ? pointIndices : [])
+                .filter((idx) => Number.isInteger(idx) && idx >= 0 && ownerIdForPointIndex(idx) === nodeId)
+        )).sort((a, b) => a - b);
+        if (!indices.length) return [];
+        const ctx = findNodeContextById(nodeId);
+        const node = ctx && ctx.node ? ctx.node : null;
+        const startPoint = getPointPickGroupPoint(node, ["sx", "sy", "sz"]);
+        const endPoint = getPointPickGroupPoint(node, ["ex", "ey", "ez"]);
+        let startHits = 0;
+        let endHits = 0;
+        let avg = 0;
+        const tieEpsilon = 1e-9;
+        for (const idx of indices) {
+            avg += idx;
+            const pickedPoint = lastPoints && lastPoints[idx];
+            if (!pickedPoint || !startPoint || !endPoint) continue;
+            const startDx = pickedPoint.x - startPoint.x;
+            const startDy = pickedPoint.y - startPoint.y;
+            const startDz = pickedPoint.z - startPoint.z;
+            const endDx = pickedPoint.x - endPoint.x;
+            const endDy = pickedPoint.y - endPoint.y;
+            const endDz = pickedPoint.z - endPoint.z;
+            const startDist = startDx * startDx + startDy * startDy + startDz * startDz;
+            const endDist = endDx * endDx + endDy * endDy + endDz * endDz;
+            if (!Number.isFinite(startDist) || !Number.isFinite(endDist)) continue;
+            if (Math.abs(startDist - endDist) <= tieEpsilon) continue;
+            if (startDist < endDist) startHits++;
+            else endHits++;
+        }
+        const out = [];
+        if (startHits > 0) {
+            const startTarget = buildPointPickTargetForGroup(node, ["sx", "sy", "sz"], targets);
+            if (startTarget) out.push(startTarget);
+        }
+        if (endHits > 0) {
+            const endTarget = buildPointPickTargetForGroup(node, ["ex", "ey", "ez"], targets);
+            if (endTarget && !out.some((it) => targetKeysSignature(it) === targetKeysSignature(endTarget))) out.push(endTarget);
+        }
+        if (out.length) return out;
+        const seg = nodePointSegments.get(nodeId);
+        const fallbackIndex = seg ? Math.round(avg / indices.length) : indices[0];
+        const fallback = chooseLineEndpointTarget(nodeId, fallbackIndex, targets);
+        return fallback ? [fallback] : [];
+    }
+
+    function collectPointPickTargetsForNodePointIndices(nodeId, pointIndices, targetsOverride = null) {
+        if (!nodeId) return [];
+        const ctx = findNodeContextById(nodeId);
+        if (!ctx || !ctx.node) return [];
+        const targets = (Array.isArray(targetsOverride) && targetsOverride.length)
+            ? targetsOverride
+            : getPointPickTargetsForNodeId(nodeId);
+        if (!targets.length) return [];
+        const indices = Array.from(new Set(
+            (Array.isArray(pointIndices) ? pointIndices : [])
+                .filter((idx) => Number.isInteger(idx) && idx >= 0 && ownerIdForPointIndex(idx) === nodeId)
+        ));
+        if (!indices.length) return [];
+        const out = [];
+        const seen = new Set();
+        const push = (target) => {
+            const sig = targetKeysSignature(target);
+            if (!sig || seen.has(sig)) return;
+            seen.add(sig);
+            out.push(target);
+        };
+        if (ctx.node.kind === "add_line") {
+            for (const target of collectLineEndpointTargetsForPointIndices(nodeId, indices, targets)) {
+                push(target);
+            }
+            if (out.length) return out;
+        }
+        const groups = OFFSET_PARAM_GROUPS[ctx.node.kind];
+        if (!Array.isArray(groups) || !groups.length) {
+            if (targets.length === 1) push(targets[0]);
+            return out;
+        }
+        if (groups.length === 1) {
+            push(buildPointPickTargetForGroup(ctx.node, groups[0], targets));
+            return out;
+        }
+        for (const idx of indices) {
+            const pickedPoint = lastPoints && lastPoints[idx];
+            if (!pickedPoint) continue;
+            let bestGroup = null;
+            let bestDist = Infinity;
+            for (const group of groups) {
+                const point = getPointPickGroupPoint(ctx.node, group);
+                if (!point) continue;
+                const dx = pickedPoint.x - point.x;
+                const dy = pickedPoint.y - point.y;
+                const dz = pickedPoint.z - point.z;
+                const dist = dx * dx + dy * dy + dz * dz;
+                if (dist < bestDist) {
+                    bestDist = dist;
+                    bestGroup = group;
+                }
+            }
+            if (!bestGroup) continue;
+            push(buildPointPickTargetForGroup(ctx.node, bestGroup, targets));
+        }
+        return out;
+    }
+
     function collectSyncPointPickTargetsForNodeIds(ids) {
         const valid = normalizeActionTargetIds(ids);
         if (valid.length < 2) return [];
@@ -5511,6 +5831,29 @@ function onCanvasDblClick(ev) {
         return out;
     }
 
+    function collectSyncPointPickTargetsForSelectedPointIndices(ids) {
+        const valid = normalizeActionTargetIds(ids);
+        if (valid.length < 2) return [];
+        if (!areActionTargetsSameKind(valid)) return [];
+        let common = null;
+        for (const id of valid) {
+            const targets = collectPointPickTargetsForNodePointIndices(id, getViewBoxPointIndicesForOwner(id));
+            const signatures = new Set(targets.map(targetKeysSignature).filter(Boolean));
+            if (!signatures.size) return [];
+            if (!common) {
+                common = signatures;
+                continue;
+            }
+            for (const sig of Array.from(common)) {
+                if (!signatures.has(sig)) common.delete(sig);
+            }
+            if (!common.size) return [];
+        }
+        if (!common || !common.size) return [];
+        return collectSyncPointPickTargetsForNodeIds(valid)
+            .filter((target) => common.has(targetKeysSignature(target)));
+    }
+
     function chooseLineEndpointTarget(nodeId, pickedIndex, targets, options = {}) {
         const seg = nodePointSegments.get(nodeId);
         const useEnd = (!seg || !Number.isInteger(pickedIndex))
@@ -5563,6 +5906,8 @@ function onCanvasDblClick(ev) {
     }
 
     function getPointPickFallbackNodeId() {
+        const selectedOwnerIds = getViewBoxSelectedOwnerIds();
+        if (selectedOwnerIds.length === 1) return selectedOwnerIds[0];
         if (focusedNodeId && findNodeContextById(focusedNodeId)) return focusedNodeId;
         if (typeof getCardSelectionIds === "function") {
             const ids = getCardSelectionIds();
@@ -5611,6 +5956,23 @@ function onCanvasDblClick(ev) {
             return null;
         }
         if (ownerId) {
+            const selectedPointTargets = collectPointPickTargetsForNodePointIndices(
+                ownerId,
+                getViewBoxPointIndicesForOwner(ownerId)
+            );
+            if (selectedPointTargets.length === 1) {
+                try { focusCardById(ownerId, false, false, true); } catch {}
+                return selectedPointTargets[0];
+            }
+            if (selectedPointTargets.length > 1) {
+                showPointPickTargetMenu(
+                    selectedPointTargets,
+                    ev ? ev.clientX : undefined,
+                    ev ? ev.clientY : undefined,
+                    mappedPoint
+                );
+                return null;
+            }
             const target = resolvePointPickTargetByNodeId(ownerId, {
                 pickedIndex: idx,
                 allowMenu: true,
@@ -5625,6 +5987,20 @@ function onCanvasDblClick(ev) {
         }
         const fallbackNodeId = getPointPickFallbackNodeId();
         if (!fallbackNodeId) return null;
+        const selectedPointTargets = collectPointPickTargetsForNodePointIndices(
+            fallbackNodeId,
+            getViewBoxPointIndicesForOwner(fallbackNodeId)
+        );
+        if (selectedPointTargets.length === 1) return selectedPointTargets[0];
+        if (selectedPointTargets.length > 1) {
+            showPointPickTargetMenu(
+                selectedPointTargets,
+                ev ? ev.clientX : undefined,
+                ev ? ev.clientY : undefined,
+                mappedPoint
+            );
+            return null;
+        }
         return resolvePointPickTargetByNodeId(fallbackNodeId, {
             allowMenu: true,
             anchorX: ev ? ev.clientX : undefined,
@@ -5696,7 +6072,9 @@ function onCanvasDblClick(ev) {
         const selectedSet = (typeof getCardSelectionIds === "function") ? getCardSelectionIds() : null;
         const selectedIds = normalizeActionTargetIds(selectedSet ? Array.from(selectedSet) : []);
         const selectedCount = selectedIds.length;
-        const hasSelectedCard = selectedCount > 0;
+        const selectedPointOwnerIds = getViewBoxSelectedOwnerIds();
+        const preferredPointOwnerId = selectedPointOwnerIds.length === 1 ? selectedPointOwnerIds[0] : null;
+        const hasSelectedCard = selectedCount > 0 || !!preferredPointOwnerId;
         if (!hasSelectedCard) {
             setPointPickStatus("请先选中卡片，再按 E 进行点拾取");
             setTimeout(() => hideLinePickStatus(), 1200);
@@ -5722,10 +6100,19 @@ function onCanvasDblClick(ev) {
         }
         const activeTarget = (document.activeElement && document.activeElement.__vecTarget) || null;
         const quickTargets = collectQuickSyncVecTargets();
-        const fallbackNodeId = getPointPickFallbackNodeId();
+        const fallbackNodeId = preferredPointOwnerId || getPointPickFallbackNodeId();
+        const singlePointTargetNodeId = multiSelection
+            ? null
+            : (preferredPointOwnerId || (selectedCount === 1 ? selectedIds[0] : fallbackNodeId));
+        const pointSelectionTargets = multiSelection
+            ? collectSyncPointPickTargetsForSelectedPointIndices(selectedIds)
+            : collectPointPickTargetsForNodePointIndices(
+                singlePointTargetNodeId,
+                getViewBoxPointIndicesForOwner(singlePointTargetNodeId)
+            );
         const hasCardContext = multiSelection
-            ? (syncTargets.length > 0 || !!activeTarget)
-            : (!!fallbackNodeId || !!activeTarget || quickTargets.length > 0);
+            ? (syncTargets.length > 0 || pointSelectionTargets.length > 0 || !!activeTarget)
+            : (!!singlePointTargetNodeId || !!activeTarget || quickTargets.length > 0 || pointSelectionTargets.length > 0);
         if (!hasCardContext) {
             setPointPickStatus("请先选中卡片，再按 E 进行点拾取");
             setTimeout(() => hideLinePickStatus(), 1200);
@@ -5748,9 +6135,19 @@ function onCanvasDblClick(ev) {
                     activeTarget.keys.z
                 );
             }
-            if (!target && syncTargets.length === 1) {
+            if (!target && pointSelectionTargets.length === 1) {
+                target = pointSelectionTargets[0];
+            } else if (!target && pointSelectionTargets.length > 1) {
+                const anchor = resolvePointPickMenuAnchor();
+                openedMenu = !!showPointPickTargetMenu(
+                    pointSelectionTargets,
+                    anchor.x,
+                    anchor.y
+                );
+            }
+            if (!target && !openedMenu && syncTargets.length === 1) {
                 target = syncTargets[0];
-            } else if (!target && syncTargets.length > 1) {
+            } else if (!target && !openedMenu && syncTargets.length > 1) {
                 const anchor = resolvePointPickMenuAnchor();
                 openedMenu = !!showPointPickTargetMenu(
                     syncTargets,
@@ -5770,7 +6167,17 @@ function onCanvasDblClick(ev) {
                     anchor.y
                 );
             }
-            if (!target && fallbackNodeId) {
+            if (!target && !openedMenu && pointSelectionTargets.length === 1) {
+                target = pointSelectionTargets[0];
+            } else if (!target && !openedMenu && pointSelectionTargets.length > 1) {
+                const anchor = resolvePointPickMenuAnchor();
+                openedMenu = !!showPointPickTargetMenu(
+                    pointSelectionTargets,
+                    anchor.x,
+                    anchor.y
+                );
+            }
+            if (!target && !openedMenu && fallbackNodeId) {
                 const ctx = findNodeContextById(fallbackNodeId);
                 if (ctx && ctx.node) {
                     const nodeTargets = getPointPickTargetsForNodeId(fallbackNodeId);
@@ -5787,8 +6194,7 @@ function onCanvasDblClick(ev) {
                 }
             }
         }
-        pointPickTarget = target || null;
-        if (pointPickTarget) activeVecTarget = pointPickTarget;
+        setPointPickTarget(target || null);
         ensureHoverMarker();
         setHoverMarkerColor(0xffcc33);
         hoverMarker.visible = true;
@@ -6292,6 +6698,7 @@ function onCanvasDblClick(ev) {
                 needRenderAll = true;
             }
         }
+        clearViewBoxPointSelection();
         if (needRenderAll) renderAll();
         if (focusInput) {
             try { focusInput.focus({ preventScroll: true }); } catch { try { focusInput.focus(); } catch {} }
@@ -6444,8 +6851,9 @@ function onCanvasDblClick(ev) {
                 target = null;
             }
             if (!target) {
-                setPointPickStatus(`${getPlaneInfo().label} 点拾取：请先在菜单里选择要修改的坐标组`);
-                return;
+                target = resolvePointPickTargetOnPick(ev, mapped);
+                if (!target) return;
+                setPointPickTarget(target);
             }
             applyPointToTarget(mapped);
             stopPointPick();
@@ -6635,6 +7043,7 @@ function onCanvasDblClick(ev) {
         startLinePick,
         stopPointPick,
         startOffsetMode,
+        clearEmptyBuilderCards,
         uid,
         getState: () => state,
         getRenderAll: () => renderAll,
@@ -6685,6 +7094,20 @@ function onCanvasDblClick(ev) {
         setSelectedNodeIds: setCardSelectionIds,
         clearSelectedNodeIds: clearCardSelectionIds
     } = cardSystem);
+    if (typeof setCardSelectionIds === "function") {
+        const rawSetCardSelectionIds = setCardSelectionIds;
+        setCardSelectionIds = (ids, options = {}) => {
+            if (!(options && options.keepPointSelection === true)) clearViewBoxPointSelection();
+            return rawSetCardSelectionIds(ids, options);
+        };
+    }
+    if (typeof clearCardSelectionIds === "function") {
+        const rawClearCardSelectionIds = clearCardSelectionIds;
+        clearCardSelectionIds = (...args) => {
+            clearViewBoxPointSelection();
+            return rawClearCardSelectionIds(...args);
+        };
+    }
 
     const filterSystem = initFilterSystem({
         KIND,
@@ -6817,6 +7240,8 @@ function onCanvasDblClick(ev) {
         settingsMask,
         btnAddCard,
         btnQuickOffset,
+        btnClearEmptyAddBuilder,
+        btnClearEmptyAddWith,
         btnPickLine,
         btnPickTriangle,
         btnPickPoint,
@@ -6835,6 +7260,7 @@ function onCanvasDblClick(ev) {
         isBuilderContainerKind,
         openModal,
         addQuickOffsetTo,
+        clearEmptyBuilderCards,
         getState: () => state,
         getFocusedNodeId: () => focusedNodeId,
         findNodeContextById,

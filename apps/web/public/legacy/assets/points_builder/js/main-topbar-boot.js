@@ -16,6 +16,8 @@ export function initTopbarAndBoot(ctx = {}) {
         settingsMask,
         btnAddCard,
         btnQuickOffset,
+        btnClearEmptyAddBuilder,
+        btnClearEmptyAddWith,
         btnPickLine,
         btnPickTriangle,
         btnPickPoint,
@@ -34,6 +36,7 @@ export function initTopbarAndBoot(ctx = {}) {
         isBuilderContainerKind,
         openModal,
         addQuickOffsetTo,
+        clearEmptyBuilderCards,
         getState,
         getFocusedNodeId,
         findNodeContextById,
@@ -225,6 +228,28 @@ export function initTopbarAndBoot(ctx = {}) {
         addQuickOffsetTo(stateObj.root.children);
     });
 
+    btnClearEmptyAddBuilder?.addEventListener("click", () => {
+        const removed = (typeof clearEmptyBuilderCards === "function")
+            ? clearEmptyBuilderCards("add_builder")
+            : 0;
+        if (!removed) {
+            showToast("没有可清理的空的 addBuilder 卡片", "info");
+            return;
+        }
+        showToast(`已清理 ${removed} 个空的 addBuilder 卡片`, "success");
+    });
+
+    btnClearEmptyAddWith?.addEventListener("click", () => {
+        const removed = (typeof clearEmptyBuilderCards === "function")
+            ? clearEmptyBuilderCards("add_with")
+            : 0;
+        if (!removed) {
+            showToast("没有可清理的空的 addWith 卡片", "info");
+            return;
+        }
+        showToast(`已清理 ${removed} 个空的 addWith 卡片`, "success");
+    });
+
     btnPickLine?.addEventListener("click", () => {
         if (getLinePickMode() && getLinePickType() === "line") stopLinePick();
         else {
@@ -387,4 +412,3 @@ export function initTopbarAndBoot(ctx = {}) {
         // keep
     }
 }
-
