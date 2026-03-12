@@ -872,7 +872,7 @@ function normalizeStateShape(state) {
     next.settings.theme = String(next.settings.theme || "dark-1");
     next.settings.theme = String(next.settings.theme || "dark-1");
     next.settings.paramStep = Math.max(0.000001, num(next.settings.paramStep || 0.1));
-    next.settings.pointSize = Math.max(0.001, num(next.settings.pointSize || 1.5));
+    next.settings.pointSize = Math.max(0.001, num(next.settings.pointSize || 0.5));
     next.settings.showAxes = next.settings.showAxes !== false;
     next.settings.showGrid = next.settings.showGrid === true ? true : false;
     next.settings.realtimeCode = next.settings.realtimeCode !== false;
@@ -969,7 +969,7 @@ function createDefaultState() {
         settings: {
             theme: "dark-1",
             paramStep: 0.1,
-            pointSize: 1.5,
+            pointSize: 0.5,
             showAxes: true,
             showGrid: false,
             realtimeCode: true,

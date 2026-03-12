@@ -23,6 +23,7 @@ export function createPickerModule(ctx = {}) {
         isBuilderContainerKind,
         getFocusedNodeId,
         getCardSelectionIds,
+        getCurrentCardScopeContext,
         setSuppressFocusHistory
     } = ctx;
 
@@ -300,6 +301,18 @@ export function createPickerModule(ctx = {}) {
             }
         }
 
+        if (typeof getCurrentCardScopeContext === "function") {
+            const scopeCtx = getCurrentCardScopeContext();
+            if (scopeCtx && Array.isArray(scopeCtx.list)) {
+                return {
+                    list: scopeCtx.list,
+                    insertIndex: scopeCtx.list.length,
+                    label: scopeCtx.label || (scopeCtx.ownerNode ? "子Builder" : "主Builder"),
+                    ownerNode: scopeCtx.ownerNode || null
+                };
+            }
+        }
+
         return { list: rootList, insertIndex: rootList.length, label: "主Builder", ownerNode: null };
     }
 
@@ -342,4 +355,3 @@ export function createPickerModule(ctx = {}) {
         addKindInContext
     };
 }
-

@@ -835,6 +835,7 @@ function select(options, value, onChange) {
             if (typeof onChange === "function") onChange();
         });
         input.classList.add("angle-value");
+        input.dataset.angleKey = key;
 
         const unitSelect = select([["deg", "度"], ["rad", "弧度"]], unit, (val) => {
             const prevUnit = normalizeAngleUnit(obj[unitKey]);
@@ -846,6 +847,7 @@ function select(options, value, onChange) {
             input.dispatchEvent(new Event("input", { bubbles: true }));
         });
         unitSelect.classList.add("angle-unit");
+        unitSelect.dataset.angleUnitKey = unitKey;
         unitSelect.setAttribute("data-tip", "单位切换：度 / 弧度");
 
         const piWrap = document.createElement("div");
@@ -1145,6 +1147,173 @@ export function initCardSystem(ctx = {}) {
         const fn = ctx.findNodeContextById;
         return (typeof fn === "function") ? fn(...args) : null;
     };
+    const findNodePathById = (...args) => {
+        const fn = ctx.findNodePathById;
+        return (typeof fn === "function") ? fn(...args) : null;
+    };
+
+    let activeScopeBuilderId = null;
+
+    function getBuilderScopeType(node) {
+        if (!node || !node.kind) return "builder";
+        if (node.kind === "add_with") return "addWith";
+        if (node.kind === "with_builder") return "withBuilder";
+        if (node.kind === "add_builder") return "addBuilder";
+        return node.kind;
+    }
+
+    function getScopePathByBuilderId(builderId) {
+        if (!builderId) return [];
+        const path = findNodePathById(builderId);
+        if (!Array.isArray(path) || !path.length) return [];
+        return path.filter((step) => step && step.node && isBuilderContainerKind(step.node.kind));
+    }
+
+    function setActiveCardScope(builderId) {
+        const nextId = getScopePathByBuilderId(builderId).length ? builderId : null;
+        if (activeScopeBuilderId === nextId) return false;
+        activeScopeBuilderId = nextId;
+        return true;
+    }
+
+    function getCurrentCardScopeContext() {
+        const state = getState();
+        const rootList = state?.root?.children || [];
+        const path = getScopePathByBuilderId(activeScopeBuilderId);
+        const currentStep = path.length ? path[path.length - 1] : null;
+        const ownerNode = currentStep ? currentStep.node : null;
+        if (ownerNode && !Array.isArray(ownerNode.children)) ownerNode.children = [];
+        const list = ownerNode ? ownerNode.children : rootList;
+        const typeLabel = ownerNode ? getBuilderScopeType(ownerNode) : "root";
+        const label = ownerNode ? `子Builder（${typeLabel}）` : "主Builder";
+        const crumbs = [{ ownerId: null, label: "最外层", active: !ownerNode, typeLabel: "root" }];
+        for (const step of path) {
+            crumbs.push({
+                ownerId: step.node.id,
+                label: getBuilderScopeType(step.node),
+                active: ownerNode ? step.node.id === ownerNode.id : false,
+                typeLabel: getBuilderScopeType(step.node)
+            });
+        }
+        return {
+            list,
+            ownerNode,
+            scopeId: ownerNode ? ownerNode.id : null,
+            label,
+            typeLabel,
+            crumbs
+        };
+    }
+
+    function navigateCardScope(builderId) {
+        if (!setActiveCardScope(builderId)) return false;
+        if (typeof renderCards === "function") renderCards();
+        else renderAll();
+        requestAnimationFrame(() => {
+            if (elCardsRoot) elCardsRoot.scrollTop = 0;
+        });
+        return true;
+    }
+
+    function revealCardScopeById(nodeId) {
+        if (!nodeId) return setActiveCardScope(null);
+        const path = findNodePathById(nodeId);
+        if (!Array.isArray(path) || !path.length) return setActiveCardScope(null);
+        let nextScopeId = null;
+        for (let i = path.length - 2; i >= 0; i--) {
+            const step = path[i];
+            if (step && step.node && isBuilderContainerKind(step.node.kind)) {
+                nextScopeId = step.node.id;
+                break;
+            }
+        }
+        return setActiveCardScope(nextScopeId);
+    }
+
+    function renderScopeBar(scopeCtx) {
+        const bar = document.createElement("div");
+        bar.className = "pb-scope-bar";
+
+        const crumbs = document.createElement("div");
+        crumbs.className = "pb-scope-breadcrumb";
+        const crumbList = Array.isArray(scopeCtx?.crumbs) ? scopeCtx.crumbs : [];
+        crumbList.forEach((crumb, index) => {
+            if (index > 0) {
+                const sep = document.createElement("span");
+                sep.className = "pb-scope-sep";
+                sep.textContent = ">";
+                crumbs.appendChild(sep);
+            }
+            if (crumb.active) {
+                const current = document.createElement("span");
+                current.className = "pb-scope-crumb active";
+                current.textContent = crumb.label;
+                crumbs.appendChild(current);
+            } else {
+                const btn = document.createElement("button");
+                btn.type = "button";
+                btn.className = "pb-scope-crumb clickable";
+                btn.textContent = crumb.label;
+                btn.addEventListener("click", () => {
+                    navigateCardScope(crumb.ownerId || null);
+                });
+                crumbs.appendChild(btn);
+            }
+        });
+
+        const meta = document.createElement("div");
+        meta.className = "pb-scope-meta";
+
+        const kind = document.createElement("span");
+        kind.className = "pb-scope-kind";
+        kind.textContent = scopeCtx?.ownerNode ? scopeCtx.typeLabel : "root";
+        meta.appendChild(kind);
+
+        const summary = document.createElement("span");
+        summary.className = "pb-scope-summary";
+        summary.textContent = `当前层 ${Array.isArray(scopeCtx?.list) ? scopeCtx.list.length : 0} 张卡片`;
+        meta.appendChild(summary);
+
+        bar.appendChild(crumbs);
+        bar.appendChild(meta);
+        return bar;
+    }
+
+    function renderBuilderScopeEntry(node) {
+        const wrap = document.createElement("div");
+        wrap.className = "pb-builder-entry";
+
+        const info = document.createElement("div");
+        info.className = "pb-builder-entry-info";
+
+        const kind = document.createElement("span");
+        kind.className = "pb-builder-entry-kind";
+        kind.textContent = getBuilderScopeType(node);
+        info.appendChild(kind);
+
+        const summary = document.createElement("span");
+        summary.className = "pb-builder-entry-summary";
+        summary.textContent = `当前含 ${Array.isArray(node?.children) ? node.children.length : 0} 张卡片`;
+        info.appendChild(summary);
+
+        wrap.appendChild(info);
+
+        const actions = document.createElement("div");
+        actions.className = "pb-builder-entry-actions";
+
+        const enterBtn = document.createElement("button");
+        enterBtn.type = "button";
+        enterBtn.className = `btn small ${activeScopeBuilderId === node?.id ? "" : "primary"}`.trim();
+        enterBtn.textContent = activeScopeBuilderId === node?.id ? "当前正在此层编辑" : "进入此层编辑";
+        enterBtn.addEventListener("click", () => {
+            setFocusedNode(node?.id || null, false);
+            navigateCardScope(node?.id || null);
+        });
+        actions.appendChild(enterBtn);
+
+        wrap.appendChild(actions);
+        return wrap;
+    }
 
     function iconBtn(text, onClick, danger = false) {
         const b = document.createElement("button");
@@ -1195,6 +1364,7 @@ export function initCardSystem(ctx = {}) {
     }
 
     let moreMenuBound = false;
+    let scopeRootBtn = null;
     function ensureMoreMenu(actionsEl) {
         let wrap = actionsEl.querySelector(".more-wrap");
         if (wrap) return wrap;
@@ -1239,9 +1409,11 @@ export function initCardSystem(ctx = {}) {
             if (actionsEl.scrollWidth <= actionsEl.clientWidth) return;
             wrap.classList.remove("hidden");
 
-            let items = Array.from(actionsEl.querySelectorAll(".action-item")).filter((el) => !wrap.contains(el));
-            while (actionsEl.scrollWidth > actionsEl.clientWidth && items.length) {
-                const item = items.pop();
+            const items = Array.from(actionsEl.querySelectorAll(".action-item")).filter((el) => !wrap.contains(el));
+            const normalItems = items.filter((el) => el.dataset.keepMainAction !== "1");
+            const stickyItems = items.filter((el) => el.dataset.keepMainAction === "1");
+            while (actionsEl.scrollWidth > actionsEl.clientWidth && (normalItems.length || stickyItems.length)) {
+                const item = normalItems.length ? normalItems.pop() : stickyItems.pop();
                 menu.insertBefore(item, menu.firstChild);
             }
             if (!menu.children.length) wrap.classList.add("hidden");
@@ -1251,9 +1423,22 @@ export function initCardSystem(ctx = {}) {
     function initCollapseAllControls() {
         const title = document.querySelector(".panel.left .panel-title");
         if (!title || !title.parentElement) return;
-        if (title.parentElement.querySelector(".panel-tools")) return;
+        const existingTools = title.parentElement.querySelector(".panel-tools");
+        if (existingTools) {
+            scopeRootBtn = existingTools.querySelector("[data-pb-scope-root='1']") || null;
+            return;
+        }
         const tools = document.createElement("div");
         tools.className = "panel-tools";
+        scopeRootBtn = document.createElement("button");
+        scopeRootBtn.type = "button";
+        scopeRootBtn.className = "btn small hidden";
+        scopeRootBtn.textContent = "回到最外层";
+        scopeRootBtn.dataset.pbScopeRoot = "1";
+        scopeRootBtn.addEventListener("click", () => {
+            navigateCardScope(null);
+        });
+        tools.appendChild(scopeRootBtn);
         const { collapseBtn, expandBtn } = makeCollapseAllButtons(null, () => (getState()?.root?.children || []), true);
         tools.appendChild(collapseBtn);
         tools.appendChild(expandBtn);
@@ -1264,6 +1449,16 @@ export function initCardSystem(ctx = {}) {
         if (syncUi && syncUi.wrap) tools.appendChild(syncUi.wrap);
 
         title.insertAdjacentElement("afterend", tools);
+    }
+
+    function updateScopeToolbar(scopeCtx) {
+        if (!scopeRootBtn) return;
+        const hasNestedScope = !!scopeCtx?.ownerNode;
+        scopeRootBtn.classList.toggle("hidden", !hasNestedScope);
+        if (!hasNestedScope) return;
+        scopeRootBtn.title = scopeCtx?.typeLabel
+            ? `当前位于 ${scopeCtx.typeLabel}，点击返回最外层`
+            : "点击返回最外层";
     }
 
     const selectedNodeIds = new Set();
@@ -2324,6 +2519,17 @@ export function initCardSystem(ctx = {}) {
         addBtn.title = "在下方新增";
         actions.appendChild(addBtn);
 
+        if (isBuilderContainerKind(node.kind)) {
+            const enterBtn = iconBtn("⤢", (e) => {
+                e.stopPropagation();
+                setFocusedNode(node.id, false);
+                navigateCardScope(node.id);
+            });
+            enterBtn.dataset.keepMainAction = "1";
+            enterBtn.title = `进入 ${getBuilderScopeType(node)}`;
+            actions.appendChild(enterBtn);
+        }
+
         const toTopBtn = iconBtn("⇡", () => {
             if (useFilterSwap) {
                 const target = findVisibleSwapIndex(idx, "top", siblings, scopeId);
@@ -2588,11 +2794,13 @@ export function initCardSystem(ctx = {}) {
         try {
             elCardsRoot.innerHTML = "";
             cleanupFilterMenus();
-            const state = getState();
-            const list = state?.root?.children || [];
-            const entries = getVisibleEntries(list, null) || list.map((node, index) => ({ node, index }));
+            const scopeCtx = getCurrentCardScopeContext();
+            const list = scopeCtx.list || [];
+            updateScopeToolbar(scopeCtx);
+            elCardsRoot.appendChild(renderScopeBar(scopeCtx));
+            const entries = getVisibleEntries(list, scopeCtx.scopeId) || list.map((node, index) => ({ node, index }));
             for (const it of entries) {
-                elCardsRoot.appendChild(renderNodeCard(it.node, list, it.index, "主Builder", null));
+                elCardsRoot.appendChild(renderNodeCard(it.node, list, it.index, scopeCtx.label || "主Builder", scopeCtx.ownerNode || null));
             }
         } finally {
             setIsRenderingCards(false);
@@ -3189,6 +3397,7 @@ export function initCardSystem(ctx = {}) {
 
             case "add_with":
                 if (!Array.isArray(node.children)) node.children = [];
+                if (!opts.paramsOnly) body.appendChild(renderBuilderScopeEntry(node));
                 body.appendChild(row("旋转半径 r", inputNum(p.r, v => {
                     p.r = v;
                     rebuildPreviewAndKotlin();
@@ -3349,6 +3558,7 @@ export function initCardSystem(ctx = {}) {
 
             case "add_builder":
                 body.appendChild(row("offset", makeVec3Editor(p, "o", rebuildPreviewAndKotlin, "offset")));
+                if (!opts.paramsOnly) body.appendChild(renderBuilderScopeEntry(node));
                 if (opts.paramsOnly) break;
                 if (!node.folded) {
                     const block = document.createElement("div");
@@ -3364,7 +3574,7 @@ export function initCardSystem(ctx = {}) {
 
                     const title = document.createElement("div");
                     title.className = "subblock-title";
-                    title.textContent = `子 PointsBuilder（${ownerLabel}）`;
+                    title.textContent = "子 PointsBuilder（addBuilder）";
 
                     const actions = document.createElement("div");
                     actions.className = "mini";
@@ -3504,6 +3714,8 @@ export function initCardSystem(ctx = {}) {
         initCollapseAllControls,
         setupListDropZone,
         addQuickOffsetTo,
+        revealCardScopeById,
+        getCurrentCardScopeContext,
         getSelectedNodeIds,
         setSelectedNodeIds,
         clearSelectedNodeIds

@@ -783,7 +783,7 @@ function initPointsBuilderMain() {
         realtimeKotlin: false,
         pointPickPreviewEnabled: true,
         theme: "dark-1",
-        pointSize: 1.5,
+        pointSize: 0.5,
         offsetPreviewLimit: -1,
         snapGridKeyToggleMode: false,
         snapParticleKeyToggleMode: false
@@ -1034,6 +1034,7 @@ function initPointsBuilderMain() {
 
     let getFilterScope, saveRootFilter, isFilterActive, filterAllows, getVisibleEntries, getVisibleIndices, swapInList, findVisibleSwapIndex, cleanupFilterMenus;
       let renderCards, renderParamsEditors, layoutActionOverflow, initCollapseAllControls, setupListDropZone, addQuickOffsetTo;
+      let revealCardScopeById, getCurrentCardScopeContext;
       let createFilterControls, createParamSyncControls, renderSyncMenu, bindParamSyncListeners, isSyncSelectableEvent, toggleSyncTarget, setSyncTargetsByIds, setSyncEnabled, paramSync;
       let getCardSelectionIds, setCardSelectionIds, clearCardSelectionIds;
       let hotkeys, hotkeyToHuman, hotkeyMatchEvent, normalizeHotkey, shouldIgnorePlainHotkeys;
@@ -2409,7 +2410,7 @@ function initPointsBuilderMain() {
     const rotatePointColor = new THREE.Color(ROTATE_POINT_HEX);
 
     let pickMarkers = [];
-    let pointSize = 1.5;     // ✅ 粒子大小（PointsMaterial.size）
+    let pointSize = 0.5;     // ✅ 粒子大小（PointsMaterial.size）
     // line pick state (可指向主/任意子 builder)
     let linePickMode = false;
     let linePickType = "line"; // line | triangle
@@ -2443,6 +2444,7 @@ function initPointsBuilderMain() {
     let offsetHoverPoint = null;
     let rotateMode = false;
     let rotateTargetIds = [];
+    let rotateBindings = [];
     let rotateSourceIds = [];
     let rotateAxis = null;
     let rotateCenter = null;
@@ -2451,6 +2453,7 @@ function initPointsBuilderMain() {
     let rotateDragStartPoint = null;
     let rotateDragStartDeg = 0;
     let rotateDragChanged = false;
+    let rotateHistoryCaptured = false;
     let rotateManualInput = "";
     const panKeyState = {ArrowUp: false, ArrowDown: false, ArrowLeft: false, ArrowRight: false};
     const PAN_KEY_SPEED = 0.0025;
@@ -4462,16 +4465,19 @@ function focusCardById(id, recordHistory = true, scrollToTop = true, revealPath 
     const parentNode = ctx ? ctx.parentNode : null;
     const parentIsBuilder = parentNode && isBuilderContainerKind(parentNode.kind);
     const parentId = parentIsBuilder ? parentNode.id : null;
-    const needRender = revealPath ? revealCardPathById(id) : false;
+    const needRender = revealPath ? (revealCardPathById(id) || (typeof revealCardScopeById === "function" ? revealCardScopeById(id) : false)) : false;
     setFocusedNode(id, recordHistory);
-    if (needRender) renderAll();
+    if (needRender) {
+        if (typeof renderCards === "function") renderCards();
+        else renderAll();
+    }
     requestAnimationFrame(() => {
         const el = elCardsRoot ? elCardsRoot.querySelector(`.card[data-id="${id}"]`) : null;
         const parentEl = parentId ? elCardsRoot.querySelector(`.card[data-id="${parentId}"]`) : null;
         if (parentEl) {
             const container = getCardScrollContainer(parentEl);
             scrollCardIntoContainer(container, parentEl);
-        } else if (scrollToTop && el) {
+        } else if ((scrollToTop || revealPath) && el) {
             const container = getCardScrollContainer(el);
             scrollCardIntoContainer(container, el);
         }
@@ -4624,6 +4630,186 @@ function resolveReusableTailRotateForRows(rows) {
     };
 }
 
+function hasPointSegmentForNodeId(id) {
+    if (!id) return false;
+    const seg = nodePointSegments.get(id);
+    return !!(seg && Number.isFinite(seg.start) && Number.isFinite(seg.end) && seg.end > seg.start);
+}
+
+function resolveReusableOffsetAncestor(path) {
+    if (!Array.isArray(path) || path.length < 2) return null;
+    for (let i = path.length - 2; i >= 0; i--) {
+        const step = path[i];
+        const builderNode = step && step.node;
+        const childStep = path[i + 1];
+        const childNode = childStep && childStep.node;
+        if (!builderNode || builderNode.kind !== "add_builder" || !Array.isArray(builderNode.children) || !childNode) continue;
+        let pointCount = 0;
+        let coversTarget = false;
+        for (const child of builderNode.children) {
+            if (!child || !hasPointSegmentForNodeId(child.id)) continue;
+            pointCount += 1;
+            if (child.id === childNode.id) coversTarget = true;
+            if (pointCount > 1 && coversTarget) break;
+        }
+        if (pointCount === 1 && coversTarget) {
+            return { node: builderNode, pathIndex: i };
+        }
+    }
+    return null;
+}
+
+const BUILTIN_ROTATE_PARAM_BINDINGS = {
+    add_half_circle: { valueKey: "rotateDeg", unitKey: "rotateDegUnit", enableKey: "useRotate" },
+    add_radian_center: { valueKey: "rotateDeg", unitKey: "rotateDegUnit", enableKey: "useRotate" },
+    add_radian: { valueKey: "rotateDeg", unitKey: "rotateDegUnit", enableKey: "useRotate" },
+    apply_spiral_offset: { valueKey: "rotateDeg", unitKey: "rotateDegUnit", enableKey: "useRotate" }
+};
+
+function normalizeAngleUnitForRotate(unit) {
+    return String(unit || "deg").toLowerCase() === "rad" ? "rad" : "deg";
+}
+
+function readAngleParamAsDeg(params, valueKey, unitKey) {
+    const p = params || {};
+    const value = num(p[valueKey]);
+    return normalizeAngleUnitForRotate(p[unitKey]) === "rad" ? (value * 180 / Math.PI) : value;
+}
+
+function makeRotateParamBinding(nodeId, options = {}) {
+    const valueKey = options.valueKey || "deg";
+    const unitKey = options.unitKey || `${valueKey}Unit`;
+    const scale = Number.isFinite(options.valueScale) && Math.abs(options.valueScale) > 1e-9 ? options.valueScale : 1;
+    return {
+        type: "param",
+        nodeId,
+        valueKey,
+        unitKey,
+        enableKey: options.enableKey || null,
+        valueScale: scale,
+        sourceIds: Array.isArray(options.sourceIds) && options.sourceIds.length ? options.sourceIds.slice() : (nodeId ? [nodeId] : [])
+    };
+}
+
+function readRotateBindingDeg(binding) {
+    if (!binding) return 0;
+    if (binding.type === "deferred_wrapper") return Number.isFinite(binding.initialDeg) ? binding.initialDeg : 0;
+    if (!binding.nodeId) return 0;
+    const ctx = findNodeContextById(binding.nodeId);
+    if (!ctx || !ctx.node) return 0;
+    const scale = Number.isFinite(binding.valueScale) && Math.abs(binding.valueScale) > 1e-9 ? binding.valueScale : 1;
+    return readAngleParamAsDeg(ctx.node.params || {}, binding.valueKey || "deg", binding.unitKey || `${binding.valueKey || "deg"}Unit`) / scale;
+}
+
+function resolveBuiltinRotateBindingForRow(row) {
+    if (!row || !row.ctx || !row.ctx.node) return null;
+    const cfg = BUILTIN_ROTATE_PARAM_BINDINGS[row.ctx.node.kind];
+    if (!cfg) return null;
+    const axis = normalizeAxisForRotate(resolveAxisForNodeId(row.id));
+    if (Math.abs(axis.x) > 1e-6 || Math.abs(axis.z) > 1e-6 || Math.abs(Math.abs(axis.y) - 1) > 1e-6) {
+        return null;
+    }
+    return makeRotateParamBinding(row.id, {
+        valueKey: cfg.valueKey,
+        unitKey: cfg.unitKey,
+        enableKey: cfg.enableKey,
+        valueScale: axis.y < 0 ? -1 : 1,
+        sourceIds: [row.id]
+    });
+}
+
+function ensureRotateHistoryCaptured(reason = "rotate_drag") {
+    if (rotateHistoryCaptured) return;
+    historyCapture(reason);
+    rotateHistoryCaptured = true;
+}
+
+function materializeRotateBinding(binding) {
+    if (!binding || binding.type !== "deferred_wrapper") return binding;
+    const sourceIds = normalizeOffsetTargetIds(Array.isArray(binding.sourceIds) ? binding.sourceIds : []);
+    if (!sourceIds.length) return null;
+    const axis = normalizeAxisForRotate(binding.axis || U.v(0, 1, 0));
+    const rotateNode = makeNode("rotate_as_axis", {
+        params: {
+            deg: 0,
+            degUnit: "deg",
+            useCustomAxis: true,
+            ax: axis.x,
+            ay: axis.y,
+            az: axis.z
+        }
+    });
+    if (sourceIds.length > 1) {
+        const rows = [];
+        for (const id of sourceIds) {
+            const ctx = findNodeContextById(id);
+            if (!ctx || !ctx.node || !Array.isArray(ctx.parentList)) return null;
+            rows.push({ id, ctx });
+        }
+        const firstList = rows[0].ctx.parentList;
+        for (const row of rows) {
+            if (row.ctx.parentList !== firstList) return null;
+        }
+        const orderedRows = rows.slice().sort((a, b) => a.ctx.index - b.ctx.index);
+        const wrapper = makeNode("add_builder", { params: { ox: 0, oy: 0, oz: 0 } });
+        wrapper.children = orderedRows.map((row) => row.ctx.node);
+        const removeRows = orderedRows.slice().sort((a, b) => b.ctx.index - a.ctx.index);
+        for (const row of removeRows) {
+            firstList.splice(row.ctx.index, 1);
+        }
+        wrapper.children.push(rotateNode);
+        firstList.splice(orderedRows[0].ctx.index, 0, wrapper);
+        binding.wrapperId = wrapper.id;
+    } else {
+        const ctx = findNodeContextById(sourceIds[0]);
+        if (!ctx || !ctx.node || !Array.isArray(ctx.parentList)) return null;
+        const wrapper = makeNode("add_builder", { params: { ox: 0, oy: 0, oz: 0 } });
+        wrapper.children = [ctx.node, rotateNode];
+        ctx.parentList.splice(ctx.index, 1, wrapper);
+        binding.wrapperId = wrapper.id;
+    }
+    binding.type = "param";
+    binding.nodeId = rotateNode.id;
+    binding.valueKey = "deg";
+    binding.unitKey = "degUnit";
+    binding.enableKey = null;
+    binding.valueScale = 1;
+    renderAll();
+    return binding;
+}
+
+function willRotateBindingChange(binding, nextDeg) {
+    if (!binding || !Number.isFinite(nextDeg)) return false;
+    if (binding.type === "deferred_wrapper") {
+        return Math.abs((Number.isFinite(binding.initialDeg) ? binding.initialDeg : 0) - nextDeg) > 1e-9;
+    }
+    const ctx = binding.nodeId ? findNodeContextById(binding.nodeId) : null;
+    if (!ctx || !ctx.node) return false;
+    const p = ctx.node.params || {};
+    if (binding.enableKey && !p[binding.enableKey]) return true;
+    if (normalizeAngleUnitForRotate(p[binding.unitKey]) !== "deg") return true;
+    return Math.abs(readRotateBindingDeg(binding) - nextDeg) > 1e-9;
+}
+
+function getActiveRotateBindings() {
+    const out = [];
+    for (const binding of (Array.isArray(rotateBindings) ? rotateBindings : [])) {
+        if (!binding) continue;
+        if (binding.type === "deferred_wrapper") {
+            const sourceIds = normalizeOffsetTargetIds(Array.isArray(binding.sourceIds) ? binding.sourceIds : []);
+            if (!sourceIds.length) continue;
+            binding.sourceIds = sourceIds;
+            out.push(binding);
+            continue;
+        }
+        if (!binding.nodeId) continue;
+        const ctx = findNodeContextById(binding.nodeId);
+        if (!ctx || !ctx.node) continue;
+        out.push(binding);
+    }
+    return out;
+}
+
 function addRotateForTargetIds(ids) {
     const validBase = normalizeActionTargetIds(ids);
     const valid = normalizeOffsetTargetIds(validBase);
@@ -4647,11 +4833,12 @@ function addRotateForTargetIds(ids) {
         const sourceIds = Array.isArray(reusable.sourceIds) && reusable.sourceIds.length ? reusable.sourceIds : usable;
         const centerSeed = averageSegmentCenterForNodeIds(sourceIds) || averageSegmentCenterForNodeIds(usable);
         const axisSeed = resolveAxisFromRotateNodeId(reusable.rotateId, sourceIds[0] || usable[0]);
+        const binding = makeRotateParamBinding(reusable.rotateId, { sourceIds });
         if (typeof setCardSelectionIds === "function") {
             setCardSelectionIds(sourceIds, { replace: true, focus: false, syncWithParamSync: false });
         }
         focusCardById(sourceIds[0], false, false, true);
-        startRotateMode([reusable.rotateId], { sourceIds, center: centerSeed, axis: axisSeed });
+        startRotateMode([], { bindings: [binding], sourceIds, center: centerSeed, axis: axisSeed });
         return;
     }
 
@@ -4672,62 +4859,47 @@ function addRotateForTargetIds(ids) {
         const orderedIds = orderedRows.map((r) => r.id);
         const centerSeed = averageSegmentCenterForNodeIds(orderedIds);
         const axisSeed = normalizeAxisForRotate(resolveAxisForNodeId(orderedIds[0]));
-
-        historyCapture("add_rotate_as_axis_multi");
-        const rotateNode = makeNode("rotate_as_axis", {
-            params: {
-                deg: 0,
-                degUnit: "deg",
-                useCustomAxis: true,
-                ax: axisSeed.x,
-                ay: axisSeed.y,
-                az: axisSeed.z
-            }
-        });
-        const wrapper = makeNode("add_builder", { params: { ox: 0, oy: 0, oz: 0 } });
-        wrapper.children = orderedRows.map((r) => r.ctx.node);
-
-        const removeRows = orderedRows.slice().sort((a, b) => b.ctx.index - a.ctx.index);
-        for (const row of removeRows) {
-            firstList.splice(row.ctx.index, 1);
-        }
-        const insertIndex = orderedRows[0].ctx.index;
-        wrapper.children.push(rotateNode);
-        firstList.splice(insertIndex, 0, wrapper);
+        const binding = {
+            type: "deferred_wrapper",
+            sourceIds: orderedIds,
+            axis: axisSeed,
+            initialDeg: 0
+        };
 
         if (typeof setCardSelectionIds === "function") {
             setCardSelectionIds(orderedIds, { replace: true, focus: false, syncWithParamSync: false });
         }
         focusCardById(orderedIds[0], false, false, true);
-        renderAll();
-        startRotateMode([rotateNode.id], { sourceIds: orderedIds, center: centerSeed, axis: axisSeed });
+        startRotateMode([], { bindings: [binding], sourceIds: orderedIds, center: centerSeed, axis: axisSeed, initialDeg: 0 });
         return;
     }
 
     const row = usableRows[0];
     const centerSeed = averageSegmentCenterForNodeIds([row.id]);
     const axisSeed = normalizeAxisForRotate(resolveAxisForNodeId(row.id));
-    historyCapture("add_rotate_as_axis");
-    const rotateNode = makeNode("rotate_as_axis", {
-        params: {
-            deg: 0,
-            degUnit: "deg",
-            useCustomAxis: true,
-            ax: axisSeed.x,
-            ay: axisSeed.y,
-            az: axisSeed.z
-        }
-    });
-    const wrapper = makeNode("add_builder", { params: { ox: 0, oy: 0, oz: 0 } });
-    wrapper.children = [row.ctx.node, rotateNode];
-    row.ctx.parentList.splice(row.ctx.index, 1, wrapper);
+    const builtinBinding = resolveBuiltinRotateBindingForRow(row);
 
     if (typeof setCardSelectionIds === "function") {
         setCardSelectionIds([row.id], { replace: true, focus: false, syncWithParamSync: false });
     }
     focusCardById(row.id, false, false, true);
-    renderAll();
-    startRotateMode([rotateNode.id], { sourceIds: [row.id], center: centerSeed, axis: axisSeed });
+    if (builtinBinding) {
+        startRotateMode([], {
+            bindings: [builtinBinding],
+            sourceIds: [row.id],
+            center: centerSeed,
+            axis: axisSeed,
+            initialDeg: readRotateBindingDeg(builtinBinding)
+        });
+        return;
+    }
+    const binding = {
+        type: "deferred_wrapper",
+        sourceIds: [row.id],
+        axis: axisSeed,
+        initialDeg: 0
+    };
+    startRotateMode([], { bindings: [binding], sourceIds: [row.id], center: centerSeed, axis: axisSeed, initialDeg: 0 });
 }
 
 function deleteTargetIds(ids) {
@@ -5801,17 +5973,16 @@ function onCanvasDblClick(ev) {
 
         if (applyOffsetDeltaToNode(ctx.node, localDelta)) return true;
 
-        if (ctx.parentNode && ctx.parentNode.kind === "add_builder"
-            && Array.isArray(ctx.parentNode.children)
-            && ctx.parentNode.children.length === 1) {
-            const parentDeltaRaw = mapWorldDeltaToLocalDelta(worldDelta, path, path ? path.length - 2 : -1);
+        const reusableParent = resolveReusableOffsetAncestor(path);
+        if (reusableParent && reusableParent.node) {
+            const parentDeltaRaw = mapWorldDeltaToLocalDelta(worldDelta, path, reusableParent.pathIndex);
             const parentDelta = (parentDeltaRaw
                 && Number.isFinite(parentDeltaRaw.x)
                 && Number.isFinite(parentDeltaRaw.y)
                 && Number.isFinite(parentDeltaRaw.z))
                 ? parentDeltaRaw
                 : localDelta;
-            const p = ctx.parentNode.params || (ctx.parentNode.params = {});
+            const p = reusableParent.node.params || (reusableParent.node.params = {});
             p.ox = num(p.ox) + parentDelta.x;
             p.oy = num(p.oy) + parentDelta.y;
             p.oz = num(p.oz) + parentDelta.z;
@@ -5861,25 +6032,15 @@ function onCanvasDblClick(ev) {
         return out;
     }
 
-    function getActiveRotateTargetIds() {
-        const out = [];
-        const seen = new Set();
-        for (const id of (Array.isArray(rotateTargetIds) ? rotateTargetIds : [])) {
-            if (!id || seen.has(id)) continue;
-            seen.add(id);
-            const ctx = findNodeContextById(id);
-            if (!ctx || !ctx.node || ctx.node.kind !== "rotate_as_axis") continue;
-            out.push(id);
-        }
-        return out;
-    }
-
-    function syncRotateCardUiForTarget(targetId, degValue, unitValue = "deg") {
+    function syncRotateCardUiForTarget(targetId, degValue, unitValue = "deg", valueKey = "deg", unitKey = null) {
         if (!targetId || !elCardsRoot) return false;
         const card = elCardsRoot.querySelector(`.card[data-id="${targetId}"]`);
         if (!card) return false;
-        const input = card.querySelector("input.angle-value");
-        const unitSelect = card.querySelector("select.angle-unit");
+        const safeUnitKey = unitKey || `${valueKey}Unit`;
+        const input = Array.from(card.querySelectorAll("input.angle-value")).find((el) => (el.dataset.angleKey || "") === valueKey)
+            || (valueKey === "deg" ? card.querySelector("input.angle-value") : null);
+        const unitSelect = Array.from(card.querySelectorAll("select.angle-unit")).find((el) => (el.dataset.angleUnitKey || "") === safeUnitKey)
+            || (safeUnitKey === "degUnit" ? card.querySelector("select.angle-unit") : null);
         if (!input && !unitSelect) return false;
         if (input && input.value !== String(degValue)) input.value = String(degValue);
         if (unitSelect && unitSelect.value !== unitValue) unitSelect.value = unitValue;
@@ -5888,22 +6049,55 @@ function onCanvasDblClick(ev) {
 
     function setRotateDegForTargets(nextDeg) {
         if (!Number.isFinite(nextDeg)) return false;
-        const ids = getActiveRotateTargetIds();
-        if (!ids.length) return false;
-        let changed = false;
-        for (const id of ids) {
-            const ctx = findNodeContextById(id);
-            if (!ctx || !ctx.node) continue;
-            const p = ctx.node.params || (ctx.node.params = {});
-            const prev = num(p.deg);
-            if (Math.abs(prev - nextDeg) > 1e-9) changed = true;
-            if (p.degUnit !== "deg") changed = true;
-            p.deg = nextDeg;
-            p.degUnit = "deg";
-            syncRotateCardUiForTarget(id, nextDeg, "deg");
+        const bindings = getActiveRotateBindings();
+        if (!bindings.length) return false;
+        rotateBindings = bindings;
+        let shouldApply = false;
+        for (const binding of bindings) {
+            if (willRotateBindingChange(binding, nextDeg)) {
+                shouldApply = true;
+                break;
+            }
         }
         rotateCurrentDeg = nextDeg;
-        if (changed) rebuildPreviewAndKotlin();
+        if (!shouldApply) {
+            refreshRotateStatus();
+            return false;
+        }
+        ensureRotateHistoryCaptured("rotate_drag");
+        for (const binding of bindings) {
+            if (binding.type === "deferred_wrapper" && !materializeRotateBinding(binding)) {
+                showToast("旋转目标已变化，无法继续", "error");
+                stopRotateMode({ silent: true });
+                return false;
+            }
+        }
+        let changed = false;
+        let needsCardRender = false;
+        for (const binding of getActiveRotateBindings()) {
+            const ctx = binding.nodeId ? findNodeContextById(binding.nodeId) : null;
+            if (!ctx || !ctx.node) continue;
+            const p = ctx.node.params || (ctx.node.params = {});
+            const prev = readRotateBindingDeg(binding);
+            const valueKey = binding.valueKey || "deg";
+            const unitKey = binding.unitKey || `${valueKey}Unit`;
+            const enableKey = binding.enableKey || null;
+            const storageDeg = nextDeg * (Number.isFinite(binding.valueScale) && Math.abs(binding.valueScale) > 1e-9 ? binding.valueScale : 1);
+            if (Math.abs(prev - nextDeg) > 1e-9) changed = true;
+            if (normalizeAngleUnitForRotate(p[unitKey]) !== "deg") changed = true;
+            if (enableKey && !p[enableKey]) {
+                p[enableKey] = true;
+                changed = true;
+                needsCardRender = true;
+            }
+            p[valueKey] = storageDeg;
+            p[unitKey] = "deg";
+            syncRotateCardUiForTarget(binding.nodeId, storageDeg, "deg", valueKey, unitKey);
+        }
+        if (changed) {
+            if (needsCardRender) renderAll();
+            else rebuildPreviewAndKotlin();
+        }
         refreshRotateStatus();
         return changed;
     }
@@ -5923,8 +6117,12 @@ function onCanvasDblClick(ev) {
         if (pointPickMode) stopPointPick();
         if (offsetMode) stopOffsetMode();
 
-        const ids = normalizeRotateTargetIds(rotateIds);
-        if (!ids.length) return false;
+        const explicitBindings = Array.isArray(options.bindings) ? options.bindings.filter(Boolean) : [];
+        const ids = explicitBindings.length ? [] : normalizeRotateTargetIds(rotateIds);
+        const bindings = explicitBindings.length
+            ? explicitBindings.slice()
+            : ids.map((id) => makeRotateParamBinding(id));
+        if (!bindings.length) return false;
         const sourceIds = normalizeOffsetTargetIds(Array.isArray(options.sourceIds) ? options.sourceIds : []);
         let center = options.center;
         if (!center || !Number.isFinite(center.x) || !Number.isFinite(center.y) || !Number.isFinite(center.z)) {
@@ -5942,8 +6140,9 @@ function onCanvasDblClick(ev) {
         if (U.len(axis) <= 1e-9) axis = U.v(0, 1, 0);
 
         rotateMode = true;
-        rotateTargetIds = ids.slice();
-        rotateSourceIds = sourceIds.length ? sourceIds.slice() : ids.slice();
+        rotateBindings = bindings;
+        rotateTargetIds = bindings.map((binding) => binding.nodeId).filter(Boolean);
+        rotateSourceIds = sourceIds.length ? sourceIds.slice() : bindings.flatMap((binding) => binding.sourceIds || (binding.nodeId ? [binding.nodeId] : []));
         rotateCenter = { x: center.x, y: center.y, z: center.z };
         rotateAxis = axis;
         rotateManualInput = "";
@@ -5951,9 +6150,9 @@ function onCanvasDblClick(ev) {
         rotateDragStartPoint = null;
         rotateDragStartDeg = 0;
         rotateDragChanged = false;
+        rotateHistoryCaptured = false;
 
-        const firstCtx = findNodeContextById(ids[0]);
-        rotateCurrentDeg = firstCtx && firstCtx.node ? num(firstCtx.node.params?.deg) : 0;
+        rotateCurrentDeg = Number.isFinite(options.initialDeg) ? options.initialDeg : readRotateBindingDeg(bindings[0]);
         _rClickT = 0;
         ensureHoverMarker();
         setHoverMarkerColor(rotatePointColor.getHex());
@@ -5970,6 +6169,7 @@ function onCanvasDblClick(ev) {
         const finalDeg = rotateCurrentDeg;
         rotateMode = false;
         rotateTargetIds = [];
+        rotateBindings = [];
         rotateSourceIds = [];
         rotateCenter = null;
         rotateAxis = null;
@@ -5978,6 +6178,7 @@ function onCanvasDblClick(ev) {
         rotateDragStartPoint = null;
         rotateDragStartDeg = 0;
         rotateDragChanged = false;
+        rotateHistoryCaptured = false;
         hideHoverMarker();
         if (silent) {
             hideLinePickStatus();
@@ -6383,6 +6584,7 @@ function onCanvasDblClick(ev) {
         isBuilderContainerKind,
         getFocusedNodeId: () => focusedNodeId,
         getCardSelectionIds: () => (typeof getCardSelectionIds === "function" ? getCardSelectionIds() : null),
+        getCurrentCardScopeContext: () => (typeof getCurrentCardScopeContext === "function" ? getCurrentCardScopeContext() : null),
         setSuppressFocusHistory: (v) => { suppressFocusHistory = !!v; }
     });
     const {
@@ -6459,6 +6661,7 @@ function onCanvasDblClick(ev) {
         getBuilderJsonTargetNode: () => builderJsonTargetNode,
         setBuilderJsonTargetNode: (node) => { builderJsonTargetNode = node; },
         findNodeContextById,
+        findNodePathById,
           getLinePickMode: () => linePickMode,
           getPointPickMode: () => pointPickMode,
           setDraggingState: (v) => { isDraggingCard = !!v; },
@@ -6476,6 +6679,8 @@ function onCanvasDblClick(ev) {
         initCollapseAllControls,
         setupListDropZone,
         addQuickOffsetTo,
+        revealCardScopeById,
+        getCurrentCardScopeContext,
         getSelectedNodeIds: getCardSelectionIds,
         setSelectedNodeIds: setCardSelectionIds,
         clearSelectedNodeIds: clearCardSelectionIds
