@@ -1222,11 +1222,11 @@ body[data-theme^="light"] select.input option {
     flex: 1;
     min-height: 0;
     margin: 10px;
-    border: 1px solid var(--wb-preview-border);
     border-radius: 18px;
     overflow: hidden;
-    background: var(--wb-preview-frame);
-    box-shadow: var(--wb-preview-shadow);
+    border: none;
+    background: transparent;
+    box-shadow: none;
 }
 
 .three-host {
