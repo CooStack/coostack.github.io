@@ -414,11 +414,15 @@ function initPointsBuilderMain() {
         const focusColor = readCssColor("--point-focus", "#ffcc33");
         const syncColor = readCssColor("--point-sync", "#5dd6ff");
         const offsetColor = readCssColor("--point-offset", "#ff6ad5");
+        const previewSceneColor = readCssColor("--wb-preview-scene", "#0b1017");
 
         defaultPointColor.set(pointColor);
         focusPointColor.set(focusColor);
         syncPointColor.set(syncColor);
         offsetPointColor.set(offsetColor);
+
+        if (scene) scene.background = new THREE.Color(previewSceneColor);
+        if (renderer) renderer.setClearColor(previewSceneColor, 1);
 
         if (gridHelper && scene) {
             const wasVisible = gridHelper.visible;

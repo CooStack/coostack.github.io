@@ -12,6 +12,15 @@
     --wb-chip-fill: color-mix(in srgb, var(--panel2, var(--panel, #151b24)) 80%, transparent);
     --wb-shadow-xl: 0 28px 90px rgba(2, 6, 23, 0.4);
     --wb-shadow-md: 0 16px 40px rgba(2, 6, 23, 0.28);
+    --wb-preview-scene: #0b1017;
+    --wb-preview-border: rgba(148, 174, 203, 0.18);
+    --wb-preview-surface:
+        radial-gradient(920px 560px at 50% 18%, rgba(79, 117, 167, 0.24), transparent 58%),
+        linear-gradient(180deg, rgba(16, 23, 34, 0.98), rgba(8, 11, 17, 0.98));
+    --wb-preview-frame:
+        linear-gradient(180deg, rgba(255, 255, 255, 0.04), rgba(255, 255, 255, 0.015) 24%),
+        rgba(8, 12, 18, 0.76);
+    --wb-preview-shadow: 0 20px 44px rgba(2, 6, 23, 0.34);
 }
 
 html {

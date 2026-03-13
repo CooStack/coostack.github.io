@@ -245,14 +245,17 @@ export function initPreview(ctx = {}) {
     function initThree() {
         const el = viewportEl || document.getElementById("viewport");
         const w = el.clientWidth, h = el.clientHeight;
+        const previewSceneColor = getComputedStyle(document.body).getPropertyValue("--wb-preview-scene").trim() || "#0b1017";
 
         renderer = new THREE.WebGLRenderer({antialias: true, alpha: true});
         renderer.setSize(w, h);
         renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+        renderer.setClearColor(previewSceneColor, 1);
         el.innerHTML = "";
         el.appendChild(renderer.domElement);
 
         scene = new THREE.Scene();
+        scene.background = new THREE.Color(previewSceneColor);
         camera = new THREE.PerspectiveCamera(55, w / h, 0.01, 5000);
         camera.position.set(10, 10, 10);
 

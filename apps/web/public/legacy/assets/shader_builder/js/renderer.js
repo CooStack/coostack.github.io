@@ -459,6 +459,7 @@ export class ShaderWorkbenchRenderer {
         this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
         this.renderer.outputColorSpace = THREE.SRGBColorSpace;
         this.renderer.setSize(10, 10, false);
+        this.syncThemeFromDom();
 
         this.hostEl.appendChild(this.renderer.domElement);
         this.renderer.domElement.addEventListener("contextmenu", (ev) => ev.preventDefault());
@@ -623,6 +624,17 @@ export class ShaderWorkbenchRenderer {
         requestAnimationFrame(this.loop);
     }
 
+    getPreviewSceneColor() {
+        if (!document?.body) return "#0b1017";
+        return getComputedStyle(document.body).getPropertyValue("--wb-preview-scene").trim() || "#0b1017";
+    }
+
+    syncThemeFromDom() {
+        const previewSceneColor = this.getPreviewSceneColor();
+        this.scene.background = new THREE.Color(previewSceneColor);
+        this.renderer.setClearColor(previewSceneColor, 1);
+    }
+
     dispose() {
         this.resizeObserver.disconnect();
         this.renderer.domElement.removeEventListener("pointerdown", this.onCanvasPointerdown);
@@ -681,6 +693,7 @@ export class ShaderWorkbenchRenderer {
     }
 
     applySettings(settings) {
+        this.syncThemeFromDom();
         this.axesHelper.visible = !!settings?.showAxes;
         this.gridHelper.visible = !!settings?.showGrid;
         this.helpersIndependentRender = !!settings?.helpersIndependentRender;
@@ -1447,7 +1460,7 @@ export class ShaderWorkbenchRenderer {
 
         if (this.noOutputPreview) {
             this.renderer.setRenderTarget(null);
-            this.renderer.setClearColor(0x000000, 1);
+            this.renderer.setClearColor(this.getPreviewSceneColor(), 1);
             this.renderer.clear(true, true, true);
             if (this.helpersIndependentRender) {
                 this.renderHelperOverlay();

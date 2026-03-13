@@ -1530,12 +1530,14 @@ class CompositionBuilderApp {
         const height = Math.max(2, host.clientHeight || 2);
 
         this.scene = new THREE.Scene();
+        this.scene.background = new THREE.Color(0x0b1017);
         this.camera = new THREE.PerspectiveCamera(58, width / height, 0.1, 5000);
         this.camera.position.set(16, 11, 16);
 
         this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
         this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
         this.renderer.setSize(width, height);
+        this.renderer.setClearColor(0x0b1017, 1);
         host.innerHTML = "";
         host.appendChild(this.renderer.domElement);
 
@@ -1681,9 +1683,14 @@ class CompositionBuilderApp {
         const theme = this.state.settings.theme || "dark-1";
         document.body.setAttribute("data-theme", theme);
         if (this.dom?.themeSelect && this.dom.themeSelect.value !== theme) this.dom.themeSelect.value = theme;
+        const styles = getComputedStyle(document.body);
+        const gridColor = styles.getPropertyValue("--line2").trim() || "#2b405c";
+        const previewSceneColor = styles.getPropertyValue("--wb-preview-scene").trim() || "#0b1017";
+
+        if (this.scene) this.scene.background = new THREE.Color(previewSceneColor);
+        if (this.renderer) this.renderer.setClearColor(previewSceneColor, 1);
 
         if (this.grid && this.scene) {
-            const gridColor = getComputedStyle(document.body).getPropertyValue("--line2").trim() || "#2b405c";
             this.scene.remove(this.grid);
             this.grid.geometry.dispose();
             if (Array.isArray(this.grid.material)) {

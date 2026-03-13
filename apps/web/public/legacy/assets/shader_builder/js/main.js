@@ -1462,7 +1462,7 @@ const graphEditor = new GraphEditor({
 
 async function bootRenderer() {
     try {
-        const mod = await import("./renderer.js");
+        const mod = await import("./renderer.js?v=20260313_4");
         const RendererCtor = mod?.ShaderWorkbenchRenderer;
         if (typeof RendererCtor !== "function") {
             throw new Error("渲染模块缺少 ShaderWorkbenchRenderer");

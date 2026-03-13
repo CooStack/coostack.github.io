@@ -1,4 +1,4 @@
-@import url("../../shared/css/workbench-theme.css?v=20260313_2");
+@import url("../../shared/css/workbench-theme.css?v=20260313_4");
 
 :root {
         --bg: #101317;
@@ -348,8 +348,16 @@
         transform: translateY(1px);
       }
       .btn.primary {
-        border-color: color-mix(in srgb, var(--accent) 55%, var(--line2));
-        background: color-mix(in srgb, var(--accent) 18%, var(--btn-bg));
+        border-color: color-mix(in srgb, var(--accent) 52%, #b49363 48%);
+        background:
+          linear-gradient(
+            135deg,
+            color-mix(in srgb, var(--accent) 72%, white 8%),
+            color-mix(in srgb, #b49363 78%, var(--accent) 22%)
+          );
+        color: #171513;
+        box-shadow: 0 16px 32px color-mix(in srgb, #b49363 18%, transparent);
+        font-weight: 700;
       }
       .btn.danger {
         border-color: color-mix(in srgb, var(--danger) 55%, var(--line2));
@@ -692,29 +700,25 @@
         min-height: 240px;
         height: auto;
         flex: 1 1 auto;
-        background: color-mix(in srgb, var(--panel) 70%, transparent);
-        border: 1px solid color-mix(in srgb, var(--text) 10%, transparent);
-        border-radius: 16px;
+        background: var(--wb-preview-frame);
+        border: 1px solid var(--wb-preview-border);
+        border-radius: 18px;
         backdrop-filter: blur(12px) saturate(1.1);
+        box-shadow: var(--wb-preview-shadow);
       }
       .viewport {
         flex: 1 1 auto;
         min-height: 0;
         height: auto;
-        border-radius: 16px;
-        border: 1px solid var(--line2);
+        border-radius: 18px;
+        border: 1px solid var(--wb-preview-border);
         overflow: hidden;
-        background:
-          radial-gradient(
-            900px 520px at 50% 20%,
-            color-mix(in srgb, var(--accent) 18%, transparent),
-            transparent 60%
-          ),
-          linear-gradient(
-            180deg,
-            color-mix(in srgb, var(--panel-head) 40%, transparent),
-            color-mix(in srgb, var(--panel-soft) 60%, transparent)
-          );
+        background: var(--wb-preview-surface);
+      }
+      .viewport canvas {
+        display: block;
+        width: 100%;
+        height: 100%;
       }
       .overlay {
         position: absolute;
@@ -864,8 +868,16 @@
         transition: border-color 0.12s ease, background 0.12s ease;
       }
       .kotlin-tab.active {
-        border-color: color-mix(in srgb, var(--accent) 55%, var(--line2));
-        background: color-mix(in srgb, var(--accent) 18%, var(--btn-bg));
+        border-color: color-mix(in srgb, var(--accent) 52%, #b49363 48%);
+        background:
+          linear-gradient(
+            135deg,
+            color-mix(in srgb, var(--accent) 72%, white 8%),
+            color-mix(in srgb, #b49363 78%, var(--accent) 22%)
+          );
+        color: #171513;
+        box-shadow: 0 16px 32px color-mix(in srgb, #b49363 18%, transparent);
+        font-weight: 700;
       }
       .config-tab {
         border: 1px solid var(--line2);
@@ -879,8 +891,21 @@
         transition: border-color 0.12s ease, background 0.12s ease;
       }
       .config-tab.active {
-        border-color: color-mix(in srgb, var(--accent) 55%, var(--line2));
-        background: color-mix(in srgb, var(--accent) 18%, var(--btn-bg));
+        border-color: color-mix(in srgb, var(--accent) 52%, #b49363 48%);
+        background:
+          linear-gradient(
+            135deg,
+            color-mix(in srgb, var(--accent) 72%, white 8%),
+            color-mix(in srgb, #b49363 78%, var(--accent) 22%)
+          );
+        color: #171513;
+        box-shadow: 0 16px 32px color-mix(in srgb, #b49363 18%, transparent);
+        font-weight: 700;
+      }
+      body[data-theme^="light"] .btn.primary,
+      body[data-theme^="light"] .kotlin-tab.active,
+      body[data-theme^="light"] .config-tab.active {
+        color: #1f2833;
       }
       .cfg-page {
         display: none;
@@ -2694,9 +2719,9 @@
         border-radius: 0;
         width: 100vw;
         height: 100vh;
-        background: color-mix(in srgb, var(--bg) 55%, transparent);
-        border: 1px solid var(--line2);
-        box-shadow: var(--shadow2);
+        background: #05080d;
+        border: 1px solid var(--wb-preview-border);
+        box-shadow: var(--wb-preview-shadow);
         backdrop-filter: blur(10px);
       }
       .viewport-wrap.isFull .viewport {

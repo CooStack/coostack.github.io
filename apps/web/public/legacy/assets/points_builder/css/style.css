@@ -1,4 +1,4 @@
-@import url("../../shared/css/workbench-theme.css?v=20260313_2");
+@import url("../../shared/css/workbench-theme.css?v=20260313_4");
 
 :root {
     --bg: #101317;
@@ -1417,7 +1417,19 @@ body.resizing-panels .panel.right {
 
 .three-host {
     flex: 1;
-    min-height: 0
+    min-height: 0;
+    position: relative;
+    overflow: hidden;
+    border: 1px solid var(--wb-preview-border);
+    border-radius: 18px;
+    background: var(--wb-preview-surface);
+    box-shadow: var(--wb-preview-shadow);
+}
+
+.three-host canvas {
+    display: block;
+    width: 100%;
+    height: 100%;
 }
 
 .code {
