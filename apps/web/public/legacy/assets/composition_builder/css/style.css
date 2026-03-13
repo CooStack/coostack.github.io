@@ -1,4 +1,4 @@
-@import url("../../shared/css/workbench-theme.css?v=20260313_4");
+@import url("../../shared/css/workbench-theme.css?v=20260313_5");
 
 :root {
     --bg: #101317;
@@ -1339,6 +1339,30 @@ body[data-theme^="light"] select.input option {
 
 .tok-type {
     color: #90e1ff;
+}
+
+body[data-theme^="light"] .tok-kw {
+    color: #7c6147;
+}
+
+body[data-theme^="light"] .tok-str {
+    color: #5f7868;
+}
+
+body[data-theme^="light"] .tok-com {
+    color: #7c8793;
+}
+
+body[data-theme^="light"] .tok-num {
+    color: #6c7f90;
+}
+
+body[data-theme^="light"] .tok-fn {
+    color: #96655d;
+}
+
+body[data-theme^="light"] .tok-type {
+    color: #6e817a;
 }
 
 .modal-mask {

@@ -1,4 +1,4 @@
-@import url("../../shared/css/workbench-theme.css?v=20260313_4");
+@import url("../../shared/css/workbench-theme.css?v=20260313_5");
 
 :root {
     --bg: #101317;
@@ -1430,6 +1430,12 @@ body.card-preview-dragging {
 .kt-type { color: #7ab7ff; }
 .kt-key { color: #6ec0ff; }
 .kt-id { color: var(--text); }
+
+body[data-theme^="light"] .kt-comment { color: #7c8793; }
+body[data-theme^="light"] .kt-string { color: #7c6147; }
+body[data-theme^="light"] .kt-num { color: #5f7868; }
+body[data-theme^="light"] .kt-type { color: #6c7f90; }
+body[data-theme^="light"] .kt-key { color: #96655d; }
 
 .actions-row {
     padding: 0 10px 10px;
