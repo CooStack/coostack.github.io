@@ -724,7 +724,6 @@ export function installKotlinCodegenMethods(CompositionBuilderApp, deps = {}) {
 
     _emitTreeNodeSingleApplyCodegen(lines, node, card, className, ctx, bindMode, pointExpr, builderExpr, dataLambdaHead, indent, actionCtx) {
         const fx = sanitizeKotlinIdentifier(node.effectClass || card.singleEffectClass || DEFAULT_EFFECT_CLASS, DEFAULT_EFFECT_CLASS);
-        const scale = normalizeScaleHelperConfig(node.scale, { type: "none" });
         if (bindMode === "builder") {
             lines.push(`${indent}applyBuilder(`);
             lines.push(indentText(builderExpr, `${indent}    `));
@@ -739,15 +738,6 @@ export function installKotlinCodegenMethods(CompositionBuilderApp, deps = {}) {
         const singleChain = this._buildTreeNodeSingleDataChainCodegen(node, card, className, `${indent}        `);
         if (singleChain) lines.push(singleChain);
         lines.push(`${indent}}`);
-        const singlePseudo = {
-            id: card.id,
-            shapeDisplayActions: node.displayActions || [],
-            shapeScale: scale,
-            growthAnimates: []
-        };
-        const scopeInfo = this.getShapeScopeInfoByRuntimeLevel(card, int(ctx?.depth || 1));
-        const singleActions = this.applyCardCompositionActions(singlePseudo, className, indent, false, scopeInfo, actionCtx);
-        if (String(singleActions || "").trim()) lines.push(singleActions);
     }
 
     _emitTreeNodeShapeApplyCodegen(lines, node, card, className, ctx, bindMode, pointExpr, builderExpr, dataLambdaHead, indent, isSequenced, depth, actionCtx) {

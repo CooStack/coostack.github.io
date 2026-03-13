@@ -2775,6 +2775,7 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
 
     buildPreviewRuntimeLevelForNode(card, node, depth, elapsedTick, skipExpression) {
         if (!card || !node) return null;
+        if (String(node.type || "single") === "single") return null;
         const scope = this.getShapeScopeInfoByRuntimeLevel(card, depth);
         const actions = this.buildPreviewRuntimeActions(elapsedTick, node.displayActions || [], {
             skipExpression,

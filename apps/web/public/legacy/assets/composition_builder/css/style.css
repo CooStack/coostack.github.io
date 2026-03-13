@@ -1,106 +1,114 @@
+@import url("../../shared/css/workbench-theme.css?v=20260313_2");
+
 :root {
-    --bg: #0e1218;
-    --panel: #151b24;
-    --panel2: #121822;
-    --card: #1b2330;
+    --bg: #101317;
+    --panel: #171d23;
+    --panel2: #12171d;
+    --card: #1d242b;
     --line: rgba(255, 255, 255, .08);
-    --line2: rgba(255, 255, 255, .16);
-    --text: rgba(232, 238, 247, .92);
-    --muted: rgba(169, 183, 204, .62);
-    --muted2: rgba(169, 183, 204, .42);
-    --accent: #6fa8ff;
-    --ok: #5dd6ff;
-    --danger: #ff6b6b;
+    --line2: rgba(255, 255, 255, .14);
+    --text: rgba(236, 240, 245, .94);
+    --muted: rgba(152, 166, 181, .68);
+    --muted2: rgba(152, 166, 181, .44);
+    --accent: #8fa7b8;
+    --ok: #b49363;
+    --danger: #c96f62;
     --topbar-h: 56px;
     --radius: 14px;
     --radius2: 10px;
-    --shadow: 0 12px 30px rgba(0, 0, 0, .35);
-    --shadow2: 0 8px 18px rgba(0, 0, 0, .28);
+    --shadow: 0 14px 34px rgba(0, 0, 0, .34);
+    --shadow2: 0 10px 22px rgba(0, 0, 0, .24);
     --font: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", Arial;
 }
 
 body[data-theme="dark-1"] {
-    --bg: #0e1218;
-    --panel: #151b24;
-    --panel2: #121822;
-    --card: #1b2330;
+    --bg: #101317;
+    --panel: #171d23;
+    --panel2: #12171d;
+    --card: #1d242b;
     --line: rgba(255, 255, 255, .08);
-    --line2: rgba(255, 255, 255, .16);
-    --text: rgba(232, 238, 247, .92);
-    --muted: rgba(169, 183, 204, .62);
-    --muted2: rgba(169, 183, 204, .42);
-    --accent: #6fa8ff;
-    --ok: #5dd6ff;
+    --line2: rgba(255, 255, 255, .14);
+    --text: rgba(236, 240, 245, .94);
+    --muted: rgba(152, 166, 181, .68);
+    --muted2: rgba(152, 166, 181, .44);
+    --accent: #8fa7b8;
+    --ok: #b49363;
+    --danger: #c96f62;
 }
 
 body[data-theme="dark-2"] {
-    --bg: #0b1413;
-    --panel: #101b1a;
-    --panel2: #0e1716;
-    --card: #142221;
-    --line: rgba(255, 255, 255, .07);
-    --line2: rgba(255, 255, 255, .13);
-    --text: rgba(232, 250, 246, .92);
-    --muted: rgba(190, 220, 212, .62);
-    --muted2: rgba(190, 220, 212, .42);
-    --accent: #32c7a2;
-    --ok: #62e0c7;
+    --bg: #121514;
+    --panel: #191d1a;
+    --panel2: #141815;
+    --card: #202420;
+    --line: rgba(255, 255, 255, .08);
+    --line2: rgba(255, 255, 255, .14);
+    --text: rgba(239, 241, 236, .93);
+    --muted: rgba(163, 171, 160, .66);
+    --muted2: rgba(163, 171, 160, .44);
+    --accent: #8fa28f;
+    --ok: #bea06f;
+    --danger: #bf776b;
 }
 
 body[data-theme="dark-3"] {
-    --bg: #17120f;
-    --panel: #211915;
-    --panel2: #1c1512;
-    --card: #261c18;
-    --line: rgba(255, 225, 200, .08);
-    --line2: rgba(255, 225, 200, .16);
-    --text: rgba(255, 244, 230, .92);
-    --muted: rgba(230, 205, 180, .62);
-    --muted2: rgba(230, 205, 180, .42);
-    --accent: #ff9a5f;
-    --ok: #ffd08a;
+    --bg: #171314;
+    --panel: #201a1b;
+    --panel2: #191415;
+    --card: #272021;
+    --line: rgba(255, 255, 255, .08);
+    --line2: rgba(255, 255, 255, .15);
+    --text: rgba(243, 236, 232, .94);
+    --muted: rgba(180, 161, 154, .66);
+    --muted2: rgba(180, 161, 154, .44);
+    --accent: #b28b76;
+    --ok: #c1a074;
+    --danger: #c96c60;
 }
 
 body[data-theme="light-1"] {
-    --bg: #e4f3fe;
-    --panel: #f7fbff;
-    --panel2: #eef6ff;
-    --card: #f4f8ff;
-    --line: rgba(60, 90, 140, .12);
-    --line2: rgba(60, 90, 140, .2);
-    --text: rgba(27, 45, 69, .9);
-    --muted: rgba(27, 45, 69, .6);
-    --muted2: rgba(27, 45, 69, .45);
-    --accent: #559be8;
-    --ok: #1d4ed8;
+    --bg: #edf1f4;
+    --panel: #f7f8fa;
+    --panel2: #eef1f4;
+    --card: #fbfcfd;
+    --line: rgba(79, 93, 109, .12);
+    --line2: rgba(79, 93, 109, .18);
+    --text: rgba(34, 42, 52, .92);
+    --muted: rgba(92, 103, 118, .64);
+    --muted2: rgba(92, 103, 118, .44);
+    --accent: #70879b;
+    --ok: #a07f52;
+    --danger: #b36358;
 }
 
 body[data-theme="light-2"] {
-    --bg: #fff7f0;
-    --panel: #fffdfb;
-    --panel2: #fff6ef;
-    --card: #fff9f4;
-    --line: rgba(60, 40, 30, .08);
-    --line2: rgba(60, 40, 30, .16);
-    --text: rgba(60, 40, 30, .9);
-    --muted: rgba(60, 40, 30, .6);
-    --muted2: rgba(60, 40, 30, .45);
-    --accent: #ff8a3d;
-    --ok: #9a3412;
+    --bg: #f3ede5;
+    --panel: #faf7f2;
+    --panel2: #f4eee6;
+    --card: #fffdfa;
+    --line: rgba(97, 82, 70, .1);
+    --line2: rgba(97, 82, 70, .16);
+    --text: rgba(56, 45, 38, .92);
+    --muted: rgba(111, 92, 76, .64);
+    --muted2: rgba(111, 92, 76, .44);
+    --accent: #a2765a;
+    --ok: #9c8254;
+    --danger: #b06257;
 }
 
 body[data-theme="light-3"] {
-    --bg: #f1fbf7;
-    --panel: #ffffff;
-    --panel2: #f4fbf8;
-    --card: #f2fbf7;
-    --line: rgba(14, 40, 30, .08);
-    --line2: rgba(14, 40, 30, .14);
-    --text: rgba(12, 26, 22, .9);
-    --muted: rgba(12, 26, 22, .62);
-    --muted2: rgba(12, 26, 22, .45);
-    --accent: #2dbd8f;
-    --ok: #0ea5e9;
+    --bg: #eef2ed;
+    --panel: #f8faf8;
+    --panel2: #f0f4f0;
+    --card: #fcfdfc;
+    --line: rgba(67, 86, 76, .1);
+    --line2: rgba(67, 86, 76, .15);
+    --text: rgba(35, 46, 40, .92);
+    --muted: rgba(87, 104, 95, .64);
+    --muted2: rgba(87, 104, 95, .44);
+    --accent: #70897b;
+    --ok: #9a8256;
+    --danger: #a86057;
 }
 
 * {

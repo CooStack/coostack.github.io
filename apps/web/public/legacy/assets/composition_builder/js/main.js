@@ -34,8 +34,8 @@ import {
     hasAngleOffsetEaseSpecialParams,
     formatAngleValue
 } from "./angle_offset_utils.js";
-import { installPreviewRuntimeMethods } from "./preview_runtime_mixin.js?v=20260312_44";
-import { installKotlinCodegenMethods } from "./kotlin_codegen_mixin.js?v=20260312_15";
+import { installPreviewRuntimeMethods } from "./preview_runtime_mixin.js?v=20260313_1";
+import { installKotlinCodegenMethods } from "./kotlin_codegen_mixin.js?v=20260313_1";
 import { installCodeOutputMethods } from "./code_output_mixin.js";
 import { installExpressionEditorMethods } from "./expression_editor_mixin.js?v=20260312_8";
 import { installCodeCompileMethods } from "./code_compile_mixin.js?v=20260309_2";
@@ -5392,10 +5392,6 @@ class CompositionBuilderApp {
                 </label>
             </div>
             ${bindBlock}
-            ${axisBlock}
-            ${displayBlock}
-            ${angleOffsetBlock}
-            ${scaleBlock}
             <div class="mini-note">Particle Init</div>
             <div class="list-tools">
                 <button class="btn small primary" data-act="add-tree-node-pinit" data-card-id="${cardId}" data-tree-path="${tp}">添加 init</button>

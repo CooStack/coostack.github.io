@@ -82,18 +82,54 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .legacy-page-host {
+  position: relative;
+  box-sizing: border-box;
   width: 100%;
   min-height: 100vh;
   height: 100vh;
   overflow: hidden;
-  background: #0e1218;
+  padding: clamp(8px, 1.1vw, 16px);
+  background:
+    radial-gradient(1280px 780px at 10% -10%, rgba(143, 167, 184, 0.14), transparent 50%),
+    radial-gradient(980px 720px at 88% 0%, rgba(180, 147, 99, 0.12), transparent 56%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.03), transparent 26%),
+    #0d1116;
+  isolation: isolate;
+}
+
+.legacy-page-host::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background:
+    linear-gradient(125deg, rgba(255, 255, 255, 0.045), transparent 30%),
+    repeating-linear-gradient(90deg, rgba(255, 255, 255, 0.015) 0 1px, transparent 1px 60px);
+  opacity: 0.14;
 }
 
 .legacy-page-frame {
+  position: relative;
+  z-index: 1;
   display: block;
   width: 100%;
   height: 100%;
-  border: 0;
+  border: 1px solid rgba(166, 175, 186, 0.18);
+  border-radius: 28px;
   background: transparent;
+  box-shadow:
+    0 24px 80px rgba(2, 6, 23, 0.46),
+    inset 0 1px 0 rgba(255, 255, 255, 0.04);
+}
+
+@media (max-width: 768px) {
+  .legacy-page-host {
+    padding: 8px;
+  }
+
+  .legacy-page-frame {
+    border-radius: 20px;
+  }
 }
 </style>

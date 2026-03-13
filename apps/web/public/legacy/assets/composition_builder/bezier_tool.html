@@ -6,15 +6,15 @@
     <title>Bezier Scale 工具</title>
     <style>
         :root {
-            --bg: #0f1724;
-            --panel: #162135;
-            --line: rgba(255, 255, 255, 0.16);
-            --line2: rgba(255, 255, 255, 0.28);
-            --text: #e6eefc;
-            --muted: #9db1d1;
-            --accent: #67a4ff;
-            --danger: #ff6b6b;
-            --ok: #53d3ab;
+            --bg: #101317;
+            --panel: #171d23;
+            --line: rgba(255, 255, 255, 0.08);
+            --line2: rgba(255, 255, 255, 0.14);
+            --text: #ecf0f5;
+            --muted: #98a6b5;
+            --accent: #8fa7b8;
+            --danger: #c96f62;
+            --ok: #b49363;
             --font: ui-sans-serif, system-ui, -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", Arial;
             --mono: "JetBrains Mono", ui-monospace, Consolas, monospace;
         }
@@ -28,7 +28,10 @@
             height: 100%;
             margin: 0;
             overflow: hidden;
-            background: radial-gradient(900px 520px at 20% 10%, rgba(103, 164, 255, 0.14), transparent 55%), var(--bg);
+            background:
+                radial-gradient(900px 520px at 20% 10%, rgba(143, 167, 184, 0.14), transparent 55%),
+                radial-gradient(780px 460px at 100% 0%, rgba(180, 147, 99, 0.12), transparent 58%),
+                var(--bg);
             color: var(--text);
             font-family: var(--font);
         }
@@ -120,8 +123,13 @@
         }
 
         button.primary {
-            border-color: color-mix(in srgb, var(--accent) 72%, transparent);
-            background: color-mix(in srgb, var(--accent) 24%, transparent);
+            border-color: color-mix(in srgb, var(--accent) 48%, var(--ok) 52%);
+            background: linear-gradient(
+                135deg,
+                color-mix(in srgb, var(--accent) 74%, white 8%),
+                color-mix(in srgb, var(--ok) 78%, var(--accent) 22%)
+            );
+            color: #171513;
         }
 
         .canvas-wrap {
@@ -161,6 +169,7 @@
             color: var(--ok);
         }
     </style>
+    <link rel="stylesheet" href="../shared/css/workbench-theme.css?v=20260313_2"/>
 </head>
 <body>
 <div class="app">

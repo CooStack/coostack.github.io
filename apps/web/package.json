@@ -5,8 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "vite build",
-    "build:github": "vite build",
+    "build": "node ./scripts/build-safe.mjs",
+    "build:github": "node ./scripts/build-safe.mjs",
     "preview": "vite preview"
   },
   "dependencies": {
