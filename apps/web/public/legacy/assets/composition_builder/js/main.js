@@ -2052,13 +2052,21 @@ class CompositionBuilderApp {
         this.showToast("已新建合成项目", "success");
     }
 
-    onProjectClick(e) {
+    async onProjectClick(e) {
         const btn = e.target.closest("button[data-act]");
         if (!btn) return;
         const act = btn.dataset.act;
         const idx = int(btn.dataset.idx);
         if (act === "open-project-bezier-tool") {
             this.openBezierTool("project");
+            return;
+        }
+        if (act === "copy-project-bezier-params") {
+            await this.copyScaleBezierParams("project");
+            return;
+        }
+        if (act === "paste-project-bezier-params") {
+            await this.pasteScaleBezierParams("project");
             return;
         }
         if (act === "apply-project-axis-manual") {
@@ -2915,9 +2923,27 @@ class CompositionBuilderApp {
                 this.openBezierTool("card", cardId);
                 return;
             }
+            if (act === "copy-card-bezier-params") {
+                await this.copyScaleBezierParams("card", cardId);
+                return;
+            }
+            if (act === "paste-card-bezier-params") {
+                await this.pasteScaleBezierParams("card", cardId);
+                return;
+            }
             if (act === "open-node-bezier-tool") {
                 const treePath = btn.dataset.treePath || "[]";
                 this.openBezierTool("tree_node", cardId, treePath);
+                return;
+            }
+            if (act === "copy-node-bezier-params") {
+                const treePath = btn.dataset.treePath || "[]";
+                await this.copyScaleBezierParams("tree_node", cardId, treePath);
+                return;
+            }
+            if (act === "paste-node-bezier-params") {
+                const treePath = btn.dataset.treePath || "[]";
+                await this.pasteScaleBezierParams("tree_node", cardId, treePath);
                 return;
             }
             if (act === "open-card-angle-bezier-tool") {
@@ -5565,6 +5591,16 @@ class CompositionBuilderApp {
             : (scope === "tree_node"
                 ? "open-node-bezier-tool"
                 : "open-card-bezier-tool");
+        const copyBezierAct = scope === "project"
+            ? "copy-project-bezier-params"
+            : (scope === "tree_node"
+                ? "copy-node-bezier-params"
+                : "copy-card-bezier-params");
+        const pasteBezierAct = scope === "project"
+            ? "paste-project-bezier-params"
+            : (scope === "tree_node"
+                ? "paste-node-bezier-params"
+                : "paste-card-bezier-params");
         const typeSelect = `
             <label class="field">
                 <span>${esc(helperName)}</span>
@@ -5620,6 +5656,8 @@ class CompositionBuilderApp {
                 </label>
             </div>
             <div class="list-tools">
+                <button class="btn small" data-act="${copyBezierAct}" ${cardAttr}>复制参数</button>
+                <button class="btn small" data-act="${pasteBezierAct}" ${cardAttr}>从剪贴板粘贴</button>
                 <button class="btn small" data-act="${openBezierAct}" ${cardAttr}>打开 Bezier 工具</button>
             </div>
         ` : "";
@@ -9637,6 +9675,161 @@ class CompositionBuilderApp {
             c2y: num(params.angleOffsetEaseBezierEndY),
             c2z: 0
         };
+    }
+
+    getScaleBezierConfigForScope(scope = "project", cardId = "", treePathRaw = "") {
+        if (scope === "card") {
+            const card = this.getCardById(cardId);
+            return card ? normalizeScaleHelperConfig(card.shapeScale, { type: "none" }) : null;
+        }
+        if (scope === "tree_node") {
+            const card = this.getCardById(cardId);
+            if (!card) return null;
+            const treePath = this.parseBezierToolTreePath(treePathRaw || "[]");
+            const node = this.getShapeNodeByPath(card, treePath);
+            return node ? normalizeScaleHelperConfig(node.scale, { type: "none" }) : null;
+        }
+        return normalizeScaleHelperConfig(this.state.projectScale, { type: "none" });
+    }
+
+    normalizeScaleBezierClipboardParams(raw) {
+        const cfg = normalizeScaleHelperConfig(Object.assign({ type: "bezier" }, raw || {}), { type: "bezier" });
+        return {
+            min: num(cfg.min),
+            max: num(cfg.max),
+            tick: Math.max(1, int(cfg.tick || 1)),
+            c1x: num(cfg.c1x),
+            c1y: num(cfg.c1y),
+            c1z: num(cfg.c1z),
+            c2x: num(cfg.c2x),
+            c2y: num(cfg.c2y),
+            c2z: num(cfg.c2z)
+        };
+    }
+
+    buildScaleBezierClipboardText(scale) {
+        return JSON.stringify({
+            type: "composition-scale-bezier",
+            version: 1,
+            params: this.normalizeScaleBezierClipboardParams(scale)
+        }, null, 2);
+    }
+
+    parseScaleBezierClipboardText(text) {
+        const rawText = String(text || "").trim();
+        if (!rawText) throw new Error("剪贴板为空");
+        let parsed = null;
+        try {
+            parsed = JSON.parse(rawText);
+        } catch {
+            throw new Error("剪贴板内容不是有效 JSON");
+        }
+        const keys = ["min", "max", "tick", "c1x", "c1y", "c1z", "c2x", "c2y", "c2z"];
+        const candidates = [];
+        if (parsed && typeof parsed === "object") {
+            candidates.push(parsed);
+            if (parsed.params && typeof parsed.params === "object") candidates.push(parsed.params);
+            if (parsed.payload && typeof parsed.payload === "object") {
+                candidates.push(parsed.payload);
+                if (parsed.payload.params && typeof parsed.payload.params === "object") candidates.push(parsed.payload.params);
+            }
+        }
+        const picked = candidates.find((it) => keys.some((key) => it[key] !== undefined));
+        if (!picked) throw new Error("剪贴板内容缺少缩放贝塞尔参数");
+        return this.normalizeScaleBezierClipboardParams(picked);
+    }
+
+    async writeClipboardText(text) {
+        if (navigator.clipboard?.writeText) {
+            await navigator.clipboard.writeText(text);
+            return;
+        }
+        const ta = document.createElement("textarea");
+        ta.value = String(text || "");
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand("copy");
+        ta.remove();
+    }
+
+    async readClipboardText(promptMessage = "请从剪贴板粘贴缩放贝塞尔参数 JSON：") {
+        let clipboardError = null;
+        if (navigator.clipboard?.readText) {
+            try {
+                return await navigator.clipboard.readText();
+            } catch (e) {
+                clipboardError = e;
+            }
+        }
+        const manual = window.prompt(promptMessage, "");
+        if (manual !== null) return manual;
+        if (clipboardError) throw clipboardError;
+        throw new Error("已取消粘贴");
+    }
+
+    getScaleBezierScopeLabel(scope = "project") {
+        if (scope === "card") return "卡片缩放助手";
+        if (scope === "tree_node") return "节点缩放助手";
+        return "项目缩放助手";
+    }
+
+    async copyScaleBezierParams(scope = "project", cardId = "", treePathRaw = "") {
+        try {
+            const scale = this.getScaleBezierConfigForScope(scope, cardId, treePathRaw);
+            if (!scale) throw new Error(`${this.getScaleBezierScopeLabel(scope)}不存在`);
+            if (String(scale.type || "none") !== "bezier") {
+                throw new Error(`${this.getScaleBezierScopeLabel(scope)}不是 Bezier 类型`);
+            }
+            await this.writeClipboardText(this.buildScaleBezierClipboardText(scale));
+            this.showToast(`${this.getScaleBezierScopeLabel(scope)}参数已复制`, "success");
+            return true;
+        } catch (e) {
+            this.showToast(`复制失败: ${e?.message || e}`, "error");
+            return false;
+        }
+    }
+
+    async pasteScaleBezierParams(scope = "project", cardId = "", treePathRaw = "") {
+        try {
+            const params = this.parseScaleBezierClipboardText(await this.readClipboardText());
+            if (scope === "card") {
+                const card = this.getCardById(cardId);
+                if (!card) throw new Error("卡片不存在");
+                this.pushHistory();
+                const scale = Object.assign({}, normalizeScaleHelperConfig(card.shapeScale, { type: "none" }), params);
+                scale.type = "bezier";
+                scale.runMode = "auto";
+                card.shapeScale = scale;
+                this.afterValueMutate({ rerenderCards: true, rebuildPreview: true });
+                this.showToast("已粘贴到卡片缩放助手", "success");
+                return true;
+            }
+            if (scope === "tree_node") {
+                const card = this.getCardById(cardId);
+                if (!card) throw new Error("卡片不存在");
+                const treePath = this.parseBezierToolTreePath(treePathRaw || "[]");
+                const node = this.getShapeNodeByPath(card, treePath);
+                if (!node) throw new Error("节点不存在");
+                this.pushHistory();
+                const scale = Object.assign({}, normalizeScaleHelperConfig(node.scale, { type: "none" }), params);
+                scale.type = "bezier";
+                scale.runMode = "auto";
+                node.scale = scale;
+                this.afterValueMutate({ rerenderCards: true, rebuildPreview: true });
+                this.showToast("已粘贴到节点缩放助手", "success");
+                return true;
+            }
+            this.pushHistory();
+            const scale = Object.assign({}, normalizeScaleHelperConfig(this.state.projectScale, { type: "none" }), params);
+            scale.type = "bezier";
+            this.state.projectScale = scale;
+            this.afterValueMutate({ rerenderProject: true, rebuildPreview: true });
+            this.showToast("已粘贴到项目缩放助手", "success");
+            return true;
+        } catch (e) {
+            this.showToast(`粘贴失败: ${e?.message || e}`, "error");
+            return false;
+        }
     }
 
     openBezierTool(scope = "project", cardId = "", treePathOrLevelIdx = "", kind = "scale") {
