@@ -397,8 +397,9 @@ export function createKindDefs(ctx) {
         },
 
         add_bezier: {
+            hiddenInPicker: true,
             title: "addBezier(三点贝塞尔)",
-            desc: "添加三点贝塞尔曲线点（addBezier）",
+            desc: "兼容旧版三点贝塞尔曲线点（addBezier）",
             defaultParams: {
                 p1x: 0, p1y: 0, p1z: 0,
                 p2x: 2, p2y: 2, p2z: 0,
@@ -428,52 +429,44 @@ export function createKindDefs(ctx) {
         },
 
         add_bezier_4: {
-            title: "addBezier4(四点贝塞尔)",
-            desc: "添加四点贝塞尔曲线点（addBezier4）",
+            title: "Bezier(start-end+曲柄)",
+            desc: "添加显式 start/end 与两个曲柄的三维贝塞尔曲线",
             defaultParams: {
-                p1x: 0, p1y: 0, p1z: 0,
-                p2x: 2, p2y: 2, p2z: 0,
-                p3x: 4, p3y: -2, p3z: 0,
-                p4x: 6, p4y: 0, p4z: 0,
+                sx: 0, sy: 0, sz: 0,
+                ex: 6, ey: 0, ez: 0,
+                shx: 2, shy: 2, shz: 0,
+                ehx: -2, ehy: 2, ehz: 0,
                 count: 80
             },
             apply(ctx, node) {
                 const p = node.params;
-                const p0 = U.v(num(p.p1x), num(p.p1y), num(p.p1z));
-                const p1 = U.v(num(p.p2x), num(p.p2y), num(p.p2z));
-                const p2 = U.v(num(p.p3x), num(p.p3y), num(p.p3z));
-                const p3 = U.v(num(p.p4x), num(p.p4y), num(p.p4z));
-                ctx.points.push(...buildCubicBezier(p0, p1, p2, p3, int(p.count)));
+                const start = U.v(num(p.sx), num(p.sy), num(p.sz));
+                const end = U.v(num(p.ex), num(p.ey), num(p.ez));
+                const p1 = U.add(start, U.v(num(p.shx), num(p.shy), num(p.shz)));
+                const p2 = U.add(end, U.v(num(p.ehx), num(p.ehy), num(p.ehz)));
+                ctx.points.push(...buildCubicBezier(start, p1, p2, end, int(p.count)));
             },
             kotlin(node) {
                 const p = node.params;
-                const p0 = U.v(num(p.p1x), num(p.p1y), num(p.p1z));
-                const c1 = U.v(num(p.p2x), num(p.p2y), num(p.p2z));
-                const c2 = U.v(num(p.p3x), num(p.p3y), num(p.p3z));
-                const p3 = U.v(num(p.p4x), num(p.p4y), num(p.p4z));
-                const target = U.sub(p3, p0);
-                const startHandle = U.sub(c1, p0);
-                const endHandle = U.sub(c2, p3);
-                const startExpr = relExpr(p0.x, p0.y, p0.z);
-                return `.addWith { generateBezierCurve(${relExpr(target.x, target.y, target.z)}, ${relExpr(startHandle.x, startHandle.y, startHandle.z)}, ${relExpr(endHandle.x, endHandle.y, endHandle.z)}, ${int(p.count)}).onEach { it.add(${startExpr}) } }`;
+                return `.addBezierCurve(${relExpr(p.sx, p.sy, p.sz)}, ${relExpr(p.ex, p.ey, p.ez)}, ${relExpr(p.shx, p.shy, p.shz)}, ${relExpr(p.ehx, p.ehy, p.ehz)}, ${int(p.count)})`;
             }
         },
 
         add_bezier_curve: {
-            title: "addBezierCurve(三次贝塞尔)",
-            desc: "添加三次贝塞尔曲线点（addBezierCurve）",
-            defaultParams: {tx: 5, ty: 0, shx: 2, shy: 2, ehx: -2, ehy: 2, count: 80},
+            title: "Bezier(end+曲柄)",
+            desc: "添加以原点为 start、仅输入 end 与两个曲柄的三维贝塞尔曲线",
+            defaultParams: { ex: 5, ey: 0, ez: 0, shx: 2, shy: 2, shz: 0, ehx: -2, ehy: 2, ehz: 0, count: 80 },
             apply(ctx, node) {
-                const target = U.v(num(node.params.tx), num(node.params.ty), 0);
-                const sh = U.v(num(node.params.shx), num(node.params.shy), 0);
-                const eh = U.v(num(node.params.ehx), num(node.params.ehy), 0);
-                ctx.points.push(...U.generateBezierCurve(target, sh, eh, int(node.params.count)));
+                const p = node.params;
+                const start = U.v(0, 0, 0);
+                const end = U.v(num(p.ex), num(p.ey), num(p.ez));
+                const p1 = U.add(start, U.v(num(p.shx), num(p.shy), num(p.shz)));
+                const p2 = U.add(end, U.v(num(p.ehx), num(p.ehy), num(p.ehz)));
+                ctx.points.push(...buildCubicBezier(start, p1, p2, end, int(p.count)));
             },
             kotlin(node) {
-                const target = relExpr(node.params.tx, node.params.ty, 0);
-                const sh = relExpr(node.params.shx, node.params.shy, 0);
-                const eh = relExpr(node.params.ehx, node.params.ehy, 0);
-                return `.addBezierCurve(${target}, ${sh}, ${eh}, ${int(node.params.count)})`;
+                const p = node.params;
+                return `.addBezierCurve(${relExpr(0, 0, 0)}, ${relExpr(p.ex, p.ey, p.ez)}, ${relExpr(p.shx, p.shy, p.shz)}, ${relExpr(p.ehx, p.ehy, p.ehz)}, ${int(p.count)})`;
             }
         },
 

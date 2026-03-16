@@ -126,6 +126,7 @@ export function createPickerModule(ctx = {}) {
 
         const shown = [];
         for (const it of entries) {
+            if (it.def && it.def.hiddenInPicker) continue;
             const titleRaw = (it.def?.title || it.kind) + "";
             const kindRaw = (it.kind || "") + "";
             const descRaw = (it.def?.desc || "") + "";

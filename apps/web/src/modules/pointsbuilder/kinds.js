@@ -246,22 +246,30 @@ export const POINTS_NODE_KINDS = {
   add_bezier_curve: {
     title: 'Bezier Curve',
     group: '曲线',
-    description: '兼容旧版 addBezierCurve(target, startHandle, endHandle)。',
-    defaultParams: { tx: 5, ty: 0, shx: 2, shy: 2, ehx: -2, ehy: 2, count: 80 },
+    description: '使用起点/终点与相对手柄生成三维三次贝塞尔曲线。',
+    defaultParams: {
+      sx: 0, sy: 0, sz: 0,
+      ex: 5, ey: 0, ez: 0,
+      shx: 2, shy: 2, shz: 0,
+      ehx: -2, ehy: 2, ehz: 0,
+      count: 80
+    },
     fields: [
-      numberField('tx', '目标 X'), numberField('ty', '目标 Y'),
-      numberField('shx', '起始手柄 X'), numberField('shy', '起始手柄 Y'),
-      numberField('ehx', '结束手柄 X'), numberField('ehy', '结束手柄 Y'),
+      numberField('sx', '起点 X'), numberField('sy', '起点 Y'), numberField('sz', '起点 Z'),
+      numberField('ex', '终点 X'), numberField('ey', '终点 Y'), numberField('ez', '终点 Z'),
+      numberField('shx', '起始手柄 X'), numberField('shy', '起始手柄 Y'), numberField('shz', '起始手柄 Z'),
+      numberField('ehx', '结束手柄 X'), numberField('ehy', '结束手柄 Y'), numberField('ehz', '结束手柄 Z'),
       numberField('count', '点数', { step: 1, min: 2 })
     ],
     apply(ctx, node) {
-      const target = v(num(node.params.tx), num(node.params.ty), 0);
-      const startHandle = v(num(node.params.shx), num(node.params.shy), 0);
-      const endHandle = v(num(node.params.ehx), num(node.params.ehy), 0);
-      ctx.points.push(...generateBezierCurve(target, startHandle, endHandle, Math.max(2, int(node.params.count, 80))));
+      const start = v(num(node.params.sx), num(node.params.sy), num(node.params.sz));
+      const end = v(num(node.params.ex), num(node.params.ey), num(node.params.ez));
+      const startHandle = v(num(node.params.shx), num(node.params.shy), num(node.params.shz));
+      const endHandle = v(num(node.params.ehx), num(node.params.ehy), num(node.params.ehz));
+      ctx.points.push(...generateBezierCurve(start, end, startHandle, endHandle, Math.max(2, int(node.params.count, 80))));
     },
     kotlin(node) {
-      return `.addBezierCurve(${relExpr(node.params.tx, node.params.ty, 0)}, ${relExpr(node.params.shx, node.params.shy, 0)}, ${relExpr(node.params.ehx, node.params.ehy, 0)}, ${Math.max(2, int(node.params.count, 80))})`;
+      return `.addBezierCurve(${relExpr(node.params.sx, node.params.sy, node.params.sz)}, ${relExpr(node.params.ex, node.params.ey, node.params.ez)}, ${relExpr(node.params.shx, node.params.shy, node.params.shz)}, ${relExpr(node.params.ehx, node.params.ehy, node.params.ehz)}, ${Math.max(2, int(node.params.count, 80))})`;
     }
   },
   points_on_each_offset: {

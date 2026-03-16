@@ -1393,19 +1393,40 @@ function initPointsBuilderMain() {
                 if (p.count === undefined && p.counts !== undefined) p.count = p.counts;
                 break;
             case "add_bezier_4":
-                normalizeLegacyVecParams(p, "p1");
-                normalizeLegacyVecParams(p, "p2");
-                normalizeLegacyVecParams(p, "p3");
-                normalizeLegacyVecParams(p, "p4");
+                normalizeLegacyVecParams(p, "s", "start");
+                normalizeLegacyVecParams(p, "e", "end");
+                normalizeLegacyVecParams(p, "sh", "startHandle");
+                normalizeLegacyVecParams(p, "eh", "endHandle");
+                if (p.sx === undefined && p.p1x !== undefined) p.sx = p.p1x;
+                if (p.sy === undefined && p.p1y !== undefined) p.sy = p.p1y;
+                if (p.sz === undefined && p.p1z !== undefined) p.sz = p.p1z;
+                if (p.ex === undefined && p.p4x !== undefined) p.ex = p.p4x;
+                if (p.ey === undefined && p.p4y !== undefined) p.ey = p.p4y;
+                if (p.ez === undefined && p.p4z !== undefined) p.ez = p.p4z;
+                if (p.shx === undefined && p.p1x !== undefined && p.p2x !== undefined) p.shx = num(p.p2x) - num(p.p1x);
+                if (p.shy === undefined && p.p1y !== undefined && p.p2y !== undefined) p.shy = num(p.p2y) - num(p.p1y);
+                if (p.shz === undefined && p.p1z !== undefined && p.p2z !== undefined) p.shz = num(p.p2z) - num(p.p1z);
+                if (p.ehx === undefined && p.p4x !== undefined && p.p3x !== undefined) p.ehx = num(p.p3x) - num(p.p4x);
+                if (p.ehy === undefined && p.p4y !== undefined && p.p3y !== undefined) p.ehy = num(p.p3y) - num(p.p4y);
+                if (p.ehz === undefined && p.p4z !== undefined && p.p3z !== undefined) p.ehz = num(p.p3z) - num(p.p4z);
                 if (p.count === undefined && p.counts !== undefined) p.count = p.counts;
                 break;
             case "add_bezier_curve":
-                if (p.tx === undefined && p.target && typeof p.target === "object") p.tx = p.target.x ?? p.target[0];
-                if (p.ty === undefined && p.target && typeof p.target === "object") p.ty = p.target.y ?? p.target[1];
+                normalizeLegacyVecParams(p, "e", "target");
+                normalizeLegacyVecParams(p, "sh", "startHandle");
+                normalizeLegacyVecParams(p, "eh", "endHandle");
+                if (p.ex === undefined && p.tx !== undefined) p.ex = p.tx;
+                if (p.ey === undefined && p.ty !== undefined) p.ey = p.ty;
+                if (p.ez === undefined && p.tz !== undefined) p.ez = p.tz;
+                if (p.ex === undefined && p.target && typeof p.target === "object") p.ex = p.target.x ?? p.target[0];
+                if (p.ey === undefined && p.target && typeof p.target === "object") p.ey = p.target.y ?? p.target[1];
+                if (p.ez === undefined && p.target && typeof p.target === "object") p.ez = p.target.z ?? p.target[2];
                 if (p.shx === undefined && p.startHandle && typeof p.startHandle === "object") p.shx = p.startHandle.x ?? p.startHandle[0];
                 if (p.shy === undefined && p.startHandle && typeof p.startHandle === "object") p.shy = p.startHandle.y ?? p.startHandle[1];
+                if (p.shz === undefined && p.startHandle && typeof p.startHandle === "object") p.shz = p.startHandle.z ?? p.startHandle[2];
                 if (p.ehx === undefined && p.endHandle && typeof p.endHandle === "object") p.ehx = p.endHandle.x ?? p.endHandle[0];
                 if (p.ehy === undefined && p.endHandle && typeof p.endHandle === "object") p.ehy = p.endHandle.y ?? p.endHandle[1];
+                if (p.ehz === undefined && p.endHandle && typeof p.endHandle === "object") p.ehz = p.endHandle.z ?? p.endHandle[2];
                 break;
             case "add_polygon":
                 if (p.count === undefined && p.edgeCount !== undefined) p.count = p.edgeCount;
@@ -2548,6 +2569,11 @@ function initPointsBuilderMain() {
     let rotateDragChanged = false;
     let rotateHistoryCaptured = false;
     let rotateManualInput = "";
+    let bezierGuidePointsObj = null;
+    let bezierGuideLineObj = null;
+    let bezierGuideMeta = [];
+    let bezierGuideNodeId = null;
+    let bezierHandleDrag = null;
     const panKeyState = {ArrowUp: false, ArrowDown: false, ArrowLeft: false, ArrowRight: false};
     const PAN_KEY_SPEED = 0.0025;
     const _panDir = new THREE.Vector3();
@@ -3104,8 +3130,17 @@ function initPointsBuilderMain() {
         return new THREE.Vector3(0, 1, 0);
     }
 
+    function getBezierHandleWorldPointByDragState(dragState = bezierHandleDrag) {
+        if (!dragState || !dragState.nodeId || !dragState.role) return null;
+        const guide = getBezierGuideDataByNodeId(dragState.nodeId);
+        if (!guide) return null;
+        if (dragState.role === "sh") return { x: guide.c1.x, y: guide.c1.y, z: guide.c1.z };
+        if (dragState.role === "eh") return { x: guide.c2.x, y: guide.c2.y, z: guide.c2.z };
+        return null;
+    }
+
     function shouldApplyLockPlane() {
-        return !!(linePickMode || pointPickMode || offsetMode);
+        return !!(linePickMode || pointPickMode || offsetMode || bezierHandleDrag);
     }
 
     function snapValue(v, step) {
@@ -3295,7 +3330,7 @@ function initPointsBuilderMain() {
         if (lockPlaneActive === active) return lockPlaneActive;
         lockPlaneActive = active;
         if (lockPlaneActive) {
-            const base = lastPickMappedPoint || lastPickBasePoint;
+            const base = getBezierHandleWorldPointByDragState() || lastPickMappedPoint || lastPickBasePoint;
             if (!base) {
                 lockPlaneActive = false;
                 updateSnapModeStatus();
@@ -3381,6 +3416,9 @@ function initPointsBuilderMain() {
         controls.mouseButtons.LEFT = null;
         controls.mouseButtons.MIDDLE = THREE.MOUSE.ROTATE;
         controls.mouseButtons.RIGHT = THREE.MOUSE.PAN;
+        controls.addEventListener("change", () => {
+            if (focusedNodeId || bezierGuideNodeId) updateBezierGuidePreview();
+        });
         captureInitialCamera();
         axesHelper = new THREE.AxesHelper(5);
         scene.add(axesHelper);
@@ -3413,6 +3451,9 @@ function initPointsBuilderMain() {
         renderer.domElement.addEventListener("pointermove", onPointerMove);
         renderer.domElement.addEventListener("pointerup", onPointerUp);
         renderer.domElement.addEventListener("pointercancel", (ev) => {
+            if (bezierHandleDrag && ev && ev.pointerId === bezierHandleDrag.pointerId) {
+                cancelBezierHandleDrag(ev, { suppressClick: true });
+            }
             if (actionMenuRightTrack && ev && ev.pointerId === actionMenuRightTrack.pointerId) {
                 endActionMenuRightTrack(ev, true);
             }
@@ -3533,6 +3574,184 @@ function initPointsBuilderMain() {
         controls.update();
     }
 
+    function ensureBezierGuideObjects() {
+        if (!scene) return;
+        if (!bezierGuideLineObj) {
+            const geom = new THREE.BufferGeometry();
+            geom.setAttribute("position", new THREE.BufferAttribute(new Float32Array(12), 3));
+            const mat = new THREE.LineBasicMaterial({
+                color: 0x5dd6ff,
+                transparent: true,
+                opacity: 0.5,
+                depthWrite: false
+            });
+            bezierGuideLineObj = new THREE.LineSegments(geom, mat);
+            bezierGuideLineObj.visible = false;
+            scene.add(bezierGuideLineObj);
+        }
+        if (!bezierGuidePointsObj) {
+            const geom = new THREE.BufferGeometry();
+            geom.setAttribute("position", new THREE.BufferAttribute(new Float32Array(12), 3));
+            geom.setAttribute("color", new THREE.BufferAttribute(new Float32Array(12), 3));
+            const mat = new THREE.PointsMaterial({
+                size: Math.max(pointSize * 2.4, 0.28),
+                sizeAttenuation: true,
+                vertexColors: true,
+                transparent: true,
+                opacity: 0.95,
+                depthWrite: false
+            });
+            bezierGuidePointsObj = new THREE.Points(geom, mat);
+            bezierGuidePointsObj.visible = false;
+            scene.add(bezierGuidePointsObj);
+        }
+    }
+
+    function hideBezierGuidePreview() {
+        bezierGuideNodeId = null;
+        bezierGuideMeta = [];
+        if (bezierGuideLineObj) bezierGuideLineObj.visible = false;
+        if (bezierGuidePointsObj) bezierGuidePointsObj.visible = false;
+    }
+
+    function cancelBezierHandleDrag(ev = null, options = {}) {
+        if (!bezierHandleDrag) return false;
+        bezierHandleDrag = null;
+        if (options.suppressClick) armCanvasClickSuppress(ev);
+        hideHoverMarker();
+        updateBezierGuidePreview();
+        return true;
+    }
+
+    function getBezierGuideDataByNodeId(nodeId) {
+        if (!nodeId) return null;
+        const ctx = findNodeContextById(nodeId);
+        if (!ctx || !ctx.node) return null;
+        const node = ctx.node;
+        const p = node.params || {};
+        if (node.kind === "add_bezier_4") {
+            const start = U.v(num(p.sx), num(p.sy), num(p.sz));
+            const end = U.v(num(p.ex), num(p.ey), num(p.ez));
+            const c1 = U.add(start, U.v(num(p.shx), num(p.shy), num(p.shz)));
+            const c2 = U.add(end, U.v(num(p.ehx), num(p.ehy), num(p.ehz)));
+            return { nodeId, kind: node.kind, start, end, c1, c2 };
+        }
+        if (node.kind === "add_bezier_curve") {
+            const start = U.v(0, 0, 0);
+            const end = U.v(num(p.ex), num(p.ey), num(p.ez));
+            const c1 = U.add(start, U.v(num(p.shx), num(p.shy), num(p.shz)));
+            const c2 = U.add(end, U.v(num(p.ehx), num(p.ehy), num(p.ehz)));
+            return { nodeId, kind: node.kind, start, end, c1, c2 };
+        }
+        return null;
+    }
+
+    function updateBezierGuidePreview() {
+        if (!scene) return;
+        if (linePickMode || pointPickMode || offsetMode || rotateMode) {
+            hideBezierGuidePreview();
+            return;
+        }
+        const guide = getBezierGuideDataByNodeId(focusedNodeId);
+        if (!guide) {
+            hideBezierGuidePreview();
+            return;
+        }
+        ensureBezierGuideObjects();
+        if (!bezierGuideLineObj || !bezierGuidePointsObj) return;
+        bezierGuideNodeId = guide.nodeId;
+        bezierGuideMeta = [
+            { role: "start", point: guide.start },
+            { role: "end", point: guide.end },
+            { role: "sh", point: guide.c1 },
+            { role: "eh", point: guide.c2 }
+        ];
+        const linePos = bezierGuideLineObj.geometry.getAttribute("position");
+        const lp = linePos.array;
+        lp[0] = guide.start.x; lp[1] = guide.start.y; lp[2] = guide.start.z;
+        lp[3] = guide.c1.x; lp[4] = guide.c1.y; lp[5] = guide.c1.z;
+        lp[6] = guide.end.x; lp[7] = guide.end.y; lp[8] = guide.end.z;
+        lp[9] = guide.c2.x; lp[10] = guide.c2.y; lp[11] = guide.c2.z;
+        linePos.needsUpdate = true;
+        bezierGuideLineObj.visible = true;
+
+        const pointPos = bezierGuidePointsObj.geometry.getAttribute("position");
+        const pointColor = bezierGuidePointsObj.geometry.getAttribute("color");
+        const pa = pointPos.array;
+        const ca = pointColor.array;
+        const colors = [
+            defaultPointColor,
+            focusPointColor,
+            pointPickPreviewColor,
+            pointPickPreviewColor
+        ];
+        for (let i = 0; i < bezierGuideMeta.length; i++) {
+            const meta = bezierGuideMeta[i];
+            const base = i * 3;
+            pa[base + 0] = meta.point.x;
+            pa[base + 1] = meta.point.y;
+            pa[base + 2] = meta.point.z;
+            const color = colors[i] || defaultPointColor;
+            ca[base + 0] = color.r;
+            ca[base + 1] = color.g;
+            ca[base + 2] = color.b;
+        }
+        pointPos.needsUpdate = true;
+        pointColor.needsUpdate = true;
+        bezierGuidePointsObj.material.size = Math.max(pointSize * 2.4, 0.28);
+        bezierGuidePointsObj.visible = true;
+    }
+
+    function pickBezierGuideHandleFromEvent(ev) {
+        if (!bezierGuidePointsObj || !bezierGuidePointsObj.visible || !renderer || !camera || !raycaster) return null;
+        const rect = renderer.domElement.getBoundingClientRect();
+        mouse.x = ((ev.clientX - rect.left) / rect.width) * 2 - 1;
+        mouse.y = -(((ev.clientY - rect.top) / rect.height) * 2 - 1);
+        raycaster.setFromCamera(mouse, camera);
+        raycaster.params.Points = raycaster.params.Points || {};
+        raycaster.params.Points.threshold = Math.max(0.28, (pointSize || 0.2) * 1.2);
+        const hits = raycaster.intersectObject(bezierGuidePointsObj, false);
+        if (!hits || !hits.length) return null;
+        const idx = hits[0].index;
+        const meta = (idx === undefined || idx === null) ? null : bezierGuideMeta[idx];
+        if (!meta || (meta.role !== "sh" && meta.role !== "eh")) return null;
+        return meta;
+    }
+
+    function syncVecEditorInputs(nodeId, prefix, point) {
+        if (!nodeId || !prefix || !point) return;
+        const targets = collectCardVecTargets(nodeId);
+        const target = findTargetByKeys(targets, `${prefix}x`, `${prefix}y`, `${prefix}z`);
+        if (!target || !target.inputs) return;
+        if (target.inputs.x) target.inputs.x.value = String(point.x);
+        if (target.inputs.y) target.inputs.y.value = String(point.y);
+        if (target.inputs.z) target.inputs.z.value = String(point.z);
+    }
+
+    function applyBezierGuideDragPoint(mapped) {
+        if (!bezierHandleDrag || !mapped) return;
+        const ctx = findNodeContextById(bezierHandleDrag.nodeId);
+        if (!ctx || !ctx.node) {
+            bezierHandleDrag = null;
+            hideBezierGuidePreview();
+            return;
+        }
+        const node = ctx.node;
+        const p = node.params || (node.params = {});
+        const anchor = bezierHandleDrag.role === "sh"
+            ? (node.kind === "add_bezier_curve" ? U.v(0, 0, 0) : U.v(num(p.sx), num(p.sy), num(p.sz)))
+            : U.v(num(p.ex), num(p.ey), num(p.ez));
+        const rel = U.sub(mapped, anchor);
+        const prefix = bezierHandleDrag.role;
+        p[`__pb_vec_mode_${prefix}`] = "manual";
+        p[`${prefix}x`] = rel.x;
+        p[`${prefix}y`] = rel.y;
+        p[`${prefix}z`] = rel.z;
+        syncVecEditorInputs(bezierHandleDrag.nodeId, prefix, rel);
+        rebuildPreviewAndKotlin();
+        updateBezierGuidePreview();
+    }
+
     function setPoints(points) {
         statusPoints.textContent = `点数：${points.length}`;
 
@@ -3549,6 +3768,7 @@ function initPointsBuilderMain() {
             hideOffsetPreview();
             hideLinePickPreview();
             hidePointPickPreview();
+            hideBezierGuidePreview();
             return;
         }
 
@@ -3588,6 +3808,7 @@ function initPointsBuilderMain() {
         // ✅ 根据当前聚焦的卡片，重新着色
         updateFocusColors();
         updateOffsetPreview(offsetHoverPoint);
+        updateBezierGuidePreview();
 
         // 不自动重置镜头：由用户手动点击“重置镜头”
     }
@@ -4049,6 +4270,7 @@ function initPointsBuilderMain() {
         }
         focusedNodeId = next;
         updateFocusColors();
+        updateBezierGuidePreview();
         updateFocusCardUI();
         handleCollapseAllFocusChange(prev, focusedNodeId);
     }
@@ -4062,6 +4284,7 @@ function initPointsBuilderMain() {
         }
         focusedNodeId = null;
         updateFocusColors();
+        updateBezierGuidePreview();
         updateFocusCardUI();
         handleCollapseAllFocusChange(prev, null);
     }
@@ -5408,9 +5631,7 @@ function onCanvasClick(ev) {
         }
     }
 
-    // 点到空白处：清空粒子聚焦与多选
-    if (typeof clearCardSelectionIds === "function") clearCardSelectionIds();
-    if (focusedNodeId) setFocusedNode(null, true);
+    // 点到空白处不再自动取消粒子聚焦，避免曲柄/粒子难点中时直接失焦。
 }
 
 function onCanvasDblClick(ev) {
@@ -5498,6 +5719,8 @@ function onCanvasDblClick(ev) {
         if (!kx) return "point";
         if (kx === "sx") return "start";
         if (kx === "ex") return "end";
+        if (kx === "shx") return "startHandle";
+        if (kx === "ehx") return "endHandle";
         if (kx === "ox") return "origin";
         if (kx === "tox") return "to";
         if (kx === "cx") return "center";
@@ -5561,6 +5784,8 @@ function onCanvasDblClick(ev) {
         if (/^p\d+$/i.test(p) || /^h\d+$/i.test(p)) return p.toUpperCase();
         if (p === "s") return "start";
         if (p === "e") return "end";
+        if (p === "sh") return "startHandle";
+        if (p === "eh") return "endHandle";
         if (p === "o") return "origin";
         if (p === "to") return "to";
         if (p === "c") return "center";
@@ -6237,15 +6462,38 @@ function onCanvasDblClick(ev) {
             ["p3x", "p3y", "p3z"]
         ],
         add_bezier_4: [
-            ["p1x", "p1y", "p1z"],
-            ["p2x", "p2y", "p2z"],
-            ["p3x", "p3y", "p3z"],
-            ["p4x", "p4y", "p4z"]
+            ["sx", "sy", "sz"],
+            ["ex", "ey", "ez"],
+            ["shx", "shy", "shz"],
+            ["ehx", "ehy", "ehz"]
+        ],
+        add_bezier_curve: [
+            ["ex", "ey", "ez"],
+            ["shx", "shy", "shz"],
+            ["ehx", "ehy", "ehz"]
         ]
     };
 
     function applyOffsetDeltaToNode(node, delta) {
         if (!node || !node.kind) return false;
+        if (node.kind === "add_bezier_4") {
+            const p = node.params || (node.params = {});
+            const keys = ["sx", "sy", "sz", "ex", "ey", "ez"];
+            for (const key of keys) {
+                const raw = String(p[key] ?? "").trim();
+                if (!raw) continue;
+                if (!isNumericLiteral(stripNumericSuffix(raw))) return false;
+            }
+            p.sx = num(p.sx) + delta.x;
+            p.sy = num(p.sy) + delta.y;
+            p.sz = num(p.sz) + delta.z;
+            p.ex = num(p.ex) + delta.x;
+            p.ey = num(p.ey) + delta.y;
+            p.ez = num(p.ez) + delta.z;
+            p.__pb_vec_mode_s = "manual";
+            p.__pb_vec_mode_e = "manual";
+            return true;
+        }
         const groups = OFFSET_PARAM_GROUPS[node.kind];
         if (!groups) return false;
         const p = node.params || (node.params = {});
@@ -6264,6 +6512,27 @@ function onCanvasDblClick(ev) {
             if (ky) p[ky] = num(p[ky]) + delta.y;
             if (kz) p[kz] = num(p[kz]) + delta.z;
         }
+        return true;
+    }
+
+    function convertBezierCurveEndOnlyToStartEnd(node, delta) {
+        if (!node || node.kind !== "add_bezier_curve" || !delta) return false;
+        const p = node.params || (node.params = {});
+        const keys = ["ex", "ey", "ez"];
+        for (const key of keys) {
+            const raw = String(p[key] ?? "").trim();
+            if (!raw) continue;
+            if (!isNumericLiteral(stripNumericSuffix(raw))) return false;
+        }
+        p.sx = delta.x;
+        p.sy = delta.y;
+        p.sz = delta.z;
+        p.ex = num(p.ex) + delta.x;
+        p.ey = num(p.ey) + delta.y;
+        p.ez = num(p.ez) + delta.z;
+        p.__pb_vec_mode_s = "manual";
+        p.__pb_vec_mode_e = "manual";
+        node.kind = "add_bezier_4";
         return true;
     }
 
@@ -6357,6 +6626,7 @@ function onCanvasDblClick(ev) {
         hideOffsetPreview();
         hideLinePickStatus();
         updateFocusColors();
+        updateBezierGuidePreview();
     }
 
     function applyOffsetToTargetId(targetId, worldDelta) {
@@ -6379,6 +6649,10 @@ function onCanvasDblClick(ev) {
             p.oy = num(p.oy) + localDelta.y;
             p.oz = num(p.oz) + localDelta.z;
             return true;
+        }
+
+        if (ctx.node.kind === "add_bezier_curve") {
+            return convertBezierCurveEndOnlyToStartEnd(ctx.node, localDelta);
         }
 
         if (applyOffsetDeltaToNode(ctx.node, localDelta)) return true;
@@ -6712,12 +6986,21 @@ function onCanvasDblClick(ev) {
     function onPointerMove(ev) {
         rememberPointPickMenuAnchor(ev);
         updateActionMenuRightTrack(ev);
+        if (bezierHandleDrag) {
+            if (!ev || ev.pointerId !== bezierHandleDrag.pointerId) return;
+            const mapped = getMappedPointFromEvent(ev);
+            if (!mapped) return;
+            armCanvasClickSuppress(ev);
+            applyBezierGuideDragPoint(mapped);
+            showHoverMarker(mapped);
+            return;
+        }
         if (updateViewBoxSelecting(ev)) {
             ev.preventDefault();
             return;
         }
-        if (!linePickMode && !pointPickMode && !offsetMode && !rotateMode) return;
-        if ((linePickMode || pointPickMode || offsetMode || rotateMode) && _rDown) {
+        const modeActive = !!(linePickMode || pointPickMode || offsetMode || rotateMode);
+        if (_rDown) {
             const d = Math.hypot(ev.clientX - _rDownX, ev.clientY - _rDownY);
             if (d > 6) _rMoved = true; // 视为拖动
             hideHoverMarker();
@@ -6725,6 +7008,7 @@ function onCanvasDblClick(ev) {
             if (pointPickMode) hidePointPickPreview();
             return;
         }
+        if (!modeActive) return;
         if (!renderer || !camera) return;
 
         const rect = renderer.domElement.getBoundingClientRect();
@@ -6755,11 +7039,15 @@ function onCanvasDblClick(ev) {
     function onPointerUp(ev) {
         rememberPointPickMenuAnchor(ev);
         endActionMenuRightTrack(ev);
+        if (bezierHandleDrag && ev && ev.button === 0 && ev.pointerId === bezierHandleDrag.pointerId) {
+            cancelBezierHandleDrag(ev, { suppressClick: true });
+            return;
+        }
         if (finishViewBoxSelection(ev)) return;
         if (viewBoxPending && ev && ev.pointerId === viewBoxPending.pointerId) {
             clearViewBoxState(ev.pointerId);
         }
-        if (!linePickMode && !pointPickMode && !offsetMode && !rotateMode) return;
+        const modeActive = !!(linePickMode || pointPickMode || offsetMode || rotateMode);
         if (rotateMode && ev && ev.button === 0 && rotateDragPointerId !== null && ev.pointerId === rotateDragPointerId) {
             rotateDragPointerId = null;
             rotateDragStartPoint = null;
@@ -6770,7 +7058,10 @@ function onCanvasDblClick(ev) {
             else refreshRotateStatus();
             return;
         }
-        if (!_rDown) return;
+        if (!_rDown) {
+            if (!modeActive) return;
+            return;
+        }
 
         _rDown = false;
 
@@ -6792,6 +7083,11 @@ function onCanvasDblClick(ev) {
             if (pointPickMode) stopPointPick();
             if (offsetMode) stopOffsetMode();
             if (rotateMode) stopRotateMode({ silent: true });
+            if (!modeActive) {
+                hideActionMenu();
+                if (typeof clearCardSelectionIds === "function") clearCardSelectionIds();
+                if (focusedNodeId) setFocusedNode(null, true);
+            }
             _rClickT = 0;
             return;
         }
@@ -6805,18 +7101,38 @@ function onCanvasDblClick(ev) {
     function onPointerDown(ev) {
         rememberPointPickMenuAnchor(ev);
         beginActionMenuRightTrack(ev);
+        if (bezierHandleDrag && ev && ev.button !== 0) {
+            cancelBezierHandleDrag(ev, { suppressClick: true });
+        }
+        if (isRightLike(ev)) {
+            _rDown = true;
+            _rMoved = false;
+            _rDownX = ev.clientX;
+            _rDownY = ev.clientY;
+        }
         // 非拾取模式：点击/拖动预览主要用于 OrbitControls；选点聚焦由 click 事件处理
         if (!linePickMode && !pointPickMode && !offsetMode && !rotateMode) {
+            if (isRightLike(ev)) return;
+            if (ev.button === 0 && !ev.ctrlKey) {
+                const bezierHit = pickBezierGuideHandleFromEvent(ev);
+                if (bezierHit) {
+                    armCanvasClickSuppress(ev);
+                    hideActionMenu();
+                    bezierHandleDrag = {
+                        pointerId: ev.pointerId,
+                        nodeId: bezierGuideNodeId,
+                        role: bezierHit.role
+                    };
+                    historyCapture("bezier_handle_drag");
+                    return;
+                }
+            }
             beginViewBoxPending(ev);
             return;
         }
 
         // ✅ 右键 / Ctrl+Click：不选点，只进入“可能的右键双击取消”判定流程
         if ((linePickMode || pointPickMode || offsetMode || rotateMode) && isRightLike(ev)) {
-            _rDown = true;
-            _rMoved = false;
-            _rDownX = ev.clientX;
-            _rDownY = ev.clientY;
             return; // 关键：右键永远不选点
         }
 
@@ -6969,6 +7285,7 @@ function onCanvasDblClick(ev) {
             const ctx = findNodeContextById(focusedNodeId);
             if (!ctx) focusedNodeId = null;
         }
+        updateBezierGuidePreview();
         rebuildPreviewAndKotlin();
     }
 

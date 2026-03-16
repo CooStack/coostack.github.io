@@ -2447,6 +2447,8 @@ export function initCardSystem(ctx = {}) {
             requestAnimationFrame(() => {
                 const ae = document.activeElement;
                 if (ae && card.contains(ae)) return;
+                const nextCard = ae && ae.closest ? ae.closest(".card") : null;
+                if (!nextCard || nextCard === card) return;
                 clearFocusedNodeIf(t.id);
             });
         });
@@ -2758,6 +2760,8 @@ export function initCardSystem(ctx = {}) {
             requestAnimationFrame(() => {
                 const ae = document.activeElement;
                 if (ae && card.contains(ae)) return;
+                const nextCard = ae && ae.closest ? ae.closest(".card") : null;
+                if (!nextCard || nextCard === card) return;
                 clearFocusedNodeIf(node.id);
             });
         });
@@ -3029,30 +3033,9 @@ export function initCardSystem(ctx = {}) {
                 break;
 
             case "add_bezier_curve":
-                body.appendChild(row("target.x", inputNum(p.tx, v => {
-                    p.tx = v;
-                    rebuildPreviewAndKotlin();
-                })));
-                body.appendChild(row("target.y", inputNum(p.ty, v => {
-                    p.ty = v;
-                    rebuildPreviewAndKotlin();
-                })));
-                body.appendChild(row("startHandle.x", inputNum(p.shx, v => {
-                    p.shx = v;
-                    rebuildPreviewAndKotlin();
-                })));
-                body.appendChild(row("startHandle.y", inputNum(p.shy, v => {
-                    p.shy = v;
-                    rebuildPreviewAndKotlin();
-                })));
-                body.appendChild(row("endHandle.x", inputNum(p.ehx, v => {
-                    p.ehx = v;
-                    rebuildPreviewAndKotlin();
-                })));
-                body.appendChild(row("endHandle.y", inputNum(p.ehy, v => {
-                    p.ehy = v;
-                    rebuildPreviewAndKotlin();
-                })));
+                body.appendChild(row("end", makeVec3Editor(p, "e", rebuildPreviewAndKotlin, "end")));
+                body.appendChild(row("startHandle", makeVec3Editor(p, "sh", rebuildPreviewAndKotlin, "startHandle")));
+                body.appendChild(row("endHandle", makeVec3Editor(p, "eh", rebuildPreviewAndKotlin, "endHandle")));
                 body.appendChild(row("count", inputNum(p.count, v => {
                     p.count = v;
                     rebuildPreviewAndKotlin();
@@ -3070,10 +3053,10 @@ export function initCardSystem(ctx = {}) {
                 break;
 
             case "add_bezier_4":
-                body.appendChild(row("p1", makeVec3Editor(p, "p1", rebuildPreviewAndKotlin, "p1")));
-                body.appendChild(row("p2", makeVec3Editor(p, "p2", rebuildPreviewAndKotlin, "p2")));
-                body.appendChild(row("p3", makeVec3Editor(p, "p3", rebuildPreviewAndKotlin, "p3")));
-                body.appendChild(row("p4", makeVec3Editor(p, "p4", rebuildPreviewAndKotlin, "p4")));
+                body.appendChild(row("start", makeVec3Editor(p, "s", rebuildPreviewAndKotlin, "start")));
+                body.appendChild(row("end", makeVec3Editor(p, "e", rebuildPreviewAndKotlin, "end")));
+                body.appendChild(row("startHandle", makeVec3Editor(p, "sh", rebuildPreviewAndKotlin, "startHandle")));
+                body.appendChild(row("endHandle", makeVec3Editor(p, "eh", rebuildPreviewAndKotlin, "endHandle")));
                 body.appendChild(row("count", inputNum(p.count, v => {
                     p.count = v;
                     rebuildPreviewAndKotlin();

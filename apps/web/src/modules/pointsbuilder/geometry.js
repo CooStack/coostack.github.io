@@ -168,9 +168,20 @@ export function quadToCubic(p0, p1, p2) {
   };
 }
 
-export function generateBezierCurve(target, startHandle, endHandle, count) {
+export function generateBezierCurve(startOrTarget, endOrStartHandle, startHandleOrEndHandle, endHandleOrCount, maybeCount) {
+  if (maybeCount !== undefined) {
+    const start = clone(startOrTarget);
+    const end = clone(endOrStartHandle);
+    const startHandle = add(start, startHandleOrEndHandle);
+    const endHandle = add(end, endHandleOrCount);
+    return buildCubicBezier(start, startHandle, endHandle, end, maybeCount);
+  }
+
+  const target = clone(startOrTarget);
+  const startHandle = clone(endOrStartHandle);
+  const endHandle = clone(startHandleOrEndHandle);
   const origin = v(0, 0, 0);
-  return buildCubicBezier(origin, startHandle, add(target, endHandle), target, count);
+  return buildCubicBezier(origin, startHandle, add(target, endHandle), target, endHandleOrCount);
 }
 
 function rotateVectorAroundAxis(point, axis, angle) {

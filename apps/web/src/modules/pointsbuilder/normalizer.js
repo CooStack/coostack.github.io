@@ -77,12 +77,21 @@ function normalizeNodeParams(kind, params) {
       if (params.count === undefined && params.counts !== undefined) params.count = params.counts;
       break;
     case 'add_bezier_curve':
-      if (params.tx === undefined && params.target && typeof params.target === 'object') params.tx = params.target.x ?? params.target[0] ?? 0;
-      if (params.ty === undefined && params.target && typeof params.target === 'object') params.ty = params.target.y ?? params.target[1] ?? 0;
+      if (params.sx === undefined) params.sx = 0;
+      if (params.sy === undefined) params.sy = 0;
+      if (params.sz === undefined) params.sz = 0;
+      if (params.ex === undefined && params.tx !== undefined) params.ex = params.tx;
+      if (params.ey === undefined && params.ty !== undefined) params.ey = params.ty;
+      if (params.ez === undefined && params.tz !== undefined) params.ez = params.tz;
+      if (params.ex === undefined && params.target && typeof params.target === 'object') params.ex = params.target.x ?? params.target[0] ?? 0;
+      if (params.ey === undefined && params.target && typeof params.target === 'object') params.ey = params.target.y ?? params.target[1] ?? 0;
+      if (params.ez === undefined && params.target && typeof params.target === 'object') params.ez = params.target.z ?? params.target[2] ?? 0;
       if (params.shx === undefined && params.startHandle && typeof params.startHandle === 'object') params.shx = params.startHandle.x ?? params.startHandle[0] ?? 0;
       if (params.shy === undefined && params.startHandle && typeof params.startHandle === 'object') params.shy = params.startHandle.y ?? params.startHandle[1] ?? 0;
+      if (params.shz === undefined && params.startHandle && typeof params.startHandle === 'object') params.shz = params.startHandle.z ?? params.startHandle[2] ?? 0;
       if (params.ehx === undefined && params.endHandle && typeof params.endHandle === 'object') params.ehx = params.endHandle.x ?? params.endHandle[0] ?? 0;
       if (params.ehy === undefined && params.endHandle && typeof params.endHandle === 'object') params.ehy = params.endHandle.y ?? params.endHandle[1] ?? 0;
+      if (params.ehz === undefined && params.endHandle && typeof params.endHandle === 'object') params.ehz = params.endHandle.z ?? params.endHandle[2] ?? 0;
       break;
     case 'add_polygon':
       if (params.count === undefined && params.edgeCount !== undefined) params.count = params.edgeCount;
