@@ -35,12 +35,13 @@ export function initHotkeysSystem(ctx) {
     const HOTKEY_STORAGE_KEY = "pb_hotkeys_v2";
 
     const DEFAULT_HOTKEYS = {
-        version: 6,
+        version: 7,
         actions: {
             openPicker: "KeyN",
             pickLineXZ: "KeyQ",
             pickTriangle: "KeyT",
             pickPoint: "KeyE",
+            pickBezierStartEnd: "KeyW",
             toggleFullscreen: "KeyF",
             resetCamera: "Shift+KeyR",
             importJson: "Shift+KeyN",
@@ -242,10 +243,11 @@ export function initHotkeysSystem(ctx) {
     let hotkeyCapture = null; // {type:"action"|"kind", id:"...", title:"..."}
 
     const HOTKEY_ACTION_DEFS = [
-        {id: "openPicker", title: "打开「添加元素」", desc: "默认 W"},
+        {id: "openPicker", title: "打开「添加元素」", desc: "默认 N"},
         {id: "pickLineXZ", title: "进入 XZ 拾取直线", desc: "默认 Q"},
         {id: "pickTriangle", title: "进入 XZ 拾取三角形", desc: "默认 T"},
         {id: "pickPoint", title: "点拾取（填充当前输入）", desc: "默认 E"},
+        {id: "pickBezierStartEnd", title: "进入 Bezier 创建流", desc: "默认 W"},
         {id: "toggleFullscreen", title: "预览全屏 / 退出全屏", desc: "默认 F"},
         {id: "resetCamera", title: "重置镜头", desc: "默认 Shift + R"},
         {id: "importJson", title: "导入 JSON", desc: "默认 Ctrl/Cmd+O"},
@@ -262,7 +264,7 @@ export function initHotkeysSystem(ctx) {
         {id: "mirrorPlaneZY", title: "切换镜像平面：ZY", desc: "默认 Shift+D"},
         {id: "lockPlaneHold", title: "锁定平面坐标（仅移动法线轴）", desc: "默认 X"},
         {id: "copyFocused", title: "复制当前聚焦卡片", desc: "默认 Ctrl/Cmd + D"},
-        {id: "mirrorCopy", title: "镜像复制（直线/三角形/Offset）", desc: "默认 Ctrl/Cmd + Shift + M"},
+        {id: "mirrorCopy", title: "镜像复制（直线/三角形/Bezier/Offset）", desc: "默认 Ctrl/Cmd + Shift + M"},
         {id: "triggerFocusedMove", title: "触发聚焦卡片移动", desc: "默认 V"},
         {id: "triggerFocusedRotate", title: "触发聚焦卡片旋转", desc: "默认 R"},
         {id: "deleteFocused", title: "删除当前聚焦卡片", desc: "默认 Backspace"},

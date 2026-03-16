@@ -77,6 +77,26 @@ export function createNodeHelpers(options = {}) {
             cloned.params.p3x = p3.x; cloned.params.p3y = p3.y; cloned.params.p3z = p3.z;
             return cloned;
         }
+        if (node.kind === "add_bezier_4") {
+            const s = mirrorPointByPlane({x: node.params.sx, y: node.params.sy, z: node.params.sz}, planeKey);
+            const e = mirrorPointByPlane({x: node.params.ex, y: node.params.ey, z: node.params.ez}, planeKey);
+            const sh = mirrorPointByPlane({x: node.params.shx, y: node.params.shy, z: node.params.shz}, planeKey);
+            const eh = mirrorPointByPlane({x: node.params.ehx, y: node.params.ehy, z: node.params.ehz}, planeKey);
+            cloned.params.sx = s.x; cloned.params.sy = s.y; cloned.params.sz = s.z;
+            cloned.params.ex = e.x; cloned.params.ey = e.y; cloned.params.ez = e.z;
+            cloned.params.shx = sh.x; cloned.params.shy = sh.y; cloned.params.shz = sh.z;
+            cloned.params.ehx = eh.x; cloned.params.ehy = eh.y; cloned.params.ehz = eh.z;
+            return cloned;
+        }
+        if (node.kind === "add_bezier_curve") {
+            const e = mirrorPointByPlane({x: node.params.ex, y: node.params.ey, z: node.params.ez}, planeKey);
+            const sh = mirrorPointByPlane({x: node.params.shx, y: node.params.shy, z: node.params.shz}, planeKey);
+            const eh = mirrorPointByPlane({x: node.params.ehx, y: node.params.ehy, z: node.params.ehz}, planeKey);
+            cloned.params.ex = e.x; cloned.params.ey = e.y; cloned.params.ez = e.z;
+            cloned.params.shx = sh.x; cloned.params.shy = sh.y; cloned.params.shz = sh.z;
+            cloned.params.ehx = eh.x; cloned.params.ehy = eh.y; cloned.params.ehz = eh.z;
+            return cloned;
+        }
         if (node.kind === "points_on_each_offset") {
             const v = mirrorPointByPlane({x: node.params.offX, y: node.params.offY, z: node.params.offZ}, planeKey);
             cloned.params.offX = v.x; cloned.params.offY = v.y; cloned.params.offZ = v.z;

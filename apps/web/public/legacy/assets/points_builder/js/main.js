@@ -1,15 +1,15 @@
 import * as THREE from "three";
 import {OrbitControls} from "three/addons/controls/OrbitControls.js";
-import { createCardInputs, initCardSystem } from "./cards.js?v=20260313_3";
+import { createCardInputs, initCardSystem } from "./cards.js?v=20260316_1";
 import { initFilterSystem } from "./filters.js";
-import { initHotkeysSystem } from "./hotkeys.js";
+import { initHotkeysSystem } from "./hotkeys.js?v=20260316_1";
 import { createKindDefs } from "./kinds.js";
 import { createBuilderTools } from "./builder.js";
 import { initLayoutSystem } from "./layout.js";
-import { createNodeHelpers } from "./nodes.js";
+import { createNodeHelpers } from "./nodes.js?v=20260316_1";
 import { toggleFullscreen } from "./viewer.js";
 import { createPickerModule } from "./main-picker.js";
-import { initGlobalShortcuts } from "./main-shortcuts.js";
+import { initGlobalShortcuts } from "./main-shortcuts.js?v=20260316_1";
 import { initTopbarAndBoot } from "./main-topbar-boot.js";
 import {
     sanitizeFileBase,
@@ -2530,6 +2530,7 @@ function initPointsBuilderMain() {
     let linePickType = "line"; // line | triangle
     let linePickRequiredPoints = 2;
     let picked = [];
+    let bezierCreateState = null;
     let linePickTargetList = null;
     let linePickTargetLabel = "主Builder";
     // 插入位置（用于：在某个卡片后/某个 addBuilder 子列表末尾连续插入）
@@ -3140,7 +3141,7 @@ function initPointsBuilderMain() {
     }
 
     function shouldApplyLockPlane() {
-        return !!(linePickMode || pointPickMode || offsetMode || bezierHandleDrag);
+        return !!(linePickMode || pointPickMode || offsetMode || bezierHandleDrag || bezierCreateState);
     }
 
     function snapValue(v, step) {
@@ -3616,6 +3617,7 @@ function initPointsBuilderMain() {
 
     function cancelBezierHandleDrag(ev = null, options = {}) {
         if (!bezierHandleDrag) return false;
+        releaseBezierHandlePointer(bezierHandleDrag.pointerId);
         bezierHandleDrag = null;
         if (options.suppressClick) armCanvasClickSuppress(ev);
         hideHoverMarker();
@@ -3652,7 +3654,8 @@ function initPointsBuilderMain() {
             hideBezierGuidePreview();
             return;
         }
-        const guide = getBezierGuideDataByNodeId(focusedNodeId);
+        const previewNodeId = (bezierCreateState && bezierCreateState.nodeId) ? bezierCreateState.nodeId : focusedNodeId;
+        const guide = getBezierGuideDataByNodeId(previewNodeId);
         if (!guide) {
             hideBezierGuidePreview();
             return;
@@ -3703,19 +3706,20 @@ function initPointsBuilderMain() {
     }
 
     function pickBezierGuideHandleFromEvent(ev) {
-        if (!bezierGuidePointsObj || !bezierGuidePointsObj.visible || !renderer || !camera || !raycaster) return null;
-        const rect = renderer.domElement.getBoundingClientRect();
-        mouse.x = ((ev.clientX - rect.left) / rect.width) * 2 - 1;
-        mouse.y = -(((ev.clientY - rect.top) / rect.height) * 2 - 1);
-        raycaster.setFromCamera(mouse, camera);
-        raycaster.params.Points = raycaster.params.Points || {};
-        raycaster.params.Points.threshold = Math.max(0.28, (pointSize || 0.2) * 1.2);
-        const hits = raycaster.intersectObject(bezierGuidePointsObj, false);
-        if (!hits || !hits.length) return null;
-        const idx = hits[0].index;
-        const meta = (idx === undefined || idx === null) ? null : bezierGuideMeta[idx];
-        if (!meta || (meta.role !== "sh" && meta.role !== "eh")) return null;
-        return meta;
+        if (!bezierGuideMeta || !bezierGuideMeta.length || !renderer || !camera) return null;
+        const radiusPx = Math.max(18, Math.min(34, (Number(pointSize) || 0.2) * 56));
+        let best = null;
+        let bestDist = Number.POSITIVE_INFINITY;
+        for (const meta of bezierGuideMeta) {
+            if (!meta || (meta.role !== "sh" && meta.role !== "eh")) continue;
+            const client = projectPointToClient(meta.point);
+            if (!client) continue;
+            const dist = Math.hypot((ev.clientX || 0) - client.x, (ev.clientY || 0) - client.y);
+            if (dist > radiusPx || dist >= bestDist) continue;
+            best = meta;
+            bestDist = dist;
+        }
+        return best || null;
     }
 
     function syncVecEditorInputs(nodeId, prefix, point) {
@@ -3728,26 +3732,188 @@ function initPointsBuilderMain() {
         if (target.inputs.z) target.inputs.z.value = String(point.z);
     }
 
+    function buildBezierCreateStatus() {
+        if (!bezierCreateState) return "";
+        const info = getPlaneInfo().label;
+        if (bezierCreateState.phase === "pick_start") {
+            return `${info} Bezier 创建：请点 start`;
+        }
+        if (bezierCreateState.phase === "pick_end") {
+            const start = bezierCreateState.start;
+            return `${info} Bezier 创建：已选 start (${U.fmt(start.x)}, ${U.fmt(start.y)}, ${U.fmt(start.z)})，请点 end`;
+        }
+        if (bezierCreateState.phase === "drag_start_handle") {
+            return `${info} Bezier 创建：移动鼠标调整 start 曲柄，左键确认`;
+        }
+        if (bezierCreateState.phase === "drag_end_handle") {
+            return `${info} Bezier 创建：移动鼠标调整 end 曲柄，左键确认`;
+        }
+        return `${info} Bezier 创建中`;
+    }
+
+    function refreshBezierCreateStatus() {
+        if (!bezierCreateState) return;
+        setLinePickStatus(buildBezierCreateStatus());
+    }
+
+    function stopBezierCreate(options = {}) {
+        if (!bezierCreateState) return false;
+        const keepGuide = options.keepGuide === true;
+        bezierCreateState = null;
+        hideHoverMarker();
+        if (!keepGuide) hideBezierGuidePreview();
+        hideLinePickStatus();
+        return true;
+    }
+
+    function setBezierHandleRelative(nodeId, role, mapped) {
+        if (!nodeId || !role || !mapped) return false;
+        const ctx = findNodeContextById(nodeId);
+        if (!ctx || !ctx.node) return false;
+        const node = ctx.node;
+        const p = node.params || (node.params = {});
+        const anchor = role === "sh"
+            ? (node.kind === "add_bezier_curve" ? U.v(0, 0, 0) : U.v(num(p.sx), num(p.sy), num(p.sz)))
+            : U.v(num(p.ex), num(p.ey), num(p.ez));
+        const rel = U.sub(mapped, anchor);
+        p[`__pb_vec_mode_${role}`] = "manual";
+        p[`${role}x`] = rel.x;
+        p[`${role}y`] = rel.y;
+        p[`${role}z`] = rel.z;
+        syncVecEditorInputs(nodeId, role, rel);
+        return true;
+    }
+
+    function insertBezierCreateNode(start, end) {
+        const pickCtx = (typeof getInsertContextFromFocus === "function") ? getInsertContextFromFocus() : null;
+        const list = pickCtx && Array.isArray(pickCtx.list) ? pickCtx.list : state.root.children;
+        const at = pickCtx && pickCtx.insertIndex != null ? pickCtx.insertIndex : list.length;
+        const dx = end.x - start.x;
+        const dy = end.y - start.y;
+        const dz = end.z - start.z;
+        const nn = makeNode("add_bezier_4", {
+            params: {
+                sx: start.x,
+                sy: start.y,
+                sz: start.z,
+                ex: end.x,
+                ey: end.y,
+                ez: end.z,
+                shx: dx / 3,
+                shy: dy / 3,
+                shz: dz / 3,
+                ehx: -dx / 3,
+                ehy: -dy / 3,
+                ehz: -dz / 3,
+                count: 100
+            }
+        });
+        const idx = Math.max(0, Math.min(at, list.length));
+        list.splice(idx, 0, nn);
+        ensureAxisEverywhere();
+        renderAll();
+        requestAnimationFrame(() => {
+            try { focusCardById(nn.id, false, true, true); } catch {}
+            updateBezierGuidePreview();
+        });
+        return nn.id;
+    }
+
+    function updateBezierCreateHover(mapped) {
+        if (!bezierCreateState || !mapped) {
+            hideHoverMarker();
+            return;
+        }
+        if (bezierCreateState.phase === "drag_start_handle" || bezierCreateState.phase === "drag_end_handle") {
+            const role = bezierCreateState.phase === "drag_start_handle" ? "sh" : "eh";
+            if (setBezierHandleRelative(bezierCreateState.nodeId, role, mapped)) {
+                rebuildPreviewAndKotlin();
+                updateBezierGuidePreview();
+            }
+        }
+        showHoverMarker(mapped);
+    }
+
+    function confirmBezierCreatePoint(mapped) {
+        if (!bezierCreateState || !mapped) return false;
+        if (bezierCreateState.phase === "pick_start") {
+            bezierCreateState.start = { x: mapped.x, y: mapped.y, z: mapped.z };
+            bezierCreateState.phase = "pick_end";
+            ensureHoverMarker();
+            setHoverMarkerColor(colorForPickIndex(1));
+            showHoverMarker(mapped);
+            refreshBezierCreateStatus();
+            return true;
+        }
+        if (bezierCreateState.phase === "pick_end") {
+            bezierCreateState.end = { x: mapped.x, y: mapped.y, z: mapped.z };
+            bezierCreateState.nodeId = insertBezierCreateNode(bezierCreateState.start, bezierCreateState.end);
+            bezierCreateState.phase = "drag_start_handle";
+            ensureHoverMarker();
+            setHoverMarkerColor(pointPickPreviewColor.getHex());
+            showHoverMarker(mapped);
+            refreshBezierCreateStatus();
+            return true;
+        }
+        if (bezierCreateState.phase === "drag_start_handle") {
+            setBezierHandleRelative(bezierCreateState.nodeId, "sh", mapped);
+            rebuildPreviewAndKotlin();
+            updateBezierGuidePreview();
+            bezierCreateState.phase = "drag_end_handle";
+            refreshBezierCreateStatus();
+            return true;
+        }
+        if (bezierCreateState.phase === "drag_end_handle") {
+            setBezierHandleRelative(bezierCreateState.nodeId, "eh", mapped);
+            rebuildPreviewAndKotlin();
+            updateBezierGuidePreview();
+            const nodeId = bezierCreateState.nodeId;
+            stopBezierCreate({ keepGuide: true });
+            requestAnimationFrame(() => {
+                try { focusCardById(nodeId, false, true, true); } catch {}
+                updateBezierGuidePreview();
+            });
+            showToast("Bezier 创建完成", "success");
+            return true;
+        }
+        return false;
+    }
+
+    function startBezierCreate() {
+        if (bezierCreateState) stopBezierCreate();
+        hideActionMenu();
+        hideQuickSyncPanel();
+        if (offsetMode) stopOffsetMode();
+        if (rotateMode) stopRotateMode({ silent: true });
+        if (linePickMode) stopLinePick();
+        if (pointPickMode) stopPointPick();
+        setLockPlaneActive(false);
+        lastPickBasePoint = null;
+        lastPickMappedPoint = null;
+        _rClickT = 0;
+        clearPickMarkers();
+        hideLinePickPreview();
+        bezierCreateState = {
+            phase: "pick_start",
+            start: null,
+            end: null,
+            nodeId: null
+        };
+        ensureHoverMarker();
+        setHoverMarkerColor(colorForPickIndex(0));
+        hoverMarker.visible = true;
+        refreshBezierCreateStatus();
+        return true;
+    }
+
     function applyBezierGuideDragPoint(mapped) {
         if (!bezierHandleDrag || !mapped) return;
-        const ctx = findNodeContextById(bezierHandleDrag.nodeId);
-        if (!ctx || !ctx.node) {
+        const ok = setBezierHandleRelative(bezierHandleDrag.nodeId, bezierHandleDrag.role, mapped);
+        if (!ok) {
             bezierHandleDrag = null;
             hideBezierGuidePreview();
             return;
         }
-        const node = ctx.node;
-        const p = node.params || (node.params = {});
-        const anchor = bezierHandleDrag.role === "sh"
-            ? (node.kind === "add_bezier_curve" ? U.v(0, 0, 0) : U.v(num(p.sx), num(p.sy), num(p.sz)))
-            : U.v(num(p.ex), num(p.ey), num(p.ez));
-        const rel = U.sub(mapped, anchor);
-        const prefix = bezierHandleDrag.role;
-        p[`__pb_vec_mode_${prefix}`] = "manual";
-        p[`${prefix}x`] = rel.x;
-        p[`${prefix}y`] = rel.y;
-        p[`${prefix}z`] = rel.z;
-        syncVecEditorInputs(bezierHandleDrag.nodeId, prefix, rel);
         rebuildPreviewAndKotlin();
         updateBezierGuidePreview();
     }
@@ -4566,6 +4732,16 @@ function ensureViewBoxEl() {
 }
 
 function releaseViewBoxPointer(pointerId) {
+    const dom = renderer && renderer.domElement;
+    if (!dom || pointerId === null || pointerId === undefined) return;
+    try {
+        if (dom.hasPointerCapture && dom.hasPointerCapture(pointerId)) {
+            dom.releasePointerCapture(pointerId);
+        }
+    } catch {}
+}
+
+function releaseBezierHandlePointer(pointerId) {
     const dom = renderer && renderer.domElement;
     if (!dom || pointerId === null || pointerId === undefined) return;
     try {
@@ -5599,7 +5775,7 @@ function onCanvasClick(ev) {
     hideQuickSyncPanel();
 
     // 拾取/旋转模式中由 onPointerDown 处理；此处不抢逻辑
-    if (linePickMode || pointPickMode || rotateMode) return;
+    if (linePickMode || pointPickMode || rotateMode || bezierCreateState) return;
 
     blurActiveElementForCanvas();
 
@@ -6995,11 +7171,21 @@ function onCanvasDblClick(ev) {
             showHoverMarker(mapped);
             return;
         }
+        if (bezierCreateState) {
+            const mapped = getMappedPointFromEvent(ev);
+            if (!mapped) {
+                hideHoverMarker();
+                return;
+            }
+            armCanvasClickSuppress(ev);
+            updateBezierCreateHover(mapped);
+            return;
+        }
         if (updateViewBoxSelecting(ev)) {
             ev.preventDefault();
             return;
         }
-        const modeActive = !!(linePickMode || pointPickMode || offsetMode || rotateMode);
+        const modeActive = !!(linePickMode || pointPickMode || offsetMode || rotateMode || bezierCreateState);
         if (_rDown) {
             const d = Math.hypot(ev.clientX - _rDownX, ev.clientY - _rDownY);
             if (d > 6) _rMoved = true; // 视为拖动
@@ -7083,6 +7269,7 @@ function onCanvasDblClick(ev) {
             if (pointPickMode) stopPointPick();
             if (offsetMode) stopOffsetMode();
             if (rotateMode) stopRotateMode({ silent: true });
+            if (bezierCreateState) stopBezierCreate();
             if (!modeActive) {
                 hideActionMenu();
                 if (typeof clearCardSelectionIds === "function") clearCardSelectionIds();
@@ -7110,6 +7297,15 @@ function onCanvasDblClick(ev) {
             _rDownX = ev.clientX;
             _rDownY = ev.clientY;
         }
+        if (bezierCreateState) {
+            if (isRightLike(ev)) return;
+            if (ev.button !== 0 || ev.ctrlKey) return;
+            armCanvasClickSuppress(ev);
+            const mapped = getMappedPointFromEvent(ev);
+            if (!mapped) return;
+            confirmBezierCreatePoint(mapped);
+            return;
+        }
         // 非拾取模式：点击/拖动预览主要用于 OrbitControls；选点聚焦由 click 事件处理
         if (!linePickMode && !pointPickMode && !offsetMode && !rotateMode) {
             if (isRightLike(ev)) return;
@@ -7118,6 +7314,10 @@ function onCanvasDblClick(ev) {
                 if (bezierHit) {
                     armCanvasClickSuppress(ev);
                     hideActionMenu();
+                    const dom = renderer && renderer.domElement;
+                    if (dom && dom.setPointerCapture) {
+                        try { dom.setPointerCapture(ev.pointerId); } catch {}
+                    }
                     bezierHandleDrag = {
                         pointerId: ev.pointerId,
                         nodeId: bezierGuideNodeId,
@@ -7510,6 +7710,7 @@ function onCanvasDblClick(ev) {
         startLinePick,
         startTrianglePick,
         startPointPick,
+        startBezierCreate,
         setSnapPlane,
         setMirrorPlane,
         copyFocusedCard,

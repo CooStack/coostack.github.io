@@ -47,6 +47,7 @@ export function initGlobalShortcuts(ctx = {}) {
         startLinePick,
         startTrianglePick,
         startPointPick,
+        startBezierCreate,
         setSnapPlane,
         setMirrorPlane,
         copyFocusedCard,
@@ -361,6 +362,19 @@ export function initGlobalShortcuts(ctx = {}) {
                 if (linePickMode && typeof stopLinePick === "function") stopLinePick();
                 if (typeof startPointPick === "function") startPointPick();
             }
+            return;
+        }
+
+        if (hotkeyMatchEvent(e, hotkeys.actions.pickBezierStartEnd)) {
+            e.preventDefault();
+            if (modal && !modal.classList.contains("hidden") && typeof hideModal === "function") hideModal();
+            if (hkModal && !hkModal.classList.contains("hidden") && typeof hideHotkeysModal === "function") hideHotkeysModal();
+            if (settingsModal && !settingsModal.classList.contains("hidden") && typeof hideSettingsModal === "function") hideSettingsModal();
+            if (rotateMode && typeof stopRotateMode === "function") stopRotateMode({ silent: true });
+            if (linePickMode && typeof stopLinePick === "function") stopLinePick();
+            if (pointPickMode && typeof stopPointPick === "function") stopPointPick();
+            if (offsetMode && typeof stopOffsetMode === "function") stopOffsetMode();
+            if (typeof startBezierCreate === "function") startBezierCreate();
             return;
         }
 

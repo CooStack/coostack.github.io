@@ -620,7 +620,7 @@ function normalizeShapeNestedLevel(raw, index = 0) {
     x.type = ["single", "particle_shape", "sequenced_shape"].includes(String(x.type || "")) ? String(x.type) : "single";
     x.effectClass = String(x.effectClass || DEFAULT_EFFECT_CLASS);
     x.useTexture = x.useTexture !== false;
-    x.bindMode = x.bindMode === "builder" ? "builder" : "point";
+    x.bindMode = x.bindMode === "point" ? "point" : "builder";
     x.point = x.point && typeof x.point === "object" ? x.point : { x: 0, y: 0, z: 0 };
     x.point.x = num(x.point.x);
     x.point.y = num(x.point.y);
@@ -656,7 +656,7 @@ function normalizeShapeTreeNode(raw = {}, index = 0) {
     x.id = x.id || uid();
     x.name = String(x.name || `子节点 ${index + 1}`);
     x.type = ["single", "particle_shape", "sequenced_shape"].includes(String(x.type || "")) ? String(x.type) : "single";
-    x.bindMode = x.bindMode === "builder" ? "builder" : "point";
+    x.bindMode = x.bindMode === "point" ? "point" : "builder";
     x.point = x.point && typeof x.point === "object" ? x.point : { x: 0, y: 0, z: 0 };
     x.point.x = num(x.point.x);
     x.point.y = num(x.point.y);
