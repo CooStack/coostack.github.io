@@ -34,7 +34,7 @@ import {
     hasAngleOffsetEaseSpecialParams,
     formatAngleValue
 } from "./angle_offset_utils.js";
-import { installPreviewRuntimeMethods } from "./preview_runtime_mixin.js?v=20260313_1";
+import { installPreviewRuntimeMethods } from "./preview_runtime_mixin.js?v=20260316_2";
 import { installKotlinCodegenMethods } from "./kotlin_codegen_mixin.js?v=20260313_1";
 import { installCodeOutputMethods } from "./code_output_mixin.js";
 import { installExpressionEditorMethods } from "./expression_editor_mixin.js?v=20260316_1";
@@ -6815,7 +6815,7 @@ class CompositionBuilderApp {
             this.applyExpressionGlobalsOnce(runtimeActions, t, t, frameRuntimeGlobals, globalAxis);
         }
         if (tickStep > this.previewRuntimeAppliedTick) this.previewRuntimeAppliedTick = tickStep;
-        this.syncPreviewStatusWithCycle(frameRuntimeGlobals, cycleCfg, globalCycleAge, elapsedTick);
+        this.syncPreviewStatusWithCycle(frameRuntimeGlobals, cycleCfg, globalCycleAge, globalCycleAge);
         const ownerCache = new Map();
         const anchorCache = new Map();
         const localCache = new Map();
@@ -6843,7 +6843,9 @@ class CompositionBuilderApp {
             let cached = byBirth.get(birthKey);
             if (!cached) {
                 const ageBase = ((elapsedTick - birthOffset) % cycleTotal + cycleTotal) % cycleTotal;
-                let age = this.resolvePreviewAgeWithStatus(ageBase, elapsedTick, cycleCfg, frameRuntimeGlobals);
+                // Keep dissolve timing in cycle-local ticks, or second-cycle fade
+                // can jump straight to the minimum scale.
+                let age = this.resolvePreviewAgeWithStatus(ageBase, globalCycleAge, cycleCfg, frameRuntimeGlobals);
                 const card = this.getCardById(owner);
                 let shapeRuntimeLevels = [];
                 if (card) {
@@ -6869,9 +6871,9 @@ class CompositionBuilderApp {
                     });
                     if (!ageDependent) ownerVisualCache.set(owner, visual);
                 }
-                this.syncPreviewStatusWithCycle(frameRuntimeGlobals, cycleCfg, globalCycleAge, elapsedTick);
-                age = this.resolvePreviewAgeWithStatus(ageBase, elapsedTick, cycleCfg, frameRuntimeGlobals);
-                const globalCycleAgeNow = this.resolvePreviewAgeWithStatus(globalCycleAge, elapsedTick, cycleCfg, frameRuntimeGlobals);
+                this.syncPreviewStatusWithCycle(frameRuntimeGlobals, cycleCfg, globalCycleAge, globalCycleAge);
+                age = this.resolvePreviewAgeWithStatus(ageBase, globalCycleAge, cycleCfg, frameRuntimeGlobals);
+                const globalCycleAgeNow = this.resolvePreviewAgeWithStatus(globalCycleAge, globalCycleAge, cycleCfg, frameRuntimeGlobals);
                 const visibleLimit = this.evaluateGrowthVisibleLimit(
                     owner,
                     ownerCount,

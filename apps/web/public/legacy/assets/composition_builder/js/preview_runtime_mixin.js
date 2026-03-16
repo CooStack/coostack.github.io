@@ -903,7 +903,9 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
             let cached = groupId >= 0 ? groupRuntimeCache[groupId] : null;
             if (!cached) {
                 const ageBase = ((elapsedTick - birthOffset) % cycleTotal + cycleTotal) % cycleTotal;
-                let globalAge = this.resolvePreviewAgeWithStatus(ageBase, elapsedTick, cycleCfg, frameRuntimeGlobals);
+                // Dissolve start tick is tracked in cycle-local time; mixing in
+                // absolute elapsedTick makes second-cycle fade jump to the end.
+                let globalAge = this.resolvePreviewAgeWithStatus(ageBase, globalCycleAge, cycleCfg, frameRuntimeGlobals);
                 const runtimeElapsedTick = Math.max(0, num(globalAge) - rootDelayTick);                const runtimeAgeTick = runtimeElapsedTick;
                 const card = groupId >= 0
                     ? (groupCard[groupId] || null)
@@ -947,9 +949,9 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
                     visualDependency = this.getCardPreviewVisualDependency(card);
                     ownerVisualAgeDependentCache.set(owner, visualDependency);
                 }
-                this.syncPreviewStatusWithCycle(frameRuntimeGlobals, cycleCfg, globalCycleAge, elapsedTick);
-                globalAge = this.resolvePreviewAgeWithStatus(ageBase, elapsedTick, cycleCfg, frameRuntimeGlobals);
-                const globalCycleAgeNow = this.resolvePreviewAgeWithStatus(globalCycleAge, elapsedTick, cycleCfg, frameRuntimeGlobals);
+                this.syncPreviewStatusWithCycle(frameRuntimeGlobals, cycleCfg, globalCycleAge, globalCycleAge);
+                globalAge = this.resolvePreviewAgeWithStatus(ageBase, globalCycleAge, cycleCfg, frameRuntimeGlobals);
+                const globalCycleAgeNow = this.resolvePreviewAgeWithStatus(globalCycleAge, globalCycleAge, cycleCfg, frameRuntimeGlobals);
                 const growthAgeTick = Math.max(0, num(globalAge) - rootDelayTick);
                 const canReuseGrowthPlan = !!card
                     && !runtimeActions.__hasExpression
