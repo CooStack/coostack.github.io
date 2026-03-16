@@ -100,7 +100,7 @@ export function installExpressionEditorMethods(CompositionBuilderApp, deps = {})
             this.closeExprSuggest();
             return;
         }
-        const all = this.getExprCompletions();
+        const all = this.getExprCompletions(input);
         const token = String(info.token || "").trim();
         if (!force && !token) {
             this.closeExprSuggest();
@@ -214,7 +214,7 @@ export function installExpressionEditorMethods(CompositionBuilderApp, deps = {})
         return { token, start: pos - token.length, end: pos };
     }
 
-    getExprCompletions() {
+    getExprCompletions(textarea = null) {
         const projectClass = sanitizeKotlinClassName(this.state.projectName || "NewComposition");
         const base = [
             "age",

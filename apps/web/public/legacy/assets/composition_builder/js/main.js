@@ -37,7 +37,7 @@ import {
 import { installPreviewRuntimeMethods } from "./preview_runtime_mixin.js?v=20260313_1";
 import { installKotlinCodegenMethods } from "./kotlin_codegen_mixin.js?v=20260313_1";
 import { installCodeOutputMethods } from "./code_output_mixin.js";
-import { installExpressionEditorMethods } from "./expression_editor_mixin.js?v=20260312_8";
+import { installExpressionEditorMethods } from "./expression_editor_mixin.js?v=20260316_1";
 import { installCodeCompileMethods } from "./code_compile_mixin.js?v=20260309_2";
 import { installTargetPresetMethods } from "./target_preset_mixin.js";
 import {
