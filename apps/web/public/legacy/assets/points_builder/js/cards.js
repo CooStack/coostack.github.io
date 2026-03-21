@@ -308,8 +308,6 @@ export function createCardInputs(ctx) {
             add_fourier_series: {
                 "折叠": "折叠/展开 term 列表。",
                 angle: "整体相位旋转。",
-                xOffset: "整体 X 方向偏移。",
-                zOffset: "整体 Z 方向偏移。",
                 count: "采样点数量。"
             }
         }
@@ -1342,12 +1340,13 @@ export function initCardSystem(ctx = {}) {
         return updated > 0;
     }
 
-    function makeCollapseAllButtons(scopeId, listGetter, small = true) {
+    function makeCollapseAllButtons(scopeIdRef, listGetter, small = true) {
         const collapseBtn = document.createElement("button");
         collapseBtn.className = small ? "btn small" : "btn";
         collapseBtn.textContent = "折叠所有";
         collapseBtn.addEventListener("click", () => {
             const list = (typeof listGetter === "function") ? listGetter() : [];
+            const scopeId = typeof scopeIdRef === "function" ? scopeIdRef() : scopeIdRef;
             if (typeof ctx.collapseAllInScope === "function") ctx.collapseAllInScope(scopeId, list);
             if (!syncCollapseUIForList(list)) renderAll();
         });
@@ -1357,6 +1356,7 @@ export function initCardSystem(ctx = {}) {
         expandBtn.textContent = "展开所有";
         expandBtn.addEventListener("click", () => {
             const list = (typeof listGetter === "function") ? listGetter() : [];
+            const scopeId = typeof scopeIdRef === "function" ? scopeIdRef() : scopeIdRef;
             if (typeof ctx.expandAllInScope === "function") ctx.expandAllInScope(scopeId, list);
             if (!syncCollapseUIForList(list)) renderAll();
         });
@@ -1366,6 +1366,9 @@ export function initCardSystem(ctx = {}) {
 
     let moreMenuBound = false;
     let scopeRootBtn = null;
+    let scopeFilterHost = null;
+    let scopeFilterUi = null;
+    let scopeFilterScopeKey = "__pb_scope_root__";
     function ensureMoreMenu(actionsEl) {
         let wrap = actionsEl.querySelector(".more-wrap");
         if (wrap) return wrap;
@@ -1427,6 +1430,7 @@ export function initCardSystem(ctx = {}) {
         const existingTools = title.parentElement.querySelector(".panel-tools");
         if (existingTools) {
             scopeRootBtn = existingTools.querySelector("[data-pb-scope-root='1']") || null;
+            scopeFilterHost = existingTools.querySelector("[data-pb-scope-filter='1']") || null;
             return;
         }
         const tools = document.createElement("div");
@@ -1440,7 +1444,12 @@ export function initCardSystem(ctx = {}) {
             navigateCardScope(null);
         });
         tools.appendChild(scopeRootBtn);
-        const { collapseBtn, expandBtn } = makeCollapseAllButtons(null, () => (getState()?.root?.children || []), true);
+        const resolveScopeCtx = () => getCurrentCardScopeContext();
+        const { collapseBtn, expandBtn } = makeCollapseAllButtons(
+            () => resolveScopeCtx()?.scopeId || null,
+            () => resolveScopeCtx()?.list || [],
+            true
+        );
         tools.appendChild(collapseBtn);
         tools.appendChild(expandBtn);
 
@@ -1464,25 +1473,34 @@ export function initCardSystem(ctx = {}) {
         appendCleanupBtn("add_builder", "清空空的Builder", "没有可清理的空的 addBuilder 卡片", "addBuilder");
         appendCleanupBtn("add_with", "清空空的With", "没有可清理的空的 addWith 卡片", "addWith");
 
-        const filterUi = createFilterControls(null, renderCards, true);
+        scopeFilterHost = document.createElement("div");
+        scopeFilterHost.dataset.pbScopeFilter = "1";
+        tools.appendChild(scopeFilterHost);
         const syncUi = createParamSyncControls();
-        if (filterUi && filterUi.wrap) tools.appendChild(filterUi.wrap);
         if (syncUi && syncUi.wrap) tools.appendChild(syncUi.wrap);
 
         title.insertAdjacentElement("afterend", tools);
+        updateScopeToolbar(getCurrentCardScopeContext());
     }
 
     function updateScopeToolbar(scopeCtx) {
         if (!scopeRootBtn) return;
         const hasNestedScope = !!scopeCtx?.ownerNode;
         scopeRootBtn.classList.toggle("hidden", !hasNestedScope);
-        if (!hasNestedScope) return;
-        scopeRootBtn.title = scopeCtx?.typeLabel
+        scopeRootBtn.title = hasNestedScope && scopeCtx?.typeLabel
             ? `当前位于 ${scopeCtx.typeLabel}，点击返回最外层`
             : "点击返回最外层";
+        if (!scopeFilterHost) return;
+        const nextScopeKey = scopeCtx?.scopeId || "__pb_scope_root__";
+        if (scopeFilterUi && scopeFilterScopeKey === nextScopeKey) return;
+        scopeFilterScopeKey = nextScopeKey;
+        scopeFilterUi = createFilterControls(scopeCtx?.scopeId || null, renderCards, true);
+        scopeFilterHost.innerHTML = "";
+        if (scopeFilterUi?.wrap) scopeFilterHost.appendChild(scopeFilterUi.wrap);
     }
 
     const selectedNodeIds = new Set();
+    let selectionAnchorNodeId = null;
     const CARD_BOX_DELAY_MS = 220;
     let cardBoxEl = null;
     let cardBoxTimer = 0;
@@ -1500,6 +1518,9 @@ export function initCardSystem(ctx = {}) {
                 changed = true;
             }
         }
+        if (selectionAnchorNodeId && !findNodeContextById(selectionAnchorNodeId)) {
+            selectionAnchorNodeId = null;
+        }
         return changed;
     }
 
@@ -1514,6 +1535,7 @@ export function initCardSystem(ctx = {}) {
         const recordHistory = options.recordHistory !== false;
         const allowSync = options.syncWithParamSync !== false;
         const syncStrictKind = !!options.syncStrictKind;
+        const updateAnchor = options.updateAnchor !== false;
         const src = Array.isArray(ids) ? ids : [];
         const valid = [];
         const seen = new Set();
@@ -1538,6 +1560,10 @@ export function initCardSystem(ctx = {}) {
             selectedNodeIds.clear();
         }
 
+        if (updateAnchor) {
+            selectionAnchorNodeId = options.anchorId || valid[0] || null;
+        }
+
         if (allowSync) {
             const sync = getParamSync();
             if (sync && sync.open) setSyncTargetsByIds(valid, { replace, strictKind: syncStrictKind });
@@ -1552,6 +1578,18 @@ export function initCardSystem(ctx = {}) {
             notifyCardSelectionChange();
         }
         return Array.from(selectedNodeIds);
+    }
+
+    function buildRangeNodeIds(anchorId, targetId, siblings, scopeId) {
+        if (!anchorId || !targetId || anchorId === targetId) return [targetId];
+        const entries = getVisibleEntries(siblings, scopeId) || (Array.isArray(siblings) ? siblings.map((node, index) => ({ node, index })) : []);
+        const orderedIds = entries.map((it) => it?.node?.id).filter(Boolean);
+        const start = orderedIds.indexOf(anchorId);
+        const end = orderedIds.indexOf(targetId);
+        if (start < 0 || end < 0) return [targetId];
+        const from = Math.min(start, end);
+        const to = Math.max(start, end);
+        return orderedIds.slice(from, to + 1);
     }
 
     function clearSelectedNodeIds() {
@@ -1840,6 +1878,23 @@ export function initCardSystem(ctx = {}) {
         if (delta !== 0) containerEl.scrollTop += delta;
     }
 
+    function clearDragOverIndicators(containerEl = null) {
+        const root = containerEl || elCardsRoot || document;
+        root.querySelectorAll?.(".card.drag-over, .card.drag-over-top, .card.drag-over-bottom").forEach((el) => {
+            el.classList.remove("drag-over", "drag-over-top", "drag-over-bottom");
+        });
+    }
+
+    function setDragOverIndicator(cardEl, mode, after) {
+        if (!cardEl) return;
+        const container = cardEl.parentElement || elCardsRoot;
+        clearDragOverIndicators(container);
+        cardEl.classList.add("drag-over");
+        if (mode === "insert") {
+            cardEl.classList.add(after ? "drag-over-bottom" : "drag-over-top");
+        }
+    }
+
 
     function setupDnD(handleEl, cardEl, node, listRef, getIdx, ownerNode = null) {
         const isNestedDropTarget = (target) => {
@@ -1885,9 +1940,8 @@ export function initCardSystem(ctx = {}) {
                 : [cardEl];
             dragEls.forEach((el) => {
                 el.classList.remove("dragging");
-                el.classList.remove("drag-over");
             });
-            cardEl.classList.remove("drag-over");
+            clearDragOverIndicators(dragPreview?.container || cardEl.parentElement || elCardsRoot);
             finishDragPreview();
             if (typeof ctx.setDraggingState === "function") ctx.setDraggingState(false);
         });
@@ -1898,7 +1952,7 @@ export function initCardSystem(ctx = {}) {
             autoScrollDuringDrag(getDragScrollContainer(cardEl), e.clientY);
             const builderInfo = getDragBuilderInfo(e);
             e.dataTransfer.dropEffect = builderInfo ? "copy" : "move";
-            cardEl.classList.add("drag-over");
+            setDragOverIndicator(cardEl, builderInfo ? "copy" : "insert", e.clientY > (cardEl.getBoundingClientRect().top + cardEl.getBoundingClientRect().height / 2));
 
             if (builderInfo) return;
             const dragIds = getDragNodeIds(e);
@@ -1915,36 +1969,15 @@ export function initCardSystem(ctx = {}) {
                 if (mode === "swap") return;
                 const rect = cardEl.getBoundingClientRect();
                 const after = (e.clientY > rect.top + rect.height / 2);
+                setDragOverIndicator(cardEl, mode, after);
                 if (dragPreview.lastTargetId === targetCardId
                     && dragPreview.lastMode === mode
                     && dragPreview.lastAfter === after) {
                     return;
                 }
-
-                const prevPositions = captureCardPositionsIn(cardEl.parentElement);
-                const orderedGroupEls = Array.from(cardEl.parentElement.querySelectorAll(".card[data-id]"))
-                    .filter((el) => dragPreview.ids.includes(el.dataset.id));
-                if (!orderedGroupEls.length) return;
-                const first = orderedGroupEls[0];
-                const last = orderedGroupEls[orderedGroupEls.length - 1];
-                const nextOfLast = last ? last.nextElementSibling : null;
-                let ref = after ? cardEl.nextElementSibling : cardEl;
-                // 处理“紧邻目标”的无效落点：自动切换到另一侧，支持整组与单卡交换位置
-                if (ref === first) {
-                    ref = cardEl; // 原本会变成 no-op（目标在选中组上方，落在下半区）
-                } else if (ref === nextOfLast) {
-                    ref = cardEl.nextElementSibling; // 原本会变成 no-op（目标在选中组下方，落在上半区）
-                }
-                if (ref === first || ref === nextOfLast) return;
-                const frag = document.createDocumentFragment();
-                orderedGroupEls.forEach((el) => frag.appendChild(el));
-                cardEl.parentElement.insertBefore(frag, ref);
-
-                dragPreview.dirty = true;
                 dragPreview.lastTargetId = targetCardId;
                 dragPreview.lastMode = mode;
                 dragPreview.lastAfter = after;
-                applyCardSwapAnimationIn(cardEl.parentElement, prevPositions);
                 return;
             }
             const id = dragIds[0];
@@ -1957,42 +1990,25 @@ export function initCardSystem(ctx = {}) {
             const mode = isFilterActive(scopeId) ? "swap" : "insert";
             const rect = cardEl.getBoundingClientRect();
             const after = (mode === "insert") && (e.clientY > rect.top + rect.height / 2);
+            setDragOverIndicator(cardEl, mode, after);
             if (dragPreview.lastTargetId === cardEl.dataset.id
                 && dragPreview.lastMode === mode
                 && (mode === "swap" || dragPreview.lastAfter === after)) {
                 return;
             }
-
-            const prevPositions = captureCardPositionsIn(cardEl.parentElement);
-            if (mode === "swap") {
-                const baseOrder = Array.isArray(dragPreview.originalOrder) ? dragPreview.originalOrder : [];
-                const fromIdx = baseOrder.indexOf(dragPreview.cardEl);
-                const toIdx = baseOrder.indexOf(cardEl);
-                if (fromIdx < 0 || toIdx < 0 || fromIdx === toIdx) return;
-                const nextOrder = baseOrder.slice();
-                nextOrder[fromIdx] = baseOrder[toIdx];
-                nextOrder[toIdx] = baseOrder[fromIdx];
-                nextOrder.forEach((el) => cardEl.parentElement.appendChild(el));
-            } else {
-                const ref = after ? cardEl.nextElementSibling : cardEl;
-                if (ref === dragPreview.cardEl) return;
-                cardEl.parentElement.insertBefore(dragPreview.cardEl, ref);
-            }
-            dragPreview.dirty = true;
             dragPreview.lastTargetId = cardEl.dataset.id;
             dragPreview.lastMode = mode;
             dragPreview.lastAfter = after;
-            applyCardSwapAnimationIn(cardEl.parentElement, prevPositions);
         });
-        cardEl.addEventListener("dragleave", () => cardEl.classList.remove("drag-over"));
+        cardEl.addEventListener("dragleave", () => clearDragOverIndicators(cardEl.parentElement || elCardsRoot));
         cardEl.addEventListener("drop", (e) => {
             if (isNestedDropTarget(e.target)) {
-                cardEl.classList.remove("drag-over");
+                clearDragOverIndicators(cardEl.parentElement || elCardsRoot);
                 return;
             }
             e.preventDefault();
             e.stopPropagation();
-            cardEl.classList.remove("drag-over");
+            clearDragOverIndicators(cardEl.parentElement || elCardsRoot);
             const builderInfo = getDragBuilderInfo(e);
             if (builderInfo) {
                 if (handleBuilderDrop(builderInfo, listRef, getIdx(), ownerNode)) {
@@ -2043,26 +2059,6 @@ export function initCardSystem(ctx = {}) {
                     }
                 }
                 return;
-            }
-
-            if (dragPreview && dragPreview.dirty && dragPreview.id === id) {
-                const scopeId = ownerNode ? ownerNode.id : null;
-                const useSwap = isFilterActive(scopeId);
-                const targetId = dragPreview.lastTargetId;
-                if (targetId && targetId !== id) {
-                    const targetIdx = listRef.findIndex((it) => it && it.id === targetId);
-                    if (targetIdx >= 0) {
-                        historyCapture("drag_drop");
-                        const targetIndex = targetIdx + (!useSwap && dragPreview.lastAfter ? 1 : 0);
-                        const ok = moveNodeById(id, listRef, targetIndex, ownerNode);
-                        if (ok) {
-                            markDragPreviewDrop();
-                            requestCardSwapAnim();
-                            renderAll();
-                        }
-                        return;
-                    }
-                }
             }
 
             // drop 在卡片上：插入到该卡片之前（同列表=排序，跨列表=移动）
@@ -2730,8 +2726,23 @@ export function initCardSystem(ctx = {}) {
             // ✅ 避免 addBuilder 父卡片接管子卡片：只响应“事件发生在当前卡片自身区域”
             const inner = e.target && e.target.closest ? e.target.closest(".card") : null;
             if (inner && inner !== card) return;
-            const additive = !!(e.ctrlKey || e.shiftKey);
-            setSelectedNodeIds([node.id], { replace: !additive, focus: false, syncWithParamSync: false });
+            const append = !!(e.ctrlKey || e.metaKey);
+            if (e.shiftKey && selectionAnchorNodeId) {
+                const rangeIds = buildRangeNodeIds(selectionAnchorNodeId, node.id, siblings, scopeId);
+                setSelectedNodeIds(rangeIds, {
+                    replace: !append,
+                    focus: false,
+                    syncWithParamSync: false,
+                    updateAnchor: false
+                });
+            } else {
+                setSelectedNodeIds([node.id], {
+                    replace: !append,
+                    focus: false,
+                    syncWithParamSync: false,
+                    anchorId: node.id
+                });
+            }
             if (isSyncSelectableEvent(e)) toggleSyncTarget(node);
             setFocusedNode(node.id);
         });
@@ -2789,18 +2800,18 @@ export function initCardSystem(ctx = {}) {
             const next = el.getBoundingClientRect();
             const dx = prev.left - next.left;
             const dy = prev.top - next.top;
-            if (dx || dy) {
-                el.style.transform = `translate(${dx}px, ${dy}px)`;
-                el.style.transition = "transform 0s";
-                moving.push(el);
-            }
+            if (dx || dy) moving.push(el);
         });
         if (!moving.length) return;
-        requestAnimationFrame(() => {
-            moving.forEach((el) => {
-                el.style.transition = "";
-                el.style.transform = "";
-            });
+        moving.forEach((el) => {
+            if (el.__pbDragSwapTimer) clearTimeout(el.__pbDragSwapTimer);
+            el.classList.remove("drag-swap-highlight");
+            void el.offsetWidth;
+            el.classList.add("drag-swap-highlight");
+            el.__pbDragSwapTimer = setTimeout(() => {
+                el.classList.remove("drag-swap-highlight");
+                el.__pbDragSwapTimer = 0;
+            }, 320);
         });
     }
 
@@ -2903,6 +2914,7 @@ export function initCardSystem(ctx = {}) {
                     p.count = v;
                     rebuildPreviewAndKotlin();
                 })));
+                body.appendChild(row("offset", makeVec3Editor(p, "o", rebuildPreviewAndKotlin, "offset")));
                 break;
 
             case "add_discrete_circle_xz":
@@ -2926,6 +2938,7 @@ export function initCardSystem(ctx = {}) {
                     p.seed = v;
                     rebuildPreviewAndKotlin();
                 })));
+                body.appendChild(row("offset", makeVec3Editor(p, "o", rebuildPreviewAndKotlin, "offset")));
                 break;
 
             case "add_half_circle":
@@ -2942,6 +2955,7 @@ export function initCardSystem(ctx = {}) {
                     renderAll();
                 })));
                 if (p.useRotate) body.appendChild(row("角度", angleInput(p, "rotateDeg", rebuildPreviewAndKotlin)));
+                body.appendChild(row("offset", makeVec3Editor(p, "o", rebuildPreviewAndKotlin, "offset")));
                 break;
 
             case "add_radian_center":
@@ -2959,6 +2973,7 @@ export function initCardSystem(ctx = {}) {
                     renderAll();
                 })));
                 if (p.useRotate) body.appendChild(row("rotate角度", angleInput(p, "rotateDeg", rebuildPreviewAndKotlin)));
+                body.appendChild(row("offset", makeVec3Editor(p, "o", rebuildPreviewAndKotlin, "offset")));
                 break;
 
             case "add_radian":
@@ -2977,6 +2992,7 @@ export function initCardSystem(ctx = {}) {
                     renderAll();
                 })));
                 if (p.useRotate) body.appendChild(row("rotate角度", angleInput(p, "rotateDeg", rebuildPreviewAndKotlin)));
+                body.appendChild(row("offset", makeVec3Editor(p, "o", rebuildPreviewAndKotlin, "offset")));
                 break;
 
             case "add_ball":
@@ -2992,6 +3008,7 @@ export function initCardSystem(ctx = {}) {
                     p.discrete = v;
                     rebuildPreviewAndKotlin();
                 })));
+                body.appendChild(row("offset", makeVec3Editor(p, "o", rebuildPreviewAndKotlin, "offset")));
                 break;
 
             case "add_ring":
@@ -3090,6 +3107,7 @@ export function initCardSystem(ctx = {}) {
                     p.count = v;
                     rebuildPreviewAndKotlin();
                 })));
+                body.appendChild(row("offset", makeVec3Editor(p, "o", rebuildPreviewAndKotlin, "offset")));
                 break;
 
             case "add_polygon_in_circle":
@@ -3105,6 +3123,7 @@ export function initCardSystem(ctx = {}) {
                     p.r = v;
                     rebuildPreviewAndKotlin();
                 })));
+                body.appendChild(row("offset", makeVec3Editor(p, "o", rebuildPreviewAndKotlin, "offset")));
                 break;
 
             case "add_round_shape":
@@ -3139,6 +3158,7 @@ export function initCardSystem(ctx = {}) {
                         rebuildPreviewAndKotlin();
                     })));
                 }
+                body.appendChild(row("offset", makeVec3Editor(p, "o", rebuildPreviewAndKotlin, "offset")));
                 break;
 
             case "add_rect":
@@ -3427,6 +3447,11 @@ export function initCardSystem(ctx = {}) {
                 if (p.rotateOffsetEnabled) {
                     body.appendChild(row("偏移", makeVec3Editor(p, "ro", rebuildPreviewAndKotlin, "offset")));
                 }
+                body.appendChild(row("offset", makeVec3Editor(p, "o", rebuildPreviewAndKotlin, "offset")));
+                body.appendChild(row("开启偏移前预览", checkbox(p.previewBeforeOffsetEnabled, v => {
+                    p.previewBeforeOffsetEnabled = v;
+                    rebuildPreviewAndKotlin();
+                })));
                 if (!opts.paramsOnly) {
                     body.appendChild(row("折叠子卡片", checkbox(node.folded, v => {
                         node.folded = v;
@@ -3671,14 +3696,6 @@ export function initCardSystem(ctx = {}) {
                     })));
                 }
                 body.appendChild(row("angle", angleInput(p, "angle", rebuildPreviewAndKotlin)));
-                body.appendChild(row("xOffset", inputNum(p.xOffset, v => {
-                    p.xOffset = v;
-                    rebuildPreviewAndKotlin();
-                })));
-                body.appendChild(row("zOffset", inputNum(p.zOffset, v => {
-                    p.zOffset = v;
-                    rebuildPreviewAndKotlin();
-                })));
                 body.appendChild(row("scale", inputNum(p.scale, v => {
                     p.scale = v;
                     rebuildPreviewAndKotlin();
@@ -3687,6 +3704,7 @@ export function initCardSystem(ctx = {}) {
                     p.count = v;
                     rebuildPreviewAndKotlin();
                 })));
+                body.appendChild(row("offset", makeVec3Editor(p, "o", rebuildPreviewAndKotlin, "offset")));
                 if (!opts.paramsOnly && !node.folded) {
                     const sub = document.createElement("div");
                     sub.className = "subcards";

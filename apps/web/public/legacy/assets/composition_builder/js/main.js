@@ -1169,6 +1169,7 @@ class CompositionBuilderApp {
         this.selectedCardIds = new Set();
         this.focusedCardId = this.state.cards[0]?.id || null;
         if (this.focusedCardId) this.selectedCardIds.add(this.focusedCardId);
+        this.selectionAnchorCardId = this.focusedCardId;
 
         this.undoStack = [];
         this.redoStack = [];
@@ -2766,7 +2767,7 @@ class CompositionBuilderApp {
             const idx = int(btn.dataset.idx);
             const levelIdx = int(btn.dataset.shapeLevelIdx);
             if (act === "select-card") {
-                this.selectCardById(cardId, e.ctrlKey || e.metaKey);
+                this.selectCardById(cardId, e.ctrlKey || e.metaKey, e.shiftKey);
                 return;
             }
             if (act === "toggle-fold") {
@@ -3313,7 +3314,7 @@ class CompositionBuilderApp {
             if (targetNode instanceof Element && targetNode.closest("input, textarea, select, [contenteditable='true'], [role='textbox'], [role='combobox'], .editor-shell-monaco, .editor-monaco-host, .monaco-editor, .suggest-widget, .monaco-hover, .monaco-menu-container")) {
                 return;
             }
-            this.selectCardById(head.dataset.cardId, e.ctrlKey || e.metaKey);
+            this.selectCardById(head.dataset.cardId, e.ctrlKey || e.metaKey, e.shiftKey);
         }
     }
 
@@ -4026,21 +4027,45 @@ class CompositionBuilderApp {
         if (!this.selectedCardIds.size && this.focusedCardId) {
             this.selectedCardIds.add(this.focusedCardId);
         }
+        if (!this.selectionAnchorCardId || !ids.has(this.selectionAnchorCardId)) {
+            this.selectionAnchorCardId = this.focusedCardId || this.state.cards[0]?.id || null;
+        }
     }
 
     getFocusedCard() {
         return this.getCardById(this.focusedCardId);
     }
 
-    selectCardById(cardId, append = false) {
+    selectCardById(cardId, append = false, range = false) {
         const card = this.getCardById(cardId);
         if (!card) return;
+        if (range) {
+            const anchorId = this.selectionAnchorCardId || this.focusedCardId || card.id;
+            const anchorIndex = this.getCardIndexById(anchorId);
+            const targetIndex = this.getCardIndexById(card.id);
+            if (anchorIndex >= 0 && targetIndex >= 0) {
+                if (!append) this.selectedCardIds.clear();
+                const start = Math.min(anchorIndex, targetIndex);
+                const end = Math.max(anchorIndex, targetIndex);
+                for (let i = start; i <= end; i++) {
+                    const item = this.state.cards[i];
+                    if (item?.id) this.selectedCardIds.add(item.id);
+                }
+                this.focusedCardId = card.id;
+                this.ensureSelectionValid();
+                this.renderCards();
+                this.updatePreviewGeometry(this.previewPoints, this.previewOwners);
+                this.updateSelectionStatus();
+                return;
+            }
+        }
         if (!append) this.selectedCardIds.clear();
         if (append && this.selectedCardIds.has(card.id) && this.selectedCardIds.size > 1) {
             this.selectedCardIds.delete(card.id);
         } else {
             this.selectedCardIds.add(card.id);
             this.focusedCardId = card.id;
+            this.selectionAnchorCardId = card.id;
         }
         this.ensureSelectionValid();
         this.renderCards();
@@ -4055,7 +4080,10 @@ class CompositionBuilderApp {
             if (cardIds.includes(c.id)) ordered.push(c.id);
         }
         for (const id of ordered) this.selectedCardIds.add(id);
-        if (ordered.length) this.focusedCardId = ordered[0];
+        if (ordered.length) {
+            this.focusedCardId = ordered[0];
+            if (!append || !this.selectionAnchorCardId) this.selectionAnchorCardId = ordered[0];
+        }
         this.ensureSelectionValid();
         this.renderCards();
         this.updatePreviewGeometry(this.previewPoints, this.previewOwners);
@@ -4103,6 +4131,7 @@ class CompositionBuilderApp {
         this.state.cards.push(card);
         this.focusedCardId = card.id;
         this.selectedCardIds = new Set([card.id]);
+        this.selectionAnchorCardId = card.id;
         this.afterStructureMutate({ rerenderProject: false, rerenderCards: true, rebuildPreview: true });
     }
 
@@ -4113,6 +4142,7 @@ class CompositionBuilderApp {
         if (!this.state.cards.length) this.state.cards.push(createDefaultCard(0));
         this.focusedCardId = this.state.cards[0].id;
         this.selectedCardIds = new Set([this.focusedCardId]);
+        this.selectionAnchorCardId = this.focusedCardId;
         this.afterStructureMutate({ rerenderProject: false, rerenderCards: true, rebuildPreview: true });
     }
 
@@ -4124,6 +4154,7 @@ class CompositionBuilderApp {
         const fallback = this.state.cards[Math.max(0, idx - 1)] || this.state.cards[0];
         this.focusedCardId = fallback?.id || null;
         this.selectedCardIds = new Set(this.focusedCardId ? [this.focusedCardId] : []);
+        this.selectionAnchorCardId = this.focusedCardId;
     }
 
     duplicateCardById(cardId) {
@@ -4157,6 +4188,7 @@ class CompositionBuilderApp {
         this.state.cards.splice(idx + 1, 0, cloned);
         this.focusedCardId = cloned.id;
         this.selectedCardIds = new Set([cloned.id]);
+        this.selectionAnchorCardId = cloned.id;
     }
 
     moveCard(cardId, dir) {
@@ -9541,6 +9573,7 @@ class CompositionBuilderApp {
         this.setCardBuilderState(card, target, state);
         this.focusedCardId = card.id;
         this.selectedCardIds = new Set([card.id]);
+        this.selectionAnchorCardId = card.id;
         this.saveStateNow();
         let msg = "已返回 PointsBuilder 并加载根 Builder";
         if (target === "shape") msg = "已返回并加载 Shape Builder";

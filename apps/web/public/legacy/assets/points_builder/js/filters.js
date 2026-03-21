@@ -13,6 +13,7 @@ export function initFilterSystem(ctx) {
 
     const FILTER_STORAGE_KEY = "pb_root_filter_v2";
     const FILTER_SCOPE_ROOT = "root";
+    const FILTER_SCOPE_NONE = Symbol("pb_filter_scope_none");
     const filterScopes = new Map(); // scopeId -> { mode, kinds:Set, search:string }
     let rootFilterLoaded = false;
 
@@ -52,17 +53,41 @@ export function initFilterSystem(ctx) {
         } catch {}
     }
 
-    function isFilterActive(scopeId) {
+    function hasOwnActiveFilter(scopeId) {
         const scope = getFilterScope(scopeId);
         return scope.kinds && scope.kinds.size > 0;
     }
 
+    function resolveEffectiveFilterScopeId(scopeId) {
+        let currentScopeId = scopeId || null;
+        if (hasOwnActiveFilter(currentScopeId)) return currentScopeId;
+        while (currentScopeId) {
+            const ctxNode = typeof findNodeContextById === "function" ? findNodeContextById(currentScopeId) : null;
+            currentScopeId = ctxNode?.parentNode?.id || null;
+            if (hasOwnActiveFilter(currentScopeId)) return currentScopeId;
+        }
+        return hasOwnActiveFilter(null) ? null : FILTER_SCOPE_NONE;
+    }
+
+    function isFilterActive(scopeId) {
+        return resolveEffectiveFilterScopeId(scopeId) !== FILTER_SCOPE_NONE;
+    }
+
+    function getFilterChildrenScopeId(node, scopeId) {
+        if (node && node.id && Array.isArray(node.children)) return node.id;
+        return scopeId || null;
+    }
+
     function filterAllows(node, scopeId) {
         if (!node) return false;
-        if (!isFilterActive(scopeId)) return true;
-        const scope = getFilterScope(scopeId);
-        const hit = scope.kinds.has(node.kind);
-        return scope.mode === "include" ? hit : !hit;
+        const effectiveScopeId = resolveEffectiveFilterScopeId(scopeId);
+        if (effectiveScopeId === FILTER_SCOPE_NONE) return true;
+        const scope = getFilterScope(effectiveScopeId);
+        const directHit = scope.kinds.has(node.kind);
+        const childScopeId = getFilterChildrenScopeId(node, scopeId);
+        const childHit = Array.isArray(node.children) && node.children.some((child) => filterAllows(child, childScopeId));
+        if (scope.mode === "include") return directHit || childHit;
+        return !directHit || childHit;
     }
 
     function getVisibleEntries(list, scopeId) {
@@ -189,7 +214,9 @@ export function initFilterSystem(ctx) {
     }
 
     function createFilterControls(scopeId, onChange, small = true) {
-        const scope = getFilterScope(scopeId);
+        const resolvedScopeId = resolveEffectiveFilterScopeId(scopeId);
+        const controlScopeId = resolvedScopeId === FILTER_SCOPE_NONE ? scopeId : resolvedScopeId;
+        const scope = getFilterScope(controlScopeId);
         const wrap = document.createElement("div");
         wrap.className = "filter-wrap";
         const filterBtn = document.createElement("button");
@@ -291,7 +318,7 @@ export function initFilterSystem(ctx) {
         }
 
         function handleFilterChange() {
-            if (scopeId === null) saveRootFilter();
+            if (controlScopeId === null) saveRootFilter();
             updateFilterButtonState();
             if (typeof onChange === "function") onChange();
         }

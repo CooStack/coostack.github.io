@@ -1,10 +1,10 @@
 import * as THREE from "three";
 import {OrbitControls} from "three/addons/controls/OrbitControls.js";
-import { createCardInputs, initCardSystem } from "./cards.js?v=20260316_1";
-import { initFilterSystem } from "./filters.js";
+import { createCardInputs, initCardSystem } from "./cards.js?v=20260321_3";
+import { initFilterSystem } from "./filters.js?v=20260321_1";
 import { initHotkeysSystem } from "./hotkeys.js?v=20260316_1";
-import { createKindDefs } from "./kinds.js";
-import { createBuilderTools } from "./builder.js";
+import { createKindDefs } from "./kinds.js?v=20260321_1";
+import { createBuilderTools } from "./builder.js?v=20260321_1";
 import { initLayoutSystem } from "./layout.js";
 import { createNodeHelpers } from "./nodes.js?v=20260316_1";
 import { toggleFullscreen } from "./viewer.js";
@@ -102,6 +102,7 @@ function initPointsBuilderMain() {
     const chkGrid = document.getElementById("chkGrid");
     const chkRealtimeKotlin = document.getElementById("chkRealtimeKotlin");
     const chkPointPickPreview = document.getElementById("chkPointPickPreview");
+    const chkShowGeometryCenters = document.getElementById("chkShowGeometryCenters");
     const btnResetCamera = document.getElementById("btnResetCamera");
     const themeSelect = document.getElementById("themeSelect");
     const chkSnapGrid = document.getElementById("chkSnapGrid");
@@ -788,6 +789,7 @@ function initPointsBuilderMain() {
         showGrid: true,
         realtimeKotlin: false,
         pointPickPreviewEnabled: true,
+        showGeometryCenters: true,
         theme: "dark-1",
         pointSize: 0.5,
         offsetPreviewLimit: -1,
@@ -800,6 +802,7 @@ function initPointsBuilderMain() {
     let offsetPreviewLimit = DEFAULT_SETTINGS_PAYLOAD.offsetPreviewLimit;
     let realtimeKotlin = DEFAULT_SETTINGS_PAYLOAD.realtimeKotlin;
     let pointPickPreviewEnabled = DEFAULT_SETTINGS_PAYLOAD.pointPickPreviewEnabled;
+    let geometryCenterPreviewEnabled = DEFAULT_SETTINGS_PAYLOAD.showGeometryCenters;
     let snapGridKeyToggleMode = DEFAULT_SETTINGS_PAYLOAD.snapGridKeyToggleMode;
     let snapParticleKeyToggleMode = DEFAULT_SETTINGS_PAYLOAD.snapParticleKeyToggleMode;
 
@@ -919,6 +922,20 @@ function initPointsBuilderMain() {
         if (!opts.skipSave) saveSettingsToStorage();
     }
 
+    function setGeometryCenterPreviewEnabled(v, opts = {}) {
+        const next = (v !== false);
+        geometryCenterPreviewEnabled = next;
+        if (chkShowGeometryCenters && chkShowGeometryCenters.checked !== next) {
+            chkShowGeometryCenters.checked = next;
+        }
+        if (!next) {
+            hideGeometryCenterPreview();
+        } else if (lastGeometryCenterPoints.length) {
+            setGeometryCenterPoints(lastGeometryCenterPoints);
+        }
+        if (!opts.skipSave) saveSettingsToStorage();
+    }
+
     function setSnapGridKeyToggleMode(v, opts = {}) {
         const next = (v === true);
         snapGridKeyToggleMode = next;
@@ -952,6 +969,7 @@ function initPointsBuilderMain() {
             showGrid: chkGrid ? !!chkGrid.checked : true,
             realtimeKotlin,
             pointPickPreviewEnabled,
+            showGeometryCenters: geometryCenterPreviewEnabled,
             theme: currentTheme,
             pointSize,
             offsetPreviewLimit,
@@ -987,6 +1005,9 @@ function initPointsBuilderMain() {
         }
         if (payload.pointPickPreviewEnabled !== undefined) {
             setPointPickPreviewEnabled(payload.pointPickPreviewEnabled, { skipSave: true });
+        }
+        if (payload.showGeometryCenters !== undefined) {
+            setGeometryCenterPreviewEnabled(payload.showGeometryCenters, { skipSave: true });
         }
         if (payload.snapGridKeyToggleMode !== undefined) {
             setSnapGridKeyToggleMode(payload.snapGridKeyToggleMode, { skipSave: true });
@@ -1378,11 +1399,28 @@ function initPointsBuilderMain() {
     function normalizeNodeParams(node) {
         if (!node || !node.kind) return;
         if (!node.params || typeof node.params !== "object") node.params = {};
+        const offsetKinds = new Set([
+            "add_builder",
+            "add_with",
+            "add_circle",
+            "add_discrete_circle_xz",
+            "add_half_circle",
+            "add_radian_center",
+            "add_radian",
+            "add_ball",
+            "add_polygon",
+            "add_polygon_in_circle",
+            "add_round_shape",
+            "add_fourier_series"
+        ]);
         if (node.kind === "with_builder") node.kind = "add_builder";
-        if (node.kind === "add_builder") {
+        if (offsetKinds.has(node.kind)) {
             if (node.params.ox === undefined) node.params.ox = 0;
             if (node.params.oy === undefined) node.params.oy = 0;
             if (node.params.oz === undefined) node.params.oz = 0;
+        }
+        if (node.kind === "add_with" && node.params.previewBeforeOffsetEnabled === undefined) {
+            node.params.previewBeforeOffsetEnabled = false;
         }
         const p = node.params;
         switch (node.kind) {
@@ -2465,6 +2503,12 @@ function initPointsBuilderMain() {
     let renderer, scene, camera, controls;
     let initialCameraState = null;
     let pointsObj = null;
+    let addWithPreviewObj = null;
+    let addWithPreviewBuf = null;
+    let addWithPreviewCount = 0;
+    let geometryCenterObj = null;
+    let geometryCenterBuf = null;
+    let geometryCenterCount = 0;
     let offsetPreviewObj = null;
     let offsetPreviewBuf = null;
     let offsetPreviewCount = 0;
@@ -2495,6 +2539,7 @@ function initPointsBuilderMain() {
     let mirrorPlane = "XZ";
     let hoverMarker = null;   // ✅ 实时跟随的红点
     let lastPoints = [];      // ✅ 当前预览点，用于“吸附到最近点”
+    let lastGeometryCenterPoints = [];
     let lastPickBasePoint = null;
     let lastPickMappedPoint = null;
     let lockPlaneActive = false;
@@ -2510,6 +2555,8 @@ function initPointsBuilderMain() {
     const FOCUS_POINT_HEX = 0xffcc33;
     const SYNC_POINT_HEX = 0x5dd6ff;
     const OFFSET_POINT_HEX = 0xff6ad5;
+    const ADD_WITH_PREVIEW_HEX = 0x63f5c8;
+    const GEOMETRY_CENTER_HEX = 0xffb347;
     const OFFSET_PREVIEW_HEX = 0x8a8a8a;
     const LINE_PICK_PREVIEW_HEX = 0x33a1ff;
     const POINT_PICK_PREVIEW_HEX = 0x5dd6ff;
@@ -2518,6 +2565,8 @@ function initPointsBuilderMain() {
     const focusPointColor = new THREE.Color(FOCUS_POINT_HEX);
     const syncPointColor = new THREE.Color(SYNC_POINT_HEX);
     const offsetPointColor = new THREE.Color(OFFSET_POINT_HEX);
+    const addWithPreviewColor = new THREE.Color(ADD_WITH_PREVIEW_HEX);
+    const geometryCenterColor = new THREE.Color(GEOMETRY_CENTER_HEX);
     const offsetPreviewColor = new THREE.Color(OFFSET_PREVIEW_HEX);
     const linePickPreviewColor = new THREE.Color(LINE_PICK_PREVIEW_HEX);
     const pointPickPreviewColor = new THREE.Color(POINT_PICK_PREVIEW_HEX);
@@ -2535,6 +2584,7 @@ function initPointsBuilderMain() {
     let linePickTargetLabel = "主Builder";
     // 插入位置（用于：在某个卡片后/某个 addBuilder 子列表末尾连续插入）
     let linePickInsertIndex = null;
+    let linePickTargetOwnerNode = null;
     // 进入拾取前的聚焦卡片（用于：拾取新增后保持聚焦不丢失）
     let linePickKeepFocusId = null;
     // ✅ 解决：拾取直线时 pointerdown 处理完后仍会触发 click 事件，可能导致焦点被 onCanvasClick 清空
@@ -2841,6 +2891,14 @@ function initPointsBuilderMain() {
         if (pointsObj && pointsObj.material) {
             pointsObj.material.size = pointSize;
             pointsObj.material.needsUpdate = true;
+        }
+        if (addWithPreviewObj && addWithPreviewObj.material) {
+            addWithPreviewObj.material.size = Math.max(0.12, pointSize * 0.9);
+            addWithPreviewObj.material.needsUpdate = true;
+        }
+        if (geometryCenterObj && geometryCenterObj.material) {
+            geometryCenterObj.material.size = Math.max(0.14, pointSize * 1.1);
+            geometryCenterObj.material.needsUpdate = true;
         }
         if (offsetPreviewObj && offsetPreviewObj.material) {
             offsetPreviewObj.material.size = pointSize;
@@ -3491,6 +3549,11 @@ function initPointsBuilderMain() {
                 setPointPickPreviewEnabled(!!chkPointPickPreview.checked);
             });
         }
+        if (chkShowGeometryCenters) {
+            chkShowGeometryCenters.addEventListener("change", () => {
+                setGeometryCenterPreviewEnabled(!!chkShowGeometryCenters.checked);
+            });
+        }
         if (btnResetCamera) {
             btnResetCamera.addEventListener("click", () => resetCameraToPoints());
         }
@@ -3918,7 +3981,105 @@ function initPointsBuilderMain() {
         updateBezierGuidePreview();
     }
 
-    function setPoints(points) {
+    function ensureAddWithPreviewObj() {
+        if (addWithPreviewObj || !scene) return;
+        const geom = new THREE.BufferGeometry();
+        const mat = new THREE.PointsMaterial({
+            size: Math.max(0.12, pointSize * 0.9),
+            sizeAttenuation: true,
+            color: addWithPreviewColor.getHex(),
+            opacity: 0.72,
+            transparent: true
+        });
+        addWithPreviewObj = new THREE.Points(geom, mat);
+        addWithPreviewObj.visible = false;
+        scene.add(addWithPreviewObj);
+    }
+
+    function hideAddWithPreview() {
+        if (addWithPreviewObj) addWithPreviewObj.visible = false;
+    }
+
+    function setAddWithPreviewPoints(points) {
+        const list = Array.isArray(points) ? points : [];
+        if (!list.length) {
+            hideAddWithPreview();
+            return;
+        }
+        ensureAddWithPreviewObj();
+        if (!addWithPreviewObj) return;
+        const geom = addWithPreviewObj.geometry;
+        if (!addWithPreviewBuf || addWithPreviewCount !== list.length) {
+            addWithPreviewBuf = new Float32Array(list.length * 3);
+            addWithPreviewCount = list.length;
+            geom.setAttribute("position", new THREE.BufferAttribute(addWithPreviewBuf, 3));
+        }
+        let o = 0;
+        for (const point of list) {
+            addWithPreviewBuf[o++] = num(point?.x);
+            addWithPreviewBuf[o++] = num(point?.y);
+            addWithPreviewBuf[o++] = num(point?.z);
+        }
+        const posAttr = geom.getAttribute("position");
+        if (posAttr) posAttr.needsUpdate = true;
+        geom.computeBoundingSphere();
+        addWithPreviewObj.visible = true;
+    }
+
+    function ensureGeometryCenterPreviewObj() {
+        if (geometryCenterObj || !scene) return;
+        const geom = new THREE.BufferGeometry();
+        const mat = new THREE.PointsMaterial({
+            size: Math.max(0.14, pointSize * 1.1),
+            sizeAttenuation: true,
+            color: geometryCenterColor.getHex(),
+            opacity: 0.9,
+            transparent: true
+        });
+        geometryCenterObj = new THREE.Points(geom, mat);
+        geometryCenterObj.visible = false;
+        scene.add(geometryCenterObj);
+    }
+
+    function hideGeometryCenterPreview() {
+        if (geometryCenterObj) geometryCenterObj.visible = false;
+    }
+
+    function setGeometryCenterPoints(points) {
+        const list = Array.isArray(points) ? points : [];
+        lastGeometryCenterPoints = list.map((point) => ({
+            x: num(point?.x),
+            y: num(point?.y),
+            z: num(point?.z),
+            nodeId: point?.nodeId || null,
+            kind: point?.kind || "",
+            helperType: point?.helperType || "geometry_center"
+        }));
+        if (!geometryCenterPreviewEnabled || !lastGeometryCenterPoints.length) {
+            hideGeometryCenterPreview();
+            return;
+        }
+        ensureGeometryCenterPreviewObj();
+        if (!geometryCenterObj) return;
+        const geom = geometryCenterObj.geometry;
+        if (!geometryCenterBuf || geometryCenterCount !== lastGeometryCenterPoints.length) {
+            geometryCenterBuf = new Float32Array(lastGeometryCenterPoints.length * 3);
+            geometryCenterCount = lastGeometryCenterPoints.length;
+            geom.setAttribute("position", new THREE.BufferAttribute(geometryCenterBuf, 3));
+        }
+        let o = 0;
+        for (const point of lastGeometryCenterPoints) {
+            geometryCenterBuf[o++] = point.x;
+            geometryCenterBuf[o++] = point.y;
+            geometryCenterBuf[o++] = point.z;
+        }
+        const posAttr = geom.getAttribute("position");
+        if (posAttr) posAttr.needsUpdate = true;
+        geom.computeBoundingSphere();
+        geometryCenterObj.visible = true;
+    }
+
+    function setPoints(points, addWithPreviewPoints = [], geometryCenterPoints = []) {
         statusPoints.textContent = `点数：${points.length}`;
 
         if (pointsObj) {
@@ -3931,6 +4092,8 @@ function initPointsBuilderMain() {
         lastPoints = points ? points.map(p => ({ x: p.x, y: p.y, z: p.z })) : [];
         if (!points || points.length === 0) {
             defaultColorBuf = null;
+            setAddWithPreviewPoints(addWithPreviewPoints);
+            setGeometryCenterPoints(geometryCenterPoints);
             hideOffsetPreview();
             hideLinePickPreview();
             hidePointPickPreview();
@@ -3971,6 +4134,8 @@ function initPointsBuilderMain() {
         pointsObj = new THREE.Points(geom, mat);
         scene.add(pointsObj);
 
+        setAddWithPreviewPoints(addWithPreviewPoints);
+        setGeometryCenterPoints(geometryCenterPoints);
         // ✅ 根据当前聚焦的卡片，重新着色
         updateFocusColors();
         updateOffsetPreview(offsetHoverPoint);
@@ -4660,6 +4825,284 @@ function applyInverseTransformsToDelta(delta, transforms) {
     return { x: v.x, y: v.y, z: v.z };
 }
 
+function collectPostPointTransformsForList(list, afterIndex) {
+    const arr = list || [];
+    const transforms = [];
+    let axis = U.v(0, 1, 0);
+
+    for (let i = 0; i < arr.length; i++) {
+        const n = arr[i];
+        if (!n || !n.kind || !KIND[n.kind]) continue;
+
+        if (n.kind === "axis") {
+            axis = buildAxisFromParams(n.params);
+            continue;
+        }
+
+        if (i <= afterIndex) continue;
+
+        if (n.kind === "rotate_as_axis") {
+            const rad = U.angleToRad(num(n.params?.deg), n.params?.degUnit);
+            const axisVec = n.params?.useCustomAxis
+                ? U.v(num(n.params?.ax), num(n.params?.ay), num(n.params?.az))
+                : axis;
+            const inv = makeInverseAxisAngleQuat(axisVec, rad);
+            if (inv) transforms.push({ type: "rot", inv });
+            continue;
+        }
+
+        if (n.kind === "rotate_to") {
+            const inv = makeInverseRotateToQuat(n, axis);
+            if (inv) transforms.push({ type: "rot", inv });
+            continue;
+        }
+
+        if (n.kind === "scale") {
+            const f = num(n.params?.factor);
+            if (Number.isFinite(f) && f > 0 && Math.abs(f - 1) > 1e-12) {
+                transforms.push({ type: "scale", inv: 1 / f });
+            }
+            continue;
+        }
+
+        if (n.kind === "points_on_each_offset") {
+            transforms.push({
+                type: "translate",
+                x: num(n.params?.offX),
+                y: num(n.params?.offY),
+                z: num(n.params?.offZ)
+            });
+        }
+    }
+
+    return transforms;
+}
+
+function applyInversePointTransforms(point, transforms) {
+    if (!point || !transforms || !transforms.length) return point;
+    const v = new THREE.Vector3(point.x, point.y, point.z);
+    for (let i = transforms.length - 1; i >= 0; i--) {
+        const t = transforms[i];
+        if (t.type === "scale") {
+            v.multiplyScalar(t.inv);
+        } else if (t.type === "rot") {
+            v.applyQuaternion(t.inv);
+        } else if (t.type === "translate") {
+            v.set(v.x - num(t.x), v.y - num(t.y), v.z - num(t.z));
+        }
+    }
+    return { x: v.x, y: v.y, z: v.z };
+}
+
+function applyInverseContainerPointOffset(point, node) {
+    if (!point || !node) return point;
+    if (node.kind === "add_builder" || node.kind === "with_builder" || node.kind === "add_with") {
+        return {
+            x: point.x - num(node.params?.ox),
+            y: point.y - num(node.params?.oy),
+            z: point.z - num(node.params?.oz)
+        };
+    }
+    return point;
+}
+
+function mapWorldPointThroughScopes(worldPoint, ownerPath, currentList, currentAfterIndex) {
+    if (!worldPoint) return worldPoint;
+    let point = { x: num(worldPoint.x), y: num(worldPoint.y), z: num(worldPoint.z) };
+    const scopes = Array.isArray(ownerPath) ? ownerPath : [];
+    for (const step of scopes) {
+        if (!step) continue;
+        point = applyInversePointTransforms(point, collectPostPointTransformsForList(step.parentList, step.index));
+        point = applyInverseContainerPointOffset(point, step.node);
+    }
+    point = applyInversePointTransforms(point, collectPostPointTransformsForList(currentList, currentAfterIndex));
+    return point;
+}
+
+function mapWorldPointToInsertLocalPoint(worldPoint, targetList, insertIndex, ownerNode = null) {
+    const ownerPath = ownerNode?.id ? (findNodePathById(ownerNode.id) || []) : [];
+    const currentList = Array.isArray(targetList) ? targetList : state.root.children;
+    const afterIndex = (insertIndex === null || insertIndex === undefined)
+        ? (currentList.length - 1)
+        : (Math.max(-1, int(insertIndex) - 1));
+    return mapWorldPointThroughScopes(worldPoint, ownerPath, currentList, afterIndex);
+}
+
+function resolvePointPickTargetNodeId(target) {
+    if (!target) return null;
+    if (target.nodeId && findNodeContextById(target.nodeId)) return target.nodeId;
+    if (target.ownerId && findNodeContextById(target.ownerId)) return target.ownerId;
+    const input = target.inputs?.x || target.inputs?.y || target.inputs?.z || null;
+    const syncSourceId = input?.closest?.("[data-sync-source-id]")?.dataset?.syncSourceId || null;
+    if (syncSourceId && findNodeContextById(syncSourceId)) return syncSourceId;
+    const card = input?.closest?.(".card[data-id]");
+    const nodeId = card?.dataset?.id || null;
+    return (nodeId && findNodeContextById(nodeId)) ? nodeId : null;
+}
+
+function mapWorldPointToTargetLocalPoint(worldPoint, target) {
+    const nodeId = resolvePointPickTargetNodeId(target);
+    if (!nodeId) return worldPoint;
+    const path = findNodePathById(nodeId);
+    if (!Array.isArray(path) || !path.length) return worldPoint;
+    const current = path[path.length - 1];
+    return mapWorldPointThroughScopes(worldPoint, path.slice(0, -1), current.parentList, current.index);
+}
+
+const GEOMETRY_CENTER_PREVIEW_KINDS = new Set([
+    "add_circle",
+    "add_discrete_circle_xz",
+    "add_half_circle",
+    "add_radian_center",
+    "add_radian",
+    "add_ball",
+    "add_polygon",
+    "add_polygon_in_circle",
+    "add_round_shape",
+    "add_fourier_series"
+]);
+
+function applyContainerPointOffset(point, node) {
+    if (!point || !node) return point;
+    if (node.kind === "add_builder" || node.kind === "with_builder" || node.kind === "add_with") {
+        return {
+            x: point.x + num(node.params?.ox),
+            y: point.y + num(node.params?.oy),
+            z: point.z + num(node.params?.oz)
+        };
+    }
+    return point;
+}
+
+function collectPostPointForwardTransformsForList(list, afterIndex) {
+    const arr = list || [];
+    const transforms = [];
+    let axis = U.v(0, 1, 0);
+    for (let i = 0; i < arr.length; i++) {
+        const n = arr[i];
+        if (!n || !n.kind || !KIND[n.kind]) continue;
+
+        if (n.kind === "axis") {
+            axis = buildAxisFromParams(n.params);
+            continue;
+        }
+
+        if (i <= afterIndex) continue;
+
+        if (n.kind === "rotate_as_axis") {
+            const rad = U.angleToRad(num(n.params?.deg), n.params?.degUnit);
+            const axisVec = n.params?.useCustomAxis
+                ? U.v(num(n.params?.ax), num(n.params?.ay), num(n.params?.az))
+                : axis;
+            const unit = U.norm(axisVec);
+            if (U.len(unit) > 1e-9 && Number.isFinite(rad) && Math.abs(rad) > 1e-12) {
+                const q = new THREE.Quaternion();
+                q.setFromAxisAngle(new THREE.Vector3(unit.x, unit.y, unit.z), rad);
+                transforms.push({ type: "rot", quat: q });
+            }
+            continue;
+        }
+
+        if (n.kind === "rotate_to") {
+            const axisVec = U.norm(axis);
+            if (U.len(axisVec) <= 1e-9) continue;
+            const p = n.params || {};
+            let to;
+            if (p.mode === "originEnd") {
+                const origin = U.v(num(p.ox), num(p.oy), num(p.oz));
+                const end = U.v(num(p.ex), num(p.ey), num(p.ez));
+                to = U.sub(end, origin);
+            } else {
+                to = U.v(num(p.tox), num(p.toy), num(p.toz));
+            }
+            const toN = U.norm(to);
+            if (U.len(toN) <= 1e-9) continue;
+            const q = new THREE.Quaternion();
+            q.setFromUnitVectors(
+                new THREE.Vector3(axisVec.x, axisVec.y, axisVec.z),
+                new THREE.Vector3(toN.x, toN.y, toN.z)
+            );
+            transforms.push({ type: "rot", quat: q });
+            continue;
+        }
+
+        if (n.kind === "scale") {
+            const f = num(n.params?.factor);
+            if (Number.isFinite(f) && f > 0 && Math.abs(f - 1) > 1e-12) {
+                transforms.push({ type: "scale", factor: f });
+            }
+            continue;
+        }
+
+        if (n.kind === "points_on_each_offset") {
+            transforms.push({
+                type: "translate",
+                x: num(n.params?.offX),
+                y: num(n.params?.offY),
+                z: num(n.params?.offZ)
+            });
+        }
+    }
+    return transforms;
+}
+
+function applyForwardPointTransforms(point, transforms) {
+    if (!point || !transforms || !transforms.length) return point;
+    const v = new THREE.Vector3(point.x, point.y, point.z);
+    for (const t of transforms) {
+        if (t.type === "translate") {
+            v.set(v.x + num(t.x), v.y + num(t.y), v.z + num(t.z));
+        } else if (t.type === "scale") {
+            v.multiplyScalar(t.factor);
+        } else if (t.type === "rot" && t.quat) {
+            v.applyQuaternion(t.quat);
+        }
+    }
+    return { x: v.x, y: v.y, z: v.z };
+}
+
+function pathHasRepeatedContainer(path) {
+    const list = Array.isArray(path) ? path : [];
+    return list.some((step) => step?.node?.kind === "add_with");
+}
+
+function mapLocalPointToWorldPoint(localPoint, path) {
+    if (!localPoint) return null;
+    if (!Array.isArray(path) || !path.length) return localPoint;
+    let point = { x: num(localPoint.x), y: num(localPoint.y), z: num(localPoint.z) };
+    for (let i = path.length - 1; i >= 0; i--) {
+        const step = path[i];
+        if (!step) continue;
+        point = applyForwardPointTransforms(point, collectPostPointForwardTransformsForList(step.parentList, step.index));
+        if (i > 0) point = applyContainerPointOffset(point, path[i - 1].node);
+    }
+    return point;
+}
+
+function collectGeometryCenterPreviewPoints() {
+    if (!geometryCenterPreviewEnabled) return [];
+    const out = [];
+    forEachNode(state.root.children, (node) => {
+        if (!node || !GEOMETRY_CENTER_PREVIEW_KINDS.has(node.kind)) return;
+        const path = findNodePathById(node.id);
+        if (!Array.isArray(path) || !path.length) return;
+        if (pathHasRepeatedContainer(path.slice(0, -1))) return;
+        const params = node.params || {};
+        const localPoint = { x: num(params.ox), y: num(params.oy), z: num(params.oz) };
+        const worldPoint = mapLocalPointToWorldPoint(localPoint, path);
+        if (!worldPoint) return;
+        out.push({
+            x: worldPoint.x,
+            y: worldPoint.y,
+            z: worldPoint.z,
+            nodeId: node.id,
+            kind: node.kind,
+            helperType: "geometry_center"
+        });
+    });
+    return out;
+}
+
 function mapWorldDeltaToLocalDelta(worldDelta, path, pathIndex) {
     if (!worldDelta) return worldDelta;
     if (!Array.isArray(path) || pathIndex < 0 || pathIndex >= path.length) return worldDelta;
@@ -4699,10 +5142,18 @@ function getParticleSnapFromEvent(ev) {
     raycaster.params.Points = raycaster.params.Points || {};
     const hitThreshold = Math.max(0.12, (pointSize || 0.2) * 0.6);
     raycaster.params.Points.threshold = Math.min(hitThreshold, particleSnapRange);
-    const hits = raycaster.intersectObject(pointsObj, false);
+    const pickTargets = [pointsObj];
+    if (geometryCenterPreviewEnabled && geometryCenterObj && geometryCenterObj.visible) {
+        pickTargets.push(geometryCenterObj);
+    }
+    const hits = raycaster.intersectObjects(pickTargets, false);
     if (!hits || hits.length === 0) return null;
-    const idx = hits[0].index;
+    const hit = hits[0];
+    const idx = hit.index;
     if (idx === null || idx === undefined) return null;
+    if (hit.object === geometryCenterObj) {
+        return lastGeometryCenterPoints[idx] || null;
+    }
     if (!lastPoints || !lastPoints[idx]) return null;
     return lastPoints[idx];
 }
@@ -5971,9 +6422,9 @@ function onCanvasDblClick(ev) {
         return p;
     }
 
-    function collectSyntheticVecTargetsForNode(node) {
-        const p = node && node.params;
-        if (!p || typeof p !== "object") return [];
+function collectSyntheticVecTargetsForNode(node) {
+    const p = node && node.params;
+    if (!p || typeof p !== "object") return [];
         const byPrefix = new Map();
         for (const key of Object.keys(p)) {
             const m = String(key).match(/^(.*?)([xyz])$/);
@@ -5988,16 +6439,17 @@ function onCanvasDblClick(ev) {
         for (const prefix of keys) {
             const g = byPrefix.get(prefix) || {};
             if (!g.x || !g.y || !g.z) continue;
-            out.push({
-                obj: p,
-                keys: { x: g.x, y: g.y, z: g.z },
-                inputs: null,
-                label: fallbackPointLabelByPrefix(prefix, node.kind),
-                onChange: () => renderAll()
-            });
-        }
-        return out;
+        out.push({
+            obj: p,
+            keys: { x: g.x, y: g.y, z: g.z },
+            inputs: null,
+            label: fallbackPointLabelByPrefix(prefix, node.kind),
+            onChange: () => renderAll(),
+            nodeId: node.id || null
+        });
     }
+    return out;
+}
 
     function mergePointPickTargets(cardTargets, syntheticTargets) {
         const out = [];
@@ -6048,14 +6500,15 @@ function onCanvasDblClick(ev) {
         const matched = findTargetByKeys(targets, xKey, yKey, zKey);
         if (matched) return matched;
         const p = node.params || (node.params = {});
-        return {
-            obj: p,
-            keys: { x: xKey, y: yKey, z: zKey },
-            inputs: null,
-            label: pointPickGroupLabel(group),
-            onChange: () => renderAll()
-        };
-    }
+    return {
+        obj: p,
+        keys: { x: xKey, y: yKey, z: zKey },
+        inputs: null,
+        label: pointPickGroupLabel(group),
+        onChange: () => renderAll(),
+        nodeId: node.id || null
+    };
+}
 
     function getPointPickGroupPoint(node, group) {
         if (!node || !node.params || !Array.isArray(group) || group.length < 3) return null;
@@ -6191,7 +6644,8 @@ function onCanvasDblClick(ev) {
                 inputs: target.inputs || null,
                 label: target.label || "",
                 onChange: target.onChange,
-                ownerId: ownerId || null
+                ownerId: ownerId || null,
+                nodeId: target.nodeId || ownerId || null
             };
         };
         const out = [];
@@ -6279,7 +6733,8 @@ function onCanvasDblClick(ev) {
             keys: { x, y, z },
             inputs: null,
             label: useEnd ? "end" : "start",
-            onChange: () => renderAll()
+            onChange: () => renderAll(),
+            nodeId
         };
     }
 
@@ -6414,7 +6869,7 @@ function onCanvasDblClick(ev) {
         });
     }
 
-    function startShapePick(type, targetList, label, insertIndex = null) {
+    function startShapePick(type, targetList, label, insertIndex = null, ownerNode = null) {
         hideActionMenu();
         hideQuickSyncPanel();
         if (offsetMode) stopOffsetMode();
@@ -6432,6 +6887,7 @@ function onCanvasDblClick(ev) {
         linePickTargetList = targetList || state.root.children;
         linePickTargetLabel = label || "主Builder";
         linePickInsertIndex = (insertIndex === undefined ? null : insertIndex);
+        linePickTargetOwnerNode = ownerNode || null;
         linePickType = (type === "triangle") ? "triangle" : "line";
         linePickRequiredPoints = (linePickType === "triangle") ? 3 : 2;
         // 记录进入拾取前的聚焦卡片：拾取新增完成后要把聚焦留在原卡片上
@@ -6441,12 +6897,12 @@ function onCanvasDblClick(ev) {
         setLinePickStatus(buildLinePickProgressStatus(getPlaneInfo().label));
     }
 
-    function startLinePick(targetList, label, insertIndex = null) {
-        startShapePick("line", targetList, label, insertIndex);
+    function startLinePick(targetList, label, insertIndex = null, ownerNode = null) {
+        startShapePick("line", targetList, label, insertIndex, ownerNode);
     }
 
-    function startTrianglePick(targetList, label, insertIndex = null) {
-        startShapePick("triangle", targetList, label, insertIndex);
+    function startTrianglePick(targetList, label, insertIndex = null, ownerNode = null) {
+        startShapePick("triangle", targetList, label, insertIndex, ownerNode);
     }
 
     function stopLinePick() {
@@ -6458,6 +6914,7 @@ function onCanvasDblClick(ev) {
         linePickMode = false;
         picked = [];
         linePickInsertIndex = null;
+        linePickTargetOwnerNode = null;
         linePickKeepFocusId = null;
         linePickType = "line";
         linePickRequiredPoints = 2;
@@ -6650,8 +7107,34 @@ function onCanvasDblClick(ev) {
         ]
     };
 
+    const NATIVE_OFFSET_TARGET_KINDS = new Set([
+        "add_circle",
+        "add_discrete_circle_xz",
+        "add_half_circle",
+        "add_radian_center",
+        "add_radian",
+        "add_ball",
+        "add_polygon",
+        "add_polygon_in_circle",
+        "add_round_shape",
+        "add_fourier_series",
+        "add_with"
+    ]);
+
+    function applyNodeOffsetParams(node, delta) {
+        if (!node || !delta) return false;
+        const p = node.params || (node.params = {});
+        p.ox = num(p.ox) + delta.x;
+        p.oy = num(p.oy) + delta.y;
+        p.oz = num(p.oz) + delta.z;
+        return true;
+    }
+
     function applyOffsetDeltaToNode(node, delta) {
         if (!node || !node.kind) return false;
+        if (NATIVE_OFFSET_TARGET_KINDS.has(node.kind)) {
+            return applyNodeOffsetParams(node, delta);
+        }
         if (node.kind === "add_bezier_4") {
             const p = node.params || (node.params = {});
             const keys = ["sx", "sy", "sz", "ex", "ey", "ez"];
@@ -6819,7 +7302,7 @@ function onCanvasDblClick(ev) {
             ? localDeltaRaw
             : worldDelta;
 
-        if (ctx.node.kind === "add_builder" || ctx.node.kind === "with_builder") {
+        if (ctx.node.kind === "add_builder" || ctx.node.kind === "with_builder" || ctx.node.kind === "add_with") {
             const p = ctx.node.params || (ctx.node.params = {});
             p.ox = num(p.ox) + localDelta.x;
             p.oy = num(p.oy) + localDelta.y;
@@ -7131,14 +7614,15 @@ function onCanvasDblClick(ev) {
         let focusInput = null;
         for (const t of targets) {
             if (!t || !t.obj || !t.keys) continue;
-            t.obj[t.keys.x] = p.x;
-            t.obj[t.keys.y] = p.y;
-            t.obj[t.keys.z] = p.z;
+            const localPoint = mapWorldPointToTargetLocalPoint(p, t) || p;
+            t.obj[t.keys.x] = localPoint.x;
+            t.obj[t.keys.y] = localPoint.y;
+            t.obj[t.keys.z] = localPoint.z;
             let dispatched = false;
             if (t.inputs) {
-                t.inputs.x.value = String(p.x);
-                t.inputs.y.value = String(p.y);
-                t.inputs.z.value = String(p.z);
+                t.inputs.x.value = String(localPoint.x);
+                t.inputs.y.value = String(localPoint.y);
+                t.inputs.z.value = String(localPoint.z);
                 if (t.inputs.x && t.inputs.x.isConnected) {
                     try {
                         t.inputs.x.dispatchEvent(new Event("input", { bubbles: true }));
@@ -7397,7 +7881,9 @@ function onCanvasDblClick(ev) {
 
             let nn;
             if (isTriangle) {
-                const a = picked[0], b = picked[1], c = picked[2];
+                const a = mapWorldPointToInsertLocalPoint(picked[0], list, linePickInsertIndex, linePickTargetOwnerNode);
+                const b = mapWorldPointToInsertLocalPoint(picked[1], list, linePickInsertIndex, linePickTargetOwnerNode);
+                const c = mapWorldPointToInsertLocalPoint(picked[2], list, linePickInsertIndex, linePickTargetOwnerNode);
                 nn = makeNode("add_fill_triangle", {
                     params: {
                         p1x: a.x, p1y: a.y, p1z: a.z,
@@ -7407,7 +7893,8 @@ function onCanvasDblClick(ev) {
                     }
                 });
             } else {
-                const a = picked[0], b = picked[1];
+                const a = mapWorldPointToInsertLocalPoint(picked[0], list, linePickInsertIndex, linePickTargetOwnerNode);
+                const b = mapWorldPointToInsertLocalPoint(picked[1], list, linePickInsertIndex, linePickTargetOwnerNode);
                 nn = makeNode("add_line", {
                     params: {sx: a.x, sy: a.y, sz: a.z, ex: b.x, ey: b.y, ez: b.z, count: 30}
                 });
@@ -7466,7 +7953,8 @@ function onCanvasDblClick(ev) {
             const res = evalBuilderWithMeta(state.root.children, U.v(0, 1, 0));
             nodePointSegments = res.segments;
             pointOwnerByIndex = buildPointOwnerByIndex(res.points.length, res.segments);
-            setPoints(res.points);
+            const geometryCenters = collectGeometryCenterPreviewPoints();
+            setPoints(res.points, res.previewPoints || [], geometryCenters);
             // setPoints 内部会根据 focusedNodeId 重新上色
             kotlinDirty = true;
             if (realtimeKotlin) scheduleKotlinOut();

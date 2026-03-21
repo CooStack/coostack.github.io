@@ -3,7 +3,7 @@ export function createBuilderTools(ctx) {
 
     // Eval（同时计算：每个卡片新增的点在最终点数组里的区间，用于高亮）
     function evalBuilderWithMeta(nodes, initialAxis) {
-        const ctxLocal = { points: [], axis: U.clone(initialAxis || U.v(0, 1, 0)) };
+        const ctxLocal = { points: [], axis: U.clone(initialAxis || U.v(0, 1, 0)), previewPoints: [] };
         const segments = new Map(); // nodeId -> {start, end}
 
         function evalList(list, targetCtx, baseOffset) {
@@ -32,6 +32,16 @@ export function createBuilderTools(ctx) {
                     } else {
                         targetCtx.points.push(...child.points);
                     }
+                    if (Array.isArray(child.previewPoints) && child.previewPoints.length) {
+                        if (!Array.isArray(targetCtx.previewPoints)) targetCtx.previewPoints = [];
+                        if (useOffset) {
+                            for (const p of child.previewPoints) {
+                                targetCtx.previewPoints.push({ x: p.x + ox, y: p.y + oy, z: p.z + oz });
+                            }
+                        } else {
+                            targetCtx.previewPoints.push(...child.previewPoints.map((p) => ({ x: p.x, y: p.y, z: p.z })));
+                        }
+                    }
                     const after = targetCtx.points.length;
 
                     if (after > before) segments.set(n.id, { start: before + baseOffset, end: after + baseOffset });
@@ -57,7 +67,7 @@ export function createBuilderTools(ctx) {
         }
 
         evalList(nodes || [], ctxLocal, 0);
-        return { points: ctxLocal.points, segments };
+        return { points: ctxLocal.points, segments, previewPoints: ctxLocal.previewPoints };
     }
 
     // 兼容旧调用：只要点集

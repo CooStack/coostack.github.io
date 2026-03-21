@@ -326,7 +326,7 @@ export function initGlobalShortcuts(ctx = {}) {
                 if (linePickMode && typeof stopLinePick === "function") stopLinePick();
                 if (pointPickMode && typeof stopPointPick === "function") stopPointPick();
                 const pickCtx = (typeof getInsertContextFromFocus === "function") ? getInsertContextFromFocus() : null;
-                if (pickCtx && typeof startLinePick === "function") startLinePick(pickCtx.list, pickCtx.label, pickCtx.insertIndex);
+                if (pickCtx && typeof startLinePick === "function") startLinePick(pickCtx.list, pickCtx.label, pickCtx.insertIndex, pickCtx.ownerNode || null);
             }
             return;
         }
@@ -344,7 +344,7 @@ export function initGlobalShortcuts(ctx = {}) {
                 if (linePickMode && typeof stopLinePick === "function") stopLinePick();
                 if (pointPickMode && typeof stopPointPick === "function") stopPointPick();
                 const pickCtx = (typeof getInsertContextFromFocus === "function") ? getInsertContextFromFocus() : null;
-                if (pickCtx && typeof startTrianglePick === "function") startTrianglePick(pickCtx.list, pickCtx.label, pickCtx.insertIndex);
+                if (pickCtx && typeof startTrianglePick === "function") startTrianglePick(pickCtx.list, pickCtx.label, pickCtx.insertIndex, pickCtx.ownerNode || null);
             }
             return;
         }

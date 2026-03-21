@@ -101,6 +101,64 @@ export function createKindDefs(ctx) {
     function distortionNoise(p, seed) {
         return distortionValueNoise3(p, seed) * 2.0 - 1.0;
     }
+
+    function pointWithOffset(point, ox = 0, oy = 0, oz = 0) {
+        return {
+            x: num(point?.x) + ox,
+            y: num(point?.y) + oy,
+            z: num(point?.z) + oz,
+        };
+    }
+
+    function getOffset(params, prefix = "o") {
+        return {
+            x: num(params?.[`${prefix}x`]),
+            y: num(params?.[`${prefix}y`]),
+            z: num(params?.[`${prefix}z`]),
+        };
+    }
+
+    function hasOffset(offset) {
+        return Math.abs(num(offset?.x)) > 1e-9
+            || Math.abs(num(offset?.y)) > 1e-9
+            || Math.abs(num(offset?.z)) > 1e-9;
+    }
+
+    function pushPoints(ctx, points, offset = null) {
+        const off = offset || { x: 0, y: 0, z: 0 };
+        for (const point of (points || [])) {
+            ctx.points.push(pointWithOffset(point, off.x, off.y, off.z));
+        }
+    }
+
+    function pushPreviewPoints(ctx, points, offset = null) {
+        const list = points || [];
+        if (!list.length) return;
+        if (!Array.isArray(ctx.previewPoints)) ctx.previewPoints = [];
+        const off = offset || { x: 0, y: 0, z: 0 };
+        for (const point of list) {
+            ctx.previewPoints.push(pointWithOffset(point, off.x, off.y, off.z));
+        }
+    }
+
+    function mapAllPointSets(ctx, mapper) {
+        if (Array.isArray(ctx.points)) ctx.points = ctx.points.map(mapper);
+        if (Array.isArray(ctx.previewPoints) && ctx.previewPoints.length) {
+            ctx.previewPoints = ctx.previewPoints.map(mapper);
+        }
+    }
+
+    function mutateAllPointSets(ctx, mutator) {
+        for (const list of [ctx.points, ctx.previewPoints]) {
+            if (!Array.isArray(list) || !list.length) continue;
+            mutator(list);
+        }
+    }
+
+    function clearAllPointSets(ctx) {
+        ctx.points = [];
+        if (Array.isArray(ctx.previewPoints)) ctx.previewPoints = [];
+    }
     // -------------------------
     // KIND
     // -------------------------
@@ -126,7 +184,7 @@ export function createKindDefs(ctx) {
                 const axis = node.params.useCustomAxis
                     ? U.v(num(node.params.ax), num(node.params.ay), num(node.params.az))
                     : ctx.axis;
-                ctx.points = ctx.points.map(p => U.rotateAroundAxis(p, axis, rad));
+                mapAllPointSets(ctx, (point) => U.rotateAroundAxis(point, axis, rad));
             },
             kotlin(node) {
                 const radExpr = U.angleToKotlinRadExpr(num(node.params.deg), node.params.degUnit);
@@ -174,12 +232,15 @@ export function createKindDefs(ctx) {
 
                 // 使用四元数旋转所有点
                 const v = new THREE.Vector3();
-                for (let i = 0; i < ctx.points.length; i++) {
-                    const p = ctx.points[i];
-                    v.set(p.x, p.y, p.z).applyQuaternion(q);  // 使用四元数旋转
-                    p.x = v.x;
-                    p.y = v.y;
-                    p.z = v.z;
+                for (const list of [ctx.points, ctx.previewPoints]) {
+                    if (!Array.isArray(list) || !list.length) continue;
+                    for (let i = 0; i < list.length; i++) {
+                        const p = list[i];
+                        v.set(p.x, p.y, p.z).applyQuaternion(q);  // 使用四元数旋转
+                        p.x = v.x;
+                        p.y = v.y;
+                        p.z = v.z;
+                    }
                 }
             },
             kotlin(node) {
@@ -197,7 +258,7 @@ export function createKindDefs(ctx) {
             apply(ctx, node) {
                 const f = num(node.params.factor);
                 if (f <= 0) return;
-                ctx.points = ctx.points.map(p => U.mul(p, f));
+                mapAllPointSets(ctx, (point) => U.mul(point, f));
             },
             kotlin(node) {
                 return `.scale(${U.fmt(num(node.params.factor))})`;
@@ -253,41 +314,59 @@ export function createKindDefs(ctx) {
         add_circle: {
             title: "addCircle(XZ圆)",
             desc: "添加 XZ 圆周采样点（addCircle）",
-            defaultParams: {r: 2, count: 120},
+            defaultParams: {r: 2, count: 120, ox: 0, oy: 0, oz: 0},
             apply(ctx, node) {
-                ctx.points.push(...U.getCircleXZ(num(node.params.r), int(node.params.count)));
+                pushPoints(ctx, U.getCircleXZ(num(node.params.r), int(node.params.count)), getOffset(node.params));
             },
             kotlin(node) {
-                return `.addCircle(${U.fmt(num(node.params.r))}, ${int(node.params.count)})`;
+                const offset = getOffset(node.params);
+                const r = U.fmt(num(node.params.r));
+                const count = int(node.params.count);
+                if (hasOffset(offset)) return `.addCircle(${relExpr(offset.x, offset.y, offset.z)}, ${r}, ${count})`;
+                return `.addCircle(${r}, ${count})`;
             }
         },
 
         add_discrete_circle_xz: {
             title: "addDiscreteCircleXZ(离散圆环)",
             desc: "添加离散圆环点（addDiscreteCircleXZ）",
-            defaultParams: {r: 2, count: 120, discrete: 0.4, seedEnabled: false, seed: 1},
+            defaultParams: {r: 2, count: 120, discrete: 0.4, seedEnabled: false, seed: 1, ox: 0, oy: 0, oz: 0},
             apply(ctx, node) {
                 const seed = node.params.seedEnabled ? int(node.params.seed) : null;
-                ctx.points.push(...U.getDiscreteCircleXZ(num(node.params.r), int(node.params.count), num(node.params.discrete), seed));
+                pushPoints(
+                    ctx,
+                    U.getDiscreteCircleXZ(num(node.params.r), int(node.params.count), num(node.params.discrete), seed),
+                    getOffset(node.params)
+                );
             },
             kotlin(node) {
-                return `.addDiscreteCircleXZ(${U.fmt(num(node.params.r))}, ${int(node.params.count)}, ${U.fmt(num(node.params.discrete))})`;
+                const offset = getOffset(node.params);
+                const r = U.fmt(num(node.params.r));
+                const count = int(node.params.count);
+                const discrete = U.fmt(num(node.params.discrete));
+                if (hasOffset(offset)) return `.addDiscreteCircleXZ(${relExpr(offset.x, offset.y, offset.z)}, ${r}, ${count}, ${discrete})`;
+                return `.addDiscreteCircleXZ(${r}, ${count}, ${discrete})`;
             }
         },
 
         add_half_circle: {
             title: "addHalfCircle(半圆XZ)",
             desc: "添加半圆弧点（addHalfCircle）",
-            defaultParams: {r: 2, count: 80, useRotate: false, rotateDeg: 0, rotateDegUnit: "deg"},
+            defaultParams: {r: 2, count: 80, useRotate: false, rotateDeg: 0, rotateDegUnit: "deg", ox: 0, oy: 0, oz: 0},
             apply(ctx, node) {
                 const rot = node.params.useRotate ? U.angleToRad(num(node.params.rotateDeg), node.params.rotateDegUnit) : 0;
-                ctx.points.push(...U.getHalfCircleXZ(num(node.params.r), int(node.params.count), rot));
+                pushPoints(ctx, U.getHalfCircleXZ(num(node.params.r), int(node.params.count), rot), getOffset(node.params));
             },
             kotlin(node) {
+                const offset = getOffset(node.params);
                 const r = U.fmt(num(node.params.r));
                 const c = int(node.params.count);
-                if (!node.params.useRotate) return `.addHalfCircle(${r}, ${c})`;
+                if (!node.params.useRotate) {
+                    if (hasOffset(offset)) return `.addHalfCircle(${relExpr(offset.x, offset.y, offset.z)}, ${r}, ${c})`;
+                    return `.addHalfCircle(${r}, ${c})`;
+                }
                 const radExpr = U.angleToKotlinRadExpr(num(node.params.rotateDeg), node.params.rotateDegUnit);
+                if (hasOffset(offset)) return `.addHalfCircle(${relExpr(offset.x, offset.y, offset.z)}, ${r}, ${c}, ${radExpr})`;
                 return `.addHalfCircle(${r}, ${c}, ${radExpr})`;
             }
         },
@@ -295,18 +374,23 @@ export function createKindDefs(ctx) {
         add_radian_center: {
             title: "addRadianCenter(弧线中心XZ)",
             desc: "添加居中弧线点（addRadianCenter）",
-            defaultParams: {r: 2, count: 80, radianDeg: 120, radianDegUnit: "deg", useRotate: false, rotateDeg: 0, rotateDegUnit: "deg"},
+            defaultParams: {r: 2, count: 80, radianDeg: 120, radianDegUnit: "deg", useRotate: false, rotateDeg: 0, rotateDegUnit: "deg", ox: 0, oy: 0, oz: 0},
             apply(ctx, node) {
                 const radian = U.angleToRad(num(node.params.radianDeg), node.params.radianDegUnit);
                 const rot = node.params.useRotate ? U.angleToRad(num(node.params.rotateDeg), node.params.rotateDegUnit) : 0;
-                ctx.points.push(...U.getRadianXZCenter(num(node.params.r), int(node.params.count), radian, rot));
+                pushPoints(ctx, U.getRadianXZCenter(num(node.params.r), int(node.params.count), radian, rot), getOffset(node.params));
             },
             kotlin(node) {
+                const offset = getOffset(node.params);
                 const r = U.fmt(num(node.params.r));
                 const c = int(node.params.count);
                 const radianExpr = U.angleToKotlinRadExpr(num(node.params.radianDeg), node.params.radianDegUnit);
-                if (!node.params.useRotate) return `.addRadianCenter(${r}, ${c}, ${radianExpr})`;
+                if (!node.params.useRotate) {
+                    if (hasOffset(offset)) return `.addRadianCenter(${relExpr(offset.x, offset.y, offset.z)}, ${r}, ${c}, ${radianExpr})`;
+                    return `.addRadianCenter(${r}, ${c}, ${radianExpr})`;
+                }
                 const rotExpr = U.angleToKotlinRadExpr(num(node.params.rotateDeg), node.params.rotateDegUnit);
+                if (hasOffset(offset)) return `.addRadianCenter(${relExpr(offset.x, offset.y, offset.z)}, ${r}, ${c}, ${radianExpr}, ${rotExpr})`;
                 return `.addRadianCenter(${r}, ${c}, ${radianExpr}, ${rotExpr})`;
             }
         },
@@ -314,20 +398,25 @@ export function createKindDefs(ctx) {
         add_radian: {
             title: "addRadian(弧线XZ)",
             desc: "添加起止角弧线点（addRadian）",
-            defaultParams: {r: 2, count: 80, startDeg: 0, startDegUnit: "deg", endDeg: 120, endDegUnit: "deg", useRotate: false, rotateDeg: 0, rotateDegUnit: "deg"},
+            defaultParams: {r: 2, count: 80, startDeg: 0, startDegUnit: "deg", endDeg: 120, endDegUnit: "deg", useRotate: false, rotateDeg: 0, rotateDegUnit: "deg", ox: 0, oy: 0, oz: 0},
             apply(ctx, node) {
                 const sr = U.angleToRad(num(node.params.startDeg), node.params.startDegUnit);
                 const er = U.angleToRad(num(node.params.endDeg), node.params.endDegUnit);
                 const rot = node.params.useRotate ? U.angleToRad(num(node.params.rotateDeg), node.params.rotateDegUnit) : 0;
-                ctx.points.push(...U.getRadianXZ(num(node.params.r), int(node.params.count), sr, er, rot));
+                pushPoints(ctx, U.getRadianXZ(num(node.params.r), int(node.params.count), sr, er, rot), getOffset(node.params));
             },
             kotlin(node) {
+                const offset = getOffset(node.params);
                 const r = U.fmt(num(node.params.r));
                 const c = int(node.params.count);
                 const srExpr = U.angleToKotlinRadExpr(num(node.params.startDeg), node.params.startDegUnit);
                 const erExpr = U.angleToKotlinRadExpr(num(node.params.endDeg), node.params.endDegUnit);
-                if (!node.params.useRotate) return `.addRadian(${r}, ${c}, ${srExpr}, ${erExpr})`;
+                if (!node.params.useRotate) {
+                    if (hasOffset(offset)) return `.addRadian(${relExpr(offset.x, offset.y, offset.z)}, ${r}, ${c}, ${srExpr}, ${erExpr})`;
+                    return `.addRadian(${r}, ${c}, ${srExpr}, ${erExpr})`;
+                }
                 const rotExpr = U.angleToKotlinRadExpr(num(node.params.rotateDeg), node.params.rotateDegUnit);
+                if (hasOffset(offset)) return `.addRadian(${relExpr(offset.x, offset.y, offset.z)}, ${r}, ${c}, ${srExpr}, ${erExpr}, ${rotExpr})`;
                 return `.addRadian(${r}, ${c}, ${srExpr}, ${erExpr}, ${rotExpr})`;
             }
         },
@@ -335,36 +424,58 @@ export function createKindDefs(ctx) {
         add_ball: {
             title: "addBall(球面点集)",
             desc: "添加球面点集（addBall / countPow）",
-            defaultParams: {r: 2, countPow: 24},
+            defaultParams: {r: 2, countPow: 24, ox: 0, oy: 0, oz: 0},
             apply(ctx, node) {
-                ctx.points.push(...U.getBallLocations(num(node.params.r), int(node.params.countPow)));
+                pushPoints(ctx, U.getBallLocations(num(node.params.r), int(node.params.countPow)), getOffset(node.params));
             },
             kotlin(node) {
-                return `.addBall(${U.fmt(num(node.params.r))}, ${int(node.params.countPow)})`;
+                const offset = getOffset(node.params);
+                const r = U.fmt(num(node.params.r));
+                const countPow = int(node.params.countPow);
+                if (hasOffset(offset)) return `.addBall(${relExpr(offset.x, offset.y, offset.z)}, ${r}, ${countPow})`;
+                return `.addBall(${r}, ${countPow})`;
             }
         },
 
         add_polygon: {
             title: "addPolygon(正多边形边点)",
             desc: "添加正多边形边点（addPolygon）",
-            defaultParams: {r: 2, sideCount: 5, count: 30},
+            defaultParams: {r: 2, sideCount: 5, count: 30, ox: 0, oy: 0, oz: 0},
             apply(ctx, node) {
-                ctx.points.push(...U.getPolygonInCircleLocations(int(node.params.sideCount) || 3, int(node.params.count) || 1, num(node.params.r)));
+                pushPoints(
+                    ctx,
+                    U.getPolygonInCircleLocations(int(node.params.sideCount) || 3, int(node.params.count) || 1, num(node.params.r)),
+                    getOffset(node.params)
+                );
             },
             kotlin(node) {
-                return `.addPolygonInCircle(${int(node.params.sideCount)}, ${int(node.params.count)}, ${U.fmt(num(node.params.r))})`;
+                const offset = getOffset(node.params);
+                const sideCount = int(node.params.sideCount);
+                const count = int(node.params.count);
+                const r = U.fmt(num(node.params.r));
+                if (hasOffset(offset)) return `.addPolygonInCircle(${relExpr(offset.x, offset.y, offset.z)}, ${sideCount}, ${count}, ${r})`;
+                return `.addPolygonInCircle(${sideCount}, ${count}, ${r})`;
             }
         },
 
         add_polygon_in_circle: {
             title: "addPolygonInCircle(内接正多边形边点)",
             desc: "添加内接多边形边点（addPolygonInCircle）",
-            defaultParams: {n: 5, edgeCount: 30, r: 2},
+            defaultParams: {n: 5, edgeCount: 30, r: 2, ox: 0, oy: 0, oz: 0},
             apply(ctx, node) {
-                ctx.points.push(...U.getPolygonInCircleLocations(int(node.params.n) || 3, int(node.params.edgeCount) || 1, num(node.params.r)));
+                pushPoints(
+                    ctx,
+                    U.getPolygonInCircleLocations(int(node.params.n) || 3, int(node.params.edgeCount) || 1, num(node.params.r)),
+                    getOffset(node.params)
+                );
             },
             kotlin(node) {
-                return `.addPolygonInCircle(${int(node.params.n)}, ${int(node.params.edgeCount)}, ${U.fmt(num(node.params.r))})`;
+                const offset = getOffset(node.params);
+                const n = int(node.params.n);
+                const edgeCount = int(node.params.edgeCount);
+                const r = U.fmt(num(node.params.r));
+                if (hasOffset(offset)) return `.addPolygonInCircle(${relExpr(offset.x, offset.y, offset.z)}, ${n}, ${edgeCount}, ${r})`;
+                return `.addPolygonInCircle(${n}, ${edgeCount}, ${r})`;
             }
         },
 
@@ -377,20 +488,39 @@ export function createKindDefs(ctx) {
                 mode: "fixed",
                 preCircleCount: 60,
                 minCircleCount: 20,
-                maxCircleCount: 120
+                maxCircleCount: 120,
+                ox: 0,
+                oy: 0,
+                oz: 0
             },
             apply(ctx, node) {
+                const offset = getOffset(node.params);
                 if (node.params.mode === "range") {
-                    ctx.points.push(...U.getRoundScapeLocationsRange(num(node.params.r), num(node.params.step), int(node.params.minCircleCount), int(node.params.maxCircleCount)));
+                    pushPoints(
+                        ctx,
+                        U.getRoundScapeLocationsRange(num(node.params.r), num(node.params.step), int(node.params.minCircleCount), int(node.params.maxCircleCount)),
+                        offset
+                    );
                 } else {
-                    ctx.points.push(...U.getRoundScapeLocations(num(node.params.r), num(node.params.step), int(node.params.preCircleCount)));
+                    pushPoints(
+                        ctx,
+                        U.getRoundScapeLocations(num(node.params.r), num(node.params.step), int(node.params.preCircleCount)),
+                        offset
+                    );
                 }
             },
             kotlin(node) {
+                const offset = getOffset(node.params);
                 const r = U.fmt(num(node.params.r));
                 const step = U.fmt(num(node.params.step));
                 if (node.params.mode === "range") {
+                    if (hasOffset(offset)) {
+                        return `.addRoundShape(${relExpr(offset.x, offset.y, offset.z)}, ${r}, ${step}, ${int(node.params.minCircleCount)}, ${int(node.params.maxCircleCount)})`;
+                    }
                     return `.addRoundShape(${r}, ${step}, ${int(node.params.minCircleCount)}, ${int(node.params.maxCircleCount)})`;
+                }
+                if (hasOffset(offset)) {
+                    return `.addRoundShape(${relExpr(offset.x, offset.y, offset.z)}, ${r}, ${step}, ${int(node.params.preCircleCount)})`;
                 }
                 return `.addRoundShape(${r}, ${step}, ${int(node.params.preCircleCount)})`;
             }
@@ -617,7 +747,9 @@ export function createKindDefs(ctx) {
                     offsetLenMin: node.params.lenMinEnabled ? num(node.params.offsetLenMin) : null,
                     offsetLenMax: node.params.lenMaxEnabled ? num(node.params.offsetLenMax) : null,
                 };
-                U.applyNoiseOffset(ctx.points, num(node.params.noiseX), num(node.params.noiseY), num(node.params.noiseZ), opts);
+                mutateAllPointSets(ctx, (list) => {
+                    U.applyNoiseOffset(list, num(node.params.noiseX), num(node.params.noiseY), num(node.params.noiseZ), opts);
+                });
             },
             kotlin(node) {
                 const nx = U.fmt(num(node.params.noiseX));
@@ -641,7 +773,7 @@ export function createKindDefs(ctx) {
             defaultParams: {offX: 0.2, offY: 0, offZ: 0, kotlinMode: "direct3"},
             apply(ctx, node) {
                 const dx = num(node.params.offX), dy = num(node.params.offY), dz = num(node.params.offZ);
-                ctx.points = ctx.points.map(p => ({x: p.x + dx, y: p.y + dy, z: p.z + dz}));
+                mapAllPointSets(ctx, (point) => ({ x: point.x + dx, y: point.y + dy, z: point.z + dz }));
             },
             kotlin(node, emitCtx) {
                 const dx = U.fmt(num(node.params.offX));
@@ -662,7 +794,20 @@ export function createKindDefs(ctx) {
         add_with: {
             title: "addWith(旋转重复)",
             desc: "按旋转重复子 Builder（addWith）",
-            defaultParams: {r: 3, c: 6, rotateToCenter: true, rotateReverse: false, rotateOffsetEnabled: false, rox: 0, roy: 0, roz: 0},
+            defaultParams: {
+                r: 3,
+                c: 6,
+                rotateToCenter: true,
+                rotateReverse: false,
+                rotateOffsetEnabled: false,
+                rox: 0,
+                roy: 0,
+                roz: 0,
+                ox: 0,
+                oy: 0,
+                oz: 0,
+                previewBeforeOffsetEnabled: false
+            },
             apply(ctx, node) {
                 const r = num(node.params.r);
                 const c = int(node.params.c);
@@ -672,7 +817,17 @@ export function createKindDefs(ctx) {
                 const rox = num(node.params.rox);
                 const roy = num(node.params.roy);
                 const roz = num(node.params.roz);
+                const offset = getOffset(node.params);
                 const verts = U.getPolygonInCircleVertices(c, r);
+
+                if (node.params.previewBeforeOffsetEnabled) {
+                    const previewCtx = { points: [], axis: U.v(0, 1, 0), previewPoints: [] };
+                    for (const ch of (node.children || [])) {
+                        const def = KIND[ch.kind];
+                        if (def && def.apply) def.apply(previewCtx, ch);
+                    }
+                    pushPreviewPoints(ctx, previewCtx.points || [], offset);
+                }
 
                 for (const it of verts) {
                     const childCtx = {points: [], axis: U.v(0, 1, 0)};
@@ -689,7 +844,11 @@ export function createKindDefs(ctx) {
                         rotatePointsToPointUpright(pts, rotateTarget, childCtx.axis);
                     }
                     for (const p of pts) {
-                        ctx.points.push({x: p.x + base.x, y: p.y + base.y, z: p.z + base.z});
+                        ctx.points.push({
+                            x: p.x + base.x + offset.x,
+                            y: p.y + base.y + offset.y,
+                            z: p.z + base.z + offset.z
+                        });
                     }
                 }
             },
@@ -702,6 +861,7 @@ export function createKindDefs(ctx) {
                 const rox = U.fmt(num(node.params.rox));
                 const roy = U.fmt(num(node.params.roy));
                 const roz = U.fmt(num(node.params.roz));
+                const offset = getOffset(node.params);
                 const lines = [];
                 lines.push(`${indent}.addWith {`);
                 lines.push(`${indent}  val res = arrayListOf<RelativeLocation>()`);
@@ -728,6 +888,9 @@ export function createKindDefs(ctx) {
                 lines.push(`${indent}                    .createWithoutClone()`);
                 lines.push(`${indent}            )`);
                 lines.push(`${indent}        }`);
+                if (hasOffset(offset)) {
+                    lines.push(`${indent}  res.onEach { rel -> rel.add(${relExpr(offset.x, offset.y, offset.z)}) }`);
+                }
                 lines.push(`${indent}  res`);
                 lines.push(`${indent}}`);
                 return lines;
@@ -770,7 +933,7 @@ export function createKindDefs(ctx) {
         add_fourier_series: {
             title: "addFourierSeries(傅里叶级数)",
             desc: "添加傅里叶级数曲线点（addFourierSeries）",
-            defaultParams: {count: 360, scale: 1.0, folded: false},
+            defaultParams: {count: 360, scale: 1.0, folded: false, ox: 0, oy: 0, oz: 0},
             apply(ctx, node) {
                 const terms = (node.terms || []).map(t => ({
                     r: num(t.r),
@@ -779,11 +942,13 @@ export function createKindDefs(ctx) {
                     startAngleUnit: t.startAngleUnit
                 }));
                 const pts = U.buildFourierSeries(terms, int(node.params.count), num(node.params.scale));
-                ctx.points.push(...pts);
+                pushPoints(ctx, pts, getOffset(node.params));
             },
             kotlin(node, emitCtx, indent) {
                 const lines = [];
-                lines.push(`${indent}.addFourierSeries(`);
+                const offset = getOffset(node.params);
+                if (hasOffset(offset)) lines.push(`${indent}.addFourierSeries(${relExpr(offset.x, offset.y, offset.z)},`);
+                else lines.push(`${indent}.addFourierSeries(`);
                 lines.push(`${indent}  FourierSeriesBuilder()`);
                 lines.push(`${indent}    .count(${int(node.params.count)})`);
                 lines.push(`${indent}    .scale(${U.fmt(num(node.params.scale))})`);
@@ -802,7 +967,7 @@ export function createKindDefs(ctx) {
             desc: "清空当前点集（clear）",
             defaultParams: {},
             apply(ctx) {
-                ctx.points = [];
+                clearAllPointSets(ctx);
             },
             kotlin() {
                 return `.clear()`;

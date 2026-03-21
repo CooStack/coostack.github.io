@@ -257,7 +257,7 @@ export function initTopbarAndBoot(ctx = {}) {
             if (getLinePickMode()) stopLinePick();
             if (getPointPickMode()) stopPointPick();
             const pickCtx = getInsertContextFromFocus();
-            startLinePick(pickCtx.list, pickCtx.label, pickCtx.insertIndex);
+            startLinePick(pickCtx.list, pickCtx.label, pickCtx.insertIndex, pickCtx.ownerNode || null);
         }
     });
 
@@ -268,7 +268,7 @@ export function initTopbarAndBoot(ctx = {}) {
             if (getLinePickMode()) stopLinePick();
             if (getPointPickMode()) stopPointPick();
             const pickCtx = getInsertContextFromFocus();
-            startTrianglePick(pickCtx.list, pickCtx.label, pickCtx.insertIndex);
+            startTrianglePick(pickCtx.list, pickCtx.label, pickCtx.insertIndex, pickCtx.ownerNode || null);
         }
     });
 

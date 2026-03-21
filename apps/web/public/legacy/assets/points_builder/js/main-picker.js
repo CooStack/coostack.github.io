@@ -278,7 +278,12 @@ export function createPickerModule(ctx = {}) {
             if (nodeCtx && nodeCtx.node) {
                 if (typeof isBuilderContainerKind === "function" && isBuilderContainerKind(nodeCtx.node.kind)) {
                     if (!Array.isArray(nodeCtx.node.children)) nodeCtx.node.children = [];
-                    return { list: nodeCtx.node.children, insertIndex: nodeCtx.node.children.length, label: "子Builder", ownerNode: nodeCtx.node };
+                    return {
+                        list: nodeCtx.node.children,
+                        insertIndex: nodeCtx.node.children.length,
+                        label: "子Builder",
+                        ownerNode: nodeCtx.node
+                    };
                 }
                 // 普通卡片：插到它后面（同一列表）
                 const label = nodeCtx.parentNode ? "子Builder" : "主Builder";
