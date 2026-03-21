@@ -1,15 +1,15 @@
 import * as THREE from "three";
 import {OrbitControls} from "three/addons/controls/OrbitControls.js";
-import { createCardInputs, initCardSystem } from "./cards.js?v=20260321_3";
+import { createCardInputs, initCardSystem } from "./cards.js?v=20260321_4";
 import { initFilterSystem } from "./filters.js?v=20260321_1";
-import { initHotkeysSystem } from "./hotkeys.js?v=20260316_1";
-import { createKindDefs } from "./kinds.js?v=20260321_1";
+import { initHotkeysSystem } from "./hotkeys.js?v=20260321_5";
+import { createKindDefs } from "./kinds.js?v=20260321_2";
 import { createBuilderTools } from "./builder.js?v=20260321_1";
 import { initLayoutSystem } from "./layout.js";
 import { createNodeHelpers } from "./nodes.js?v=20260316_1";
 import { toggleFullscreen } from "./viewer.js";
 import { createPickerModule } from "./main-picker.js";
-import { initGlobalShortcuts } from "./main-shortcuts.js?v=20260316_1";
+import { initGlobalShortcuts } from "./main-shortcuts.js?v=20260321_2";
 import { initTopbarAndBoot } from "./main-topbar-boot.js";
 import {
     sanitizeFileBase,
@@ -2576,7 +2576,7 @@ function initPointsBuilderMain() {
     let pointSize = 0.5;     // ✅ 粒子大小（PointsMaterial.size）
     // line pick state (可指向主/任意子 builder)
     let linePickMode = false;
-    let linePickType = "line"; // line | triangle
+    let linePickType = "line"; // line | dotted_line | triangle
     let linePickRequiredPoints = 2;
     let picked = [];
     let bezierCreateState = null;
@@ -4281,6 +4281,18 @@ function initPointsBuilderMain() {
         }
     }
 
+    function appendPreviewDottedSegment(out, a, b, totalCount = 30, dottedCount = 4, emptyStep = 0.3) {
+        const points = U.getDottedLineLocations(
+            U.v(b.x - a.x, b.y - a.y, b.z - a.z),
+            totalCount,
+            dottedCount,
+            emptyStep
+        ) || [];
+        for (const p of points) {
+            out.push(a.x + p.x, a.y + p.y, a.z + p.z);
+        }
+    }
+
     function updateLinePickPreview(targetPoint) {
         if (!linePickMode || !targetPoint || !picked || !picked.length) {
             hideLinePickPreview();
@@ -4321,7 +4333,11 @@ function initPointsBuilderMain() {
                 hideLinePickPreview();
                 return;
             }
-            appendPreviewSegment(previewVerts, a, targetPoint, 30);
+            if (linePickType === "dotted_line") {
+                appendPreviewDottedSegment(previewVerts, a, targetPoint, 30, 4, 0.3);
+            } else {
+                appendPreviewSegment(previewVerts, a, targetPoint, 30);
+            }
         }
 
         const count = Math.max(0, Math.trunc(previewVerts.length / 3));
@@ -6296,6 +6312,10 @@ function onCanvasDblClick(ev) {
         return linePickType === "triangle";
     }
 
+    function isDottedLinePickType() {
+        return linePickType === "dotted_line";
+    }
+
     function buildLinePickProgressStatus(infoLabel) {
         const label = infoLabel || getPlaneInfo().label;
         const targetLabel = linePickTargetLabel || "主Builder";
@@ -6312,6 +6332,13 @@ function onCanvasDblClick(ev) {
                 return `${label} 三角拾取[${targetLabel}]：已选第 2 点：(${U.fmt(b.x)}, ${U.fmt(b.y)}, ${U.fmt(b.z)})，再点第 3 点`;
             }
             return `${label} 三角拾取[${targetLabel}]：请点第 1 点`;
+        }
+        if (isDottedLinePickType()) {
+            if (!picked || picked.length <= 0) {
+                return `${label} 虚线拾取[${targetLabel}]：请点第 1 点`;
+            }
+            const a = picked[0];
+            return `${label} 虚线拾取[${targetLabel}]：已选第 1 点：(${U.fmt(a.x)}, ${U.fmt(a.y)}, ${U.fmt(a.z)})，再点第 2 点`;
         }
         if (!picked || picked.length <= 0) {
             return `${label} 拾取模式[${targetLabel}]：请点第 1 点`;
@@ -6888,7 +6915,7 @@ function collectSyntheticVecTargetsForNode(node) {
         linePickTargetLabel = label || "主Builder";
         linePickInsertIndex = (insertIndex === undefined ? null : insertIndex);
         linePickTargetOwnerNode = ownerNode || null;
-        linePickType = (type === "triangle") ? "triangle" : "line";
+        linePickType = (type === "triangle" || type === "dotted_line") ? type : "line";
         linePickRequiredPoints = (linePickType === "triangle") ? 3 : 2;
         // 记录进入拾取前的聚焦卡片：拾取新增完成后要把聚焦留在原卡片上
         linePickKeepFocusId = focusedNodeId;
@@ -6899,6 +6926,10 @@ function collectSyntheticVecTargetsForNode(node) {
 
     function startLinePick(targetList, label, insertIndex = null, ownerNode = null) {
         startShapePick("line", targetList, label, insertIndex, ownerNode);
+    }
+
+    function startDottedLinePick(targetList, label, insertIndex = null, ownerNode = null) {
+        startShapePick("dotted_line", targetList, label, insertIndex, ownerNode);
     }
 
     function startTrianglePick(targetList, label, insertIndex = null, ownerNode = null) {
@@ -7895,9 +7926,21 @@ function collectSyntheticVecTargetsForNode(node) {
             } else {
                 const a = mapWorldPointToInsertLocalPoint(picked[0], list, linePickInsertIndex, linePickTargetOwnerNode);
                 const b = mapWorldPointToInsertLocalPoint(picked[1], list, linePickInsertIndex, linePickTargetOwnerNode);
-                nn = makeNode("add_line", {
-                    params: {sx: a.x, sy: a.y, sz: a.z, ex: b.x, ey: b.y, ez: b.z, count: 30}
-                });
+                if (linePickType === "dotted_line") {
+                    nn = makeNode("add_dotted_line", {
+                        params: {
+                            ox: a.x, oy: a.y, oz: a.z,
+                            tx: b.x - a.x, ty: b.y - a.y, tz: b.z - a.z,
+                            totalCount: 30,
+                            dottedCount: 4,
+                            emptyStep: 0.3
+                        }
+                    });
+                } else {
+                    nn = makeNode("add_line", {
+                        params: {sx: a.x, sy: a.y, sz: a.z, ex: b.x, ey: b.y, ez: b.z, count: 30}
+                    });
+                }
             }
 
             // ✅ 支持插入位置：如果是从 addBuilder 或某张卡片后进入拾取，则按 insertIndex 插入并可连续插入
@@ -7911,6 +7954,8 @@ function collectSyntheticVecTargetsForNode(node) {
 
             if (isTriangle) {
                 setLinePickStatus(`${getPlaneInfo().label} 三角拾取[${linePickTargetLabel}]：已添加 addFillTriangle（可在卡片里改 sampler）`);
+            } else if (linePickType === "dotted_line") {
+                setLinePickStatus(`${getPlaneInfo().label} 虚线拾取[${linePickTargetLabel}]：已添加 addDottedLine（可在卡片里改 totalCount / dottedCount / emptyStep）`);
             } else {
                 setLinePickStatus(`${getPlaneInfo().label} 拾取模式[${linePickTargetLabel}]：已添加 addLine（可在卡片里改 count）`);
             }
@@ -8196,6 +8241,7 @@ function collectSyntheticVecTargetsForNode(node) {
         getPointPickMode: () => pointPickMode,
         stopPointPick,
         startLinePick,
+        startDottedLinePick,
         startTrianglePick,
         startPointPick,
         startBezierCreate,

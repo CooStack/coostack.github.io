@@ -45,6 +45,7 @@ export function initGlobalShortcuts(ctx = {}) {
         getPointPickMode,
         stopPointPick,
         startLinePick,
+        startDottedLinePick,
         startTrianglePick,
         startPointPick,
         startBezierCreate,
@@ -327,6 +328,24 @@ export function initGlobalShortcuts(ctx = {}) {
                 if (pointPickMode && typeof stopPointPick === "function") stopPointPick();
                 const pickCtx = (typeof getInsertContextFromFocus === "function") ? getInsertContextFromFocus() : null;
                 if (pickCtx && typeof startLinePick === "function") startLinePick(pickCtx.list, pickCtx.label, pickCtx.insertIndex, pickCtx.ownerNode || null);
+            }
+            return;
+        }
+
+        if (hotkeyMatchEvent(e, hotkeys.actions.pickDottedLineXZ)) {
+            e.preventDefault();
+            if (modal && !modal.classList.contains("hidden") && typeof hideModal === "function") hideModal();
+            if (hkModal && !hkModal.classList.contains("hidden") && typeof hideHotkeysModal === "function") hideHotkeysModal();
+            if (settingsModal && !settingsModal.classList.contains("hidden") && typeof hideSettingsModal === "function") hideSettingsModal();
+            if (rotateMode && typeof stopRotateMode === "function") stopRotateMode({ silent: true });
+
+            if (linePickMode && linePickType === "dotted_line") {
+                if (typeof stopLinePick === "function") stopLinePick();
+            } else {
+                if (linePickMode && typeof stopLinePick === "function") stopLinePick();
+                if (pointPickMode && typeof stopPointPick === "function") stopPointPick();
+                const pickCtx = (typeof getInsertContextFromFocus === "function") ? getInsertContextFromFocus() : null;
+                if (pickCtx && typeof startDottedLinePick === "function") startDottedLinePick(pickCtx.list, pickCtx.label, pickCtx.insertIndex, pickCtx.ownerNode || null);
             }
             return;
         }

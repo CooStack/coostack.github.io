@@ -108,6 +108,12 @@ export function createCardInputs(ctx) {
                 end: "线段终点坐标。",
                 count: "线段采样点数量。"
             },
+            add_dotted_line: {
+                target: "从 offset 原点指向 target 的终点向量。",
+                totalCount: "虚线总采样点数量。",
+                dottedCount: "虚线段数量。",
+                emptyStep: "每段虚线之间的空隙长度。"
+            },
             add_fill_triangle: {
                 p1: "三角形第一个顶点。",
                 p2: "三角形第二个顶点。",
@@ -117,6 +123,12 @@ export function createCardInputs(ctx) {
             add_circle: {
                 r: "圆半径。",
                 count: "圆周采样点数量。"
+            },
+            add_dotted_circle: {
+                r: "虚线圆环半径。",
+                totalCount: "虚线圆环总采样点数量。",
+                dottedCount: "虚线段数量。",
+                emptyStep: "每段虚线之间的空隙弧度（弧度制）。"
             },
             add_discrete_circle_xz: {
                 r: "圆环半径。",
@@ -3039,6 +3051,23 @@ export function initCardSystem(ctx = {}) {
                 })));
                 break;
 
+            case "add_dotted_line":
+                body.appendChild(row("target", makeVec3Editor(p, "t", rebuildPreviewAndKotlin, "target")));
+                body.appendChild(row("totalCount", inputNum(p.totalCount, v => {
+                    p.totalCount = v;
+                    rebuildPreviewAndKotlin();
+                })));
+                body.appendChild(row("dottedCount", inputNum(p.dottedCount, v => {
+                    p.dottedCount = v;
+                    rebuildPreviewAndKotlin();
+                })));
+                body.appendChild(row("emptyStep", inputNum(p.emptyStep, v => {
+                    p.emptyStep = v;
+                    rebuildPreviewAndKotlin();
+                })));
+                body.appendChild(row("offset", makeVec3Editor(p, "o", rebuildPreviewAndKotlin, "offset")));
+                break;
+
             case "add_fill_triangle":
                 body.appendChild(row("p1", makeVec3Editor(p, "p1", rebuildPreviewAndKotlin, "p1")));
                 body.appendChild(row("p2", makeVec3Editor(p, "p2", rebuildPreviewAndKotlin, "p2")));
@@ -3121,6 +3150,26 @@ export function initCardSystem(ctx = {}) {
                 })));
                 body.appendChild(row("r", inputNum(p.r, v => {
                     p.r = v;
+                    rebuildPreviewAndKotlin();
+                })));
+                body.appendChild(row("offset", makeVec3Editor(p, "o", rebuildPreviewAndKotlin, "offset")));
+                break;
+
+            case "add_dotted_circle":
+                body.appendChild(row("r", inputNum(p.r, v => {
+                    p.r = v;
+                    rebuildPreviewAndKotlin();
+                })));
+                body.appendChild(row("totalCount", inputNum(p.totalCount, v => {
+                    p.totalCount = v;
+                    rebuildPreviewAndKotlin();
+                })));
+                body.appendChild(row("dottedCount", inputNum(p.dottedCount, v => {
+                    p.dottedCount = v;
+                    rebuildPreviewAndKotlin();
+                })));
+                body.appendChild(row("emptyStep", inputNum(p.emptyStep, v => {
+                    p.emptyStep = v;
                     rebuildPreviewAndKotlin();
                 })));
                 body.appendChild(row("offset", makeVec3Editor(p, "o", rebuildPreviewAndKotlin, "offset")));

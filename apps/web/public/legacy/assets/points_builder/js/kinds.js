@@ -291,6 +291,41 @@ export function createKindDefs(ctx) {
             }
         },
 
+        add_dotted_line: {
+            title: "addDottedLine(虚线)",
+            desc: "添加虚线线段采样点（addDottedLine）",
+            defaultParams: {
+                tx: 3, ty: 0, tz: 3,
+                totalCount: 30,
+                dottedCount: 4,
+                emptyStep: 0.3,
+                ox: 0, oy: 0, oz: 0
+            },
+            apply(ctx, node) {
+                pushPoints(
+                    ctx,
+                    U.getDottedLineLocations(
+                        U.v(num(node.params.tx), num(node.params.ty), num(node.params.tz)),
+                        int(node.params.totalCount),
+                        int(node.params.dottedCount),
+                        num(node.params.emptyStep)
+                    ),
+                    getOffset(node.params)
+                );
+            },
+            kotlin(node) {
+                const offset = getOffset(node.params);
+                const target = relExpr(node.params.tx, node.params.ty, node.params.tz);
+                const totalCount = int(node.params.totalCount);
+                const dottedCount = int(node.params.dottedCount);
+                const emptyStep = U.fmt(num(node.params.emptyStep));
+                if (hasOffset(offset)) {
+                    return `.addDottedLine(${relExpr(offset.x, offset.y, offset.z)}, ${target}, ${totalCount}, ${dottedCount}, ${emptyStep})`;
+                }
+                return `.addDottedLine(${target}, ${totalCount}, ${dottedCount}, ${emptyStep})`;
+            }
+        },
+
         add_fill_triangle: {
             title: "addFillTriangle(三点填充三角形)",
             desc: "添加三角形填充点（addFillTriangle）",
@@ -324,6 +359,35 @@ export function createKindDefs(ctx) {
                 const count = int(node.params.count);
                 if (hasOffset(offset)) return `.addCircle(${relExpr(offset.x, offset.y, offset.z)}, ${r}, ${count})`;
                 return `.addCircle(${r}, ${count})`;
+            }
+        },
+
+        add_dotted_circle: {
+            title: "addDottedCircle(XZ虚线圆环)",
+            desc: "添加 XZ 虚线圆环点（addDottedCircle）",
+            defaultParams: {r: 2, totalCount: 120, dottedCount: 8, emptyStep: 0.2, ox: 0, oy: 0, oz: 0},
+            apply(ctx, node) {
+                pushPoints(
+                    ctx,
+                    U.getDottedCircleXZ(
+                        num(node.params.r),
+                        int(node.params.totalCount),
+                        int(node.params.dottedCount),
+                        num(node.params.emptyStep)
+                    ),
+                    getOffset(node.params)
+                );
+            },
+            kotlin(node) {
+                const offset = getOffset(node.params);
+                const r = U.fmt(num(node.params.r));
+                const totalCount = int(node.params.totalCount);
+                const dottedCount = int(node.params.dottedCount);
+                const emptyStep = U.fmt(num(node.params.emptyStep));
+                if (hasOffset(offset)) {
+                    return `.addDottedCircle(${relExpr(offset.x, offset.y, offset.z)}, ${r}, ${totalCount}, ${dottedCount}, ${emptyStep})`;
+                }
+                return `.addDottedCircle(${r}, ${totalCount}, ${dottedCount}, ${emptyStep})`;
             }
         },
 

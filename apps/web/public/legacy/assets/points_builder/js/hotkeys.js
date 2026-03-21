@@ -35,10 +35,11 @@ export function initHotkeysSystem(ctx) {
     const HOTKEY_STORAGE_KEY = "pb_hotkeys_v2";
 
     const DEFAULT_HOTKEYS = {
-        version: 7,
+        version: 8,
         actions: {
             openPicker: "KeyN",
             pickLineXZ: "KeyQ",
+            pickDottedLineXZ: "Shift+KeyQ",
             pickTriangle: "KeyT",
             pickPoint: "KeyE",
             pickBezierStartEnd: "KeyW",
@@ -245,6 +246,7 @@ export function initHotkeysSystem(ctx) {
     const HOTKEY_ACTION_DEFS = [
         {id: "openPicker", title: "打开「添加元素」", desc: "默认 N"},
         {id: "pickLineXZ", title: "进入 XZ 拾取直线", desc: "默认 Q"},
+        {id: "pickDottedLineXZ", title: "进入 XZ 拾取虚线直线", desc: "默认 Shift+Q"},
         {id: "pickTriangle", title: "进入 XZ 拾取三角形", desc: "默认 T"},
         {id: "pickPoint", title: "点拾取（填充当前输入）", desc: "默认 E"},
         {id: "pickBezierStartEnd", title: "进入 Bezier 创建流", desc: "默认 W"},

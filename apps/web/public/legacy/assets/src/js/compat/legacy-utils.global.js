@@ -162,6 +162,51 @@
             return res;
         },
 
+        getDottedLineLocations(target, totalCount, dottedCount, emptyStep) {
+            const total = Math.max(1, Math.trunc(Number(totalCount) || 1));
+            const dotted = Math.max(1, Math.trunc(Number(dottedCount) || 1));
+            const gap = Math.max(0, Number(emptyStep) || 0);
+            const end = Utils.v(target.x, target.y, target.z);
+            const length = Utils.len(end);
+            if (length <= 1e-12) return [Utils.v(0, 0, 0)];
+
+            const direction = Utils.mul(end, 1 / length);
+            const gapCount = Math.max(0, dotted - 1);
+            const usableLength = Math.max(0, length - gap * gapCount);
+            if (usableLength <= 1e-12) return [Utils.v(0, 0, 0)];
+
+            const segmentLength = usableLength / dotted;
+            const segments = [];
+            let cursor = 0;
+            for (let i = 0; i < dotted; i++) {
+                const start = cursor;
+                const endPos = Math.min(length, start + segmentLength);
+                if (endPos > start + 1e-12) segments.push({ start, end: endPos });
+                cursor = endPos + gap;
+            }
+            if (!segments.length) return [Utils.v(0, 0, 0)];
+
+            const solidLength = segments.reduce((sum, seg) => sum + Math.max(0, seg.end - seg.start), 0);
+            if (solidLength <= 1e-12) return [Utils.v(0, 0, 0)];
+
+            const res = [];
+            for (let i = 0; i < total; i++) {
+                const distOnSolid = total <= 1 ? 0 : (solidLength * i) / (total - 1);
+                let remain = distOnSolid;
+                let dist = segments[segments.length - 1].end;
+                for (const seg of segments) {
+                    const segLen = Math.max(0, seg.end - seg.start);
+                    if (remain <= segLen || seg === segments[segments.length - 1]) {
+                        dist = seg.start + Math.min(segLen, Math.max(0, remain));
+                        break;
+                    }
+                    remain -= segLen;
+                }
+                res.push(Utils.mul(direction, dist));
+            }
+            return res;
+        },
+
         fillTriangle(p1, p2, p3, sampler) {
             const a = Utils.v(p1.x, p1.y, p1.z);
             const b = Utils.v(p2.x, p2.y, p2.z);
@@ -217,6 +262,47 @@
             for (let i = 0; i < c; i++) {
                 res.push({ x: rr * Math.cos(a), y: 0, z: rr * Math.sin(a) });
                 a += step;
+            }
+            return res;
+        },
+
+        getDottedCircleXZ(r, totalCount, dottedCount, emptyStep) {
+            const total = Math.max(1, Math.trunc(Number(totalCount) || 1));
+            const dotted = Math.max(1, Math.trunc(Number(dottedCount) || 1));
+            const rr = Number(r) || 0;
+            const gap = Math.max(0, Number(emptyStep) || 0);
+            const full = 2 * Math.PI;
+            const usableArc = Math.max(0, full - gap * dotted);
+            if (usableArc <= 1e-12 || Math.abs(rr) <= 1e-12) return [];
+
+            const dashArc = usableArc / dotted;
+            const segments = [];
+            let angle = 0;
+            for (let i = 0; i < dotted; i++) {
+                const start = angle;
+                const end = start + dashArc;
+                if (end > start + 1e-12) segments.push({ start, end });
+                angle = end + gap;
+            }
+            if (!segments.length) return [];
+
+            const solidArc = segments.reduce((sum, seg) => sum + Math.max(0, seg.end - seg.start), 0);
+            if (solidArc <= 1e-12) return [];
+
+            const res = [];
+            for (let i = 0; i < total; i++) {
+                const arcOnSolid = solidArc * (i / total);
+                let remain = arcOnSolid;
+                let rad = segments[segments.length - 1].start;
+                for (const seg of segments) {
+                    const segLen = Math.max(0, seg.end - seg.start);
+                    if (remain <= segLen || seg === segments[segments.length - 1]) {
+                        rad = seg.start + Math.min(segLen, Math.max(0, remain));
+                        break;
+                    }
+                    remain -= segLen;
+                }
+                res.push({ x: rr * Math.cos(rad), y: 0, z: rr * Math.sin(rad) });
             }
             return res;
         },
