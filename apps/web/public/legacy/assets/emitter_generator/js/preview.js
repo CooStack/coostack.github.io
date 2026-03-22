@@ -319,6 +319,7 @@ export function initPreview(ctx = {}) {
             canvas: renderer.domElement,
             showToast,
             resolvePointFromEvent: resolveDistancePointFromEvent,
+            projectPointToClient: (point) => worldToClientPoint(point?.x, point?.y, point?.z),
             attachContextMenu: true,
             shouldOpenContextMenu: shouldOpenDistanceContextMenu,
         });

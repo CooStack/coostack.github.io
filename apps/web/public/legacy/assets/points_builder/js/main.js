@@ -3597,7 +3597,8 @@ function initPointsBuilderMain() {
             title: "PointsBuilder 测距",
             canvas: renderer.domElement,
             showToast,
-            resolvePointFromEvent: (ev) => pickMeasurePointAtClientPoint(ev.clientX, ev.clientY),
+            resolvePointFromEvent: resolveMeasurePointFromEvent,
+            projectPointToClient: (point) => projectPointToClient(point),
             attachContextMenu: false,
             isBlocked: () => !!(linePickMode || pointPickMode || offsetMode || rotateMode || bezierCreateState || bezierHandleDrag)
         });
@@ -5516,6 +5517,33 @@ function pickMeasurePointAtClientPoint(clientX, clientY, radiusPx = 12) {
     }
     if (bestDist <= radiusPx * radiusPx) return best;
     return null;
+}
+
+function resolveMeasurePointFromEvent(ev) {
+    if (!ev) return null;
+    const picked = pickMeasurePointAtClientPoint(ev.clientX, ev.clientY);
+    if (picked) {
+        return {
+            point: picked,
+            clientX: ev.clientX,
+            clientY: ev.clientY,
+            source: picked.label || "point"
+        };
+    }
+    const mapped = getMappedPointFromEvent(ev);
+    if (!mapped) return null;
+    const point = {
+        x: num(mapped?.x),
+        y: num(mapped?.y),
+        z: num(mapped?.z),
+        label: `grid:${getPlaneInfo().label}`
+    };
+    return {
+        point,
+        clientX: ev.clientX,
+        clientY: ev.clientY,
+        source: "grid"
+    };
 }
 
 function collectViewBoxSelection(rect) {

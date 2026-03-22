@@ -1,4 +1,6 @@
 const STYLE_ID = "preview-distance-tool-style";
+const CONTEXT_DRAG_PX = 6;
+const CONTEXT_SUPPRESS_MS = 260;
 
 function ensureStyle() {
     if (document.getElementById(STYLE_ID)) return;
@@ -79,6 +81,49 @@ function ensureStyle() {
     color: #ffffff;
     font-weight: 600;
 }
+.preview-distance-tool-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 10040;
+    pointer-events: none;
+}
+.preview-distance-tool-overlay.hidden {
+    display: none;
+}
+.preview-distance-tool-overlay-svg {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    overflow: visible;
+}
+.preview-distance-tool-overlay-line {
+    stroke: rgba(99, 195, 255, 0.92);
+    stroke-width: 2;
+    stroke-linecap: round;
+    filter: drop-shadow(0 0 6px rgba(99, 195, 255, 0.35));
+}
+.preview-distance-tool-marker {
+    position: absolute;
+    width: 12px;
+    height: 12px;
+    margin-left: -6px;
+    margin-top: -6px;
+    border-radius: 999px;
+    border: 2px solid rgba(255,255,255,0.92);
+    box-shadow: 0 0 0 3px rgba(11, 16, 23, 0.36), 0 0 12px rgba(99, 195, 255, 0.42);
+    background: rgba(99, 195, 255, 0.95);
+}
+.preview-distance-tool-marker.anchor {
+    background: rgba(255, 196, 77, 0.96);
+    border-color: rgba(255,255,255,0.98);
+}
+.preview-distance-tool-marker.origin {
+    background: rgba(255, 110, 177, 0.96);
+}
+.preview-distance-tool-marker.hidden {
+    display: none;
+}
 `;
     document.head.appendChild(style);
 }
@@ -109,10 +154,25 @@ function clonePoint(point) {
     };
 }
 
+function normalizeResolvedPoint(value, fallbackClientX = NaN, fallbackClientY = NaN) {
+    if (!value) return null;
+    const rawPoint = (value.point && typeof value.point === "object") ? value.point : value;
+    const point = clonePoint(rawPoint);
+    if (!point) return null;
+    return {
+        point,
+        clientX: Number.isFinite(value.clientX) ? Number(value.clientX) : fallbackClientX,
+        clientY: Number.isFinite(value.clientY) ? Number(value.clientY) : fallbackClientY,
+        label: String(value.label || point.label || ""),
+        source: String(value.source || "")
+    };
+}
+
 function formatPoint(point, prefix = "") {
     if (!point) return `${prefix}(?, ?, ?)`;
     const lead = prefix ? `${prefix}` : "";
-    return `${lead}(${formatNum(point.x)}, ${formatNum(point.y)}, ${formatNum(point.z)})`;
+    const label = point.label ? ` ${point.label}` : "";
+    return `${lead}${label}(${formatNum(point.x)}, ${formatNum(point.y)}, ${formatNum(point.z)})`;
 }
 
 function computeOriginResult(point) {
@@ -168,6 +228,14 @@ function createButton(text, extraClass = "") {
     return button;
 }
 
+function isRightLike(ev) {
+    return !!ev && (
+        ev.button === 2
+        || ((ev.buttons & 2) === 2)
+        || (ev.button === 0 && ev.ctrlKey)
+    );
+}
+
 export function createPreviewDistanceTool(options = {}) {
     ensureStyle();
 
@@ -176,6 +244,7 @@ export function createPreviewDistanceTool(options = {}) {
         canvas = null,
         showToast = null,
         resolvePointFromEvent = null,
+        projectPointToClient = null,
         attachContextMenu = true,
         shouldOpenContextMenu = null,
         isBlocked = null
@@ -197,11 +266,16 @@ export function createPreviewDistanceTool(options = {}) {
     const state = {
         visible: false,
         mode: "",
-        anchorPoint: null,
-        hoverPoint: null,
+        anchorResolved: null,
+        hoverResolved: null,
+        lockedResolved: null,
         lockedResult: null,
         hoverResult: null
     };
+
+    let overlayRaf = 0;
+    let rightGesture = null;
+    let suppressContextMenuUntil = 0;
 
     const panel = document.createElement("div");
     panel.className = "preview-distance-tool hidden";
@@ -215,10 +289,26 @@ export function createPreviewDistanceTool(options = {}) {
     `;
     document.body.appendChild(panel);
 
+    const overlay = document.createElement("div");
+    overlay.className = "preview-distance-tool-overlay hidden";
+    overlay.innerHTML = `
+        <svg class="preview-distance-tool-overlay-svg" aria-hidden="true">
+            <line class="preview-distance-tool-overlay-line" x1="0" y1="0" x2="0" y2="0"></line>
+        </svg>
+        <div class="preview-distance-tool-marker anchor hidden" aria-hidden="true"></div>
+        <div class="preview-distance-tool-marker current hidden" aria-hidden="true"></div>
+        <div class="preview-distance-tool-marker origin hidden" aria-hidden="true"></div>
+    `;
+    document.body.appendChild(overlay);
+
     const titleEl = panel.querySelector(".preview-distance-tool-title");
     const closeBtn = panel.querySelector(".preview-distance-tool-close");
     const actionsEl = panel.querySelector(".preview-distance-tool-actions");
     const bodyEl = panel.querySelector(".preview-distance-tool-body");
+    const overlayLine = overlay.querySelector(".preview-distance-tool-overlay-line");
+    const anchorMarker = overlay.querySelector(".preview-distance-tool-marker.anchor");
+    const currentMarker = overlay.querySelector(".preview-distance-tool-marker.current");
+    const originMarker = overlay.querySelector(".preview-distance-tool-marker.origin");
     titleEl.textContent = title;
 
     const originBtn = createButton("点到原点");
@@ -253,18 +343,18 @@ export function createPreviewDistanceTool(options = {}) {
     function updateBody() {
         const lines = [];
         if (!state.mode) {
-            lines.push({ text: "选择模式后，移动鼠标到吸附点即可查看距离。", strong: false });
-            lines.push({ text: "热键或右键菜单可随时重新打开。", strong: false });
+            lines.push({ text: "选择模式后，移动鼠标到吸附点或网格点即可查看距离。", strong: false });
+            lines.push({ text: "左键锁定当前结果，热键或右键菜单可重新打开。", strong: false });
         } else if (state.mode === "origin") {
             lines.push({ text: "模式：点到原点", strong: true });
-            lines.push({ text: "移动鼠标查看当前吸附点到原点的距离，左键可锁定结果。", strong: false });
-        } else if (!state.anchorPoint) {
+            lines.push({ text: "移动鼠标查看当前点到原点的距离，左键可锁定结果。", strong: false });
+        } else if (!state.anchorResolved) {
             lines.push({ text: "模式：A-B 距离", strong: true });
             lines.push({ text: "左键先选择 A 点。", strong: false });
-            if (state.hoverPoint) lines.push({ text: `当前吸附 ${formatPoint(state.hoverPoint, "P")}`, strong: false });
+            if (state.hoverResolved?.point) lines.push({ text: `当前吸附 ${formatPoint(state.hoverResolved.point, "P")}`, strong: false });
         } else {
-            lines.push({ text: `模式：A-B 距离 | ${formatPoint(state.anchorPoint, "A")}`, strong: true });
-            lines.push({ text: "移动鼠标查看 A 到当前吸附点的距离，左键确认 B 点。", strong: false });
+            lines.push({ text: `模式：A-B 距离 | ${formatPoint(state.anchorResolved.point, "A")}`, strong: true });
+            lines.push({ text: "移动鼠标查看 A 到当前点的距离，左键确认 B 点。", strong: false });
         }
 
         const displayResult = state.lockedResult || state.hoverResult;
@@ -281,10 +371,104 @@ export function createPreviewDistanceTool(options = {}) {
         }
     }
 
+    function resolveScreenPoint(resolved) {
+        if (!resolved?.point) return null;
+        if (typeof projectPointToClient === "function") {
+            try {
+                const projected = projectPointToClient(resolved.point);
+                if (projected && Number.isFinite(projected.x) && Number.isFinite(projected.y)) {
+                    return { x: Number(projected.x), y: Number(projected.y) };
+                }
+            } catch {
+            }
+        }
+        if (Number.isFinite(resolved.clientX) && Number.isFinite(resolved.clientY)) {
+            return { x: Number(resolved.clientX), y: Number(resolved.clientY) };
+        }
+        return null;
+    }
+
+    function positionMarker(marker, screen) {
+        if (!marker) return;
+        if (!screen || !Number.isFinite(screen.x) || !Number.isFinite(screen.y)) {
+            marker.classList.add("hidden");
+            return;
+        }
+        marker.style.left = `${Math.round(screen.x)}px`;
+        marker.style.top = `${Math.round(screen.y)}px`;
+        marker.classList.remove("hidden");
+    }
+
+    function buildOriginResolved() {
+        return {
+            point: { x: 0, y: 0, z: 0, label: "origin" },
+            clientX: NaN,
+            clientY: NaN,
+            label: "origin",
+            source: "origin"
+        };
+    }
+
+    function updateOverlay() {
+        const active = state.visible && !!state.mode;
+        overlay.classList.toggle("hidden", !active);
+        if (!active) {
+            anchorMarker.classList.add("hidden");
+            currentMarker.classList.add("hidden");
+            originMarker.classList.add("hidden");
+            overlayLine.style.display = "none";
+            return;
+        }
+
+        const fromResolved = state.mode === "origin" ? buildOriginResolved() : state.anchorResolved;
+        const toResolved = state.lockedResolved || state.hoverResolved;
+        const fromScreen = resolveScreenPoint(fromResolved);
+        const toScreen = resolveScreenPoint(toResolved);
+
+        if (state.mode === "origin") {
+            positionMarker(originMarker, fromScreen);
+            anchorMarker.classList.add("hidden");
+        } else {
+            originMarker.classList.add("hidden");
+            positionMarker(anchorMarker, fromScreen);
+        }
+        positionMarker(currentMarker, toScreen);
+
+        if (fromScreen && toScreen) {
+            overlayLine.style.display = "";
+            overlayLine.setAttribute("x1", `${fromScreen.x}`);
+            overlayLine.setAttribute("y1", `${fromScreen.y}`);
+            overlayLine.setAttribute("x2", `${toScreen.x}`);
+            overlayLine.setAttribute("y2", `${toScreen.y}`);
+        } else {
+            overlayLine.style.display = "none";
+        }
+    }
+
+    function stopOverlayLoop() {
+        if (!overlayRaf) return;
+        cancelAnimationFrame(overlayRaf);
+        overlayRaf = 0;
+    }
+
+    function tickOverlay() {
+        overlayRaf = 0;
+        updateOverlay();
+        if (state.visible) overlayRaf = requestAnimationFrame(tickOverlay);
+    }
+
+    function ensureOverlayLoop() {
+        if (overlayRaf || !state.visible) return;
+        overlayRaf = requestAnimationFrame(tickOverlay);
+    }
+
     function render() {
         panel.classList.toggle("hidden", !state.visible);
         setActiveButton();
         updateBody();
+        updateOverlay();
+        if (state.visible && state.mode) ensureOverlayLoop();
+        else stopOverlayLoop();
     }
 
     function placePanel(clientX, clientY) {
@@ -312,8 +496,9 @@ export function createPreviewDistanceTool(options = {}) {
 
     function clearState(keepVisible = true) {
         state.mode = "";
-        state.anchorPoint = null;
-        state.hoverPoint = null;
+        state.anchorResolved = null;
+        state.hoverResolved = null;
+        state.lockedResolved = null;
         state.lockedResult = null;
         state.hoverResult = null;
         state.visible = keepVisible ? state.visible : false;
@@ -323,8 +508,9 @@ export function createPreviewDistanceTool(options = {}) {
     function startMode(mode, anchor = null) {
         const wasHidden = !state.visible;
         state.mode = (mode === "ab") ? "ab" : "origin";
-        state.anchorPoint = null;
-        state.hoverPoint = null;
+        state.anchorResolved = null;
+        state.hoverResolved = null;
+        state.lockedResolved = null;
         state.lockedResult = null;
         state.hoverResult = null;
         state.visible = true;
@@ -351,7 +537,11 @@ export function createPreviewDistanceTool(options = {}) {
 
     function resolvePoint(ev) {
         try {
-            return clonePoint(resolvePointFromEvent(ev));
+            return normalizeResolvedPoint(
+                resolvePointFromEvent(ev),
+                Number(ev?.clientX),
+                Number(ev?.clientY)
+            );
         } catch {
             return null;
         }
@@ -360,17 +550,17 @@ export function createPreviewDistanceTool(options = {}) {
     function updateHover(ev) {
         if (!state.visible || !state.mode || isToolBlocked()) return;
         if (ev && ev.buttons) return;
-        const point = resolvePoint(ev);
-        state.hoverPoint = point;
-        if (!point) {
+        const resolved = resolvePoint(ev);
+        state.hoverResolved = resolved;
+        if (!resolved?.point) {
             state.hoverResult = null;
             render();
             return;
         }
         if (state.mode === "origin") {
-            state.hoverResult = computeOriginResult(point);
-        } else if (state.anchorPoint) {
-            state.hoverResult = computeAbResult(state.anchorPoint, point);
+            state.hoverResult = computeOriginResult(resolved.point);
+        } else if (state.anchorResolved?.point) {
+            state.hoverResult = computeAbResult(state.anchorResolved.point, resolved.point);
         } else {
             state.hoverResult = null;
         }
@@ -379,33 +569,84 @@ export function createPreviewDistanceTool(options = {}) {
 
     function confirmPoint(ev) {
         if (!state.visible || !state.mode || isToolBlocked()) return false;
-        const point = resolvePoint(ev);
-        if (!point) {
+        const resolved = resolvePoint(ev);
+        if (!resolved?.point) {
             emitToast("当前没有吸附到可测距的点", "info");
             return false;
         }
         if (state.mode === "origin") {
-            state.lockedResult = computeOriginResult(point);
+            state.lockedResolved = resolved;
+            state.lockedResult = computeOriginResult(resolved.point);
+            state.hoverResolved = resolved;
             state.hoverResult = state.lockedResult;
             render();
             return true;
         }
-        if (!state.anchorPoint) {
-            state.anchorPoint = point;
-            state.hoverResult = null;
+        if (!state.anchorResolved?.point) {
+            state.anchorResolved = resolved;
+            state.hoverResolved = null;
+            state.lockedResolved = null;
             state.lockedResult = null;
+            state.hoverResult = null;
             render();
             emitToast("已记录 A 点", "info");
             return true;
         }
-        state.lockedResult = computeAbResult(state.anchorPoint, point);
+        state.lockedResolved = resolved;
+        state.lockedResult = computeAbResult(state.anchorResolved.point, resolved.point);
+        state.hoverResolved = resolved;
         state.hoverResult = state.lockedResult;
         render();
         return true;
     }
 
+    function updateRightGesture(ev) {
+        if (!rightGesture || !ev) return;
+        if (rightGesture.pointerId !== undefined && ev.pointerId !== rightGesture.pointerId) return;
+        const dx = Number(ev.clientX) - rightGesture.startX;
+        const dy = Number(ev.clientY) - rightGesture.startY;
+        if (Math.hypot(dx, dy) > CONTEXT_DRAG_PX) rightGesture.moved = true;
+    }
+
+    function handlePointerDown(ev) {
+        if (!attachContextMenu || !isRightLike(ev)) return;
+        rightGesture = {
+            pointerId: ev.pointerId,
+            startX: Number(ev.clientX) || 0,
+            startY: Number(ev.clientY) || 0,
+            moved: false
+        };
+    }
+
+    function handlePointerMoveGesture(ev) {
+        updateRightGesture(ev);
+    }
+
+    function handlePointerUp(ev) {
+        if (!attachContextMenu || !rightGesture || !ev) return;
+        if (rightGesture.pointerId !== undefined && ev.pointerId !== rightGesture.pointerId) return;
+        updateRightGesture(ev);
+        if (rightGesture.moved) {
+            suppressContextMenuUntil = performance.now() + CONTEXT_SUPPRESS_MS;
+        }
+        rightGesture = null;
+    }
+
+    function shouldSuppressContextMenuByGesture(ev) {
+        if (!attachContextMenu) return false;
+        if (performance.now() < suppressContextMenuUntil) return true;
+        if (!rightGesture || !ev) return false;
+        if (rightGesture.pointerId !== undefined && ev.pointerId !== rightGesture.pointerId) return false;
+        updateRightGesture(ev);
+        return !!rightGesture.moved;
+    }
+
     function handleContextMenu(ev) {
         if (!attachContextMenu || isToolBlocked()) return;
+        if (shouldSuppressContextMenuByGesture(ev)) {
+            ev.preventDefault();
+            return;
+        }
         if (typeof shouldOpenContextMenu === "function") {
             let next = false;
             try {
@@ -419,16 +660,22 @@ export function createPreviewDistanceTool(options = {}) {
         openPanelAt(ev.clientX + 8, ev.clientY + 8);
     }
 
+    const handleCanvasClick = (ev) => {
+        if (ev.button !== undefined && ev.button !== 0) return;
+        confirmPoint(ev);
+    };
+
     originBtn.addEventListener("click", () => startMode("origin"));
     abBtn.addEventListener("click", () => startMode("ab"));
     clearBtn.addEventListener("click", () => clearState(true));
     closeBtn.addEventListener("click", () => closePanel());
     panel.addEventListener("contextmenu", (ev) => ev.preventDefault());
+    canvas.addEventListener("pointerdown", handlePointerDown, true);
+    canvas.addEventListener("pointermove", handlePointerMoveGesture, true);
     canvas.addEventListener("pointermove", updateHover, true);
-    canvas.addEventListener("click", (ev) => {
-        if (ev.button !== undefined && ev.button !== 0) return;
-        confirmPoint(ev);
-    }, true);
+    canvas.addEventListener("pointerup", handlePointerUp, true);
+    canvas.addEventListener("pointercancel", handlePointerUp, true);
+    canvas.addEventListener("click", handleCanvasClick, true);
     canvas.addEventListener("contextmenu", handleContextMenu, true);
 
     render();
@@ -442,9 +689,16 @@ export function createPreviewDistanceTool(options = {}) {
         startMode,
         clear: () => clearState(true),
         destroy() {
+            stopOverlayLoop();
+            canvas.removeEventListener("pointerdown", handlePointerDown, true);
+            canvas.removeEventListener("pointermove", handlePointerMoveGesture, true);
             canvas.removeEventListener("pointermove", updateHover, true);
+            canvas.removeEventListener("pointerup", handlePointerUp, true);
+            canvas.removeEventListener("pointercancel", handlePointerUp, true);
+            canvas.removeEventListener("click", handleCanvasClick, true);
             canvas.removeEventListener("contextmenu", handleContextMenu, true);
             if (panel.parentElement) panel.parentElement.removeChild(panel);
+            if (overlay.parentElement) overlay.parentElement.removeChild(overlay);
         }
     };
 }

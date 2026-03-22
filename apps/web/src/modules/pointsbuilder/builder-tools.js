@@ -12,42 +12,89 @@ import {
 import { POINTS_NODE_KINDS, BUILDER_CONTAINER_KINDS } from './kinds.js';
 import { getProjectNodes } from './node-helpers.js';
 
+function clonePointWithOffset(point, offset = v(0, 0, 0)) {
+  return {
+    ...point,
+    x: num(point?.x) + num(offset?.x),
+    y: num(point?.y) + num(offset?.y),
+    z: num(point?.z) + num(offset?.z)
+  };
+}
+
+function buildPointOwnerByIndex(totalCount, segments) {
+  const owners = new Array(totalCount || 0);
+  if (!(segments instanceof Map)) return owners;
+  for (const [id, segment] of segments.entries()) {
+    if (!segment) continue;
+    const start = Math.max(0, segment.start | 0);
+    const end = Math.min(owners.length, segment.end | 0);
+    for (let index = start; index < end; index += 1) owners[index] = id;
+  }
+  return owners;
+}
+
 function evaluateAddBuilder(node, evaluateChildren) {
   const child = evaluateChildren(node.children || []);
   const offset = v(num(node.params?.ox), num(node.params?.oy), num(node.params?.oz));
   return {
-    points: child.points.map((point) => add(point, offset)),
-    segments: child.segments
+    points: (child.points || []).map((point) => clonePointWithOffset(point, offset)),
+    previewPoints: Array.isArray(child.previewPoints)
+      ? child.previewPoints.map((point) => clonePointWithOffset(point, offset))
+      : [],
+    segments: child.segments instanceof Map ? child.segments : new Map()
   };
 }
 
 function evaluateAddWith(node, evaluateChildren) {
+  const child = evaluateChildren(node.children || []);
+  const childPoints = Array.isArray(child.points) ? child.points : [];
+  const offset = v(num(node.params?.ox), num(node.params?.oy), num(node.params?.oz));
   const radius = num(node.params?.r, 3);
   const count = Math.max(1, int(node.params?.c, 6));
   const rotateToCenter = Boolean(node.params?.rotateToCenter);
   const rotateReverse = Boolean(node.params?.rotateReverse);
   const rotateOffsetEnabled = Boolean(node.params?.rotateOffsetEnabled);
   const rotateOffset = v(num(node.params?.rox), num(node.params?.roy), num(node.params?.roz));
-  const vertices = getPolygonInCircleVertices(count, radius);
+  const vertices = getPolygonInCircleVertices(count, radius) || [];
   const points = [];
+  const previewPoints = [];
 
-  vertices.forEach((vertex) => {
-    const child = evaluateChildren(node.children || []);
-    let childPoints = child.points.map((point) => clone(point));
-
-    if (rotateToCenter) {
-      const targetPoint = rotateOffsetEnabled ? rotateOffset : v(0, 0, 0);
-      const rotateTarget = rotateReverse ? add(targetPoint, vertex) : v(targetPoint.x - vertex.x, targetPoint.y - vertex.y, targetPoint.z - vertex.z);
-      childPoints = rotatePointsToPointUpright(childPoints, rotateTarget, child.axis || v(0, 1, 0));
+  if (node.params?.previewBeforeOffsetEnabled && childPoints.length) {
+    const previewOwners = buildPointOwnerByIndex(childPoints.length, child.segments);
+    for (let index = 0; index < childPoints.length; index += 1) {
+      const point = childPoints[index];
+      previewPoints.push({
+        x: num(point?.x) + offset.x,
+        y: num(point?.y) + offset.y,
+        z: num(point?.z) + offset.z,
+        nodeId: previewOwners[index] || null,
+        previewParentId: node.id || null,
+        previewSource: 'add_with'
+      });
     }
+  }
 
-    childPoints.forEach((point) => {
-      points.push(add(point, vertex));
-    });
-  });
+  for (const vertex of vertices) {
+    const repeatedPoints = childPoints.map((point) => clone(point));
+    if (rotateToCenter && repeatedPoints.length) {
+      const targetPoint = rotateOffsetEnabled ? rotateOffset : v(0, 0, 0);
+      const rotateTarget = rotateReverse
+        ? add(targetPoint, vertex)
+        : v(targetPoint.x - vertex.x, targetPoint.y - vertex.y, targetPoint.z - vertex.z);
+      rotatePointsToPointUpright(repeatedPoints, rotateTarget, child.axis || v(0, 1, 0));
+    }
+    for (const point of repeatedPoints) {
+      points.push({
+        x: num(point?.x) + num(vertex?.x) + offset.x,
+        y: num(point?.y) + num(vertex?.y) + offset.y,
+        z: num(point?.z) + num(vertex?.z) + offset.z
+      });
+    }
+  }
 
   return {
     points,
+    previewPoints,
     segments: new Map()
   };
 }
@@ -64,12 +111,19 @@ function emitNodeKotlinLines(node, emitCtx, indent, emitNodesKotlinLines) {
 export function evalBuilderWithMeta(nodes, initialAxis = v(0, 1, 0)) {
   const context = {
     points: [],
-    axis: clone(initialAxis)
+    axis: clone(initialAxis),
+    previewPoints: []
   };
   const segments = new Map();
 
   function evaluateChildren(children) {
     return evalBuilderWithMeta(children, v(0, 1, 0));
+  }
+
+  function appendPreviewPoints(targetContext, previewPoints) {
+    if (!Array.isArray(previewPoints) || !previewPoints.length) return;
+    if (!Array.isArray(targetContext.previewPoints)) targetContext.previewPoints = [];
+    targetContext.previewPoints.push(...previewPoints.map((point) => ({ ...point })));
   }
 
   function evalList(list, targetContext, baseOffset) {
@@ -82,12 +136,24 @@ export function evalBuilderWithMeta(nodes, initialAxis = v(0, 1, 0)) {
           ? evaluateAddBuilder(node, evaluateChildren)
           : evaluateAddWith(node, evaluateChildren);
 
-        targetContext.points.push(...childResult.points);
+        targetContext.points.push(...(childResult.points || []));
+        appendPreviewPoints(targetContext, childResult.previewPoints);
+
         if (targetContext.points.length > beforeLength) {
           segments.set(node.id, {
             start: beforeLength + baseOffset,
             end: targetContext.points.length + baseOffset
           });
+        }
+
+        if (node.kind === 'add_builder' && childResult.segments instanceof Map) {
+          for (const [id, segment] of childResult.segments.entries()) {
+            if (!segment) continue;
+            segments.set(id, {
+              start: segment.start + beforeLength + baseOffset,
+              end: segment.end + beforeLength + baseOffset
+            });
+          }
         }
         return;
       }
@@ -108,6 +174,7 @@ export function evalBuilderWithMeta(nodes, initialAxis = v(0, 1, 0)) {
   return {
     points: context.points,
     axis: context.axis,
+    previewPoints: context.previewPoints,
     segments
   };
 }

@@ -1639,7 +1639,8 @@ class CompositionBuilderApp {
             title: "Composition 测距",
             canvas: this.renderer.domElement,
             showToast: (message, type) => this.showToast(message, type),
-            resolvePointFromEvent: (ev) => this.pickPreviewPointAtClientPoint(ev.clientX, ev.clientY)?.point || null,
+            resolvePointFromEvent: (ev) => this.resolvePreviewDistancePointFromEvent(ev),
+            projectPointToClient: (point) => this.worldToClient(point),
             attachContextMenu: true,
             isBlocked: () => !!this.selectState
         });
@@ -8499,6 +8500,50 @@ class CompositionBuilderApp {
         }
         if (bestDist <= radiusPx * radiusPx) return best;
         return null;
+    }
+
+    pickPreviewGridPointAtClientPoint(clientX, clientY) {
+        if (!this.camera || !this.renderer) return null;
+        const rect = this.renderer.domElement.getBoundingClientRect();
+        if (!rect || rect.width <= 0 || rect.height <= 0) return null;
+        const ndc = new THREE.Vector3(
+            ((clientX - rect.left) / rect.width) * 2 - 1,
+            -(((clientY - rect.top) / rect.height) * 2 - 1),
+            0.5
+        );
+        const origin = this.camera.position.clone();
+        const target = ndc.unproject(this.camera);
+        const direction = target.sub(origin);
+        if (Math.abs(direction.y) <= 1e-6) return null;
+        const t = -origin.y / direction.y;
+        if (!Number.isFinite(t) || t < 0) return null;
+        return {
+            x: origin.x + direction.x * t,
+            y: 0,
+            z: origin.z + direction.z * t,
+            label: "grid:xz"
+        };
+    }
+
+    resolvePreviewDistancePointFromEvent(ev) {
+        if (!ev) return null;
+        const picked = this.pickPreviewPointAtClientPoint(ev.clientX, ev.clientY);
+        if (picked?.point) {
+            return {
+                point: picked.point,
+                clientX: ev.clientX,
+                clientY: ev.clientY,
+                source: "preview_point"
+            };
+        }
+        const gridPoint = this.pickPreviewGridPointAtClientPoint(ev.clientX, ev.clientY);
+        if (!gridPoint) return null;
+        return {
+            point: gridPoint,
+            clientX: ev.clientX,
+            clientY: ev.clientY,
+            source: "grid"
+        };
     }
 
     pickCardAtClientPoint(clientX, clientY, radiusPx = 11) {

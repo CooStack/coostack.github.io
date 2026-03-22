@@ -331,7 +331,10 @@ export const POINTS_NODE_KINDS = {
       rotateOffsetEnabled: false,
       rox: 0,
       roy: 0,
-      roz: 0
+      roz: 0,
+      ox: 0,
+      oy: 0,
+      oz: 0
     },
     supportsChildren: true,
     fields: [
@@ -342,7 +345,10 @@ export const POINTS_NODE_KINDS = {
       toggleField('rotateOffsetEnabled', '启用朝向偏移'),
       numberField('rox', '朝向偏移 X'),
       numberField('roy', '朝向偏移 Y'),
-      numberField('roz', '朝向偏移 Z')
+      numberField('roz', '朝向偏移 Z'),
+      numberField('ox', '偏移 X'),
+      numberField('oy', '偏移 Y'),
+      numberField('oz', '偏移 Z')
     ],
     kotlin(node, emitCtx, indent, emitNodesKotlinLines) {
       const lines = [];
