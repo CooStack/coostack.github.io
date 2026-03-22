@@ -1120,6 +1120,14 @@ import {
         setTimeout(() => URL.revokeObjectURL(a.href), 200);
     }
 
+    function buildStateExportFilename() {
+        const raw = String(state?.kotlin?.className || "").trim();
+        const safe = raw
+            .replace(/[<>:"/\\|?*\u0000-\u001f]/g, "_")
+            .replace(/[. ]+$/g, "");
+        return `${safe || "GeneratedEmitter"}.emitter.json`;
+    }
+
     function setKotlinOut(text) {
         const el = document.getElementById("kotlinOutEmitter");
         if (!el) return;
@@ -1417,10 +1425,11 @@ import {
         readBaseForm();
         const payload = buildPersistPayload();
         const text = JSON.stringify(payload, null, 2);
+        const filename = buildStateExportFilename();
         if (window.showSaveFilePicker) {
             try {
                 const handle = await window.showSaveFilePicker({
-                    suggestedName: "particle_emitter.json",
+                    suggestedName: filename,
                     types: [{ description: "JSON", accept: {"application/json": [".json"]} }]
                 });
                 const writable = await handle.createWritable();
@@ -1439,7 +1448,7 @@ import {
             }
         }
         try {
-            downloadText("particle_emitter.json", text, "application/json");
+            downloadText(filename, text, "application/json");
             toast("保存成功", "success");
         } catch (e) {
             toast(`保存失败：${e.message || e}`, "error");
@@ -8962,6 +8971,13 @@ function setColorLifecycleSection($card, enabled) {
                 setFullscreen(!state.fullscreen);
                 return;
             }
+            if (hotkeysSystem && hotkeysSystem.hotkeyMatchEvent(e, hotkeysSystem.hotkeys.actions.openMeasureTool)) {
+                e.preventDefault();
+                if (preview && typeof preview.openDistanceToolMenu === "function") {
+                    preview.openDistanceToolMenu();
+                }
+                return;
+            }
             if (hotkeysSystem && hotkeysSystem.hotkeyMatchEvent(e, hotkeysSystem.hotkeys.actions.undo)) {
                 e.preventDefault();
                 cardHistory.undoOnce();
@@ -9089,6 +9105,7 @@ function setColorLifecycleSection($card, enabled) {
             viewportEl: document.getElementById("viewport"),
             statEl: document.getElementById("statChip"),
             fpsEl: document.getElementById("fpsChip"),
+            showToast: toast,
             getMotionEditorState: getMotionEditorStateForPreview,
             onMotionEditorSelectionChange: onPreviewMotionSelectionChange,
             onMotionEditorMoveCommit: onPreviewMotionMoveCommit,

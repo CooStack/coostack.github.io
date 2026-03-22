@@ -31,6 +31,7 @@ export function initGlobalShortcuts(ctx = {}) {
         isBuilderContainerKind,
         openModal,
         showSettingsModal,
+        openPreviewDistanceMenu,
         toggleFullscreen,
         resetCameraToPoints,
         triggerImportJson,
@@ -244,6 +245,12 @@ export function initGlobalShortcuts(ctx = {}) {
             if (hkModal && !hkModal.classList.contains("hidden") && typeof hideHotkeysModal === "function") hideHotkeysModal();
             if (settingsModal && !settingsModal.classList.contains("hidden") && typeof hideSettingsModal === "function") hideSettingsModal();
             if (typeof toggleFullscreen === "function") toggleFullscreen();
+            return;
+        }
+
+        if (hotkeyMatchEvent(e, hotkeys.actions.openMeasureTool)) {
+            e.preventDefault();
+            if (typeof openPreviewDistanceMenu === "function") openPreviewDistanceMenu();
             return;
         }
 

@@ -47,6 +47,7 @@ import {
     calcTextureFrame,
     setBasePath
 } from "../../particles/particle_data_loader.js";
+import { createPreviewDistanceTool } from "../../src/js/shared/preview-distance-tool.js";
 
 const U = globalThis.Utils;
 if (!U) throw new Error("Utils 未加载：请先加载 points_builder/utils.js");
@@ -73,6 +74,7 @@ const DEFAULT_HOTKEYS = {
         copyCode: "Mod+Shift+KeyC",
         toggleRealtime: "KeyR",
         openBuilderEditor: "KeyB",
+        openMeasureTool: "KeyM",
         deleteCard: "Backspace",
         fullscreen: "KeyF",
         undo: "Mod+KeyZ",
@@ -90,6 +92,7 @@ const HOTKEY_ACTION_DEFS = [
     { id: "copyCode", title: "复制 Kotlin", desc: "默认 Ctrl/Cmd+Shift+C" },
     { id: "toggleRealtime", title: "切换实时生成代码", desc: "默认 R" },
     { id: "openBuilderEditor", title: "编辑当前 Builder", desc: "默认 B" },
+    { id: "openMeasureTool", title: "打开预览测距", desc: "默认 M" },
     { id: "deleteCard", title: "删除选中卡片", desc: "默认 Backspace/Delete" },
     { id: "fullscreen", title: "预览全屏", desc: "默认 F" },
     { id: "undo", title: "撤销", desc: "默认 Ctrl/Cmd+Z" },
@@ -1232,6 +1235,7 @@ class CompositionBuilderApp {
         this.previewRuntimeGlobals = null;
         this.previewRuntimeAppliedTick = -1;
         this.lastExportedStateSig = this.readExportedSignature();
+        this.previewDistanceTool = null;
 
         this.selectState = null;
         this.selectPointerId = null;
@@ -1631,6 +1635,14 @@ class CompositionBuilderApp {
         this.grid.visible = this.state.settings.showGrid;
 
         this.bindPreviewSelectionEvents();
+        this.previewDistanceTool = createPreviewDistanceTool({
+            title: "Composition 测距",
+            canvas: this.renderer.domElement,
+            showToast: (message, type) => this.showToast(message, type),
+            resolvePointFromEvent: (ev) => this.pickPreviewPointAtClientPoint(ev.clientX, ev.clientY)?.point || null,
+            attachContextMenu: true,
+            isBlocked: () => !!this.selectState
+        });
 
         const animate = () => {
             requestAnimationFrame(animate);
@@ -8462,23 +8474,36 @@ class CompositionBuilderApp {
         this.dom.selectBox.style.height = "0px";
     }
 
-    pickCardAtClientPoint(clientX, clientY, radiusPx = 11) {
-        let bestId = null;
+    pickPreviewPointAtClientPoint(clientX, clientY, radiusPx = 11) {
+        let best = null;
         let bestDist = Number.POSITIVE_INFINITY;
         for (let i = 0; i < this.previewPoints.length; i++) {
             if (this.previewVisibleMask[i] === false) continue;
-            const screen = this.worldToClient(this.previewPoints[i]);
+            const point = this.previewPoints[i];
+            const screen = this.worldToClient(point);
             if (!screen) continue;
             const dx = screen.x - clientX;
             const dy = screen.y - clientY;
             const d2 = dx * dx + dy * dy;
-            if (d2 < bestDist) {
-                bestDist = d2;
-                bestId = this.previewOwners[i] || null;
-            }
+            if (d2 >= bestDist) continue;
+            bestDist = d2;
+            best = {
+                ownerId: this.previewOwners[i] || null,
+                point: {
+                    x: num(point?.x),
+                    y: num(point?.y),
+                    z: num(point?.z)
+                },
+                index: i
+            };
         }
-        if (bestDist <= radiusPx * radiusPx) return bestId;
+        if (bestDist <= radiusPx * radiusPx) return best;
         return null;
+    }
+
+    pickCardAtClientPoint(clientX, clientY, radiusPx = 11) {
+        const picked = this.pickPreviewPointAtClientPoint(clientX, clientY, radiusPx);
+        return picked ? picked.ownerId : null;
     }
 
     selectCardsByClientRect(clientRect, append = false) {
@@ -9493,6 +9518,11 @@ class CompositionBuilderApp {
         if (hit("fullscreen")) {
             e.preventDefault();
             this.toggleFullscreen();
+            return;
+        }
+        if (hit("openMeasureTool")) {
+            e.preventDefault();
+            this.previewDistanceTool?.togglePanelAtCanvasCenter();
             return;
         }
         if (hit("openBuilderEditor")) {

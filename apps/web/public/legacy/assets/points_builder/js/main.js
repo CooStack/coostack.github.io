@@ -11,6 +11,7 @@ import { toggleFullscreen } from "./viewer.js";
 import { createPickerModule } from "./main-picker.js";
 import { initGlobalShortcuts } from "./main-shortcuts.js?v=20260321_2";
 import { initTopbarAndBoot } from "./main-topbar-boot.js";
+import { createPreviewDistanceTool } from "../../src/js/shared/preview-distance-tool.js";
 import {
     sanitizeFileBase,
     loadProjectName,
@@ -1589,6 +1590,7 @@ function initPointsBuilderMain() {
     const builderTools = createBuilderTools({
         KIND,
         U,
+        rotatePointsToPointUpright,
         getState: () => state,
         getKotlinEndMode: () => kotlinEndMode
     });
@@ -2539,6 +2541,7 @@ function initPointsBuilderMain() {
     let mirrorPlane = "XZ";
     let hoverMarker = null;   // ✅ 实时跟随的红点
     let lastPoints = [];      // ✅ 当前预览点，用于“吸附到最近点”
+    let lastAddWithPreviewPoints = [];
     let lastGeometryCenterPoints = [];
     let lastPickBasePoint = null;
     let lastPickMappedPoint = null;
@@ -2574,6 +2577,7 @@ function initPointsBuilderMain() {
 
     let pickMarkers = [];
     let pointSize = 0.5;     // ✅ 粒子大小（PointsMaterial.size）
+    let previewDistanceTool = null;
     // line pick state (可指向主/任意子 builder)
     let linePickMode = false;
     let linePickType = "line"; // line | dotted_line | triangle
@@ -2686,6 +2690,7 @@ function initPointsBuilderMain() {
     let viewBoxSelecting = false;
     let viewBoxRect = null; // {left,top,right,bottom}
     let viewBoxPointSelectionByOwner = new Map(); // ownerId -> Set(pointIndex)
+    let viewBoxPreviewPointSelectionByOwner = new Map(); // ownerId -> Set(previewPointIndex)
     const _viewProjTmp = new THREE.Vector3();
 
     function isRightLike(ev) {
@@ -3588,6 +3593,15 @@ function initPointsBuilderMain() {
             });
         }
 
+        previewDistanceTool = createPreviewDistanceTool({
+            title: "PointsBuilder 测距",
+            canvas: renderer.domElement,
+            showToast,
+            resolvePointFromEvent: (ev) => pickMeasurePointAtClientPoint(ev.clientX, ev.clientY),
+            attachContextMenu: false,
+            isBlocked: () => !!(linePickMode || pointPickMode || offsetMode || rotateMode || bezierCreateState || bezierHandleDrag)
+        });
+
         animate();
     }
 
@@ -4002,20 +4016,28 @@ function initPointsBuilderMain() {
 
     function setAddWithPreviewPoints(points) {
         const list = Array.isArray(points) ? points : [];
-        if (!list.length) {
+        lastAddWithPreviewPoints = list.map((point) => ({
+            x: num(point?.x),
+            y: num(point?.y),
+            z: num(point?.z),
+            nodeId: point?.nodeId || null,
+            previewParentId: point?.previewParentId || null,
+            previewSource: point?.previewSource || "add_with"
+        }));
+        if (!lastAddWithPreviewPoints.length) {
             hideAddWithPreview();
             return;
         }
         ensureAddWithPreviewObj();
         if (!addWithPreviewObj) return;
         const geom = addWithPreviewObj.geometry;
-        if (!addWithPreviewBuf || addWithPreviewCount !== list.length) {
-            addWithPreviewBuf = new Float32Array(list.length * 3);
-            addWithPreviewCount = list.length;
+        if (!addWithPreviewBuf || addWithPreviewCount !== lastAddWithPreviewPoints.length) {
+            addWithPreviewBuf = new Float32Array(lastAddWithPreviewPoints.length * 3);
+            addWithPreviewCount = lastAddWithPreviewPoints.length;
             geom.setAttribute("position", new THREE.BufferAttribute(addWithPreviewBuf, 3));
         }
         let o = 0;
-        for (const point of list) {
+        for (const point of lastAddWithPreviewPoints) {
             addWithPreviewBuf[o++] = num(point?.x);
             addWithPreviewBuf[o++] = num(point?.y);
             addWithPreviewBuf[o++] = num(point?.z);
@@ -5147,6 +5169,46 @@ function pickPointIndexFromEvent(ev) {
     return (idx === undefined || idx === null) ? null : idx;
 }
 
+function pickSelectablePointHitFromEvent(ev) {
+    if (!renderer || !camera || !raycaster) return null;
+    const pickTargets = [];
+    if (pointsObj) pickTargets.push(pointsObj);
+    if (addWithPreviewObj && addWithPreviewObj.visible && lastAddWithPreviewPoints.length) {
+        pickTargets.push(addWithPreviewObj);
+    }
+    if (!pickTargets.length) return null;
+    const rect = renderer.domElement.getBoundingClientRect();
+    mouse.x = ((ev.clientX - rect.left) / rect.width) * 2 - 1;
+    mouse.y = -(((ev.clientY - rect.top) / rect.height) * 2 - 1);
+    raycaster.setFromCamera(mouse, camera);
+    raycaster.params.Points = raycaster.params.Points || {};
+    raycaster.params.Points.threshold = Math.max(0.06, (pointSize || 0.2) * 0.25);
+    const hits = raycaster.intersectObjects(pickTargets, false);
+    if (!hits || hits.length === 0) return null;
+    const previewHit = hits.find((hit) => (
+        hit && hit.object === addWithPreviewObj && hit.index !== undefined && hit.index !== null
+    ));
+    const hit = previewHit || hits[0];
+    const idx = hit.index;
+    if (idx === undefined || idx === null) return null;
+    if (hit.object === addWithPreviewObj) {
+        const point = lastAddWithPreviewPoints[idx] || null;
+        if (!point) return null;
+        return {
+            source: "add_with_preview",
+            index: idx,
+            ownerId: point.nodeId || point.previewParentId || null,
+            point
+        };
+    }
+    return {
+        source: "main",
+        index: idx,
+        ownerId: ownerIdForPointIndex(idx),
+        point: (lastPoints && lastPoints[idx]) ? lastPoints[idx] : null
+    };
+}
+
 function getParticleSnapFromEvent(ev) {
     if (!(chkSnapParticle && chkSnapParticle.checked)) return null;
     if (!pointsObj || !renderer || !camera || !raycaster) return null;
@@ -5273,6 +5335,7 @@ function normalizeViewBoxPointSelection(selectionMap) {
 
 function clearViewBoxPointSelection() {
     viewBoxPointSelectionByOwner = new Map();
+    viewBoxPreviewPointSelectionByOwner = new Map();
 }
 
 function setViewBoxPointSelection(selectionMap, options = {}) {
@@ -5292,6 +5355,23 @@ function setViewBoxPointSelection(selectionMap, options = {}) {
     viewBoxPointSelectionByOwner = merged;
 }
 
+function setViewBoxPreviewPointSelection(selectionMap, options = {}) {
+    const additive = options.additive === true;
+    const normalized = normalizeViewBoxPointSelection(selectionMap);
+    if (!additive) {
+        viewBoxPreviewPointSelectionByOwner = normalized;
+        return;
+    }
+    if (!normalized.size) return;
+    const merged = normalizeViewBoxPointSelection(viewBoxPreviewPointSelectionByOwner);
+    for (const [ownerId, bucket] of normalized.entries()) {
+        if (!merged.has(ownerId)) merged.set(ownerId, new Set());
+        const target = merged.get(ownerId);
+        for (const idx of bucket) target.add(idx);
+    }
+    viewBoxPreviewPointSelectionByOwner = merged;
+}
+
 function getViewBoxPointIndicesForOwner(ownerId) {
     if (!ownerId || !(viewBoxPointSelectionByOwner instanceof Map)) return [];
     const bucket = viewBoxPointSelectionByOwner.get(ownerId);
@@ -5301,15 +5381,36 @@ function getViewBoxPointIndicesForOwner(ownerId) {
         .sort((a, b) => a - b);
 }
 
+function getViewBoxPreviewPointIndicesForOwner(ownerId) {
+    if (!ownerId || !(viewBoxPreviewPointSelectionByOwner instanceof Map)) return [];
+    const bucket = viewBoxPreviewPointSelectionByOwner.get(ownerId);
+    if (!bucket || !bucket.size) return [];
+    return Array.from(bucket)
+        .filter((idx) => {
+            if (!Number.isInteger(idx) || idx < 0) return false;
+            if (!lastAddWithPreviewPoints || idx >= lastAddWithPreviewPoints.length) return false;
+            return (lastAddWithPreviewPoints[idx]?.nodeId || lastAddWithPreviewPoints[idx]?.previewParentId || null) === ownerId;
+        })
+        .sort((a, b) => a - b);
+}
+
 function getViewBoxSelectedOwnerIds() {
-    if (!(viewBoxPointSelectionByOwner instanceof Map) || !viewBoxPointSelectionByOwner.size) return [];
-    const out = [];
-    for (const ownerId of viewBoxPointSelectionByOwner.keys()) {
-        if (!ownerId) continue;
-        if (!getViewBoxPointIndicesForOwner(ownerId).length) continue;
-        out.push(ownerId);
+    const out = new Set();
+    if (viewBoxPointSelectionByOwner instanceof Map) {
+        for (const ownerId of viewBoxPointSelectionByOwner.keys()) {
+            if (!ownerId) continue;
+            if (!getViewBoxPointIndicesForOwner(ownerId).length) continue;
+            out.add(ownerId);
+        }
     }
-    return normalizeActionTargetIds(out);
+    if (viewBoxPreviewPointSelectionByOwner instanceof Map) {
+        for (const ownerId of viewBoxPreviewPointSelectionByOwner.keys()) {
+            if (!ownerId) continue;
+            if (!getViewBoxPreviewPointIndicesForOwner(ownerId).length) continue;
+            out.add(ownerId);
+        }
+    }
+    return normalizeActionTargetIds(Array.from(out));
 }
 
 function shouldStartViewBox(ev) {
@@ -5384,28 +5485,80 @@ function projectPointToClient(p) {
     return { x, y };
 }
 
+function pickMeasurePointAtClientPoint(clientX, clientY, radiusPx = 12) {
+    if (!renderer || !camera) return null;
+    let best = null;
+    let bestDist = Number.POSITIVE_INFINITY;
+    const visit = (points, label) => {
+        const list = Array.isArray(points) ? points : [];
+        for (let i = 0; i < list.length; i++) {
+            const point = list[i];
+            if (!point) continue;
+            const screen = projectPointToClient(point);
+            if (!screen) continue;
+            const dx = screen.x - clientX;
+            const dy = screen.y - clientY;
+            const d2 = dx * dx + dy * dy;
+            if (d2 >= bestDist) continue;
+            bestDist = d2;
+            best = {
+                x: num(point.x),
+                y: num(point.y),
+                z: num(point.z),
+                label
+            };
+        }
+    };
+    visit(lastPoints, "point");
+    visit(lastAddWithPreviewPoints, "addWithPreview");
+    if (geometryCenterPreviewEnabled && geometryCenterObj && geometryCenterObj.visible) {
+        visit(lastGeometryCenterPoints, "geometryCenter");
+    }
+    if (bestDist <= radiusPx * radiusPx) return best;
+    return null;
+}
+
 function collectViewBoxSelection(rect) {
-    if (!rect || !lastPoints || !lastPoints.length) {
-        return { ownerIds: [], pointIndicesByOwner: new Map() };
+    const hasMainPoints = Array.isArray(lastPoints) && lastPoints.length > 0;
+    const hasPreviewPoints = Array.isArray(lastAddWithPreviewPoints) && lastAddWithPreviewPoints.length > 0;
+    if (!rect || (!hasMainPoints && !hasPreviewPoints)) {
+        return { ownerIds: [], pointIndicesByOwner: new Map(), previewPointIndicesByOwner: new Map() };
     }
     const counts = new Map();
     const pointIndicesByOwner = new Map();
-    for (let i = 0; i < lastPoints.length; i++) {
-        const p = lastPoints[i];
-        if (!p) continue;
-        const ownerId = ownerIdForPointIndex(i);
-        if (!ownerId) continue;
-        const sp = projectPointToClient(p);
-        if (!sp) continue;
-        if (sp.x < rect.left || sp.x > rect.right || sp.y < rect.top || sp.y > rect.bottom) continue;
-        counts.set(ownerId, (counts.get(ownerId) || 0) + 1);
-        if (!pointIndicesByOwner.has(ownerId)) pointIndicesByOwner.set(ownerId, []);
-        pointIndicesByOwner.get(ownerId).push(i);
+    const previewPointIndicesByOwner = new Map();
+    if (hasMainPoints) {
+        for (let i = 0; i < lastPoints.length; i++) {
+            const p = lastPoints[i];
+            if (!p) continue;
+            const ownerId = ownerIdForPointIndex(i);
+            if (!ownerId) continue;
+            const sp = projectPointToClient(p);
+            if (!sp) continue;
+            if (sp.x < rect.left || sp.x > rect.right || sp.y < rect.top || sp.y > rect.bottom) continue;
+            counts.set(ownerId, (counts.get(ownerId) || 0) + 1);
+            if (!pointIndicesByOwner.has(ownerId)) pointIndicesByOwner.set(ownerId, []);
+            pointIndicesByOwner.get(ownerId).push(i);
+        }
+    }
+    if (hasPreviewPoints) {
+        for (let i = 0; i < lastAddWithPreviewPoints.length; i++) {
+            const p = lastAddWithPreviewPoints[i];
+            if (!p) continue;
+            const ownerId = p.nodeId || p.previewParentId || null;
+            if (!ownerId) continue;
+            const sp = projectPointToClient(p);
+            if (!sp) continue;
+            if (sp.x < rect.left || sp.x > rect.right || sp.y < rect.top || sp.y > rect.bottom) continue;
+            counts.set(ownerId, (counts.get(ownerId) || 0) + 1);
+            if (!previewPointIndicesByOwner.has(ownerId)) previewPointIndicesByOwner.set(ownerId, []);
+            previewPointIndicesByOwner.get(ownerId).push(i);
+        }
     }
     const ownerIds = Array.from(counts.entries())
         .sort((a, b) => b[1] - a[1])
         .map(([id]) => id);
-    return { ownerIds, pointIndicesByOwner };
+    return { ownerIds, pointIndicesByOwner, previewPointIndicesByOwner };
 }
 
 function collectOwnerIdsInViewBox(rect) {
@@ -5416,9 +5569,11 @@ function applyViewBoxSelection(ownerIds, options = {}) {
     const ids = Array.isArray(ownerIds) ? ownerIds.filter(Boolean) : [];
     const replace = !options.additive;
     const pointIndicesByOwner = options.pointIndicesByOwner instanceof Map ? options.pointIndicesByOwner : new Map();
+    const previewPointIndicesByOwner = options.previewPointIndicesByOwner instanceof Map ? options.previewPointIndicesByOwner : new Map();
     blurActiveElementForCanvas();
-    if (pointIndicesByOwner.size) {
+    if (pointIndicesByOwner.size || previewPointIndicesByOwner.size) {
         setViewBoxPointSelection(pointIndicesByOwner, { additive: !!options.additive });
+        setViewBoxPreviewPointSelection(previewPointIndicesByOwner, { additive: !!options.additive });
     } else if (replace) {
         clearViewBoxPointSelection();
     }
@@ -5452,7 +5607,8 @@ function finishViewBoxSelection(ev) {
     const selection = collectViewBoxSelection(rect);
     applyViewBoxSelection(selection.ownerIds, {
         additive,
-        pointIndicesByOwner: selection.pointIndicesByOwner
+        pointIndicesByOwner: selection.pointIndicesByOwner,
+        previewPointIndicesByOwner: selection.previewPointIndicesByOwner
     });
     armCanvasClickSuppress(ev);
     return true;
@@ -6127,6 +6283,14 @@ function openActionMenuForBlankNoSelection(ev) {
         {
             label: "添加全局偏移",
             onSelect: () => addQuickOffsetTo(state.root.children)
+        },
+        {
+            label: "测距：点到原点",
+            onSelect: () => previewDistanceTool && previewDistanceTool.startMode("origin", { clientX: ev.clientX + 8, clientY: ev.clientY + 8 })
+        },
+        {
+            label: "测距：A-B 距离",
+            onSelect: () => previewDistanceTool && previewDistanceTool.startMode("ab", { clientX: ev.clientX + 8, clientY: ev.clientY + 8 })
         }
     ];
     return showActionMenu(ev.clientX, ev.clientY, items);
@@ -6163,6 +6327,14 @@ function openActionMenuForTargets(ev, targetIds, options = {}) {
         onSelect: () => addRotateForTargetIds(ids)
     });
     items.push({
+        label: "测距：点到原点",
+        onSelect: () => previewDistanceTool && previewDistanceTool.startMode("origin", { clientX: ev.clientX + 8, clientY: ev.clientY + 8 })
+    });
+    items.push({
+        label: "测距：A-B 距离",
+        onSelect: () => previewDistanceTool && previewDistanceTool.startMode("ab", { clientX: ev.clientX + 8, clientY: ev.clientY + 8 })
+    });
+    items.push({
         label: "删除",
         danger: true,
         onSelect: () => deleteTargetIds(ids)
@@ -6181,9 +6353,9 @@ function onCanvasContextMenu(ev) {
         return;
     }
     let targetIds = [];
-    const idx = pickPointIndexFromEvent(ev);
-    if (idx !== null) {
-        const ownerId = ownerIdForPointIndex(idx);
+    const pointHit = pickSelectablePointHitFromEvent(ev);
+    if (pointHit && pointHit.ownerId) {
+        const ownerId = pointHit.ownerId;
         if (ownerId) {
             targetIds = getActionTargetIds(ownerId);
             if (!targetIds.length) targetIds = [ownerId];
@@ -6252,9 +6424,9 @@ function onCanvasClick(ev) {
         return;
     }
 
-    const idx = pickPointIndexFromEvent(ev);
-    if (idx !== null) {
-        const ownerId = ownerIdForPointIndex(idx);
+    const pointHit = pickSelectablePointHitFromEvent(ev);
+    if (pointHit && pointHit.ownerId) {
+        const ownerId = pointHit.ownerId;
         if (ownerId) {
             const additive = !!(ev && (ev.ctrlKey || ev.shiftKey));
             if (typeof setCardSelectionIds === "function") {
@@ -8227,6 +8399,9 @@ function collectSyntheticVecTargetsForNode(node) {
         isBuilderContainerKind,
         openModal,
         showSettingsModal,
+        openPreviewDistanceMenu: () => {
+            if (previewDistanceTool) previewDistanceTool.togglePanelAtCanvasCenter();
+        },
         toggleFullscreen,
         resetCameraToPoints,
         triggerImportJson,

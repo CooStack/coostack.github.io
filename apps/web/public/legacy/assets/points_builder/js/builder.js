@@ -1,5 +1,25 @@
 export function createBuilderTools(ctx) {
-    const { KIND, U, getState, getKotlinEndMode } = ctx || {};
+    const { KIND, U, getState, getKotlinEndMode, rotatePointsToPointUpright } = ctx || {};
+    const num = (value, fallback = 0) => {
+        const next = Number(value);
+        return Number.isFinite(next) ? next : fallback;
+    };
+    const int = (value, fallback = 0) => {
+        const next = Math.trunc(num(value, fallback));
+        return Number.isFinite(next) ? next : fallback;
+    };
+
+    function buildPointOwnerByIndex(totalCount, segments) {
+        const owners = new Array(totalCount || 0);
+        if (!segments) return owners;
+        for (const [id, seg] of segments.entries()) {
+            if (!seg) continue;
+            const start = Math.max(0, seg.start | 0);
+            const end = Math.min(owners.length, seg.end | 0);
+            for (let i = start; i < end; i++) owners[i] = id;
+        }
+        return owners;
+    }
 
     // Eval（同时计算：每个卡片新增的点在最终点数组里的区间，用于高亮）
     function evalBuilderWithMeta(nodes, initialAxis) {
@@ -36,10 +56,15 @@ export function createBuilderTools(ctx) {
                         if (!Array.isArray(targetCtx.previewPoints)) targetCtx.previewPoints = [];
                         if (useOffset) {
                             for (const p of child.previewPoints) {
-                                targetCtx.previewPoints.push({ x: p.x + ox, y: p.y + oy, z: p.z + oz });
+                                targetCtx.previewPoints.push({
+                                    ...p,
+                                    x: p.x + ox,
+                                    y: p.y + oy,
+                                    z: p.z + oz
+                                });
                             }
                         } else {
-                            targetCtx.previewPoints.push(...child.previewPoints.map((p) => ({ x: p.x, y: p.y, z: p.z })));
+                            targetCtx.previewPoints.push(...child.previewPoints.map((p) => ({ ...p })));
                         }
                     }
                     const after = targetCtx.points.length;
@@ -48,6 +73,64 @@ export function createBuilderTools(ctx) {
                     for (const [cid, seg] of child.segments.entries()) {
                         segments.set(cid, { start: seg.start + before + baseOffset, end: seg.end + before + baseOffset });
                     }
+                    continue;
+                }
+
+                if (n.kind === "add_with") {
+                    const before = targetCtx.points.length;
+                    const child = evalBuilderWithMeta(n.children || [], U.v(0, 1, 0));
+                    const childPoints = Array.isArray(child.points) ? child.points : [];
+                    const offset = {
+                        x: num(n.params?.ox),
+                        y: num(n.params?.oy),
+                        z: num(n.params?.oz)
+                    };
+
+                    if (n.params?.previewBeforeOffsetEnabled && childPoints.length) {
+                        if (!Array.isArray(targetCtx.previewPoints)) targetCtx.previewPoints = [];
+                        const previewOwners = buildPointOwnerByIndex(childPoints.length, child.segments);
+                        for (let i = 0; i < childPoints.length; i++) {
+                            const point = childPoints[i];
+                            targetCtx.previewPoints.push({
+                                x: num(point?.x) + offset.x,
+                                y: num(point?.y) + offset.y,
+                                z: num(point?.z) + offset.z,
+                                nodeId: previewOwners[i] || null,
+                                previewParentId: n.id || null,
+                                previewSource: "add_with"
+                            });
+                        }
+                    }
+
+                    const r = num(n.params?.r);
+                    const c = Math.max(0, int(n.params?.c));
+                    const rotateToCenter = !!n.params?.rotateToCenter;
+                    const rotateReverse = !!n.params?.rotateReverse;
+                    const rotateOffsetEnabled = !!n.params?.rotateOffsetEnabled;
+                    const rox = num(n.params?.rox);
+                    const roy = num(n.params?.roy);
+                    const roz = num(n.params?.roz);
+                    const verts = U.getPolygonInCircleVertices(c, r) || [];
+                    const childAxis = child.axis || U.v(0, 1, 0);
+
+                    for (const base of verts) {
+                        const pts = childPoints.map((point) => U.clone(point));
+                        if (rotateToCenter && pts.length && typeof rotatePointsToPointUpright === "function") {
+                            const targetPoint = rotateOffsetEnabled ? U.v(rox, roy, roz) : U.v(0, 0, 0);
+                            const rotateTarget = rotateReverse ? U.add(targetPoint, base) : U.sub(targetPoint, base);
+                            rotatePointsToPointUpright(pts, rotateTarget, childAxis);
+                        }
+                        for (const point of pts) {
+                            targetCtx.points.push({
+                                x: num(point?.x) + num(base?.x) + offset.x,
+                                y: num(point?.y) + num(base?.y) + offset.y,
+                                z: num(point?.z) + num(base?.z) + offset.z
+                            });
+                        }
+                    }
+
+                    const after = targetCtx.points.length;
+                    if (after > before) segments.set(n.id, { start: before + baseOffset, end: after + baseOffset });
                     continue;
                 }
 
@@ -67,7 +150,7 @@ export function createBuilderTools(ctx) {
         }
 
         evalList(nodes || [], ctxLocal, 0);
-        return { points: ctxLocal.points, segments, previewPoints: ctxLocal.previewPoints };
+        return { points: ctxLocal.points, segments, previewPoints: ctxLocal.previewPoints, axis: ctxLocal.axis };
     }
 
     // 兼容旧调用：只要点集

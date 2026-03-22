@@ -896,5 +896,11 @@ export function createMotionEditorRuntime(ctx = {}) {
     return {
         syncFromState,
         dispose,
+        isActive() {
+            return !!runtime.active;
+        },
+        pickPointFromEvent(ev) {
+            return pickPoint(ev);
+        },
     };
 }

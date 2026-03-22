@@ -6,6 +6,7 @@ import { normalizeBuilderState, evaluateBuilderState } from "./points_builder_br
 import { createDoTickRuntimeScope } from "./do_tick_expression.js";
 import { sampleFloatCurve } from "./command_curve.js";
 import { createMotionEditorRuntime } from "./motion_editor_preview.js";
+import { createPreviewDistanceTool } from "../../src/js/shared/preview-distance-tool.js";
 import {
     normalizeConditionFilter,
 } from "./expression_cards.js";
@@ -20,6 +21,7 @@ export function initPreview(ctx = {}) {
         viewportEl,
         statEl,
         fpsEl,
+        showToast,
         getMotionEditorState,
         onMotionEditorSelectionChange,
         onMotionEditorMoveCommit,
@@ -34,6 +36,7 @@ export function initPreview(ctx = {}) {
     let axesHelper, gridHelper;
     let motionEditorRuntime = null;
     let pointScale = 1.0;
+    let previewDistanceTool = null;
 
     const MAX_POINTS = 65536;
     const WHITE_COLOR = { r: 1, g: 1, b: 1 };
@@ -135,6 +138,7 @@ export function initPreview(ctx = {}) {
     const _panRight = new THREE.Vector3();
     const _panUp = new THREE.Vector3();
     const _panMove = new THREE.Vector3();
+    const _pickProj = new THREE.Vector3();
 
     function isArrowKey(code) {
         return code === "ArrowUp" || code === "ArrowDown" || code === "ArrowLeft" || code === "ArrowRight";
@@ -310,6 +314,15 @@ export function initPreview(ctx = {}) {
         points.frustumCulled = false;
         scene.add(points);
 
+        previewDistanceTool = createPreviewDistanceTool({
+            title: "Emitter 预览测距",
+            canvas: renderer.domElement,
+            showToast,
+            resolvePointFromEvent: resolveDistancePointFromEvent,
+            attachContextMenu: true,
+            shouldOpenContextMenu: shouldOpenDistanceContextMenu,
+        });
+
         window.addEventListener("resize", () => resizeRenderer());
         resizeRenderer();
     }
@@ -324,6 +337,63 @@ export function initPreview(ctx = {}) {
         if (pointsMat && pointsMat.uniforms && pointsMat.uniforms.uViewportY) {
             pointsMat.uniforms.uViewportY.value = renderer.domElement.height;
         }
+    }
+
+    function worldToClientPoint(x, y, z) {
+        if (!renderer || !camera) return null;
+        const rect = renderer.domElement.getBoundingClientRect();
+        _pickProj.set(x, y, z).project(camera);
+        if (!Number.isFinite(_pickProj.x) || !Number.isFinite(_pickProj.y) || !Number.isFinite(_pickProj.z)) return null;
+        if (_pickProj.z < -1 || _pickProj.z > 1) return null;
+        return {
+            x: rect.left + (_pickProj.x * 0.5 + 0.5) * rect.width,
+            y: rect.top + (-_pickProj.y * 0.5 + 0.5) * rect.height
+        };
+    }
+
+    function pickMainPreviewPointAtClientPoint(clientX, clientY, radiusPx = 14) {
+        if (!pointsGeo) return null;
+        const posAttr = pointsGeo.getAttribute("position");
+        if (!posAttr || !posAttr.array) return null;
+        const drawCount = Math.max(0, Number(pointsGeo.drawRange?.count) || 0);
+        let best = null;
+        let bestDist = Number.POSITIVE_INFINITY;
+        for (let i = 0; i < drawCount; i++) {
+            const x = posAttr.array[i * 3 + 0];
+            const y = posAttr.array[i * 3 + 1];
+            const z = posAttr.array[i * 3 + 2];
+            const screen = worldToClientPoint(x, y, z);
+            if (!screen) continue;
+            const dx = screen.x - clientX;
+            const dy = screen.y - clientY;
+            const d2 = dx * dx + dy * dy;
+            if (d2 >= bestDist) continue;
+            bestDist = d2;
+            best = { x, y, z, label: "particle", index: i };
+        }
+        if (bestDist <= radiusPx * radiusPx) return best;
+        return null;
+    }
+
+    function resolveDistancePointFromEvent(ev) {
+        if (motionEditorRuntime && typeof motionEditorRuntime.isActive === "function" && motionEditorRuntime.isActive()) {
+            const picked = motionEditorRuntime.pickPointFromEvent?.(ev);
+            if (!picked) return null;
+            return {
+                x: Number(picked.x) || 0,
+                y: Number(picked.y) || 0,
+                z: Number(picked.z) || 0,
+                label: String(picked.id || "motionPoint")
+            };
+        }
+        return pickMainPreviewPointAtClientPoint(ev.clientX, ev.clientY);
+    }
+
+    function shouldOpenDistanceContextMenu(ev) {
+        if (motionEditorRuntime && typeof motionEditorRuntime.isActive === "function" && motionEditorRuntime.isActive()) {
+            return !motionEditorRuntime.pickPointFromEvent?.(ev);
+        }
+        return true;
     }
 
     function hexToRgb01(hex) {
@@ -2306,5 +2376,8 @@ export function initPreview(ctx = {}) {
         setShowGrid,
         setPointScale,
         resetTime,
+        openDistanceToolMenu() {
+            previewDistanceTool?.togglePanelAtCanvasCenter();
+        },
     };
 }

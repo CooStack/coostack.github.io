@@ -34,7 +34,7 @@ export function initHotkeysSystem(ctx) {
     const HOTKEY_STORAGE_KEY = "pe_hotkeys_v1";
 
     const DEFAULT_HOTKEYS = {
-        version: 1,
+        version: 2,
         actions: {
             togglePlay: "Space",
             clearParticles: "KeyC",
@@ -42,6 +42,7 @@ export function initHotkeysSystem(ctx) {
             copyKotlin: "Mod+Shift+KeyC",
             importJson: "Mod+KeyO",
             exportJson: "Mod+KeyS",
+            openMeasureTool: "KeyM",
             toggleFullscreen: "KeyF",
             undo: "Mod+KeyZ",
             redo: "Mod+Shift+KeyZ",
@@ -208,6 +209,7 @@ export function initHotkeysSystem(ctx) {
         {id: "copyKotlin", title: "复制 Kotlin", desc: "默认 Ctrl/Cmd+Shift+C"},
         {id: "importJson", title: "导入 JSON", desc: "默认 Ctrl/Cmd+O"},
         {id: "exportJson", title: "导出 JSON", desc: "默认 Ctrl/Cmd+S"},
+        {id: "openMeasureTool", title: "打开预览测距", desc: "默认 M"},
         {id: "toggleFullscreen", title: "预览区全屏 / 退出", desc: "默认 F"},
         {id: "undo", title: "撤回", desc: "默认 Ctrl/Cmd+Z"},
         {id: "redo", title: "重做", desc: "默认 Ctrl/Cmd+Shift+Z"},

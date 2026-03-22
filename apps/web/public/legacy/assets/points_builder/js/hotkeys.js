@@ -35,7 +35,7 @@ export function initHotkeysSystem(ctx) {
     const HOTKEY_STORAGE_KEY = "pb_hotkeys_v2";
 
     const DEFAULT_HOTKEYS = {
-        version: 8,
+        version: 9,
         actions: {
             openPicker: "KeyN",
             pickLineXZ: "KeyQ",
@@ -43,6 +43,7 @@ export function initHotkeysSystem(ctx) {
             pickTriangle: "KeyT",
             pickPoint: "KeyE",
             pickBezierStartEnd: "KeyW",
+            openMeasureTool: "KeyM",
             toggleFullscreen: "KeyF",
             resetCamera: "Shift+KeyR",
             importJson: "Shift+KeyN",
@@ -250,6 +251,7 @@ export function initHotkeysSystem(ctx) {
         {id: "pickTriangle", title: "进入 XZ 拾取三角形", desc: "默认 T"},
         {id: "pickPoint", title: "点拾取（填充当前输入）", desc: "默认 E"},
         {id: "pickBezierStartEnd", title: "进入 Bezier 创建流", desc: "默认 W"},
+        {id: "openMeasureTool", title: "打开预览测距", desc: "默认 M"},
         {id: "toggleFullscreen", title: "预览全屏 / 退出全屏", desc: "默认 F"},
         {id: "resetCamera", title: "重置镜头", desc: "默认 Shift + R"},
         {id: "importJson", title: "导入 JSON", desc: "默认 Ctrl/Cmd+O"},
