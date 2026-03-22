@@ -4009,7 +4009,8 @@ class CompositionBuilderApp {
         try {
             builderEvalState = normalizeBuilderState(builderState);
             const nodes = builderEvalState?.root?.children || [];
-            return evalBuilderWithMeta(nodes, this.resolveCompositionAxisDirection());
+            // Keep embedded PointsBuilder evaluation consistent with the standalone editor.
+            return evalBuilderWithMeta(nodes, U.v(0, 1, 0));
         } catch (e) {
             console.warn("evaluateBuilderPoints failed:", e);
             return { points: [], segments: new Map() };
