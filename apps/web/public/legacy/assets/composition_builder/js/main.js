@@ -1162,7 +1162,8 @@ const builderTools = createBuilderTools({
     KIND,
     U: builderU,
     getState: () => builderEvalState,
-    getKotlinEndMode: () => "builder"
+    getKotlinEndMode: () => "builder",
+    rotatePointsToPointUpright
 });
 const { evalBuilderWithMeta, emitKotlin: emitPointsBuilderKotlin } = builderTools;
 
@@ -4009,8 +4010,7 @@ class CompositionBuilderApp {
         try {
             builderEvalState = normalizeBuilderState(builderState);
             const nodes = builderEvalState?.root?.children || [];
-            // Keep embedded PointsBuilder evaluation consistent with the standalone editor.
-            return evalBuilderWithMeta(nodes, U.v(0, 1, 0));
+            return evalBuilderWithMeta(nodes, this.resolveCompositionAxisDirection());
         } catch (e) {
             console.warn("evaluateBuilderPoints failed:", e);
             return { points: [], segments: new Map() };
