@@ -2378,7 +2378,7 @@ export function initPreview(ctx = {}) {
         setPointScale,
         resetTime,
         openDistanceToolMenu() {
-            previewDistanceTool?.togglePanelAtCanvasCenter();
+            previewDistanceTool?.toggleMeasureMode();
         },
     };
 }

@@ -6312,14 +6312,6 @@ function openActionMenuForBlankNoSelection(ev) {
             label: "添加全局偏移",
             onSelect: () => addQuickOffsetTo(state.root.children)
         },
-        {
-            label: "测距：点到原点",
-            onSelect: () => previewDistanceTool && previewDistanceTool.startMode("origin", { clientX: ev.clientX + 8, clientY: ev.clientY + 8 })
-        },
-        {
-            label: "测距：A-B 距离",
-            onSelect: () => previewDistanceTool && previewDistanceTool.startMode("ab", { clientX: ev.clientX + 8, clientY: ev.clientY + 8 })
-        }
     ];
     return showActionMenu(ev.clientX, ev.clientY, items);
 }
@@ -6355,14 +6347,6 @@ function openActionMenuForTargets(ev, targetIds, options = {}) {
         onSelect: () => addRotateForTargetIds(ids)
     });
     items.push({
-        label: "测距：点到原点",
-        onSelect: () => previewDistanceTool && previewDistanceTool.startMode("origin", { clientX: ev.clientX + 8, clientY: ev.clientY + 8 })
-    });
-    items.push({
-        label: "测距：A-B 距离",
-        onSelect: () => previewDistanceTool && previewDistanceTool.startMode("ab", { clientX: ev.clientX + 8, clientY: ev.clientY + 8 })
-    });
-    items.push({
         label: "删除",
         danger: true,
         onSelect: () => deleteTargetIds(ids)
@@ -6372,6 +6356,12 @@ function openActionMenuForTargets(ev, targetIds, options = {}) {
 
 function onCanvasContextMenu(ev) {
     ev.preventDefault();
+    if (previewDistanceTool?.isActive()) {
+        previewDistanceTool.cancel?.();
+        hideActionMenu();
+        hideQuickSyncPanel();
+        return;
+    }
     if (shouldSuppressActionMenuByGesture(ev)) {
         hideActionMenu();
         return;
@@ -6438,6 +6428,7 @@ function onCanvasClick(ev) {
     // ✅ 直线拾取用 pointerdown 处理，但浏览器仍会在 pointerup 后补一个 click。
     // 如果不屏蔽，这个 click 会走到下面的“点到空白处清空焦点”，导致聚焦丢失。
     if (shouldSuppressCanvasClick(ev)) return;
+    if (previewDistanceTool?.isActive()) return;
     hideActionMenu();
     hideQuickSyncPanel();
 
@@ -8427,8 +8418,8 @@ function collectSyntheticVecTargetsForNode(node) {
         isBuilderContainerKind,
         openModal,
         showSettingsModal,
-        openPreviewDistanceMenu: () => {
-            if (previewDistanceTool) previewDistanceTool.togglePanelAtCanvasCenter();
+        togglePreviewDistanceMeasure: () => {
+            if (previewDistanceTool) previewDistanceTool.toggleMeasureMode();
         },
         toggleFullscreen,
         resetCameraToPoints,

@@ -8394,6 +8394,7 @@ class CompositionBuilderApp {
     }
 
     onPreviewPointerDown(e) {
+        if (this.previewDistanceTool?.isActive()) return;
         if (e.button !== 0) return;
         this.selectPointerId = e.pointerId;
         this.selectState = {
@@ -8412,6 +8413,7 @@ class CompositionBuilderApp {
     }
 
     onPreviewPointerMove(e) {
+        if (this.previewDistanceTool?.isActive()) return;
         if (!this.selectState || this.selectPointerId !== e.pointerId) return;
         this.selectState.x1 = e.clientX;
         this.selectState.y1 = e.clientY;
@@ -8425,6 +8427,7 @@ class CompositionBuilderApp {
     }
 
     onPreviewPointerUp(e) {
+        if (this.previewDistanceTool?.isActive()) return;
         if (!this.selectState || this.selectPointerId !== e.pointerId) return;
         const sel = this.selectState;
         this.selectState = null;
@@ -9568,7 +9571,7 @@ class CompositionBuilderApp {
         }
         if (hit("openMeasureTool")) {
             e.preventDefault();
-            this.previewDistanceTool?.togglePanelAtCanvasCenter();
+            this.previewDistanceTool?.toggleMeasureMode();
             return;
         }
         if (hit("openBuilderEditor")) {

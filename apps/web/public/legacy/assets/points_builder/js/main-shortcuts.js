@@ -31,7 +31,7 @@ export function initGlobalShortcuts(ctx = {}) {
         isBuilderContainerKind,
         openModal,
         showSettingsModal,
-        openPreviewDistanceMenu,
+        togglePreviewDistanceMeasure,
         toggleFullscreen,
         resetCameraToPoints,
         triggerImportJson,
@@ -250,7 +250,7 @@ export function initGlobalShortcuts(ctx = {}) {
 
         if (hotkeyMatchEvent(e, hotkeys.actions.openMeasureTool)) {
             e.preventDefault();
-            if (typeof openPreviewDistanceMenu === "function") openPreviewDistanceMenu();
+            if (typeof togglePreviewDistanceMeasure === "function") togglePreviewDistanceMeasure();
             return;
         }
 
