@@ -213,6 +213,14 @@ export function initFilterSystem(ctx) {
             .sort((a, b) => a.title.localeCompare(b.title, "zh-CN"));
     }
 
+    function filterToolSvgIcon() {
+        return `
+            <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                <path d="M4 5h16l-6.4 7.3v4.9l-3.2 1.8v-6.7Z"/>
+            </svg>
+        `;
+    }
+
     function createFilterControls(scopeId, onChange, small = true) {
         const resolvedScopeId = resolveEffectiveFilterScopeId(scopeId);
         const controlScopeId = resolvedScopeId === FILTER_SCOPE_NONE ? scopeId : resolvedScopeId;
@@ -220,8 +228,12 @@ export function initFilterSystem(ctx) {
         const wrap = document.createElement("div");
         wrap.className = "filter-wrap";
         const filterBtn = document.createElement("button");
-        filterBtn.className = small ? "btn small" : "btn";
-        filterBtn.textContent = "过滤器";
+        filterBtn.type = "button";
+        filterBtn.className = small ? "panel-tool-icon filter-tool-icon" : "btn";
+        if (small) filterBtn.innerHTML = filterToolSvgIcon();
+        else filterBtn.textContent = "过滤器";
+        filterBtn.dataset.tip = "过滤器";
+        filterBtn.setAttribute("aria-label", "过滤器");
         wrap.appendChild(filterBtn);
 
         const menu = document.createElement("div");

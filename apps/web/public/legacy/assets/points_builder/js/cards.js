@@ -1013,6 +1013,7 @@ export function initCardSystem(ctx = {}) {
     const getLinePickMode = ctx.getLinePickMode || (() => false);
     const getPointPickMode = ctx.getPointPickMode || (() => false);
     const makeUid = ctx.uid || (() => (Math.random().toString(16).slice(2) + Date.now().toString(16)).slice(0, 16));
+    const renderCardParamsInline = ctx.renderCardParamsInline !== false;
 
     const INPUT_TIP_DELAY = 650;
     const inputTipState = { timer: 0, el: null, target: null };
@@ -1328,11 +1329,33 @@ export function initCardSystem(ctx = {}) {
 
     function iconBtn(text, onClick, danger = false) {
         const b = document.createElement("button");
+        b.type = "button";
         b.className = "iconbtn" + (danger ? " danger" : "");
         b.classList.add("action-item");
         b.textContent = text;
         b.addEventListener("click", onClick);
         return b;
+    }
+
+    function panelToolSvgIcon(name) {
+        const icons = {
+            builder: `
+                <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                    <path d="M3.5 7.5h6.2l1.8 2h9v8.2a2.3 2.3 0 0 1-2.3 2.3H5.8a2.3 2.3 0 0 1-2.3-2.3Z"/>
+                    <path d="M3.5 7.5V6.2A2.2 2.2 0 0 1 5.7 4h4.4l1.7 1.8h5.9A2.3 2.3 0 0 1 20 8.1v1.4"/>
+                    <path d="M9 15h6"/>
+                </svg>
+            `,
+            with: `
+                <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                    <path d="m12 3.5 8 4.2-8 4.2-8-4.2Z"/>
+                    <path d="m4 12.3 8 4.2 8-4.2"/>
+                    <path d="m4 17 8 4.2 8-4.2"/>
+                    <path d="M9.2 16.5h5.6"/>
+                </svg>
+            `
+        };
+        return icons[name] || "";
     }
 
     function syncCollapseUIForList(list) {
@@ -1381,6 +1404,76 @@ export function initCardSystem(ctx = {}) {
     let scopeFilterHost = null;
     let scopeFilterUi = null;
     let scopeFilterScopeKey = "__pb_scope_root__";
+    let floatingToolTipEl = null;
+
+    function ensureFloatingToolTipEl() {
+        if (floatingToolTipEl && document.body.contains(floatingToolTipEl)) return floatingToolTipEl;
+        const el = document.createElement("div");
+        el.className = "pb-floating-tip hidden";
+        document.body.appendChild(el);
+        floatingToolTipEl = el;
+        return el;
+    }
+
+    function hideFloatingToolTip() {
+        if (floatingToolTipEl) floatingToolTipEl.classList.add("hidden");
+    }
+
+    function showFloatingToolTip(anchor) {
+        if (!anchor || !anchor.dataset) return;
+        const text = String(anchor.dataset.tip || "").trim();
+        if (!text) return;
+        const el = ensureFloatingToolTipEl();
+        el.textContent = text;
+        el.classList.remove("hidden");
+        const a = anchor.getBoundingClientRect();
+        const t = el.getBoundingClientRect();
+        const gap = 8;
+        const vw = window.innerWidth || document.documentElement.clientWidth || 0;
+        const vh = window.innerHeight || document.documentElement.clientHeight || 0;
+        let left = a.left + a.width / 2 - t.width / 2;
+        let top = a.bottom + gap;
+        if (left < gap) left = gap;
+        if (left + t.width > vw - gap) left = Math.max(gap, vw - t.width - gap);
+        if (top + t.height > vh - gap) top = Math.max(gap, a.top - t.height - gap);
+        el.style.left = `${Math.round(left)}px`;
+        el.style.top = `${Math.round(top)}px`;
+    }
+
+    function bindFloatingToolTips() {
+        if (document.__pbFloatingToolTipsBound) return;
+        document.__pbFloatingToolTipsBound = true;
+        let activeAnchor = null;
+        const getAnchor = (target) => target && target.closest ? target.closest(".panel-tool-icon[data-tip]") : null;
+        document.addEventListener("pointerover", (ev) => {
+            const anchor = getAnchor(ev.target);
+            if (!anchor) return;
+            activeAnchor = anchor;
+            showFloatingToolTip(anchor);
+        }, true);
+        document.addEventListener("pointerout", (ev) => {
+            if (!activeAnchor) return;
+            const next = ev.relatedTarget;
+            if (next && activeAnchor.contains(next)) return;
+            activeAnchor = null;
+            hideFloatingToolTip();
+        }, true);
+        document.addEventListener("focusin", (ev) => {
+            const anchor = getAnchor(ev.target);
+            if (!anchor) return;
+            activeAnchor = anchor;
+            showFloatingToolTip(anchor);
+        }, true);
+        document.addEventListener("focusout", (ev) => {
+            const anchor = getAnchor(ev.target);
+            if (!anchor || anchor !== activeAnchor) return;
+            activeAnchor = null;
+            hideFloatingToolTip();
+        }, true);
+        window.addEventListener("resize", hideFloatingToolTip);
+        window.addEventListener("scroll", hideFloatingToolTip, true);
+    }
+
     function ensureMoreMenu(actionsEl) {
         let wrap = actionsEl.querySelector(".more-wrap");
         if (wrap) return wrap;
@@ -1437,6 +1530,7 @@ export function initCardSystem(ctx = {}) {
     }
 
     function initCollapseAllControls() {
+        bindFloatingToolTips();
         const title = document.querySelector(".panel.left .panel-title");
         if (!title || !title.parentElement) return;
         const existingTools = title.parentElement.querySelector(".panel-tools");
@@ -1449,29 +1543,24 @@ export function initCardSystem(ctx = {}) {
         tools.className = "panel-tools";
         scopeRootBtn = document.createElement("button");
         scopeRootBtn.type = "button";
-        scopeRootBtn.className = "btn small hidden";
-        scopeRootBtn.textContent = "回到最外层";
+        scopeRootBtn.className = "panel-tool-icon hidden";
+        scopeRootBtn.textContent = "↩";
+        scopeRootBtn.dataset.tip = "回到最外层";
+        scopeRootBtn.setAttribute("aria-label", "回到最外层");
         scopeRootBtn.dataset.pbScopeRoot = "1";
         scopeRootBtn.addEventListener("click", () => {
             navigateCardScope(null);
         });
         tools.appendChild(scopeRootBtn);
-        const resolveScopeCtx = () => getCurrentCardScopeContext();
-        const { collapseBtn, expandBtn } = makeCollapseAllButtons(
-            () => resolveScopeCtx()?.scopeId || null,
-            () => resolveScopeCtx()?.list || [],
-            true
-        );
-        tools.appendChild(collapseBtn);
-        tools.appendChild(expandBtn);
 
-        const appendCleanupBtn = (kind, text, emptyMsg, successLabel) => {
+        const appendCleanupBtn = (kind, icon, tip, emptyMsg, successLabel) => {
             if (typeof clearEmptyBuilderCards !== "function") return;
             const btn = document.createElement("button");
             btn.type = "button";
-            btn.className = "btn small";
-            btn.textContent = text;
-            btn.title = `清理空 ${successLabel} 卡片`;
+            btn.className = "panel-tool-icon";
+            btn.innerHTML = icon;
+            btn.dataset.tip = tip;
+            btn.setAttribute("aria-label", tip);
             btn.addEventListener("click", () => {
                 const removed = clearEmptyBuilderCards(kind);
                 if (!removed) {
@@ -1482,14 +1571,12 @@ export function initCardSystem(ctx = {}) {
             });
             tools.appendChild(btn);
         };
-        appendCleanupBtn("add_builder", "清空空的Builder", "没有可清理的空的 addBuilder 卡片", "addBuilder");
-        appendCleanupBtn("add_with", "清空空的With", "没有可清理的空的 addWith 卡片", "addWith");
+        appendCleanupBtn("add_builder", panelToolSvgIcon("builder"), "清空空的 Builder", "没有可清理的空的 addBuilder 卡片", "addBuilder");
+        appendCleanupBtn("add_with", panelToolSvgIcon("with"), "清空空的 With", "没有可清理的空的 addWith 卡片", "addWith");
 
         scopeFilterHost = document.createElement("div");
         scopeFilterHost.dataset.pbScopeFilter = "1";
         tools.appendChild(scopeFilterHost);
-        const syncUi = createParamSyncControls();
-        if (syncUi && syncUi.wrap) tools.appendChild(syncUi.wrap);
 
         title.insertAdjacentElement("afterend", tools);
         updateScopeToolbar(getCurrentCardScopeContext());
@@ -1497,9 +1584,8 @@ export function initCardSystem(ctx = {}) {
 
     function updateScopeToolbar(scopeCtx) {
         if (!scopeRootBtn) return;
-        const hasNestedScope = !!scopeCtx?.ownerNode;
-        scopeRootBtn.classList.toggle("hidden", !hasNestedScope);
-        scopeRootBtn.title = hasNestedScope && scopeCtx?.typeLabel
+        scopeRootBtn.classList.add("hidden");
+        scopeRootBtn.title = scopeCtx?.ownerNode && scopeCtx?.typeLabel
             ? `当前位于 ${scopeCtx.typeLabel}，点击返回最外层`
             : "点击返回最外层";
         if (!scopeFilterHost) return;
@@ -2466,10 +2552,30 @@ export function initCardSystem(ctx = {}) {
         return card;
     }
 
+    function renderCompactCardBody(body, node, def) {
+        const summary = document.createElement("div");
+        summary.className = "card-tree-summary";
+
+        const label = document.createElement("span");
+        if (isBuilderContainerKind(node.kind)) {
+            const count = Array.isArray(node.children) ? node.children.length : 0;
+            label.innerHTML = `<strong>文件夹</strong> ${count} 张子卡片`;
+        } else {
+            label.textContent = "选中后在右侧编辑参数";
+        }
+        summary.appendChild(label);
+
+        const kind = document.createElement("span");
+        kind.textContent = def?.title || node.kind;
+        summary.appendChild(kind);
+        body.appendChild(summary);
+    }
+
     function renderNodeCard(node, siblings, idx, ownerLabel, ownerNode = null) {
         const def = KIND[node.kind];
         const card = document.createElement("div");
         card.className = "card";
+        if (!renderCardParamsInline) card.classList.add("compact-card");
         card.dataset.id = node.id;
         const scopeId = ownerNode ? ownerNode.id : null;
         const useFilterSwap = isFilterActive(scopeId);
@@ -2504,168 +2610,185 @@ export function initCardSystem(ctx = {}) {
         const actions = document.createElement("div");
         actions.className = "card-actions";
 
-        let collapsePrev = null;
-        const rememberCollapsePrev = () => {
-            if (collapsePrev !== null) return;
-            collapsePrev = node.collapsed;
-        };
-        const collapseBtn = iconBtn(node.collapsed ? "▸" : "▾", (e) => {
-            e.stopPropagation();
-            historyCapture("toggle_card_collapse");
-            const wasCollapsed = (collapsePrev !== null) ? collapsePrev : node.collapsed;
-            collapsePrev = null;
-            node.collapsed = !wasCollapsed;
-            if (typeof ctx.isCollapseAllActive === "function" && ctx.isCollapseAllActive(scopeId)) {
-                const scope = (typeof ctx.getCollapseScope === "function") ? ctx.getCollapseScope(scopeId) : null;
-                if (scope && scope.manualOpen) {
-                    if (node.collapsed) scope.manualOpen.delete(node.id);
-                    else scope.manualOpen.add(node.id);
-                }
-            }
-            const synced = (typeof ctx.syncCardCollapseUI === "function") ? ctx.syncCardCollapseUI(node.id) : false;
-            if (!synced) {
-                card.classList.toggle("collapsed", node.collapsed);
-                collapseBtn.textContent = node.collapsed ? "▸" : "▾";
-                collapseBtn.title = node.collapsed ? "展开" : "收起";
-            }
-        });
-        collapseBtn.addEventListener("pointerdown", rememberCollapsePrev);
-        collapseBtn.addEventListener("mousedown", rememberCollapsePrev);
-        collapseBtn.addEventListener("touchstart", rememberCollapsePrev, { passive: true });
-        collapseBtn.addEventListener("keydown", (ev) => {
-            if (ev.key === " " || ev.key === "Enter") rememberCollapsePrev();
-        });
-        collapseBtn.dataset.collapseBtn = "1";
-        collapseBtn.title = node.collapsed ? "展开" : "收起";
-        actions.appendChild(collapseBtn);
-
-        // ✅ 快捷添加：在当前卡片下方插入（若选中 addBuilder 卡片则插入到子Builder）
-        const addBtn = iconBtn("＋", () => {
-            if (isBuilderContainerKind(node.kind)) {
-                openModal(node.children, (node.children || []).length, "子Builder", node.id);
-            } else {
-                openModal(siblings, idx + 1, ownerLabel);
-            }
-        });
-        addBtn.title = "在下方新增";
-        actions.appendChild(addBtn);
-
-        if (isBuilderContainerKind(node.kind)) {
-            const enterBtn = iconBtn("⤢", (e) => {
+        if (!renderCardParamsInline && isBuilderContainerKind(node.kind)) {
+            const treeCollapsed = node.treeCollapsed === true;
+            const treeToggleBtn = iconBtn(treeCollapsed ? "▸" : "▾", (e) => {
                 e.stopPropagation();
-                setFocusedNode(node.id, false);
-                navigateCardScope(node.id);
+                historyCapture("toggle_tree_collapse");
+                node.treeCollapsed = !treeCollapsed;
+                renderAll();
             });
-            enterBtn.dataset.keepMainAction = "1";
-            enterBtn.title = `进入 ${getBuilderScopeType(node)}`;
-            actions.appendChild(enterBtn);
+            treeToggleBtn.classList.add("tree-toggle-btn");
+            treeToggleBtn.dataset.keepMainAction = "1";
+            treeToggleBtn.dataset.tip = treeCollapsed ? "展开子卡片" : "折叠子卡片";
+            treeToggleBtn.setAttribute("aria-label", treeToggleBtn.dataset.tip);
+            treeToggleBtn.title = treeToggleBtn.dataset.tip;
+            actions.appendChild(treeToggleBtn);
         }
 
-        const toTopBtn = iconBtn("⇡", () => {
-            if (useFilterSwap) {
-                const target = findVisibleSwapIndex(idx, "top", siblings, scopeId);
-                if (target >= 0 && target !== idx) {
-                    historyCapture("move_top");
-                    swapInList(siblings, idx, target);
-                    renderAll();
-                }
-                return;
-            }
-            if (idx > 0) {
-                historyCapture("move_top");
-                const n = siblings.splice(idx, 1)[0];
-                siblings.unshift(n);
-                renderAll();
-            }
-        });
-        toTopBtn.title = "置顶";
-        actions.appendChild(toTopBtn);
-
-        const upBtn = iconBtn("↑", () => {
-            if (useFilterSwap) {
-                const target = findVisibleSwapIndex(idx, "prev", siblings, scopeId);
-                if (target >= 0 && target !== idx) {
-                    historyCapture("move_up");
-                    swapInList(siblings, idx, target);
-                    renderAll();
-                }
-                return;
-            }
-            if (idx > 0) {
-                historyCapture("move_up");
-                const t = siblings[idx - 1];
-                siblings[idx - 1] = siblings[idx];
-                siblings[idx] = t;
-                renderAll();
-            }
-        });
-        upBtn.title = "上移";
-        actions.appendChild(upBtn);
-
-        const downBtn = iconBtn("↓", () => {
-            if (useFilterSwap) {
-                const target = findVisibleSwapIndex(idx, "next", siblings, scopeId);
-                if (target >= 0 && target !== idx) {
-                    historyCapture("move_down");
-                    swapInList(siblings, idx, target);
-                    renderAll();
-                }
-                return;
-            }
-            if (idx < siblings.length - 1) {
-                historyCapture("move_down");
-                const t = siblings[idx + 1];
-                siblings[idx + 1] = siblings[idx];
-                siblings[idx] = t;
-                renderAll();
-            }
-        });
-        downBtn.title = "下移";
-        actions.appendChild(downBtn);
-
-        const toBottomBtn = iconBtn("⇣", () => {
-            if (useFilterSwap) {
-                const target = findVisibleSwapIndex(idx, "bottom", siblings, scopeId);
-                if (target >= 0 && target !== idx) {
-                    historyCapture("move_bottom");
-                    swapInList(siblings, idx, target);
-                    renderAll();
-                }
-                return;
-            }
-            if (idx < siblings.length - 1) {
-                historyCapture("move_bottom");
-                const n = siblings.splice(idx, 1)[0];
-                siblings.push(n);
-                renderAll();
-            }
-        });
-        toBottomBtn.title = "置底";
-        actions.appendChild(toBottomBtn);
-
-        if (node.kind === "add_line" || node.kind === "add_fill_triangle" || node.kind === "points_on_each_offset") {
-            const mirrorBtn = iconBtn("⇋", () => {
-                if (selectedNodeIds.size > 1 && selectedNodeIds.has(node.id) && typeof mirrorCopyFocusedCardAction === "function") {
-                    if (mirrorCopyFocusedCardAction()) return;
-                }
-                const cloned = mirrorCopyNode(node, getMirrorPlane());
-                if (!cloned) return;
-                historyCapture("mirror_copy");
-                siblings.splice(idx + 1, 0, cloned);
-                renderAll();
-                if (typeof showToast === "function") showToast(`已镜像粘贴 1 张卡片（${getMirrorPlaneInfo().label}）`, "success");
-                requestAnimationFrame(() => {
-                    const el = elCardsRoot.querySelector(`.card[data-id="${cloned.id}"]`);
-                    if (el) {
-                        try { el.focus(); } catch {}
-                        try { el.scrollIntoView({ block: "nearest" }); } catch {}
-                        setFocusedNode(cloned.id, false);
+        if (renderCardParamsInline) {
+            let collapsePrev = null;
+            const rememberCollapsePrev = () => {
+                if (collapsePrev !== null) return;
+                collapsePrev = node.collapsed;
+            };
+            const collapseBtn = iconBtn(node.collapsed ? "▸" : "▾", (e) => {
+                e.stopPropagation();
+                historyCapture("toggle_card_collapse");
+                const wasCollapsed = (collapsePrev !== null) ? collapsePrev : node.collapsed;
+                collapsePrev = null;
+                node.collapsed = !wasCollapsed;
+                if (typeof ctx.isCollapseAllActive === "function" && ctx.isCollapseAllActive(scopeId)) {
+                    const scope = (typeof ctx.getCollapseScope === "function") ? ctx.getCollapseScope(scopeId) : null;
+                    if (scope && scope.manualOpen) {
+                        if (node.collapsed) scope.manualOpen.delete(node.id);
+                        else scope.manualOpen.add(node.id);
                     }
-                });
+                }
+                const synced = (typeof ctx.syncCardCollapseUI === "function") ? ctx.syncCardCollapseUI(node.id) : false;
+                if (!synced) {
+                    card.classList.toggle("collapsed", node.collapsed);
+                    collapseBtn.textContent = node.collapsed ? "▸" : "▾";
+                    collapseBtn.title = node.collapsed ? "展开" : "收起";
+                }
             });
-            mirrorBtn.dataset.mirrorBtn = "1";
-            mirrorBtn.title = `镜像复制（${getMirrorPlaneInfo().label}）`;
-            actions.appendChild(mirrorBtn);
+            collapseBtn.addEventListener("pointerdown", rememberCollapsePrev);
+            collapseBtn.addEventListener("mousedown", rememberCollapsePrev);
+            collapseBtn.addEventListener("touchstart", rememberCollapsePrev, { passive: true });
+            collapseBtn.addEventListener("keydown", (ev) => {
+                if (ev.key === " " || ev.key === "Enter") rememberCollapsePrev();
+            });
+            collapseBtn.dataset.collapseBtn = "1";
+            collapseBtn.title = node.collapsed ? "展开" : "收起";
+            actions.appendChild(collapseBtn);
+
+            const addBtn = iconBtn("＋", () => {
+                if (isBuilderContainerKind(node.kind)) {
+                    openModal(node.children, (node.children || []).length, "子Builder", node.id);
+                } else {
+                    openModal(siblings, idx + 1, ownerLabel);
+                }
+            });
+            addBtn.title = "在下方新增";
+            actions.appendChild(addBtn);
+
+            if (isBuilderContainerKind(node.kind)) {
+                const enterBtn = iconBtn("⤢", (e) => {
+                    e.stopPropagation();
+                    setFocusedNode(node.id, false);
+                    navigateCardScope(node.id);
+                });
+                enterBtn.dataset.keepMainAction = "1";
+                enterBtn.title = `进入 ${getBuilderScopeType(node)}`;
+                actions.appendChild(enterBtn);
+            }
+
+            const toTopBtn = iconBtn("⇡", () => {
+                if (useFilterSwap) {
+                    const target = findVisibleSwapIndex(idx, "top", siblings, scopeId);
+                    if (target >= 0 && target !== idx) {
+                        historyCapture("move_top");
+                        swapInList(siblings, idx, target);
+                        renderAll();
+                    }
+                    return;
+                }
+                if (idx > 0) {
+                    historyCapture("move_top");
+                    const n = siblings.splice(idx, 1)[0];
+                    siblings.unshift(n);
+                    renderAll();
+                }
+            });
+            toTopBtn.title = "置顶";
+            actions.appendChild(toTopBtn);
+
+            const upBtn = iconBtn("↑", () => {
+                if (useFilterSwap) {
+                    const target = findVisibleSwapIndex(idx, "prev", siblings, scopeId);
+                    if (target >= 0 && target !== idx) {
+                        historyCapture("move_up");
+                        swapInList(siblings, idx, target);
+                        renderAll();
+                    }
+                    return;
+                }
+                if (idx > 0) {
+                    historyCapture("move_up");
+                    const t = siblings[idx - 1];
+                    siblings[idx - 1] = siblings[idx];
+                    siblings[idx] = t;
+                    renderAll();
+                }
+            });
+            upBtn.title = "上移";
+            actions.appendChild(upBtn);
+
+            const downBtn = iconBtn("↓", () => {
+                if (useFilterSwap) {
+                    const target = findVisibleSwapIndex(idx, "next", siblings, scopeId);
+                    if (target >= 0 && target !== idx) {
+                        historyCapture("move_down");
+                        swapInList(siblings, idx, target);
+                        renderAll();
+                    }
+                    return;
+                }
+                if (idx < siblings.length - 1) {
+                    historyCapture("move_down");
+                    const t = siblings[idx + 1];
+                    siblings[idx + 1] = siblings[idx];
+                    siblings[idx] = t;
+                    renderAll();
+                }
+            });
+            downBtn.title = "下移";
+            actions.appendChild(downBtn);
+
+            const toBottomBtn = iconBtn("⇣", () => {
+                if (useFilterSwap) {
+                    const target = findVisibleSwapIndex(idx, "bottom", siblings, scopeId);
+                    if (target >= 0 && target !== idx) {
+                        historyCapture("move_bottom");
+                        swapInList(siblings, idx, target);
+                        renderAll();
+                    }
+                    return;
+                }
+                if (idx < siblings.length - 1) {
+                    historyCapture("move_bottom");
+                    const n = siblings.splice(idx, 1)[0];
+                    siblings.push(n);
+                    renderAll();
+                }
+            });
+            toBottomBtn.title = "置底";
+            actions.appendChild(toBottomBtn);
+
+            if (node.kind === "add_line" || node.kind === "add_fill_triangle" || node.kind === "points_on_each_offset") {
+                const mirrorBtn = iconBtn("⇋", () => {
+                    if (selectedNodeIds.size > 1 && selectedNodeIds.has(node.id) && typeof mirrorCopyFocusedCardAction === "function") {
+                        if (mirrorCopyFocusedCardAction()) return;
+                    }
+                    const cloned = mirrorCopyNode(node, getMirrorPlane());
+                    if (!cloned) return;
+                    historyCapture("mirror_copy");
+                    siblings.splice(idx + 1, 0, cloned);
+                    renderAll();
+                    if (typeof showToast === "function") showToast(`已镜像粘贴 1 张卡片（${getMirrorPlaneInfo().label}）`, "success");
+                    requestAnimationFrame(() => {
+                        const el = elCardsRoot.querySelector(`.card[data-id="${cloned.id}"]`);
+                        if (el) {
+                            try { el.focus(); } catch {}
+                            try { el.scrollIntoView({ block: "nearest" }); } catch {}
+                            setFocusedNode(cloned.id, false);
+                        }
+                    });
+                });
+                mirrorBtn.dataset.mirrorBtn = "1";
+                mirrorBtn.title = `镜像复制（${getMirrorPlaneInfo().label}）`;
+                actions.appendChild(mirrorBtn);
+            }
         }
 
         // ✅ 复制卡片：在当前卡片下方插入一张一模一样的（含子卡片/terms）
@@ -2708,28 +2831,30 @@ export function initCardSystem(ctx = {}) {
         head.appendChild(title);
         head.appendChild(actions);
 
-        const body = document.createElement("div");
-        body.className = "card-body";
-        if (Number.isFinite(node.bodyHeight) && !node.collapsed) {
-            body.style.height = `${node.bodyHeight}px`;
-            body.style.maxHeight = `${node.bodyHeight}px`;
+        if (renderCardParamsInline) {
+            const body = document.createElement("div");
+            body.className = "card-body";
+            if (Number.isFinite(node.bodyHeight) && !node.collapsed) {
+                body.style.height = `${node.bodyHeight}px`;
+                body.style.maxHeight = `${node.bodyHeight}px`;
+            }
+
+            if (def?.desc) {
+                const d = document.createElement("div");
+                d.className = "pill";
+                d.textContent = def.desc;
+                body.appendChild(d);
+            }
+            renderParamsEditors(body, node, ownerLabel);
+            card.appendChild(head);
+            card.appendChild(body);
+            const resizer = document.createElement("div");
+            resizer.className = "card-resizer";
+            bindCardBodyResizer(resizer, body, node);
+            card.appendChild(resizer);
+        } else {
+            card.appendChild(head);
         }
-
-        if (def?.desc) {
-            const d = document.createElement("div");
-            d.className = "pill";
-            d.textContent = def.desc;
-            body.appendChild(d);
-        }
-
-        renderParamsEditors(body, node, ownerLabel);
-
-        card.appendChild(head);
-        card.appendChild(body);
-        const resizer = document.createElement("div");
-        resizer.className = "card-resizer";
-        bindCardBodyResizer(resizer, body, node);
-        card.appendChild(resizer);
 
         // ✅ 聚焦高亮：卡片获得焦点时，让对应新增的粒子变色
         card.tabIndex = 0; // 让卡片标题区也可获得焦点（点击空白处也算聚焦）
@@ -2835,6 +2960,32 @@ export function initCardSystem(ctx = {}) {
         applyCardSwapAnimationIn(elCardsRoot, prevPositions);
     }
 
+    function renderNodeTree(node, siblings, idx, ownerLabel, ownerNode = null, depth = 0) {
+        const wrap = document.createElement("div");
+        wrap.className = `pb-tree-node depth-${Math.min(6, Math.max(0, depth | 0))}`;
+        wrap.appendChild(renderNodeCard(node, siblings, idx, ownerLabel, ownerNode));
+
+        if (node && isBuilderContainerKind(node.kind)) {
+            if (!Array.isArray(node.children)) node.children = [];
+            const childrenVisible = renderCardParamsInline ? !node.collapsed : node.treeCollapsed !== true;
+            if (childrenVisible) {
+                const children = document.createElement("div");
+                children.className = "pb-tree-children builder-drop-surface";
+                if (!node.children.length) children.classList.add("empty");
+                setupListDropZone(children, () => node.children, () => node);
+
+                const entries = getVisibleEntries(node.children, node.id)
+                    || node.children.map((child, index) => ({ node: child, index }));
+                for (const it of entries) {
+                    children.appendChild(renderNodeTree(it.node, node.children, it.index, "子Builder", node, depth + 1));
+                }
+                wrap.appendChild(children);
+            }
+        }
+
+        return wrap;
+    }
+
     function renderCards() {
         const pruned = pruneSelectedNodeIds();
         setIsRenderingCards(true);
@@ -2846,10 +2997,13 @@ export function initCardSystem(ctx = {}) {
             const list = scopeCtx.list || [];
             updateScopeToolbar(scopeCtx);
             elCardsRoot.appendChild(renderScopeBar(scopeCtx));
+            const tree = document.createElement("div");
+            tree.className = "pb-tree";
             const entries = getVisibleEntries(list, scopeCtx.scopeId) || list.map((node, index) => ({ node, index }));
             for (const it of entries) {
-                elCardsRoot.appendChild(renderNodeCard(it.node, list, it.index, scopeCtx.label || "主Builder", scopeCtx.ownerNode || null));
+                tree.appendChild(renderNodeTree(it.node, list, it.index, scopeCtx.label || "主Builder", scopeCtx.ownerNode || null, 0));
             }
+            elCardsRoot.appendChild(tree);
         } finally {
             setIsRenderingCards(false);
         }
@@ -3789,6 +3943,7 @@ export function initCardSystem(ctx = {}) {
         initCollapseAllControls,
         setupListDropZone,
         addQuickOffsetTo,
+        navigateCardScope,
         revealCardScopeById,
         getCurrentCardScopeContext,
         getSelectedNodeIds,

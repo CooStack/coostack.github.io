@@ -1,11 +1,11 @@
 import * as THREE from "three";
 import {OrbitControls} from "three/addons/controls/OrbitControls.js";
-import { createCardInputs, initCardSystem } from "./cards.js?v=20260321_4";
-import { initFilterSystem } from "./filters.js?v=20260321_1";
+import { createCardInputs, initCardSystem } from "./cards.js?v=20260429_6";
+import { initFilterSystem } from "./filters.js?v=20260429_4";
 import { initHotkeysSystem } from "./hotkeys.js?v=20260321_5";
 import { createKindDefs } from "./kinds.js?v=20260321_2";
 import { createBuilderTools } from "./builder.js?v=20260321_1";
-import { initLayoutSystem } from "./layout.js";
+import { initLayoutSystem } from "./layout.js?v=20260429_1";
 import { createNodeHelpers } from "./nodes.js?v=20260316_1";
 import { toggleFullscreen } from "./viewer.js";
 import { createPickerModule } from "./main-picker.js";
@@ -63,6 +63,13 @@ function initPointsBuilderMain() {
     const btnExportKotlin2 = document.getElementById("btnExportKotlin2");
     const btnDownloadKotlin2 = document.getElementById("btnDownloadKotlin2");
     const selKotlinEnd = document.getElementById("selKotlinEnd");
+    const btnRightParamsTab = document.getElementById("btnRightParamsTab");
+    const btnRightKotlinTab = document.getElementById("btnRightKotlinTab");
+    const rightParamsPage = document.getElementById("rightParamsPage");
+    const rightKotlinPage = document.getElementById("rightKotlinPage");
+    const paramEditorStatus = document.getElementById("paramEditorStatus");
+    const paramEditorSyncHint = document.getElementById("paramEditorSyncHint");
+    const paramEditorHost = document.getElementById("paramEditorHost");
 
     const btnSaveJson = document.getElementById("btnSaveJson");
     const btnLoadJson = document.getElementById("btnLoadJson");
@@ -135,6 +142,10 @@ function initPointsBuilderMain() {
     let quickSyncState = null;
     let quickSyncHistoryLockTimer = 0;
     let quickSyncCardsRenderTimer = 0;
+    let rightPanelPage = "params";
+    let paramEditorSyncState = null;
+    let paramEditorRenderRaf = 0;
+    let paramEditorHistoryLockTimer = 0;
 
     // -------------------------
     // helpers
@@ -378,6 +389,187 @@ function initPointsBuilderMain() {
                 hideQuickSyncPanel();
             }
         }, true);
+    }
+
+    function setRightPanelPage(page) {
+        const next = page === "kotlin" ? "kotlin" : "params";
+        rightPanelPage = next;
+        const paramsActive = next === "params";
+        btnRightParamsTab?.classList.toggle("active", paramsActive);
+        btnRightKotlinTab?.classList.toggle("active", !paramsActive);
+        rightParamsPage?.classList.toggle("active", paramsActive);
+        rightKotlinPage?.classList.toggle("active", !paramsActive);
+        btnRightParamsTab?.setAttribute("aria-selected", paramsActive ? "true" : "false");
+        btnRightKotlinTab?.setAttribute("aria-selected", paramsActive ? "false" : "true");
+        if (paramsActive) scheduleParamEditorRender();
+    }
+
+    function bindRightPanelTabs() {
+        btnRightParamsTab?.addEventListener("click", () => setRightPanelPage("params"));
+        btnRightKotlinTab?.addEventListener("click", () => setRightPanelPage("kotlin"));
+        setRightPanelPage(rightPanelPage);
+    }
+
+    function detachParamEditorHandlers() {
+        if (!paramEditorHost) return;
+        if (paramEditorHost.__pbParamEditorInputHandler) {
+            paramEditorHost.removeEventListener("input", paramEditorHost.__pbParamEditorInputHandler);
+            paramEditorHost.__pbParamEditorInputHandler = null;
+        }
+        if (paramEditorHost.__pbParamEditorChangeHandler) {
+            paramEditorHost.removeEventListener("change", paramEditorHost.__pbParamEditorChangeHandler);
+            paramEditorHost.__pbParamEditorChangeHandler = null;
+        }
+    }
+
+    function isParamEditorRerenderControl(ev) {
+        const t = ev && ev.target;
+        const tag = t && t.tagName ? String(t.tagName).toUpperCase() : "";
+        const type = t && t.type ? String(t.type).toLowerCase() : "";
+        return tag === "SELECT" || (tag === "INPUT" && (type === "checkbox" || type === "radio"));
+    }
+
+    function getParamEditorTargetIds() {
+        const selectedSet = (typeof getCardSelectionIds === "function") ? getCardSelectionIds() : null;
+        const selectedIds = selectedSet ? normalizeActionTargetIds(Array.from(selectedSet)) : [];
+        if (selectedIds.length) return selectedIds;
+        if (focusedNodeId) return normalizeActionTargetIds([focusedNodeId]);
+        return [];
+    }
+
+    function getParamEditorNodes(ids) {
+        const out = [];
+        for (const id of ids || []) {
+            const ctx = findNodeContextById(id);
+            if (ctx && ctx.node) out.push(ctx.node);
+        }
+        return out;
+    }
+
+    function setParamEditorSyncHint(text) {
+        if (!paramEditorSyncHint) return;
+        const msg = String(text || "").trim();
+        paramEditorSyncHint.textContent = msg;
+        paramEditorSyncHint.classList.toggle("hidden", !msg);
+    }
+
+    function renderParamEditorEmpty(text) {
+        if (!paramEditorHost) return;
+        const empty = document.createElement("div");
+        empty.className = "param-editor-empty";
+        empty.textContent = text;
+        paramEditorHost.appendChild(empty);
+    }
+
+    function syncDockedParamEditorFromSource(sourceId, options = {}) {
+        if (!paramEditorSyncState || !sourceId) return;
+        const sourceCtx = findNodeContextById(sourceId);
+        if (!sourceCtx || !sourceCtx.node) return;
+        const source = sourceCtx.node;
+        const prev = paramEditorSyncState.snapshots.get(sourceId) || {};
+        const diff = diffPlain(prev, source.params || {});
+        if (!diff.length) {
+            if (options.rerender) scheduleParamEditorRender();
+            return;
+        }
+        if (!paramEditorHistoryLockTimer) {
+            historyCapture("right_param_sync");
+            paramEditorHistoryLockTimer = setTimeout(() => {
+                paramEditorHistoryLockTimer = 0;
+            }, 180);
+        }
+
+        let changed = false;
+        for (const id of paramEditorSyncState.ids) {
+            if (id === sourceId) continue;
+            const ctx = findNodeContextById(id);
+            if (!ctx || !ctx.node || ctx.node.kind !== paramEditorSyncState.kind) continue;
+            if (!ctx.node.params) ctx.node.params = {};
+            applyPlainDiff(ctx.node.params, diff);
+            changed = true;
+        }
+
+        for (const id of paramEditorSyncState.ids) {
+            const ctx = findNodeContextById(id);
+            if (!ctx || !ctx.node) continue;
+            paramEditorSyncState.snapshots.set(id, clonePlain(ctx.node.params || {}));
+        }
+
+        if (changed) {
+            rebuildPreviewAndKotlin();
+            if (typeof renderCards === "function") renderCards();
+        }
+        if (options.rerender) scheduleParamEditorRender();
+    }
+
+    function updateRightParamEditor() {
+        if (!paramEditorHost || !paramEditorStatus) return;
+        detachParamEditorHandlers();
+        paramEditorHost.innerHTML = "";
+        setParamEditorSyncHint("");
+        paramEditorSyncState = null;
+
+        const ids = getParamEditorTargetIds();
+        const nodes = getParamEditorNodes(ids);
+        if (!nodes.length) {
+            paramEditorStatus.textContent = "选择左侧卡片后编辑参数";
+            renderParamEditorEmpty("未选择卡片");
+            return;
+        }
+
+        const first = nodes[0];
+        const firstKind = first.kind;
+        const sameKind = nodes.every((node) => node && node.kind === firstKind);
+        if (!sameKind) {
+            paramEditorStatus.textContent = "编辑参数请选择同类型的卡片";
+            renderParamEditorEmpty("编辑参数请选择同类型的卡片");
+            return;
+        }
+
+        const kindDef = (KIND && KIND[firstKind]) || {};
+        const title = kindDef.title || firstKind || "未命名卡片";
+        const source = first;
+        if (nodes.length > 1) {
+            paramEditorStatus.textContent = `正在编辑：${title}（${nodes.length} 张）`;
+            setParamEditorSyncHint(`参数同步已启用：${nodes.length} 张同类型卡片会使用同一套参数`);
+            paramEditorSyncState = {
+                ids: ids.slice(),
+                kind: firstKind,
+                sourceId: source.id,
+                snapshots: new Map()
+            };
+            for (const node of nodes) {
+                paramEditorSyncState.snapshots.set(node.id, clonePlain(node.params || {}));
+            }
+        } else {
+            paramEditorStatus.textContent = `正在编辑：${title}`;
+        }
+
+        if (typeof renderParamsEditors === "function") {
+            renderParamsEditors(paramEditorHost, source, nodes.length > 1 ? "参数同步" : "卡片编辑", { paramsOnly: true });
+        }
+        applyParamStepToInputs();
+
+        const onInput = () => {
+            if (paramEditorSyncState) syncDockedParamEditorFromSource(source.id);
+        };
+        const onChange = (ev) => {
+            const rerender = isParamEditorRerenderControl(ev);
+            if (paramEditorSyncState) syncDockedParamEditorFromSource(source.id, { rerender });
+            else if (rerender) scheduleParamEditorRender();
+        };
+        paramEditorHost.__pbParamEditorInputHandler = onInput;
+        paramEditorHost.__pbParamEditorChangeHandler = onChange;
+        paramEditorHost.addEventListener("input", onInput);
+        paramEditorHost.addEventListener("change", onChange);
+    }
+
+    function scheduleParamEditorRender() {
+        if (paramEditorRenderRaf) return;
+        paramEditorRenderRaf = requestAnimationFrame(() => {
+            paramEditorRenderRaf = 0;
+            updateRightParamEditor();
+        });
     }
 
     const THEMES = [
@@ -1061,7 +1253,7 @@ function initPointsBuilderMain() {
     }
 
     let getFilterScope, saveRootFilter, isFilterActive, filterAllows, getVisibleEntries, getVisibleIndices, swapInList, findVisibleSwapIndex, cleanupFilterMenus;
-      let renderCards, renderParamsEditors, layoutActionOverflow, initCollapseAllControls, setupListDropZone, addQuickOffsetTo;
+      let renderCards, renderParamsEditors, layoutActionOverflow, initCollapseAllControls, setupListDropZone, addQuickOffsetTo, navigateCardScope;
       let revealCardScopeById, getCurrentCardScopeContext;
       let createFilterControls, createParamSyncControls, renderSyncMenu, bindParamSyncListeners, isSyncSelectableEvent, toggleSyncTarget, setSyncTargetsByIds, setSyncEnabled, paramSync;
       let getCardSelectionIds, setCardSelectionIds, clearCardSelectionIds;
@@ -4642,6 +4834,7 @@ function initPointsBuilderMain() {
         updateFocusColors();
         updateBezierGuidePreview();
         updateFocusCardUI();
+        scheduleParamEditorRender();
         handleCollapseAllFocusChange(prev, focusedNodeId);
     }
 
@@ -4656,6 +4849,7 @@ function initPointsBuilderMain() {
         updateFocusColors();
         updateBezierGuidePreview();
         updateFocusCardUI();
+        scheduleParamEditorRender();
         handleCollapseAllFocusChange(prev, null);
     }
 
@@ -6271,21 +6465,47 @@ function openQuickSyncTargetIdsAt(ids, clientX, clientY) {
     return quickSyncTargetIds(ids, { x: clientX, y: clientY });
 }
 
+function openDockedParamEditorForIds(ids) {
+    const valid = normalizeActionTargetIds(ids);
+    if (!valid.length) return false;
+    if (typeof setCardSelectionIds === "function") {
+        setCardSelectionIds(valid, { replace: true, focus: false, syncWithParamSync: false });
+    }
+    focusCardById(valid[0], false, false, true);
+    if (typeof setKotlinHidden === "function" && typeof isKotlinHidden === "function" && isKotlinHidden()) {
+        setKotlinHidden(false);
+    }
+    setRightPanelPage("params");
+    scheduleParamEditorRender();
+    return true;
+}
+
 function openActionMenuForBlankNoSelection(ev) {
     if (!ev || !isActionMenuAllowed()) {
         hideActionMenu();
         hideQuickSyncPanel();
         return false;
     }
-    const selectedSet = (typeof getCardSelectionIds === "function") ? getCardSelectionIds() : null;
-    const selectedCount = selectedSet ? selectedSet.size : 0;
-    if (selectedCount > 0) return false;
+    const getBlankInsertContext = () => {
+        if (typeof getCurrentCardScopeContext === "function") {
+            const scopeCtx = getCurrentCardScopeContext();
+            if (scopeCtx && Array.isArray(scopeCtx.list)) {
+                return {
+                    list: scopeCtx.list,
+                    insertIndex: scopeCtx.list.length,
+                    label: scopeCtx.label || (scopeCtx.ownerNode ? "子Builder" : "主Builder"),
+                    ownerNode: scopeCtx.ownerNode || null
+                };
+            }
+        }
+        return getInsertContextFromFocus();
+    };
     hideQuickSyncPanel();
     const items = [
         {
             label: "添加卡片",
             onSelect: () => {
-                const ctx = getInsertContextFromFocus();
+                const ctx = getBlankInsertContext();
                 const ownerNodeId = (ctx && ctx.ownerNode && isBuilderContainerKind(ctx.ownerNode.kind)) ? ctx.ownerNode.id : null;
                 openModal(ctx.list, ctx.insertIndex, ctx.label, ownerNodeId);
             }
@@ -6295,7 +6515,7 @@ function openActionMenuForBlankNoSelection(ev) {
             onSelect: () => {
                 if (linePickMode) stopLinePick();
                 if (pointPickMode) stopPointPick();
-                const ctx = getInsertContextFromFocus();
+                const ctx = getBlankInsertContext();
                 startLinePick(ctx.list, ctx.label, ctx.insertIndex);
             }
         },
@@ -6304,7 +6524,7 @@ function openActionMenuForBlankNoSelection(ev) {
             onSelect: () => {
                 if (linePickMode) stopLinePick();
                 if (pointPickMode) stopPointPick();
-                const ctx = getInsertContextFromFocus();
+                const ctx = getBlankInsertContext();
                 startTrianglePick(ctx.list, ctx.label, ctx.insertIndex);
             }
         },
@@ -6332,10 +6552,30 @@ function openActionMenuForTargets(ev, targetIds, options = {}) {
     const allowQuickSync = !!options.allowQuickSync;
     const sameKind = areActionTargetsSameKind(ids);
     const items = [];
+    if (ids.length === 1) {
+        const ctxNode = findNodeContextById(ids[0]);
+        if (ctxNode && Array.isArray(ctxNode.parentList)) {
+            const label = ctxNode.parentNode ? "子Builder" : "主Builder";
+            if (ctxNode.node && isBuilderContainerKind(ctxNode.node.kind) && typeof navigateCardScope === "function") {
+                items.push({
+                    label: "进入内层",
+                    onSelect: () => navigateCardScope(ctxNode.node.id)
+                });
+            }
+            items.push({
+                label: "向上插入卡片",
+                onSelect: () => openModal(ctxNode.parentList, ctxNode.index, label)
+            });
+            items.push({
+                label: "向下插入卡片",
+                onSelect: () => openModal(ctxNode.parentList, ctxNode.index + 1, label)
+            });
+        }
+    }
     if (allowQuickSync && sameKind && ids.length >= 1) {
         items.push({
             label: "修改参数",
-            onSelect: () => openQuickSyncTargetIdsAt(ids, ev.clientX, ev.clientY)
+            onSelect: () => openDockedParamEditorForIds(ids)
         });
     }
     items.push({
@@ -6420,7 +6660,7 @@ function onCardsContextMenu(ev) {
     if (!useSelectedGroup && typeof setCardSelectionIds === "function") {
         setCardSelectionIds(targetIds, { replace: true, focus: false, syncWithParamSync: false });
     }
-    focusCardById(id, false, false, true);
+    focusCardById(id, false, false, false);
     openActionMenuForTargets(ev, targetIds, { allowQuickSync: true });
 }
 
@@ -8202,6 +8442,7 @@ function collectSyntheticVecTargetsForNode(node) {
         // 保持选中卡片：用于高亮 & 插入规则（addBuilder 内新增等）
         applyCollapseAllStates();
         renderCards();
+        scheduleParamEditorRender();
         if (paramSync && paramSync.open && typeof renderSyncMenu === "function") renderSyncMenu();
         applyParamStepToInputs();
         // 如果选中的卡片已不存在，则清空
@@ -8253,6 +8494,7 @@ function collectSyntheticVecTargetsForNode(node) {
       const cardSystem = initCardSystem({
           KIND,
         elCardsRoot,
+        renderCardParamsInline: false,
         row,
         inputNum,
         select,
@@ -8319,7 +8561,11 @@ function collectSyntheticVecTargetsForNode(node) {
           getLinePickMode: () => linePickMode,
           getPointPickMode: () => pointPickMode,
           setDraggingState: (v) => { isDraggingCard = !!v; },
-          onCardSelectionChange: () => updateFocusColors(),
+          onCardSelectionChange: () => {
+              updateFocusColors();
+              setRightPanelPage("params");
+              scheduleParamEditorRender();
+          },
           syncCardCollapseUI,
           isCollapseAllActive,
           getCollapseScope,
@@ -8333,6 +8579,7 @@ function collectSyntheticVecTargetsForNode(node) {
         initCollapseAllControls,
         setupListDropZone,
         addQuickOffsetTo,
+        navigateCardScope,
         revealCardScopeById,
         getCurrentCardScopeContext,
         getSelectedNodeIds: getCardSelectionIds,
@@ -8472,6 +8719,8 @@ function collectSyntheticVecTargetsForNode(node) {
         }
         fileJson && fileJson.click();
     }
+
+    bindRightPanelTabs();
 
     initTopbarAndBoot({
         btnExportKotlin,

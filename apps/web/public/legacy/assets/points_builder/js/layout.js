@@ -88,10 +88,10 @@ export function initLayoutSystem(options = {}) {
         if (!btnToggleKotlin) return;
         if (layoutState.kotlinHidden) {
             btnToggleKotlin.textContent = "<";
-            btnToggleKotlin.title = "显示 Kotlin";
+            btnToggleKotlin.title = "显示右侧面板";
         } else {
             btnToggleKotlin.textContent = ">";
-            btnToggleKotlin.title = "隐藏 Kotlin";
+            btnToggleKotlin.title = "折叠右侧面板";
         }
     }
 

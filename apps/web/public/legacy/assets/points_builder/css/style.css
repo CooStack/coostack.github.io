@@ -485,7 +485,10 @@ body {
     width: 360px;
     flex: 0 0 360px;
     min-height: 0;
-    margin-right: 6px
+    margin-right: 6px;
+    overflow: visible;
+    position: relative;
+    z-index: 40;
 }
 
 .panel.right {
@@ -504,12 +507,91 @@ body {
 }
 
 .panel-tools {
-    padding: 8px 12px;
+    position: relative;
+    z-index: 10020;
+    padding: 7px 12px;
     border-bottom: 1px solid var(--line);
     display: flex;
     gap: 8px;
-    flex-wrap: wrap;
+    flex-wrap: nowrap;
+    align-items: center;
     background: rgba(0, 0, 0, .08);
+    overflow: visible;
+}
+
+.panel-tool-icon {
+    position: relative;
+    width: 34px;
+    height: 32px;
+    border-radius: 9px;
+    border: 1px solid var(--line2);
+    background: color-mix(in srgb, var(--panel2) 70%, transparent);
+    color: var(--text);
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font: 700 17px/1 var(--font);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, .05);
+    transition: background .15s ease, border-color .15s ease, color .15s ease, transform .15s ease;
+}
+
+.panel-tool-icon svg {
+    width: 18px;
+    height: 18px;
+    display: block;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.9;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+}
+
+.panel-tool-icon:hover,
+.panel-tool-icon:focus-visible {
+    background: color-mix(in srgb, var(--accent) 16%, var(--panel2));
+    border-color: color-mix(in srgb, var(--accent) 52%, transparent);
+    outline: none;
+    transform: translateY(-1px);
+}
+
+.panel-tool-icon.primary {
+    color: var(--text);
+    background: color-mix(in srgb, var(--accent) 24%, var(--panel2));
+    border-color: color-mix(in srgb, var(--accent) 68%, transparent);
+}
+
+.panel-tool-icon[data-tip]::before,
+.panel-tool-icon[data-tip]::after {
+    display: none;
+}
+
+.pb-floating-tip {
+    position: fixed;
+    z-index: 2147483000;
+    min-width: max-content;
+    max-width: 220px;
+    padding: 7px 10px;
+    border-radius: 9px;
+    border: 1px solid var(--line2);
+    background: linear-gradient(
+        180deg,
+        color-mix(in srgb, var(--panel) 94%, black),
+        color-mix(in srgb, var(--panel2) 92%, black)
+    );
+    color: var(--text);
+    box-shadow: var(--shadow2);
+    font-size: 12px;
+    font-weight: 650;
+    line-height: 1.2;
+    white-space: nowrap;
+    letter-spacing: 0;
+    pointer-events: none;
+    opacity: 1;
+}
+
+.pb-floating-tip.hidden {
+    display: none;
 }
 
 .kotlin-tools {
@@ -1160,6 +1242,74 @@ body {
     background-clip: content-box
 }
 
+.pb-tree {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.pb-tree-node {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    min-width: 0;
+}
+
+.pb-tree-node.depth-1,
+.pb-tree-node.depth-2,
+.pb-tree-node.depth-3,
+.pb-tree-node.depth-4,
+.pb-tree-node.depth-5,
+.pb-tree-node.depth-6 {
+    padding-left: 6px;
+}
+
+.pb-tree-node.depth-1::before,
+.pb-tree-node.depth-2::before,
+.pb-tree-node.depth-3::before,
+.pb-tree-node.depth-4::before,
+.pb-tree-node.depth-5::before,
+.pb-tree-node.depth-6::before {
+    display: none;
+}
+
+.pb-tree-children {
+    display: flex;
+    flex-direction: column;
+    gap: 7px;
+    margin-left: 6px;
+    padding-left: 5px;
+    border-left: 0;
+    min-height: 10px;
+}
+
+.pb-tree-children.empty {
+    min-height: 28px;
+    border-radius: 8px;
+    border: 1px dashed color-mix(in srgb, var(--accent) 28%, transparent);
+    background: color-mix(in srgb, var(--panel2) 44%, transparent);
+}
+
+.card-tree-summary {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    min-width: 0;
+    padding: 7px 9px;
+    border-radius: 9px;
+    border: 1px solid color-mix(in srgb, var(--text) 10%, transparent);
+    background: color-mix(in srgb, var(--panel2) 56%, transparent);
+    color: var(--muted);
+    font-size: 12px;
+}
+
+.card-tree-summary strong {
+    color: var(--text);
+    font-weight: 650;
+}
+
 .viewer {
     flex: 1;
     min-width: 0;
@@ -1259,6 +1409,124 @@ body.resizing-panels .panel.right {
     display: flex;
     align-items: center;
     gap: 8px;
+}
+
+.right-panel-title {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+}
+
+.right-tabs {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 3px;
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    background: rgba(0, 0, 0, .16);
+}
+
+.right-tab {
+    appearance: none;
+    border: 1px solid transparent;
+    background: transparent;
+    color: var(--muted);
+    height: 26px;
+    padding: 0 9px;
+    border-radius: 8px;
+    cursor: pointer;
+    font-size: 12px;
+}
+
+.right-tab.active {
+    color: var(--text);
+    border-color: color-mix(in srgb, var(--accent) 38%, transparent);
+    background: color-mix(in srgb, var(--accent) 18%, transparent);
+}
+
+.right-page {
+    display: none;
+    flex: 1 1 auto;
+    min-height: 0;
+    flex-direction: column;
+}
+
+.right-page.active {
+    display: flex;
+}
+
+.right-params-page {
+    overflow: hidden;
+}
+
+.right-kotlin-page {
+    overflow: hidden;
+}
+
+.param-editor-status {
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--line);
+    color: var(--muted);
+    font-size: 12px;
+}
+
+.param-editor-sync-hint {
+    margin: 10px 12px 0;
+    padding: 8px 10px;
+    border: 1px solid color-mix(in srgb, var(--accent) 34%, transparent);
+    border-radius: 10px;
+    background: color-mix(in srgb, var(--accent) 14%, transparent);
+    color: var(--text);
+    font-size: 12px;
+}
+
+.param-editor-host {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow: auto;
+    padding: 10px 12px 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    scrollbar-width: thin;
+    scrollbar-color: rgba(120, 170, 255, .45) rgba(0,0,0,.18);
+}
+
+.param-editor-host::-webkit-scrollbar{ width: 10px; }
+.param-editor-host::-webkit-scrollbar-track{
+    background: rgba(0,0,0,.18);
+    border-radius: 10px;
+}
+.param-editor-host::-webkit-scrollbar-thumb{
+    background: linear-gradient(180deg, rgba(120,170,255,.55), rgba(78,161,255,.35));
+    border-radius: 10px;
+    border: 2px solid rgba(0,0,0,.25);
+    background-clip: padding-box;
+}
+
+.param-editor-host .emitBody,
+.param-editor-host .cmdBody,
+.param-editor-host .grid1,
+.param-editor-host .grid2,
+.param-editor-host .grid3,
+.param-editor-host .vec3Row {
+    grid-template-columns: 92px 1fr;
+}
+
+.param-editor-host .label {
+    width: 92px;
+    flex-basis: 92px;
+}
+
+.param-editor-empty {
+    padding: 12px;
+    border: 1px dashed var(--line2);
+    border-radius: 10px;
+    color: var(--muted);
+    background: rgba(255, 255, 255, .03);
+    font-size: 12px;
 }
 
 .kotlin-toggle {
@@ -1588,12 +1856,24 @@ body.resizing-panels .panel.right {
     flex-wrap: wrap;
 }
 
+.card.compact-card .card-head {
+    padding: 7px 8px;
+    min-height: 38px;
+    border-bottom: 0;
+    flex-wrap: nowrap;
+}
+
 .card-title {
     flex: 1 1 auto;
     min-width: 0;
     display: flex;
     align-items: center;
     gap: 8px;
+}
+
+.card.compact-card .card-title {
+    flex: 1 1 auto;
+    gap: 7px;
 }
 
 .handle {
@@ -1627,6 +1907,10 @@ body.resizing-panels .panel.right {
     min-width: 0;
 }
 
+.card.compact-card .title-text {
+    font-size: 12px;
+}
+
 .badge2 {
     flex: 0 0 auto;
     font-size: 11px;
@@ -1635,6 +1919,11 @@ body.resizing-panels .panel.right {
     padding: 2px 8px;
     border-radius: 999px;
     background: rgba(0, 0, 0, .18);
+}
+
+.card.compact-card .badge2 {
+    padding: 1px 7px;
+    font-size: 10.5px;
 }
 
 .card-actions {
@@ -1650,11 +1939,34 @@ body.resizing-panels .panel.right {
     min-width: 0;
 }
 
+.card.compact-card .card-actions {
+    margin-left: auto;
+    gap: 6px;
+    overflow: visible;
+}
+
 .card-actions .iconbtn,
 .card-actions .btn,
 .card-actions .more-wrap {
     flex: 0 0 auto;
     flex-shrink: 0;
+}
+
+.card.compact-card .iconbtn {
+    width: 26px;
+    height: 26px;
+    border-radius: 8px;
+}
+
+.card.compact-card .tree-toggle-btn {
+    color: var(--text);
+    border-color: color-mix(in srgb, var(--accent) 42%, transparent);
+    background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+.card.compact-card .tree-toggle-btn:hover {
+    border-color: color-mix(in srgb, var(--accent) 64%, transparent);
+    background: color-mix(in srgb, var(--accent) 18%, transparent);
 }
 
 /* ✅ 子卡片更紧凑：嵌套层级多时减少“按钮拥挤” */

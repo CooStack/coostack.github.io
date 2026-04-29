@@ -3132,6 +3132,15 @@ class CompositionBuilderApp {
                 case "open-builder-editor":
                     this.openBuilderEditor(cardId);
                     return;
+                case "import-builder-json":
+                    this.importBuilderJson(cardId);
+                    return;
+                case "export-builder-json":
+                    this.exportBuilderJson(cardId);
+                    return;
+                case "clear-builder":
+                    this.clearBuilder(cardId);
+                    break;
                 case "open-node-builder-editor": {
                     const treePath = btn.dataset.treePath || "[]";
                     this.openBuilderEditor(cardId, `tree_node:${treePath}`);
