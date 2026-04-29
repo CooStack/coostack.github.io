@@ -4,18 +4,11 @@
     <meta charset="utf-8"/>
     <meta name="viewport" content="width=device-width,initial-scale=1"/>
     <title>EmitterGenerator - PointsBuilder 编辑器</title>
-    <link rel="stylesheet" href="../points_builder/css/style.css?v=20260321_1"/>
+    <link rel="stylesheet" href="../points_builder/css/style.css?v=20260429_7"/>
     <style>
-        body.emitter-no-kotlin .panel.right,
-        body.emitter-no-kotlin .resizer-right,
-        body.emitter-no-kotlin #btnToggleKotlin,
-        body.emitter-no-kotlin .kotlin-title,
-        body.emitter-no-kotlin .kotlin-tools {
+        body.emitter-no-kotlin #btnRightKotlinTab,
+        body.emitter-no-kotlin #rightKotlinPage {
             display: none !important;
-        }
-
-        body.emitter-no-kotlin .viewer {
-            margin-right: 0 !important;
         }
     </style>
 </head>
@@ -106,30 +99,45 @@
         <div class="resizer resizer-right" data-resizer="right" aria-hidden="true"></div>
 
         <aside class="panel right">
-            <div class="panel-title kotlin-title">
-                <span>Kotlin 代码</span>
+            <div class="panel-title right-panel-title">
+                <span>卡片编辑</span>
+                <div class="right-tabs" role="tablist" aria-label="右侧面板">
+                    <button id="btnRightParamsTab" class="right-tab active" type="button" role="tab"
+                            aria-selected="true" aria-controls="rightParamsPage">参数</button>
+                    <button id="btnRightKotlinTab" class="right-tab" type="button" role="tab"
+                            aria-selected="false" aria-controls="rightKotlinPage">Kotlin</button>
+                </div>
             </div>
-            <div class="panel-tools kotlin-tools">
-                <span class="kotlin-tools-label">结尾</span>
-                <select id="selKotlinEnd" class="input kotlin-end">
-                    <option value="builder">构建器结尾</option>
-                    <option value="list">列表结尾</option>
-                    <option value="clone">克隆列表结尾</option>
-                </select>
-            </div>
-            <pre id="kotlinOut" class="code code-highlight" aria-readonly="true"></pre>
+            <section id="rightParamsPage" class="right-page right-params-page active" role="tabpanel"
+                     aria-labelledby="btnRightParamsTab">
+                <div id="paramEditorStatus" class="param-editor-status">选择左侧卡片后编辑参数</div>
+                <div id="paramEditorSyncHint" class="param-editor-sync-hint hidden"></div>
+                <div id="paramEditorHost" class="param-editor-host"></div>
+            </section>
+            <section id="rightKotlinPage" class="right-page right-kotlin-page" role="tabpanel"
+                     aria-labelledby="btnRightKotlinTab">
+                <div class="panel-tools kotlin-tools">
+                    <span class="kotlin-tools-label">结尾</span>
+                    <select id="selKotlinEnd" class="input kotlin-end">
+                        <option value="builder">构建器结尾</option>
+                        <option value="list">列表结尾</option>
+                        <option value="clone">克隆列表结尾</option>
+                    </select>
+                </div>
+                <pre id="kotlinOut" class="code code-highlight" aria-readonly="true"></pre>
 
-            <div class="panel-actions">
-                <button id="btnCopyKotlin2" class="btn">复制</button>
-                <button id="btnExportKotlin2" class="btn primary">重新生成</button>
-            </div>
+                <div class="panel-actions">
+                    <button id="btnCopyKotlin2" class="btn">复制</button>
+                    <button id="btnExportKotlin2" class="btn primary">重新生成</button>
+                </div>
 
-            <div class="panel-footnote">
-                角度可切换为“度/弧度”，导出会按 Kotlin 接口要求转换（多数为 <code>x*PI</code>）。
-            </div>
+                <div class="panel-footnote">
+                    角度可切换为“度/弧度”，导出会按 Kotlin 接口要求转换（多数为 <code>x*PI</code>）。
+                </div>
+            </section>
         </aside>
 
-        <button id="btnToggleKotlin" class="kotlin-toggle" title="隐藏 Kotlin">></button>
+        <button id="btnToggleKotlin" class="kotlin-toggle" title="折叠右侧面板">></button>
     </main>
 
     <div id="modalMask" class="modal-mask hidden"></div>
@@ -269,6 +277,6 @@
       }
     }
 </script>
-<script type="module" src="../src/js/pages/emitter-pointsbuilder.page.js?v=20260313_4"></script>
+<script type="module" src="../src/js/pages/emitter-pointsbuilder.page.js?v=20260429_7"></script>
 </body>
 </html>
