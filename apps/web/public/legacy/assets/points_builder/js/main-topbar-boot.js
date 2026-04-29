@@ -12,6 +12,7 @@ export function initTopbarAndBoot(ctx = {}) {
         inpSnapParticleRange,
         inpOffsetPreviewLimit,
         btnHotkeys,
+        btnSnapRenderSettings,
         btnCloseSettings,
         settingsMask,
         btnAddCard,
@@ -30,6 +31,7 @@ export function initTopbarAndBoot(ctx = {}) {
         elCardsRoot,
         chkRealtimeKotlin,
         chkPointPickPreview,
+        inpLineDivisionPoints,
         showSettingsModal,
         hideSettingsModal,
         getInsertContextFromFocus,
@@ -75,6 +77,8 @@ export function initTopbarAndBoot(ctx = {}) {
         setParticleSnapRange,
         offsetPreviewLimitRef,
         setOffsetPreviewLimit,
+        lineDivisionPointsRef,
+        setLineDivisionPoints,
         historyCapture,
         setState,
         normalizeNodeTree,
@@ -213,7 +217,79 @@ export function initTopbarAndBoot(ctx = {}) {
         });
     }
 
-    btnHotkeys?.addEventListener("click", showSettingsModal);
+    if (inpLineDivisionPoints) {
+        if (inpLineDivisionPoints.value === "") inpLineDivisionPoints.value = String(lineDivisionPointsRef?.value ?? 0);
+        setLineDivisionPoints(inpLineDivisionPoints.value, { skipSave: true });
+        inpLineDivisionPoints.addEventListener("input", () => {
+            setLineDivisionPoints(inpLineDivisionPoints.value);
+        });
+        inpLineDivisionPoints.addEventListener("blur", () => {
+            setLineDivisionPoints(inpLineDivisionPoints.value);
+        });
+    }
+
+    const snapRenderPopover = document.getElementById("snapRenderPopover");
+
+    function isSnapRenderPopoverOpen() {
+        return !!(snapRenderPopover && !snapRenderPopover.classList.contains("hidden"));
+    }
+
+    function positionSnapRenderPopover() {
+        if (!snapRenderPopover || !btnSnapRenderSettings) return;
+        const margin = 8;
+        const rect = btnSnapRenderSettings.getBoundingClientRect();
+        const panelRect = snapRenderPopover.getBoundingClientRect();
+        const vw = window.innerWidth || document.documentElement.clientWidth || 0;
+        const left = Math.max(margin, Math.min(rect.right - panelRect.width, vw - panelRect.width - margin));
+        const top = Math.max(margin, rect.bottom + 8);
+        snapRenderPopover.style.left = `${Math.round(left)}px`;
+        snapRenderPopover.style.top = `${Math.round(top)}px`;
+    }
+
+    function hideSnapRenderPopover() {
+        if (!snapRenderPopover) return;
+        snapRenderPopover.classList.add("hidden");
+        btnSnapRenderSettings?.setAttribute("aria-expanded", "false");
+    }
+
+    function showSnapRenderPopover() {
+        if (!snapRenderPopover) return;
+        snapRenderPopover.classList.remove("hidden");
+        btnSnapRenderSettings?.setAttribute("aria-expanded", "true");
+        positionSnapRenderPopover();
+        requestAnimationFrame(positionSnapRenderPopover);
+    }
+
+    function toggleSnapRenderPopover() {
+        if (isSnapRenderPopoverOpen()) hideSnapRenderPopover();
+        else showSnapRenderPopover();
+    }
+
+    if (snapRenderPopover && !snapRenderPopover.__pbSnapRenderPopoverBound) {
+        snapRenderPopover.__pbSnapRenderPopoverBound = true;
+        document.addEventListener("pointerdown", (ev) => {
+            if (!isSnapRenderPopoverOpen()) return;
+            const target = ev.target;
+            if (snapRenderPopover.contains(target)) return;
+            if (btnSnapRenderSettings && btnSnapRenderSettings.contains(target)) return;
+            hideSnapRenderPopover();
+        }, true);
+        window.addEventListener("resize", hideSnapRenderPopover);
+        window.addEventListener("scroll", hideSnapRenderPopover, true);
+        window.addEventListener("keydown", (ev) => {
+            if (ev.code === "Escape") hideSnapRenderPopover();
+        }, true);
+    }
+
+    btnHotkeys?.addEventListener("click", () => {
+        hideSnapRenderPopover();
+        showSettingsModal();
+    });
+    btnSnapRenderSettings?.addEventListener("click", (ev) => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        toggleSnapRenderPopover();
+    });
     btnCloseSettings?.addEventListener("click", hideSettingsModal);
     settingsMask?.addEventListener("click", hideSettingsModal);
 

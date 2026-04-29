@@ -9,14 +9,48 @@ export function createBuilderTools(ctx) {
         return Number.isFinite(next) ? next : fallback;
     };
 
+    function getSegmentRanges(seg) {
+        if (!seg) return [];
+        if (Array.isArray(seg.ranges)) {
+            return seg.ranges
+                .map((range) => ({
+                    start: Math.trunc(Number(range?.start)),
+                    end: Math.trunc(Number(range?.end))
+                }))
+                .filter((range) => Number.isFinite(range.start) && Number.isFinite(range.end) && range.end > range.start);
+        }
+        const start = Math.trunc(Number(seg.start));
+        const end = Math.trunc(Number(seg.end));
+        if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) return [];
+        return [{ start, end }];
+    }
+
+    function offsetSegmentRanges(seg, offset) {
+        const delta = Math.trunc(Number(offset) || 0);
+        return getSegmentRanges(seg).map((range) => ({
+            start: range.start + delta,
+            end: range.end + delta
+        }));
+    }
+
+    function pushSegmentRanges(map, id, ranges) {
+        if (!id || !Array.isArray(ranges) || !ranges.length) return;
+        const valid = ranges.filter((range) => range && range.end > range.start);
+        if (!valid.length) return;
+        const prev = map.get(id);
+        const prevRanges = getSegmentRanges(prev);
+        map.set(id, { ranges: prevRanges.concat(valid) });
+    }
+
     function buildPointOwnerByIndex(totalCount, segments) {
         const owners = new Array(totalCount || 0);
         if (!segments) return owners;
         for (const [id, seg] of segments.entries()) {
-            if (!seg) continue;
-            const start = Math.max(0, seg.start | 0);
-            const end = Math.min(owners.length, seg.end | 0);
-            for (let i = start; i < end; i++) owners[i] = id;
+            for (const range of getSegmentRanges(seg)) {
+                const start = Math.max(0, range.start | 0);
+                const end = Math.min(owners.length, range.end | 0);
+                for (let i = start; i < end; i++) owners[i] = id;
+            }
         }
         return owners;
     }
@@ -71,7 +105,7 @@ export function createBuilderTools(ctx) {
 
                     if (after > before) segments.set(n.id, { start: before + baseOffset, end: after + baseOffset });
                     for (const [cid, seg] of child.segments.entries()) {
-                        segments.set(cid, { start: seg.start + before + baseOffset, end: seg.end + before + baseOffset });
+                        pushSegmentRanges(segments, cid, offsetSegmentRanges(seg, before + baseOffset));
                     }
                     continue;
                 }
@@ -112,8 +146,10 @@ export function createBuilderTools(ctx) {
                     const roz = num(n.params?.roz);
                     const verts = U.getPolygonInCircleVertices(c, r) || [];
                     const childAxis = child.axis || U.v(0, 1, 0);
+                    const repeatedChildSegments = new Map();
 
                     for (const base of verts) {
+                        const repeatStart = targetCtx.points.length;
                         const pts = childPoints.map((point) => U.clone(point));
                         if (rotateToCenter && pts.length && typeof rotatePointsToPointUpright === "function") {
                             const targetPoint = rotateOffsetEnabled ? U.v(rox, roy, roz) : U.v(0, 0, 0);
@@ -127,10 +163,16 @@ export function createBuilderTools(ctx) {
                                 z: num(point?.z) + num(base?.z) + offset.z
                             });
                         }
+                        for (const [cid, seg] of child.segments.entries()) {
+                            pushSegmentRanges(repeatedChildSegments, cid, offsetSegmentRanges(seg, repeatStart));
+                        }
                     }
 
                     const after = targetCtx.points.length;
                     if (after > before) segments.set(n.id, { start: before + baseOffset, end: after + baseOffset });
+                    for (const [cid, seg] of repeatedChildSegments.entries()) {
+                        pushSegmentRanges(segments, cid, offsetSegmentRanges(seg, baseOffset));
+                    }
                     continue;
                 }
 

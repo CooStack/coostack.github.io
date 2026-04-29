@@ -1,16 +1,16 @@
 import * as THREE from "three";
 import {OrbitControls} from "three/addons/controls/OrbitControls.js";
-import { createCardInputs, initCardSystem } from "./cards.js?v=20260429_8";
+import { createCardInputs, initCardSystem } from "./cards.js?v=20260429_9";
 import { initFilterSystem } from "./filters.js?v=20260429_7";
 import { initHotkeysSystem } from "./hotkeys.js?v=20260321_5";
 import { createKindDefs } from "./kinds.js?v=20260429_8";
-import { createBuilderTools } from "./builder.js?v=20260321_1";
+import { createBuilderTools } from "./builder.js?v=20260429_9";
 import { initLayoutSystem } from "./layout.js?v=20260429_1";
 import { createNodeHelpers } from "./nodes.js?v=20260316_1";
 import { toggleFullscreen } from "./viewer.js";
 import { createPickerModule } from "./main-picker.js";
 import { initGlobalShortcuts } from "./main-shortcuts.js?v=20260321_2";
-import { initTopbarAndBoot } from "./main-topbar-boot.js?v=20260429_8";
+import { initTopbarAndBoot } from "./main-topbar-boot.js?v=20260429_10";
 import { createPreviewDistanceTool } from "../../src/js/shared/preview-distance-tool.js";
 import {
     sanitizeFileBase,
@@ -53,6 +53,7 @@ function initPointsBuilderMain() {
         }
     }
     const btnHotkeys = document.getElementById("btnHotkeys");
+    const btnSnapRenderSettings = document.getElementById("btnSnapRenderSettings");
     const btnFullscreen = document.getElementById("btnFullscreen");
 
     const btnExportKotlin = document.getElementById("btnExportKotlin");
@@ -111,6 +112,7 @@ function initPointsBuilderMain() {
     const chkRealtimeKotlin = document.getElementById("chkRealtimeKotlin");
     const chkPointPickPreview = document.getElementById("chkPointPickPreview");
     const chkShowGeometryCenters = document.getElementById("chkShowGeometryCenters");
+    const inpLineDivisionPoints = document.getElementById("inpLineDivisionPoints");
     const btnResetCamera = document.getElementById("btnResetCamera");
     const themeSelect = document.getElementById("themeSelect");
     const chkSnapGrid = document.getElementById("chkSnapGrid");
@@ -983,6 +985,7 @@ function initPointsBuilderMain() {
         realtimeKotlin: false,
         pointPickPreviewEnabled: true,
         showGeometryCenters: true,
+        lineDivisionPoints: 0,
         theme: "dark-1",
         pointSize: 0.5,
         offsetPreviewLimit: -1,
@@ -996,6 +999,7 @@ function initPointsBuilderMain() {
     let realtimeKotlin = DEFAULT_SETTINGS_PAYLOAD.realtimeKotlin;
     let pointPickPreviewEnabled = DEFAULT_SETTINGS_PAYLOAD.pointPickPreviewEnabled;
     let geometryCenterPreviewEnabled = DEFAULT_SETTINGS_PAYLOAD.showGeometryCenters;
+    let lineDivisionPoints = DEFAULT_SETTINGS_PAYLOAD.lineDivisionPoints;
     let snapGridKeyToggleMode = DEFAULT_SETTINGS_PAYLOAD.snapGridKeyToggleMode;
     let snapParticleKeyToggleMode = DEFAULT_SETTINGS_PAYLOAD.snapParticleKeyToggleMode;
 
@@ -1026,6 +1030,12 @@ function initPointsBuilderMain() {
         if (n < -1) return -1;
         if (n === -1) return -1;
         return Math.max(0, n);
+    }
+
+    function normalizeLineDivisionPoints(v) {
+        const n = Math.trunc(Number(v));
+        if (!Number.isFinite(n) || n < 0) return DEFAULT_SETTINGS_PAYLOAD.lineDivisionPoints;
+        return Math.min(64, n);
     }
 
 
@@ -1121,11 +1131,17 @@ function initPointsBuilderMain() {
         if (chkShowGeometryCenters && chkShowGeometryCenters.checked !== next) {
             chkShowGeometryCenters.checked = next;
         }
-        if (!next) {
-            hideGeometryCenterPreview();
-        } else if (lastGeometryCenterPoints.length) {
-            setGeometryCenterPoints(lastGeometryCenterPoints);
+        rebuildPreviewAndKotlin();
+        if (!opts.skipSave) saveSettingsToStorage();
+    }
+
+    function setLineDivisionPoints(v, opts = {}) {
+        const next = normalizeLineDivisionPoints(v);
+        lineDivisionPoints = next;
+        if (inpLineDivisionPoints && inpLineDivisionPoints.value !== String(next)) {
+            inpLineDivisionPoints.value = String(next);
         }
+        rebuildPreviewAndKotlin();
         if (!opts.skipSave) saveSettingsToStorage();
     }
 
@@ -1163,6 +1179,7 @@ function initPointsBuilderMain() {
             realtimeKotlin,
             pointPickPreviewEnabled,
             showGeometryCenters: geometryCenterPreviewEnabled,
+            lineDivisionPoints,
             theme: currentTheme,
             pointSize,
             offsetPreviewLimit,
@@ -1201,6 +1218,9 @@ function initPointsBuilderMain() {
         }
         if (payload.showGeometryCenters !== undefined) {
             setGeometryCenterPreviewEnabled(payload.showGeometryCenters, { skipSave: true });
+        }
+        if (payload.lineDivisionPoints !== undefined) {
+            setLineDivisionPoints(payload.lineDivisionPoints, { skipSave: true });
         }
         if (payload.snapGridKeyToggleMode !== undefined) {
             setSnapGridKeyToggleMode(payload.snapGridKeyToggleMode, { skipSave: true });
@@ -4270,7 +4290,7 @@ function initPointsBuilderMain() {
             kind: point?.kind || "",
             helperType: point?.helperType || "geometry_center"
         }));
-        if (!geometryCenterPreviewEnabled || !lastGeometryCenterPoints.length) {
+        if (!lastGeometryCenterPoints.length) {
             hideGeometryCenterPreview();
             return;
         }
@@ -4370,6 +4390,39 @@ function initPointsBuilderMain() {
         updateFocusColors();
     }
 
+    function getPointSegmentRanges(seg, totalCount = lastPoints?.length || 0) {
+        if (!seg) return [];
+        const max = Math.max(0, Math.trunc(Number(totalCount) || 0));
+        const normalizeRange = (range) => {
+            const start = Math.trunc(Number(range?.start));
+            const end = Math.trunc(Number(range?.end));
+            if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) return null;
+            return {
+                start: Math.max(0, Math.min(max, start)),
+                end: Math.max(0, Math.min(max, end))
+            };
+        };
+        const raw = Array.isArray(seg.ranges) ? seg.ranges : [seg];
+        return raw.map(normalizeRange).filter((range) => range && range.end > range.start);
+    }
+
+    function getPointSegmentLength(seg, totalCount = lastPoints?.length || 0) {
+        return getPointSegmentRanges(seg, totalCount)
+            .reduce((sum, range) => sum + (range.end - range.start), 0);
+    }
+
+    function paintPointSegment(attr, seg, color) {
+        if (!attr || !attr.array || !seg || !color) return;
+        for (const range of getPointSegmentRanges(seg)) {
+            for (let i = range.start; i < range.end; i++) {
+                const k = i * 3;
+                attr.array[k + 0] = color.r;
+                attr.array[k + 1] = color.g;
+                attr.array[k + 2] = color.b;
+            }
+        }
+    }
+
     function updateFocusColors() {
         if (!pointsObj) return;
         const g = pointsObj.geometry;
@@ -4384,14 +4437,7 @@ function initPointsBuilderMain() {
         if (syncIds && syncIds.size) {
             const cSync = syncPointColor;
             for (const id of syncIds) {
-                const seg = nodePointSegments.get(id);
-                if (!seg || seg.end <= seg.start) continue;
-                for (let i = seg.start; i < seg.end; i++) {
-                    const k = i * 3;
-                    attr.array[k + 0] = cSync.r;
-                    attr.array[k + 1] = cSync.g;
-                    attr.array[k + 2] = cSync.b;
-                }
+                paintPointSegment(attr, nodePointSegments.get(id), cSync);
             }
         }
 
@@ -4399,40 +4445,18 @@ function initPointsBuilderMain() {
         if (selectedIds && selectedIds.size) {
             const cSel = focusPointColor;
             for (const id of selectedIds) {
-                const seg = nodePointSegments.get(id);
-                if (!seg || seg.end <= seg.start) continue;
-                for (let i = seg.start; i < seg.end; i++) {
-                    const k = i * 3;
-                    attr.array[k + 0] = cSel.r;
-                    attr.array[k + 1] = cSel.g;
-                    attr.array[k + 2] = cSel.b;
-                }
+                paintPointSegment(attr, nodePointSegments.get(id), cSel);
             }
         }
 
         // 聚焦色优先覆盖
         const focusSeg = focusedNodeId ? nodePointSegments.get(focusedNodeId) : null;
-        if (focusSeg && focusSeg.end > focusSeg.start) {
-            const c1 = focusPointColor;
-            for (let i = focusSeg.start; i < focusSeg.end; i++) {
-                const k = i * 3;
-                attr.array[k + 0] = c1.r;
-                attr.array[k + 1] = c1.g;
-                attr.array[k + 2] = c1.b;
-            }
-        }
+        paintPointSegment(attr, focusSeg, focusPointColor);
 
         const c2 = offsetPointColor;
         const offsetIds = getActiveOffsetTargetIds();
         for (const id of offsetIds) {
-            const seg = nodePointSegments.get(id);
-            if (!seg || seg.end <= seg.start) continue;
-            for (let i = seg.start; i < seg.end; i++) {
-                const k = i * 3;
-                attr.array[k + 0] = c2.r;
-                attr.array[k + 1] = c2.g;
-                attr.array[k + 2] = c2.b;
-            }
+            paintPointSegment(attr, nodePointSegments.get(id), c2);
         }
 
         attr.needsUpdate = true;
@@ -4602,10 +4626,10 @@ function initPointsBuilderMain() {
         const ranges = [];
         let count = 0;
         for (const id of targetIds) {
-            const seg = nodePointSegments.get(id);
-            if (!seg || seg.end <= seg.start) continue;
-            ranges.push(seg);
-            count += (seg.end - seg.start);
+            const segRanges = getPointSegmentRanges(nodePointSegments.get(id));
+            if (!segRanges.length) continue;
+            ranges.push(...segRanges);
+            count += segRanges.reduce((sum, range) => sum + (range.end - range.start), 0);
         }
         if (!ranges.length || count <= 0) {
             hideOffsetPreview();
@@ -4637,8 +4661,8 @@ function initPointsBuilderMain() {
             geom.setAttribute("position", new THREE.BufferAttribute(offsetPreviewBuf, 3));
         }
         let o = 0;
-        for (const seg of ranges) {
-            for (let i = seg.start; i < seg.end; i++) {
+        for (const range of ranges) {
+            for (let i = range.start; i < range.end; i++) {
                 const p = lastPoints[i];
                 if (!p) {
                     offsetPreviewBuf[o++] = 0;
@@ -4858,10 +4882,9 @@ function buildPointOwnerByIndex(totalCount, segments) {
     const owners = new Array(totalCount || 0);
     if (!segments) return owners;
     for (const [id, seg] of segments.entries()) {
-        if (!seg) continue;
-        const s = Math.max(0, (seg.start | 0));
-        const e = Math.min(owners.length, (seg.end | 0));
-        for (let i = s; i < e; i++) owners[i] = id; // 后写入的更细粒度（子卡片）会覆盖父段
+        for (const range of getPointSegmentRanges(seg, owners.length)) {
+            for (let i = range.start; i < range.end; i++) owners[i] = id; // 后写入的更细粒度（子卡片）会覆盖父段
+        }
     }
     return owners;
 }
@@ -4873,9 +4896,9 @@ function ownerIdForPointIndex(i) {
     let best = null;
     let bestLen = Infinity;
     for (const [id, seg] of nodePointSegments.entries()) {
-        if (!seg) continue;
-        if (i >= seg.start && i < seg.end) {
-            const len = seg.end - seg.start;
+        for (const range of getPointSegmentRanges(seg)) {
+            if (i < range.start || i >= range.end) continue;
+            const len = range.end - range.start;
             if (len < bestLen) {
                 bestLen = len;
                 best = id;
@@ -4889,18 +4912,18 @@ function getNodeSegmentCenter(id) {
     if (!id) return null;
     const seg = nodePointSegments.get(id);
     if (!seg || !lastPoints || !lastPoints.length) return null;
-    const start = Math.max(0, seg.start | 0);
-    const end = Math.min(lastPoints.length, seg.end | 0);
-    if (end <= start) return null;
     let sx = 0, sy = 0, sz = 0;
-    for (let i = start; i < end; i++) {
-        const p = lastPoints[i];
-        if (!p) continue;
-        sx += p.x;
-        sy += p.y;
-        sz += p.z;
+    let count = 0;
+    for (const range of getPointSegmentRanges(seg)) {
+        for (let i = range.start; i < range.end; i++) {
+            const p = lastPoints[i];
+            if (!p) continue;
+            sx += p.x;
+            sy += p.y;
+            sz += p.z;
+            count += 1;
+        }
     }
-    const count = end - start;
     if (!count) return null;
     return { x: sx / count, y: sy / count, z: sz / count };
 }
@@ -5299,39 +5322,111 @@ function pathHasRepeatedContainer(path) {
     return list.some((step) => step?.node?.kind === "add_with");
 }
 
-function mapLocalPointToWorldPoint(localPoint, path) {
+function applyAddWithContainerPoints(points, node) {
+    const src = Array.isArray(points) ? points : [];
+    if (!src.length || !node || node.kind !== "add_with") return src;
+    const p = node.params || {};
+    const offset = { x: num(p.ox), y: num(p.oy), z: num(p.oz) };
+    const verts = U.getPolygonInCircleVertices(Math.max(0, Math.trunc(num(p.c))), num(p.r)) || [];
+    const rotateToCenter = !!p.rotateToCenter;
+    const rotateReverse = !!p.rotateReverse;
+    const rotateOffsetEnabled = !!p.rotateOffsetEnabled;
+    const childAxis = (() => {
+        try {
+            const child = evalBuilderWithMeta(node.children || [], U.v(0, 1, 0));
+            return child?.axis || U.v(0, 1, 0);
+        } catch {
+            return U.v(0, 1, 0);
+        }
+    })();
+    const out = [];
+    for (const base of verts) {
+        for (const point of src) {
+            const rotated = [U.clone(point)];
+            if (rotateToCenter && typeof rotatePointsToPointUpright === "function") {
+                const targetPoint = rotateOffsetEnabled
+                    ? U.v(num(p.rox), num(p.roy), num(p.roz))
+                    : U.v(0, 0, 0);
+                const rotateTarget = rotateReverse ? U.add(targetPoint, base) : U.sub(targetPoint, base);
+                rotatePointsToPointUpright(rotated, rotateTarget, childAxis);
+            }
+            const clone = rotated[0] || point;
+            out.push({
+                x: num(clone.x) + num(base?.x) + offset.x,
+                y: num(clone.y) + num(base?.y) + offset.y,
+                z: num(clone.z) + num(base?.z) + offset.z
+            });
+        }
+    }
+    return out;
+}
+
+function applyContainerPoints(points, node) {
+    const src = Array.isArray(points) ? points : [];
+    if (!src.length || !node) return src;
+    if (node.kind === "add_with") return applyAddWithContainerPoints(src, node);
+    return src.map((point) => applyContainerPointOffset(point, node));
+}
+
+function mapLocalPointToWorldPoints(localPoint, path) {
     if (!localPoint) return null;
-    if (!Array.isArray(path) || !path.length) return localPoint;
-    let point = { x: num(localPoint.x), y: num(localPoint.y), z: num(localPoint.z) };
+    if (!Array.isArray(path) || !path.length) return [localPoint];
+    let points = [{ x: num(localPoint.x), y: num(localPoint.y), z: num(localPoint.z) }];
     for (let i = path.length - 1; i >= 0; i--) {
         const step = path[i];
         if (!step) continue;
-        point = applyForwardPointTransforms(point, collectPostPointForwardTransformsForList(step.parentList, step.index));
-        if (i > 0) point = applyContainerPointOffset(point, path[i - 1].node);
+        const transforms = collectPostPointForwardTransformsForList(step.parentList, step.index);
+        points = points.map((point) => applyForwardPointTransforms(point, transforms));
+        if (i > 0) points = applyContainerPoints(points, path[i - 1].node);
     }
-    return point;
+    return points;
 }
 
 function collectGeometryCenterPreviewPoints() {
-    if (!geometryCenterPreviewEnabled) return [];
+    if (!geometryCenterPreviewEnabled && lineDivisionPoints <= 0) return [];
     const out = [];
     forEachNode(state.root.children, (node) => {
-        if (!node || !GEOMETRY_CENTER_PREVIEW_KINDS.has(node.kind)) return;
+        if (!node) return;
         const path = findNodePathById(node.id);
         if (!Array.isArray(path) || !path.length) return;
-        if (pathHasRepeatedContainer(path.slice(0, -1))) return;
         const params = node.params || {};
-        const localPoint = { x: num(params.ox), y: num(params.oy), z: num(params.oz) };
-        const worldPoint = mapLocalPointToWorldPoint(localPoint, path);
-        if (!worldPoint) return;
-        out.push({
-            x: worldPoint.x,
-            y: worldPoint.y,
-            z: worldPoint.z,
-            nodeId: node.id,
-            kind: node.kind,
-            helperType: "geometry_center"
-        });
+        if (geometryCenterPreviewEnabled && GEOMETRY_CENTER_PREVIEW_KINDS.has(node.kind)) {
+            const localPoint = { x: num(params.ox), y: num(params.oy), z: num(params.oz) };
+            const worldPoints = mapLocalPointToWorldPoints(localPoint, path) || [];
+            for (const worldPoint of worldPoints) {
+                out.push({
+                    x: worldPoint.x,
+                    y: worldPoint.y,
+                    z: worldPoint.z,
+                    nodeId: node.id,
+                    kind: node.kind,
+                    helperType: "geometry_center"
+                });
+            }
+        }
+        if (lineDivisionPoints > 0 && node.kind === "add_line") {
+            const s = U.v(num(params.sx), num(params.sy), num(params.sz));
+            const e = U.v(num(params.ex), num(params.ey), num(params.ez));
+            for (let i = 1; i <= lineDivisionPoints; i++) {
+                const t = i / (lineDivisionPoints + 1);
+                const localPoint = {
+                    x: s.x + (e.x - s.x) * t,
+                    y: s.y + (e.y - s.y) * t,
+                    z: s.z + (e.z - s.z) * t
+                };
+                const worldPoints = mapLocalPointToWorldPoints(localPoint, path) || [];
+                for (const worldPoint of worldPoints) {
+                    out.push({
+                        x: worldPoint.x,
+                        y: worldPoint.y,
+                        z: worldPoint.z,
+                        nodeId: node.id,
+                        kind: node.kind,
+                        helperType: "line_division"
+                    });
+                }
+            }
+        }
     });
     return out;
 }
@@ -5416,7 +5511,7 @@ function getParticleSnapFromEvent(ev) {
     const hitThreshold = Math.max(0.12, (pointSize || 0.2) * 0.6);
     raycaster.params.Points.threshold = Math.min(hitThreshold, particleSnapRange);
     const pickTargets = [pointsObj];
-    if (geometryCenterPreviewEnabled && geometryCenterObj && geometryCenterObj.visible) {
+    if (geometryCenterObj && geometryCenterObj.visible) {
         pickTargets.push(geometryCenterObj);
     }
     const hits = raycaster.intersectObjects(pickTargets, false);
@@ -5706,7 +5801,7 @@ function pickMeasurePointAtClientPoint(clientX, clientY, radiusPx = 12) {
     };
     visit(lastPoints, "point");
     visit(lastAddWithPreviewPoints, "addWithPreview");
-    if (geometryCenterPreviewEnabled && geometryCenterObj && geometryCenterObj.visible) {
+    if (geometryCenterObj && geometryCenterObj.visible) {
         visit(lastGeometryCenterPoints, "geometryCenter");
     }
     if (bestDist <= radiusPx * radiusPx) return best;
@@ -6054,7 +6149,7 @@ function resolveReusableTailRotateForRows(rows) {
 function hasPointSegmentForNodeId(id) {
     if (!id) return false;
     const seg = nodePointSegments.get(id);
-    return !!(seg && Number.isFinite(seg.start) && Number.isFinite(seg.end) && seg.end > seg.start);
+    return getPointSegmentLength(seg) > 0;
 }
 
 function resolveReusableOffsetAncestor(path) {
@@ -7203,9 +7298,19 @@ function collectSyntheticVecTargetsForNode(node) {
 
     function chooseLineEndpointTarget(nodeId, pickedIndex, targets, options = {}) {
         const seg = nodePointSegments.get(nodeId);
-        const useEnd = (!seg || !Number.isInteger(pickedIndex))
-            ? false
-            : (Math.abs(pickedIndex - (seg.end - 1)) < Math.abs(pickedIndex - seg.start));
+        let useEnd = false;
+        if (seg && Number.isInteger(pickedIndex)) {
+            let best = null;
+            for (const range of getPointSegmentRanges(seg)) {
+                const startDist = Math.abs(pickedIndex - range.start);
+                const endDist = Math.abs(pickedIndex - (range.end - 1));
+                const dist = Math.min(startDist, endDist);
+                if (!best || dist < best.dist) {
+                    best = { dist, useEnd: endDist < startDist };
+                }
+            }
+            useEnd = !!best?.useEnd;
+        }
         const keyPrefix = useEnd ? "e" : "s";
         const x = `${keyPrefix}x`;
         const y = `${keyPrefix}y`;
@@ -8765,6 +8870,7 @@ function collectSyntheticVecTargetsForNode(node) {
         inpSnapParticleRange,
         inpOffsetPreviewLimit,
         btnHotkeys,
+        btnSnapRenderSettings,
         btnCloseSettings,
         settingsMask,
         btnAddCard,
@@ -8783,6 +8889,7 @@ function collectSyntheticVecTargetsForNode(node) {
         elCardsRoot,
         chkRealtimeKotlin,
         chkPointPickPreview,
+        inpLineDivisionPoints,
         showSettingsModal,
         hideSettingsModal,
         getInsertContextFromFocus,
@@ -8840,6 +8947,11 @@ function collectSyntheticVecTargetsForNode(node) {
             set value(v) { offsetPreviewLimit = v; }
         },
         setOffsetPreviewLimit,
+        lineDivisionPointsRef: {
+            get value() { return lineDivisionPoints; },
+            set value(v) { lineDivisionPoints = normalizeLineDivisionPoints(v); }
+        },
+        setLineDivisionPoints,
         historyCapture,
         setState: (next) => { state = next; },
         normalizeNodeTree,

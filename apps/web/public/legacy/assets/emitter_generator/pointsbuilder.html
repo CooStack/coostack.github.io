@@ -4,7 +4,7 @@
     <meta charset="utf-8"/>
     <meta name="viewport" content="width=device-width,initial-scale=1"/>
     <title>EmitterGenerator - PointsBuilder 编辑器</title>
-    <link rel="stylesheet" href="../points_builder/css/style.css?v=20260429_7"/>
+    <link rel="stylesheet" href="../points_builder/css/style.css?v=20260429_10"/>
     <style>
         body.emitter-no-kotlin #btnRightKotlinTab,
         body.emitter-no-kotlin #rightKotlinPage {
@@ -23,14 +23,11 @@
             </div>
         </div>
 
+        <div class="topbar-tools">
+            <button id="btnSnapRenderSettings" class="btn tool-btn" title="吸附渲染设置">吸附渲染</button>
+        </div>
+
         <div class="topbar-right">
-            <button id="btnAddCard" class="btn primary">添加元素</button>
-            <button id="btnQuickOffset" class="btn">添加全局偏移</button>
-            <button id="btnClearEmptyAddBuilder" class="btn small">清空空的添加组</button>
-            <button id="btnClearEmptyAddWith" class="btn small">清空空的旋转嵌套组</button>
-            <button id="btnPickLine" class="btn">绘制直线</button>
-            <button id="btnPickTriangle" class="btn">绘制三角形</button>
-            <button id="btnPickPoint" class="btn">点拾取</button>
             <button id="btnHotkeys" class="btn">设置</button>
             <button id="btnFullscreen" class="btn">预览全屏</button>
             <button id="btnResetCamera" class="btn">重置镜头</button>
@@ -48,6 +45,22 @@
             </div>
         </div>
     </header>
+
+    <div id="snapRenderPopover" class="snap-render-popover hidden" role="dialog" aria-label="吸附渲染设置">
+        <div class="snap-render-popover-title">吸附渲染设置</div>
+        <div class="settings-form">
+            <label class="chk settings-toggle">
+                <input id="chkShowGeometryCenters" type="checkbox" checked/>
+                <span>图形中心渲染</span>
+            </label>
+            <div class="settings-row">
+                <div class="settings-label">直线分点</div>
+                <input id="inpLineDivisionPoints" class="input" type="number" value="0" step="1" min="0" max="64"
+                       title="0 关闭；1 显示中点；2 显示三分点"/>
+            </div>
+            <div class="settings-note">0 关闭；1 中点；2 三分点。</div>
+        </div>
+    </div>
 
     <main class="layout">
         <aside class="panel left">
@@ -277,6 +290,6 @@
       }
     }
 </script>
-<script type="module" src="../src/js/pages/emitter-pointsbuilder.page.js?v=20260429_8"></script>
+<script type="module" src="../src/js/pages/emitter-pointsbuilder.page.js?v=20260429_10"></script>
 </body>
 </html>

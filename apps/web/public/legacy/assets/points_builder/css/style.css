@@ -276,7 +276,8 @@ body {
     flex: 0 0 var(--topbar-h);
     display: flex;
     align-items: center;
-    justify-content: space-between;
+    justify-content: flex-start;
+    gap: 12px;
     padding: 0 12px;
     border-bottom: 1px solid var(--line);
     background: linear-gradient(180deg, rgba(255, 255, 255, .03), rgba(255, 255, 255, .01));
@@ -287,6 +288,51 @@ body {
     display: flex;
     align-items: center;
     gap: 10px;
+    min-width: 0;
+    flex: 1 1 auto;
+}
+
+.topbar-tools {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex: 0 0 auto;
+    margin-left: auto;
+}
+
+.tool-btn {
+    height: 34px;
+    padding: 0 14px;
+    border-color: color-mix(in srgb, var(--accent) 38%, transparent);
+    background: color-mix(in srgb, var(--accent) 16%, transparent);
+    color: var(--text);
+}
+
+.tool-btn:hover {
+    background: color-mix(in srgb, var(--accent) 24%, transparent);
+    border-color: color-mix(in srgb, var(--accent) 52%, transparent);
+}
+
+.snap-render-popover {
+    position: fixed;
+    z-index: 69;
+    width: min(320px, calc(100vw - 20px));
+    padding: 12px;
+    border: 1px solid color-mix(in srgb, var(--accent) 38%, var(--line2));
+    border-radius: 12px;
+    background: linear-gradient(
+        180deg,
+        color-mix(in srgb, var(--panel) 96%, black),
+        color-mix(in srgb, var(--panel2) 96%, black)
+    );
+    box-shadow: var(--shadow2);
+}
+
+.snap-render-popover-title {
+    margin-bottom: 10px;
+    font-size: 12px;
+    font-weight: 800;
+    color: rgba(255,255,255,.88);
 }
 
 .brand {
@@ -309,6 +355,7 @@ body {
     display: flex;
     align-items: center;
     gap: 8px;
+    flex: 0 0 auto;
     flex-wrap: wrap
 }
 
@@ -3032,6 +3079,11 @@ body.resizing-subblock-y * {
     display: flex;
     flex-direction: column;
     gap: 10px;
+}
+
+.settings-panel-focus {
+    border-color: color-mix(in srgb, var(--accent) 72%, transparent);
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 24%, transparent);
 }
 .settings-panel-title{
     font-weight: 800;
