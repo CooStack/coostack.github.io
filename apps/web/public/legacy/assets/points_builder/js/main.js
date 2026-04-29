@@ -1,16 +1,16 @@
 import * as THREE from "three";
 import {OrbitControls} from "three/addons/controls/OrbitControls.js";
-import { createCardInputs, initCardSystem } from "./cards.js?v=20260429_7";
+import { createCardInputs, initCardSystem } from "./cards.js?v=20260429_8";
 import { initFilterSystem } from "./filters.js?v=20260429_7";
 import { initHotkeysSystem } from "./hotkeys.js?v=20260321_5";
-import { createKindDefs } from "./kinds.js?v=20260321_2";
+import { createKindDefs } from "./kinds.js?v=20260429_8";
 import { createBuilderTools } from "./builder.js?v=20260321_1";
 import { initLayoutSystem } from "./layout.js?v=20260429_1";
 import { createNodeHelpers } from "./nodes.js?v=20260316_1";
 import { toggleFullscreen } from "./viewer.js";
 import { createPickerModule } from "./main-picker.js";
 import { initGlobalShortcuts } from "./main-shortcuts.js?v=20260321_2";
-import { initTopbarAndBoot } from "./main-topbar-boot.js";
+import { initTopbarAndBoot } from "./main-topbar-boot.js?v=20260429_8";
 import { createPreviewDistanceTool } from "../../src/js/shared/preview-distance-tool.js";
 import {
     sanitizeFileBase,
@@ -6480,6 +6480,14 @@ function openDockedParamEditorForIds(ids) {
     return true;
 }
 
+function addShortcutKindInContext(kind, contextFactory) {
+    const ctx = (typeof contextFactory === "function") ? contextFactory() : contextFactory;
+    if (!ctx || !Array.isArray(ctx.list)) return;
+    if (typeof addKindInContext === "function") {
+        addKindInContext(kind, ctx);
+    }
+}
+
 function openActionMenuForBlankNoSelection(ev) {
     if (!ev || !isActionMenuAllowed()) {
         hideActionMenu();
@@ -6502,6 +6510,14 @@ function openActionMenuForBlankNoSelection(ev) {
     };
     hideQuickSyncPanel();
     const items = [
+        {
+            label: "添加组",
+            onSelect: () => addShortcutKindInContext("add_builder", getBlankInsertContext)
+        },
+        {
+            label: "旋转嵌套组",
+            onSelect: () => addShortcutKindInContext("add_with", getBlankInsertContext)
+        },
         {
             label: "添加卡片",
             onSelect: () => {
@@ -6569,6 +6585,20 @@ function openActionMenuForTargets(ev, targetIds, options = {}) {
             items.push({
                 label: "向下插入卡片",
                 onSelect: () => openModal(ctxNode.parentList, ctxNode.index + 1, label)
+            });
+            const getAfterContext = () => ({
+                list: ctxNode.parentList,
+                insertIndex: ctxNode.index + 1,
+                label,
+                ownerNode: null
+            });
+            items.push({
+                label: "下方添加组",
+                onSelect: () => addShortcutKindInContext("add_builder", getAfterContext)
+            });
+            items.push({
+                label: "下方添加旋转嵌套组",
+                onSelect: () => addShortcutKindInContext("add_with", getAfterContext)
             });
         }
     }

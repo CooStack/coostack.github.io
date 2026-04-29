@@ -233,10 +233,10 @@ export function initTopbarAndBoot(ctx = {}) {
             ? clearEmptyBuilderCards("add_builder")
             : 0;
         if (!removed) {
-            showToast("没有可清理的空的 addBuilder 卡片", "info");
+            showToast("没有可清理的空添加组卡片", "info");
             return;
         }
-        showToast(`已清理 ${removed} 个空的 addBuilder 卡片`, "success");
+        showToast(`已清理 ${removed} 个空添加组卡片`, "success");
     });
 
     btnClearEmptyAddWith?.addEventListener("click", () => {
@@ -244,10 +244,10 @@ export function initTopbarAndBoot(ctx = {}) {
             ? clearEmptyBuilderCards("add_with")
             : 0;
         if (!removed) {
-            showToast("没有可清理的空的 addWith 卡片", "info");
+            showToast("没有可清理的空旋转嵌套组卡片", "info");
             return;
         }
-        showToast(`已清理 ${removed} 个空的 addWith 卡片`, "success");
+        showToast(`已清理 ${removed} 个空旋转嵌套组卡片`, "success");
     });
 
     btnPickLine?.addEventListener("click", () => {

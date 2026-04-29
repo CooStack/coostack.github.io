@@ -856,8 +856,8 @@ export function createKindDefs(ctx) {
         },
 
         add_with: {
-            title: "addWith(旋转重复)",
-            desc: "按旋转重复子 Builder（addWith）",
+            title: "旋转嵌套组",
+            desc: "按旋转重复嵌套组",
             defaultParams: {
                 r: 3,
                 c: 6,
@@ -962,8 +962,8 @@ export function createKindDefs(ctx) {
         },
 
         add_builder: {
-            title: "addBuilder(子PointsBuilder)",
-            desc: "拼接子 Builder 的点并整体偏移（addBuilder）",
+            title: "添加组",
+            desc: "拼接子组的点并整体偏移",
             defaultParams: {ox: 0, oy: 0, oz: 0, folded: false},
             apply(ctx, node) {
                 const ox = num(node.params.ox);

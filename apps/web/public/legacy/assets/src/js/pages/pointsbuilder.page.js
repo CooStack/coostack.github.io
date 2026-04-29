@@ -1,2 +1,2 @@
 import "../compat/install-legacy-globals.js";
-import "../../../points_builder/js/main.js?v=20260429_7";
+import "../../../points_builder/js/main.js?v=20260429_8";

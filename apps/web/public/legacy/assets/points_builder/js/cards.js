@@ -1168,9 +1168,9 @@ export function initCardSystem(ctx = {}) {
 
     function getBuilderScopeType(node) {
         if (!node || !node.kind) return "builder";
-        if (node.kind === "add_with") return "addWith";
+        if (node.kind === "add_with") return "旋转嵌套组";
         if (node.kind === "with_builder") return "withBuilder";
-        if (node.kind === "add_builder") return "addBuilder";
+        if (node.kind === "add_builder") return "添加组";
         return node.kind;
     }
 
@@ -1571,8 +1571,8 @@ export function initCardSystem(ctx = {}) {
             });
             tools.appendChild(btn);
         };
-        appendCleanupBtn("add_builder", panelToolSvgIcon("builder"), "清空空的 Builder", "没有可清理的空的 addBuilder 卡片", "addBuilder");
-        appendCleanupBtn("add_with", panelToolSvgIcon("with"), "清空空的 With", "没有可清理的空的 addWith 卡片", "addWith");
+        appendCleanupBtn("add_builder", panelToolSvgIcon("builder"), "清空空的添加组", "没有可清理的空添加组卡片", "添加组");
+        appendCleanupBtn("add_with", panelToolSvgIcon("with"), "清空空的旋转嵌套组", "没有可清理的空旋转嵌套组卡片", "旋转嵌套组");
 
         scopeFilterHost = document.createElement("div");
         scopeFilterHost.dataset.pbScopeFilter = "1";
@@ -3679,7 +3679,7 @@ export function initCardSystem(ctx = {}) {
                     title.className = "subblock-title";
                     const titleText = document.createElement("div");
                     titleText.className = "subblock-title-text";
-                    titleText.textContent = "子 PointsBuilder（addWith）";
+                    titleText.textContent = "旋转嵌套组子卡片";
                     title.appendChild(titleText);
 
                     const actions = document.createElement("div");
