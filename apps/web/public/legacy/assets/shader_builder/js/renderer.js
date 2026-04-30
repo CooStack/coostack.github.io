@@ -29,6 +29,111 @@ function createPrimitiveGeometry(type) {
     }
 }
 
+function modelBuilderNumber(value, fallback = 0, min = -Infinity, max = Infinity) {
+    const n = Number(value);
+    if (!Number.isFinite(n)) return fallback;
+    return Math.max(min, Math.min(max, n));
+}
+
+function modelBuilderInt(value, fallback = 0, min = -Infinity, max = Infinity) {
+    return Math.round(modelBuilderNumber(value, fallback, min, max));
+}
+
+function modelBuilderColor(step) {
+    const parts = String(step?.color || "").split(",").map((part) => Number(part.trim()));
+    const r = Number.isFinite(parts[0]) ? parts[0] : 1;
+    const g = Number.isFinite(parts[1]) ? parts[1] : 1;
+    const b = Number.isFinite(parts[2]) ? parts[2] : 1;
+    const a = Number.isFinite(parts[3]) ? parts[3] : 1;
+    return {
+        color: new THREE.Color(
+            Math.max(0, Math.min(1, r)),
+            Math.max(0, Math.min(1, g)),
+            Math.max(0, Math.min(1, b))
+        ),
+        alpha: Math.max(0, Math.min(1, a))
+    };
+}
+
+function createModelBuilderGeometry(step) {
+    const kind = String(step?.kind || "box").toLowerCase();
+    if (kind === "plane") {
+        return new THREE.PlaneGeometry(
+            modelBuilderNumber(step.width, 1, 0.001, 1000),
+            modelBuilderNumber(step.height, 1, 0.001, 1000),
+            1,
+            1
+        );
+    }
+    if (kind === "sphere") {
+        return new THREE.SphereGeometry(
+            modelBuilderNumber(step.radius, 1, 0.001, 1000),
+            modelBuilderInt(step.lonSegments, 24, 3, 256),
+            modelBuilderInt(step.latSegments, 12, 2, 128)
+        );
+    }
+    if (kind === "disc") {
+        const geometry = new THREE.CircleGeometry(
+            modelBuilderNumber(step.radius, 1, 0.001, 1000),
+            modelBuilderInt(step.segments, 32, 3, 256)
+        );
+        geometry.rotateX(Math.PI / 2);
+        return geometry;
+    }
+    if (kind === "ring") {
+        const inner = modelBuilderNumber(step.innerRadius, 0.55, 0, 1000);
+        const outer = Math.max(inner + 0.001, modelBuilderNumber(step.outerRadius, 1, 0.001, 1000));
+        const geometry = new THREE.RingGeometry(inner, outer, modelBuilderInt(step.segments, 32, 3, 256));
+        geometry.rotateX(Math.PI / 2);
+        return geometry;
+    }
+    return new THREE.BoxGeometry(
+        modelBuilderNumber(step.width, 1, 0.001, 1000),
+        modelBuilderNumber(step.height, 1, 0.001, 1000),
+        modelBuilderNumber(step.depth, 1, 0.001, 1000),
+        1,
+        1,
+        1
+    );
+}
+
+function createModelBuilderObject(builderState) {
+    const group = new THREE.Group();
+    const steps = Array.isArray(builderState?.steps) ? builderState.steps : [];
+    const sourceSteps = steps.length ? steps : [{ kind: "box", width: 1, height: 1, depth: 1, color: "1,1,1,1" }];
+
+    for (const step of sourceSteps) {
+        const geometry = createModelBuilderGeometry(step);
+        const colorInfo = modelBuilderColor(step);
+        const material = new THREE.MeshStandardMaterial({
+            color: colorInfo.color,
+            roughness: 0.38,
+            metalness: 0,
+            transparent: colorInfo.alpha < 0.999,
+            opacity: colorInfo.alpha,
+            side: THREE.DoubleSide
+        });
+        const mesh = new THREE.Mesh(geometry, material);
+        mesh.position.set(
+            modelBuilderNumber(step.x, 0, -1000, 1000),
+            modelBuilderNumber(step.y, 0, -1000, 1000),
+            modelBuilderNumber(step.z, 0, -1000, 1000)
+        );
+        mesh.rotation.set(
+            THREE.MathUtils.degToRad(modelBuilderNumber(step.rotX, 0, -3600, 3600)),
+            THREE.MathUtils.degToRad(modelBuilderNumber(step.rotY, 0, -3600, 3600)),
+            THREE.MathUtils.degToRad(modelBuilderNumber(step.rotZ, 0, -3600, 3600))
+        );
+        mesh.scale.set(
+            modelBuilderNumber(step.scaleX, 1, -1000, 1000),
+            modelBuilderNumber(step.scaleY, 1, -1000, 1000),
+            modelBuilderNumber(step.scaleZ, 1, -1000, 1000)
+        );
+        group.add(mesh);
+    }
+    return group;
+}
+
 function normalizeNumber(value, fallback = 0) {
     const n = Number(value);
     return Number.isFinite(n) ? n : fallback;
@@ -520,6 +625,8 @@ export class ShaderWorkbenchRenderer {
 
         this.modelObject = null;
         this.modelMaterial = null;
+        this.modelGeometryMode = "";
+        this.modelGeometrySignature = "";
         this.composer = null;
         this.renderPass = null;
         this.passStates = [];
@@ -706,7 +813,8 @@ export class ShaderWorkbenchRenderer {
     }
 
     setPrimitive(primitive) {
-        const geometry = createPrimitiveGeometry(primitive);
+        const kind = String(primitive || "sphere");
+        const geometry = createPrimitiveGeometry(kind);
         const mesh = new THREE.Mesh(
             geometry,
             new THREE.MeshStandardMaterial({
@@ -716,7 +824,29 @@ export class ShaderWorkbenchRenderer {
                 side: THREE.DoubleSide
             })
         );
+        this.modelGeometryMode = "primitive";
+        this.modelGeometrySignature = `primitive:${kind}`;
         this.replaceModel(mesh);
+    }
+
+    setModelBuilder(builderState) {
+        const signature = `builder:${JSON.stringify(Array.isArray(builderState?.steps) ? builderState.steps : [])}`;
+        if (this.modelGeometryMode === "builder" && this.modelGeometrySignature === signature) return;
+        this.modelGeometryMode = "builder";
+        this.modelGeometrySignature = signature;
+        this.replaceModel(createModelBuilderObject(builderState));
+    }
+
+    syncModelGeometryFromState(modelState) {
+        const builder = modelState?.builder;
+        const builderEnabled = !!builder?.enabled && Array.isArray(builder.steps) && builder.steps.length > 0;
+        if (builderEnabled) {
+            this.setModelBuilder(builder);
+            return;
+        }
+        if (this.modelGeometryMode === "builder") {
+            this.setPrimitive(modelState?.primitive || "sphere");
+        }
     }
 
     replaceModel(object3d) {
@@ -735,8 +865,12 @@ export class ShaderWorkbenchRenderer {
             if (child.isMesh) {
                 child.geometry?.dispose?.();
                 const mat = child.material;
-                if (Array.isArray(mat)) mat.forEach((m) => m?.dispose?.());
-                else mat?.dispose?.();
+                const disposeMaterial = (m) => {
+                    if (!m || m === this.modelMaterial) return;
+                    m.dispose?.();
+                };
+                if (Array.isArray(mat)) mat.forEach(disposeMaterial);
+                else disposeMaterial(mat);
             }
         });
     }
@@ -756,7 +890,15 @@ export class ShaderWorkbenchRenderer {
     applyMaterialToModel(material) {
         if (!this.modelObject) return;
         this.modelObject.traverse((child) => {
-            if (child.isMesh) child.material = material;
+            if (!child.isMesh) return;
+            const current = child.material;
+            const disposePrevious = (m) => {
+                if (!m || m === material || m === this.modelMaterial) return;
+                m.dispose?.();
+            };
+            if (Array.isArray(current)) current.forEach(disposePrevious);
+            else disposePrevious(current);
+            child.material = material;
         });
     }
 
@@ -769,6 +911,8 @@ export class ShaderWorkbenchRenderer {
             const loader = new OBJLoader();
             const obj = loader.parse(text);
             this.replaceModel(obj);
+            this.modelGeometryMode = "upload";
+            this.modelGeometrySignature = `upload:${name}`;
             return name;
         }
 
@@ -779,6 +923,8 @@ export class ShaderWorkbenchRenderer {
                 loader.parse(buf, "", (gltf) => resolve(gltf.scene), (err) => reject(err));
             });
             this.replaceModel(scene);
+            this.modelGeometryMode = "upload";
+            this.modelGeometrySignature = `upload:${name}`;
             return name;
         }
 
@@ -1321,6 +1467,7 @@ export class ShaderWorkbenchRenderer {
     syncFromState(state) {
         this.rebuildTextureCache(state?.textures || []);
         this.applySettings(state?.settings || {});
+        this.syncModelGeometryFromState(state?.model || {});
         this.applyModelShader(state?.model || {});
         this.applyPostPipeline(state || {});
     }

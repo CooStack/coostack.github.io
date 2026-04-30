@@ -6,8 +6,10 @@ import {
     countTextureParams,
     createDefaultPostNode,
     createDefaultState,
+    createDefaultModelBuilderStep,
     createParamTemplate,
     createStore,
+    dedupeShaderParams,
     ensurePostInputSamplerParam,
     ensureSelectedNode,
     findPostNode,
@@ -15,6 +17,7 @@ import {
     GRAPH_OUTPUT_ID,
     getPostInputTextureMinCount,
     isTextureParam,
+    MODEL_BUILDER_KINDS,
     normalizeNodePathTemplate,
     removeNodeAndLinks,
     resolveNodeFragmentPath,
@@ -22,7 +25,7 @@ import {
 import { GraphEditor } from "./graph.js";
 import { initSettingsSystem } from "./settings.js";
 import { initHotkeysSystem } from "./hotkeys.js";
-import { generateModelKotlin, generatePostKotlin } from "./codegen.js";
+import { generateModelBuilderKotlin, generateModelKotlin, generatePostKotlin } from "./codegen.js";
 import {
     exportProjectJson,
     exportSettingsJson,
@@ -79,6 +82,14 @@ const els = {
     fileModel: $("fileModel"),
     modelFileName: $("modelFileName"),
     chkEnablePost: $("chkEnablePost"),
+    chkUseModelBuilder: $("chkUseModelBuilder"),
+    selModelBuilderShape: $("selModelBuilderShape"),
+    btnAddModelShape: $("btnAddModelShape"),
+    btnClearModelShapes: $("btnClearModelShapes"),
+    modelBuilderList: $("modelBuilderList"),
+    modelBuilderKotlinOut: $("modelBuilderKotlinOut"),
+    btnCopyModelBuilderKotlin: $("btnCopyModelBuilderKotlin"),
+    btnDownloadModelBuilderKotlin: $("btnDownloadModelBuilderKotlin"),
 
     btnUploadTexture: $("btnUploadTexture"),
     fileTexture: $("fileTexture"),
@@ -675,15 +686,15 @@ function buildParamFromUniformDecl(decl, prev = null) {
 function syncParamsFromUniformSource(params = [], source = "") {
     const decls = collectUniformDeclsFromSource(source);
     if (!decls.length && (params || []).length && hasIncompleteUniformDeclaration(source)) {
-        return Array.isArray(params) ? params : [];
+        return dedupeShaderParams(Array.isArray(params) ? params : []);
     }
     const prevByName = new Map();
-    for (const p of params || []) {
+    for (const p of dedupeShaderParams(params || [])) {
         const name = String(p?.name || "").trim();
         if (!name || prevByName.has(name)) continue;
         prevByName.set(name, p);
     }
-    return decls.map((decl) => buildParamFromUniformDecl(decl, prevByName.get(decl.name)));
+    return dedupeShaderParams(decls.map((decl) => buildParamFromUniformDecl(decl, prevByName.get(decl.name))));
 }
 
 function normalizeTextureParamSlots(params = []) {
@@ -849,6 +860,7 @@ function syncUniformDeclarationsInSource(source, params = [], managedNames = [])
 function syncModelShaderUniformDecls(draft, extraManagedNames = []) {
     if (!draft?.model?.shader) return;
     const shader = draft.model.shader;
+    shader.params = dedupeShaderParams(shader.params || []);
     const prevManaged = Array.isArray(shader.__autoUniformNames) ? shader.__autoUniformNames : [];
     const mergedManaged = Array.from(new Set([
         ...prevManaged,
@@ -861,12 +873,25 @@ function syncModelShaderUniformDecls(draft, extraManagedNames = []) {
 
 function syncNodeShaderUniformDecls(node, extraManagedNames = []) {
     if (!node) return;
+    node.params = dedupeShaderParams(node.params || []);
     const textureParamNames = new Set(
         (Array.isArray(node.params) ? node.params : [])
             .filter((p) => String(p?.type || "").toLowerCase() === "texture")
             .map((p) => String(p?.name || "").trim())
             .filter(Boolean)
     );
+    const primaryTextureName = Array.from(textureParamNames)[0] || "";
+    if (primaryTextureName) {
+        for (const alias of ["tDiffuse", "tex", "samp"]) {
+            if (textureParamNames.has(alias) || alias === primaryTextureName) continue;
+            node.fragmentSource = applyParamRenameInShaderSource(
+                node.fragmentSource,
+                alias,
+                primaryTextureName,
+                "texture"
+            );
+        }
+    }
     const legacyTextureAliases = ["tDiffuse", "tex", "samp"].filter((name) => !textureParamNames.has(name));
     const prevManaged = Array.isArray(node.__autoUniformNames) ? node.__autoUniformNames : [];
     const mergedManaged = Array.from(new Set([
@@ -1982,6 +2007,212 @@ function nextCustomParamSerial(params = [], { excludePostInputSampler = false, e
     return count + 1;
 }
 
+const MODEL_BUILDER_LABELS = Object.freeze({
+    box: "立方体",
+    plane: "平面",
+    sphere: "球体",
+    disc: "圆盘",
+    ring: "圆环"
+});
+
+function normalizeModelBuilderKind(kind) {
+    const k = String(kind || "").trim().toLowerCase();
+    return MODEL_BUILDER_KINDS.includes(k) ? k : "box";
+}
+
+function ensureDraftModelBuilder(draft) {
+    if (!draft.model || typeof draft.model !== "object") draft.model = {};
+    if (!draft.model.builder || typeof draft.model.builder !== "object") {
+        draft.model.builder = { enabled: false, steps: [] };
+    }
+    if (!Array.isArray(draft.model.builder.steps)) draft.model.builder.steps = [];
+    return draft.model.builder;
+}
+
+function modelBuilderStepFields(kind) {
+    const k = normalizeModelBuilderKind(kind);
+    if (k === "plane") return [
+        ["width", "宽"],
+        ["height", "高"]
+    ];
+    if (k === "sphere") return [
+        ["radius", "半径"],
+        ["latSegments", "纬线"],
+        ["lonSegments", "经线"]
+    ];
+    if (k === "disc") return [
+        ["radius", "半径"],
+        ["segments", "细分"]
+    ];
+    if (k === "ring") return [
+        ["innerRadius", "内半径"],
+        ["outerRadius", "外半径"],
+        ["segments", "细分"]
+    ];
+    return [
+        ["width", "宽"],
+        ["height", "高"],
+        ["depth", "深"]
+    ];
+}
+
+function patchModelBuilderStep(stepId, mutator, meta = {}) {
+    const id = String(stepId || "");
+    if (!id || typeof mutator !== "function") return;
+    store.patch((draft) => {
+        const builder = ensureDraftModelBuilder(draft);
+        const step = builder.steps.find((item) => String(item?.id || "") === id);
+        if (!step) return;
+        mutator(step, builder, draft);
+    }, Object.assign({
+        reason: "model-builder-step",
+        forceCompile: true,
+        forceKotlin: true
+    }, meta || {}));
+}
+
+function createModelBuilderNumberField(step, key, labelText) {
+    const field = document.createElement("label");
+    field.className = "model-builder-field";
+    const label = document.createElement("span");
+    label.textContent = labelText;
+    const input = document.createElement("input");
+    input.className = "input";
+    input.type = "number";
+    input.step = key.toLowerCase().includes("segment") ? "1" : "0.05";
+    input.value = String(step?.[key] ?? "");
+    input.addEventListener("change", () => {
+        patchModelBuilderStep(step.id, (target) => {
+            target[key] = Number(input.value);
+        });
+    });
+    field.appendChild(label);
+    field.appendChild(input);
+    return field;
+}
+
+function createModelBuilderTextField(step, key, labelText, placeholder = "") {
+    const field = document.createElement("label");
+    field.className = "model-builder-field";
+    const label = document.createElement("span");
+    label.textContent = labelText;
+    const input = document.createElement("input");
+    input.className = "input";
+    input.value = String(step?.[key] ?? "");
+    input.placeholder = placeholder;
+    input.addEventListener("change", () => {
+        patchModelBuilderStep(step.id, (target) => {
+            target[key] = String(input.value || "").trim();
+        });
+    });
+    field.appendChild(label);
+    field.appendChild(input);
+    return field;
+}
+
+function renderModelBuilder(state) {
+    const builder = state?.model?.builder || { enabled: false, steps: [] };
+    const steps = Array.isArray(builder.steps) ? builder.steps : [];
+    setChecked(els.chkUseModelBuilder, !!builder.enabled);
+
+    if (els.modelBuilderKotlinOut) {
+        els.modelBuilderKotlinOut.innerHTML = highlightKotlin(generateModelBuilderKotlin(state));
+    }
+    if (!els.modelBuilderList) return;
+    els.modelBuilderList.innerHTML = "";
+
+    if (!steps.length) {
+        const empty = document.createElement("div");
+        empty.className = "model-builder-empty";
+        empty.textContent = "还没有形体。选择类型后点击“添加形体”。";
+        els.modelBuilderList.appendChild(empty);
+        return;
+    }
+
+    for (const step of steps) {
+        const item = document.createElement("div");
+        item.className = "model-builder-item";
+
+        const head = document.createElement("div");
+        head.className = "model-builder-row head";
+        const inpName = document.createElement("input");
+        inpName.className = "input";
+        inpName.value = String(step.name || "");
+        inpName.placeholder = "shape name";
+        inpName.addEventListener("change", () => {
+            patchModelBuilderStep(step.id, (target) => {
+                target.name = String(inpName.value || "").trim() || target.name;
+            }, { forceCompile: false });
+        });
+
+        const selKind = document.createElement("select");
+        selKind.className = "input";
+        for (const kind of MODEL_BUILDER_KINDS) {
+            const opt = document.createElement("option");
+            opt.value = kind;
+            opt.textContent = MODEL_BUILDER_LABELS[kind] || kind;
+            if (kind === normalizeModelBuilderKind(step.kind)) opt.selected = true;
+            selKind.appendChild(opt);
+        }
+        selKind.addEventListener("change", () => {
+            patchModelBuilderStep(step.id, (target) => {
+                target.kind = normalizeModelBuilderKind(selKind.value);
+            });
+        });
+
+        const btnDelete = document.createElement("button");
+        btnDelete.type = "button";
+        btnDelete.className = "btn small danger";
+        btnDelete.textContent = "删除";
+        btnDelete.addEventListener("click", () => {
+            store.patch((draft) => {
+                const builderDraft = ensureDraftModelBuilder(draft);
+                builderDraft.steps = builderDraft.steps.filter((item) => String(item?.id || "") !== String(step.id));
+            }, { reason: "model-builder-delete", forceCompile: true, forceKotlin: true });
+        });
+
+        head.appendChild(inpName);
+        head.appendChild(selKind);
+        head.appendChild(btnDelete);
+        item.appendChild(head);
+
+        const shapeRow = document.createElement("div");
+        shapeRow.className = "model-builder-row";
+        for (const [key, label] of modelBuilderStepFields(step.kind)) {
+            shapeRow.appendChild(createModelBuilderNumberField(step, key, label));
+        }
+        item.appendChild(shapeRow);
+
+        const positionRow = document.createElement("div");
+        positionRow.className = "model-builder-row";
+        positionRow.appendChild(createModelBuilderNumberField(step, "x", "X"));
+        positionRow.appendChild(createModelBuilderNumberField(step, "y", "Y"));
+        positionRow.appendChild(createModelBuilderNumberField(step, "z", "Z"));
+        item.appendChild(positionRow);
+
+        const rotationRow = document.createElement("div");
+        rotationRow.className = "model-builder-row";
+        rotationRow.appendChild(createModelBuilderNumberField(step, "rotX", "旋转 X"));
+        rotationRow.appendChild(createModelBuilderNumberField(step, "rotY", "旋转 Y"));
+        rotationRow.appendChild(createModelBuilderNumberField(step, "rotZ", "旋转 Z"));
+        item.appendChild(rotationRow);
+
+        const scaleRow = document.createElement("div");
+        scaleRow.className = "model-builder-row";
+        scaleRow.appendChild(createModelBuilderNumberField(step, "scaleX", "缩放 X"));
+        scaleRow.appendChild(createModelBuilderNumberField(step, "scaleY", "缩放 Y"));
+        scaleRow.appendChild(createModelBuilderNumberField(step, "scaleZ", "缩放 Z"));
+        item.appendChild(scaleRow);
+
+        const colorRow = document.createElement("div");
+        colorRow.className = "model-builder-row";
+        colorRow.appendChild(createModelBuilderTextField(step, "color", "颜色 RGBA", "1,1,1,1"));
+        item.appendChild(colorRow);
+
+        els.modelBuilderList.appendChild(item);
+    }
+}
+
 function refreshEditorCompletions(state) {
     const modelUniforms = buildUniformCompletions(state?.model?.shader?.params || []);
     const node = findPostNode(state, state.selectedNodeId);
@@ -2667,6 +2898,7 @@ function refreshModelEditorPanel(state) {
     modelVertexEditor.setValue(String(state.model?.shader?.vertexSource || ""), { silent: true });
     modelFragmentEditor.setValue(String(state.model?.shader?.fragmentSource || ""), { silent: true });
     renderModelParamList(state);
+    renderModelBuilder(state);
 }
 
 function refreshTopPanel(state) {
@@ -2868,6 +3100,52 @@ function bindModelEvents() {
         store.patch((draft) => {
             draft.model.enablePost = enabled;
         }, { reason: "model-enable-post", forceCompile: true, forceCompileNow: true, forceKotlin: true });
+    });
+
+    els.chkUseModelBuilder?.addEventListener("change", () => {
+        const enabled = !!els.chkUseModelBuilder.checked;
+        store.patch((draft) => {
+            const builder = ensureDraftModelBuilder(draft);
+            builder.enabled = enabled;
+            if (enabled && !builder.steps.length) {
+                builder.steps.push(createDefaultModelBuilderStep(0, els.selModelBuilderShape?.value || "box"));
+            }
+        }, { reason: "model-builder-toggle", forceCompile: true, forceCompileNow: true, forceKotlin: true });
+    });
+
+    els.btnAddModelShape?.addEventListener("click", () => {
+        store.patch((draft) => {
+            const builder = ensureDraftModelBuilder(draft);
+            const kind = normalizeModelBuilderKind(els.selModelBuilderShape?.value || "box");
+            builder.steps.push(createDefaultModelBuilderStep(builder.steps.length, kind));
+            builder.enabled = true;
+        }, { reason: "model-builder-add", forceCompile: true, forceCompileNow: true, forceKotlin: true });
+    });
+
+    els.btnClearModelShapes?.addEventListener("click", () => {
+        store.patch((draft) => {
+            const builder = ensureDraftModelBuilder(draft);
+            builder.steps = [];
+            builder.enabled = false;
+        }, { reason: "model-builder-clear", forceCompile: true, forceCompileNow: true, forceKotlin: true });
+    });
+
+    els.btnCopyModelBuilderKotlin?.addEventListener("click", async () => {
+        const text = generateModelBuilderKotlin(store.getState());
+        if (els.modelBuilderKotlinOut) els.modelBuilderKotlinOut.innerHTML = highlightKotlin(text);
+        try {
+            await navigator.clipboard.writeText(text);
+            showToast("建模 Kotlin 已复制", "ok");
+        } catch {
+            showToast("复制失败，请手动复制", "err");
+        }
+    });
+
+    els.btnDownloadModelBuilderKotlin?.addEventListener("click", () => {
+        const state = store.getState();
+        const text = generateModelBuilderKotlin(state);
+        if (els.modelBuilderKotlinOut) els.modelBuilderKotlinOut.innerHTML = highlightKotlin(text);
+        downloadText(`${sanitizeProjectName(state.projectName || "shader-workbench")}_model_builder.kt.txt`, text);
     });
 
     els.btnUploadModel?.addEventListener("click", () => {

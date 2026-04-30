@@ -1699,16 +1699,38 @@ export function initCardSystem(ctx = {}) {
 
     function getDragIdsForNode(nodeId, listRef, containerEl = null) {
         if (!nodeId || !Array.isArray(listRef)) return [];
-        const sel = getSelectedNodeIds();
-        if (!sel.has(nodeId)) return [nodeId];
-        const inList = [];
+        const selectedForDrag = new Set(getSelectedNodeIds());
+        if (containerEl && containerEl.querySelectorAll) {
+            containerEl.querySelectorAll(".card.multi-selected[data-id]").forEach((el) => {
+                const id = String(el.dataset.id || "").trim();
+                if (id) selectedForDrag.add(id);
+            });
+        }
+        if (elCardsRoot && elCardsRoot.querySelectorAll) {
+            elCardsRoot.querySelectorAll(".card.multi-selected[data-id]").forEach((el) => {
+                const id = String(el.dataset.id || "").trim();
+                if (id) selectedForDrag.add(id);
+            });
+        }
+        if (!selectedForDrag.has(nodeId)) return [nodeId];
+        const ordered = [];
+        const addOrdered = (id) => {
+            if (!id || !selectedForDrag.has(id) || ordered.includes(id)) return;
+            if (!findNodeContextById(id)) return;
+            ordered.push(id);
+        };
+        if (elCardsRoot && elCardsRoot.querySelectorAll) {
+            elCardsRoot.querySelectorAll(".card.multi-selected[data-id]").forEach((el) => addOrdered(String(el.dataset.id || "").trim()));
+        }
         for (const n of listRef) {
             if (!n || !n.id) continue;
-            if (containerEl && !containerEl.querySelector(`.card[data-id="${n.id}"]`)) continue;
-            if (sel.has(n.id)) inList.push(n.id);
+            addOrdered(n.id);
         }
-        if (inList.length <= 1) return [nodeId];
-        return inList;
+        for (const id of selectedForDrag) {
+            addOrdered(id);
+        }
+        if (!ordered.includes(nodeId)) ordered.unshift(nodeId);
+        return ordered.length > 1 ? ordered : [nodeId];
     }
 
     function ensureCardBoxEl() {
@@ -1880,6 +1902,7 @@ export function initCardSystem(ctx = {}) {
     };
 
     function getDragNodeIds(e) {
+        if (Array.isArray(draggingIds) && draggingIds.length) return draggingIds.slice();
         try {
             if (e?.dataTransfer) {
                 const byMulti = e.dataTransfer.getData(DRAG_TYPE_NODE_MULTI);
@@ -1897,7 +1920,6 @@ export function initCardSystem(ctx = {}) {
                 if (plain && plain !== "pb_builder") return [plain];
             }
         } catch {}
-        if (Array.isArray(draggingIds) && draggingIds.length) return draggingIds.slice();
         return draggingId ? [draggingId] : [];
     }
 
@@ -1978,8 +2000,8 @@ export function initCardSystem(ctx = {}) {
 
     function clearDragOverIndicators(containerEl = null) {
         const root = containerEl || elCardsRoot || document;
-        root.querySelectorAll?.(".card.drag-over, .card.drag-over-top, .card.drag-over-bottom").forEach((el) => {
-            el.classList.remove("drag-over", "drag-over-top", "drag-over-bottom");
+        root.querySelectorAll?.(".card.drag-over, .card.drag-over-top, .card.drag-over-bottom, .card.drag-over-inside").forEach((el) => {
+            el.classList.remove("drag-over", "drag-over-top", "drag-over-bottom", "drag-over-inside");
         });
     }
 
@@ -1999,6 +2021,32 @@ export function initCardSystem(ctx = {}) {
             if (!target || !target.closest) return false;
             const zone = target.closest(".subcards, .dropzone, .builder-drop-surface");
             return !!zone && cardEl.contains(zone);
+        };
+        const canDropIntoCardBody = (target) => {
+            if (!target || !target.closest) return true;
+            if (target.closest(".handle, .card-actions, button, input, textarea, select, [contenteditable='true']")) return false;
+            const inner = target.closest(".card[data-id]");
+            return !inner || inner === cardEl;
+        };
+        const getCardBodyDropTarget = (e) => {
+            if (!node || !isBuilderContainerKind(node.kind)) return null;
+            if (isNestedDropTarget(e?.target)) return null;
+            if (!canDropIntoCardBody(e?.target)) return null;
+            const rect = cardEl.getBoundingClientRect();
+            if (rect && rect.height > 0 && Number.isFinite(e?.clientY)) {
+                const edge = Math.min(18, Math.max(8, rect.height * 0.25));
+                if (e.clientY < rect.top + edge || e.clientY > rect.bottom - edge) return null;
+            }
+            const dragIds = getDragNodeIds(e);
+            if (!dragIds.length || dragIds.includes(node.id)) return null;
+            if (!Array.isArray(node.children)) node.children = [];
+            const movableIds = dragIds.filter((dragId) => {
+                if (!dragId || dragId === node.id) return false;
+                const from = findNodeContextById(dragId);
+                return !!(from && from.node && !nodeContainsId(from.node, node.id));
+            });
+            if (!movableIds.length) return null;
+            return { ids: movableIds, list: node.children, owner: node };
         };
         handleEl.setAttribute("draggable", "true");
         handleEl.addEventListener("pointerdown", (e) => {
@@ -2050,6 +2098,12 @@ export function initCardSystem(ctx = {}) {
             autoScrollDuringDrag(getDragScrollContainer(cardEl), e.clientY);
             const builderInfo = getDragBuilderInfo(e);
             e.dataTransfer.dropEffect = builderInfo ? "copy" : "move";
+            const bodyDrop = !builderInfo ? getCardBodyDropTarget(e) : null;
+            if (bodyDrop) {
+                clearDragOverIndicators(cardEl.parentElement || elCardsRoot);
+                cardEl.classList.add("drag-over", "drag-over-inside");
+                return;
+            }
             setDragOverIndicator(cardEl, builderInfo ? "copy" : "insert", e.clientY > (cardEl.getBoundingClientRect().top + cardEl.getBoundingClientRect().height / 2));
 
             if (builderInfo) return;
@@ -2098,7 +2152,10 @@ export function initCardSystem(ctx = {}) {
             dragPreview.lastMode = mode;
             dragPreview.lastAfter = after;
         });
-        cardEl.addEventListener("dragleave", () => clearDragOverIndicators(cardEl.parentElement || elCardsRoot));
+        cardEl.addEventListener("dragleave", () => {
+            cardEl.classList.remove("drag-over-inside");
+            clearDragOverIndicators(cardEl.parentElement || elCardsRoot);
+        });
         cardEl.addEventListener("drop", (e) => {
             if (isNestedDropTarget(e.target)) {
                 clearDragOverIndicators(cardEl.parentElement || elCardsRoot);
@@ -2106,6 +2163,7 @@ export function initCardSystem(ctx = {}) {
             }
             e.preventDefault();
             e.stopPropagation();
+            cardEl.classList.remove("drag-over-inside");
             clearDragOverIndicators(cardEl.parentElement || elCardsRoot);
             const builderInfo = getDragBuilderInfo(e);
             if (builderInfo) {
@@ -2119,6 +2177,35 @@ export function initCardSystem(ctx = {}) {
 
             const dragIds = getDragNodeIds(e);
             if (!dragIds.length) return;
+            const bodyDrop = getCardBodyDropTarget(e);
+            if (bodyDrop) {
+                if (bodyDrop.ids.length > 1) {
+                    historyCapture("drag_drop_multi_into_group");
+                    const ok = (typeof moveNodesByIds === "function")
+                        ? moveNodesByIds(bodyDrop.ids, bodyDrop.list, bodyDrop.list.length, bodyDrop.owner)
+                        : false;
+                    if (ok) {
+                        markDragPreviewDrop();
+                        requestCardSwapAnim();
+                        renderAll();
+                    }
+                    return;
+                }
+                if (tryCopyWithBuilderIntoAddWith(bodyDrop.ids[0], bodyDrop.owner)) {
+                    markDragPreviewDrop();
+                    requestCardSwapAnim();
+                    renderAll();
+                    return;
+                }
+                historyCapture("drag_drop_into_group");
+                const ok = moveNodeById(bodyDrop.ids[0], bodyDrop.list, bodyDrop.list.length, bodyDrop.owner);
+                if (ok) {
+                    markDragPreviewDrop();
+                    requestCardSwapAnim();
+                    renderAll();
+                }
+                return;
+            }
             const isMulti = dragIds.length > 1;
             const id = dragIds[0];
 

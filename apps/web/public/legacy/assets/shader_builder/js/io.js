@@ -1,6 +1,7 @@
 import {
     createDefaultPostNode,
     createDefaultState,
+    dedupeShaderParams,
     ensurePostInputSamplerParam,
     getPostInputTextureMinCount,
     normalizeNodePathTemplate,
@@ -78,7 +79,7 @@ export function normalizeProjectPayload(payload) {
         out.model = Object.assign({}, base.model, payload.model);
         out.model.shader = Object.assign({}, base.model.shader, payload.model.shader || {});
         out.model.shader.params = Array.isArray(payload.model?.shader?.params)
-            ? payload.model.shader.params.map((p) => normalizeParamObject(p))
+            ? dedupeShaderParams(payload.model.shader.params.map((p) => normalizeParamObject(p)))
             : deepClone(base.model.shader.params);
     }
 

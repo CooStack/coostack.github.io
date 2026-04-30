@@ -4,7 +4,7 @@
     <meta charset="utf-8"/>
     <meta name="viewport" content="width=device-width,initial-scale=1"/>
     <title>CompositionBuilder - PointsBuilder 编辑器</title>
-    <link rel="stylesheet" href="./assets/points_builder/css/style.css?v=20260429_10"/>
+    <link rel="stylesheet" href="./assets/points_builder/css/style.css?v=20260429_12"/>
     <script src="./assets/src/js/compat/spa-router-bridge.js"></script>
     <style>
         body.composition-no-kotlin #btnRightKotlinTab,
@@ -58,6 +58,10 @@
                 <div class="settings-label">直线分点</div>
                 <input id="inpLineDivisionPoints" class="input" type="number" value="0" step="1" min="0" max="64"
                        title="0 关闭；1 显示中点；2 显示三分点"/>
+            </div>
+            <div class="settings-block">
+                <div class="settings-label">吸附优先级</div>
+                <div id="snapPriorityList" class="snap-priority-list" aria-label="吸附优先级"></div>
             </div>
             <div class="settings-note">0 关闭；1 中点；2 三分点。</div>
         </div>
@@ -307,6 +311,6 @@
       }
     }
 </script>
-<script type="module" src="./assets/src/js/pages/composition-pointsbuilder.page.js?v=20260429_10"></script>
+<script type="module" src="./assets/src/js/pages/composition-pointsbuilder.page.js?v=20260429_14"></script>
 </body>
 </html>

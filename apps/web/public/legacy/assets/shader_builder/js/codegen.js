@@ -3,10 +3,43 @@ import { parseVec } from "./utils.js";
 import { MC_COMPAT } from "./constants.js";
 
 function safeName(name, fallback) {
-    const n = String(name || "").replace(/[^a-zA-Z0-9_]/g, "_");
+    const n = String(name || "").replace(/[^a-zA-Z0-9_]/g, "_").replace(/_+/g, "_").replace(/^_+|_+$/g, "");
     if (!n) return fallback;
     if (/^[0-9]/.test(n)) return `_${n}`;
     return n;
+}
+
+function safeResourceSegment(name, fallback = "generated") {
+    const n = String(name || "").trim().toLowerCase().replace(/[^a-z0-9_.-]/g, "_").replace(/_+/g, "_").replace(/^_+|_+$/g, "");
+    return n || fallback;
+}
+
+function safeConstName(name, fallback) {
+    return safeName(name, fallback).replace(/([a-z0-9])([A-Z])/g, "$1_$2").toUpperCase();
+}
+
+function pascalName(name, fallback) {
+    const base = safeName(name, fallback);
+    const words = base.split("_").filter(Boolean);
+    const out = words.map((word) => `${word.slice(0, 1).toUpperCase()}${word.slice(1)}`).join("");
+    if (!out) return fallback;
+    if (/^[0-9]/.test(out)) return `_${out}`;
+    return out;
+}
+
+function uniqueName(base, used) {
+    let name = base;
+    let index = 2;
+    while (used.has(name)) {
+        name = `${base}_${index}`;
+        index += 1;
+    }
+    used.add(name);
+    return name;
+}
+
+function ktString(value) {
+    return JSON.stringify(String(value ?? ""));
 }
 
 function kotlinScalar(value, type) {
@@ -22,6 +55,13 @@ function kotlinScalar(value, type) {
     if (!Number.isFinite(n)) return "0f";
     const text = String(n);
     return text.includes(".") ? `${text}f` : `${text}.0f`;
+}
+
+function kotlinDouble(value) {
+    const n = Number(value);
+    if (!Number.isFinite(n)) return "0.0";
+    const text = String(n);
+    return text.includes(".") ? text : `${text}.0`;
 }
 
 function sanitizeUniformExpr(raw, fallback = "") {
@@ -43,51 +83,82 @@ function buildProgramSetter(param, target = "program") {
 
     if (type === "int") {
         const rhs = valueExpr || kotlinScalar(value, "int");
-        return `${target}.setInt("${name}", ${rhs})`;
+        return `${target}.setInt(${ktString(name)}, ${rhs})`;
     }
     if (type === "bool") {
         const rhs = valueExpr || kotlinScalar(value, "bool");
-        return `${target}.setBoolean("${name}", ${rhs})`;
+        return `${target}.setBoolean(${ktString(name)}, ${rhs})`;
     }
 
     if (type === "vec2") {
         if (valueExpr) {
-            return `${target}.setFloat2("${name}", ${valueExpr})`;
+            return `${target}.setFloat2(${ktString(name)}, ${valueExpr})`;
         }
         const vec = parseVec(String(value), 2) || [0, 0];
-        return `${target}.setFloat2("${name}", org.joml.Vector2f(${kotlinScalar(vec[0], "float")}, ${kotlinScalar(vec[1], "float")}))`;
+        return `${target}.setFloat2(${ktString(name)}, org.joml.Vector2f(${kotlinScalar(vec[0], "float")}, ${kotlinScalar(vec[1], "float")}))`;
     }
 
     if (type === "vec3") {
         if (valueExpr) {
-            return `${target}.setFloat3("${name}", ${valueExpr})`;
+            return `${target}.setFloat3(${ktString(name)}, ${valueExpr})`;
         }
         const vec = parseVec(String(value), 3) || [1, 1, 1];
-        return `${target}.setFloat3("${name}", org.joml.Vector3f(${kotlinScalar(vec[0], "float")}, ${kotlinScalar(vec[1], "float")}, ${kotlinScalar(vec[2], "float")}))`;
+        return `${target}.setFloat3(${ktString(name)}, org.joml.Vector3f(${kotlinScalar(vec[0], "float")}, ${kotlinScalar(vec[1], "float")}, ${kotlinScalar(vec[2], "float")}))`;
     }
 
     if (type === "texture") {
         const sampler = Number.parseInt(String(value || 0), 10);
         const safeSampler = Number.isFinite(sampler) ? sampler : 0;
         if (param?.sourceType === "connection" && param?.connection) {
-            return `${target}.setInt("${name}", ${safeSampler}) // texture <- ${param.connection}`;
+            return `${target}.setInt(${ktString(name)}, ${safeSampler}) // texture <- ${param.connection}`;
         }
         if (param?.sourceType === "upload" && param?.textureId) {
-            return `${target}.setInt("${name}", ${safeSampler}) // texture <- uploaded:${param.textureId}`;
+            return `${target}.setInt(${ktString(name)}, ${safeSampler}) // texture <- uploaded:${param.textureId}`;
         }
-        return `${target}.setInt("${name}", ${safeSampler})`;
+        return `${target}.setInt(${ktString(name)}, ${safeSampler})`;
     }
 
     if (valueExpr) {
-        return `${target}.setFloat("${name}", ${valueExpr})`;
+        return `${target}.setFloat(${ktString(name)}, ${valueExpr})`;
     }
-    return `${target}.setFloat("${name}", ${kotlinScalar(value, "float")})`;
+    return `${target}.setFloat(${ktString(name)}, ${kotlinScalar(value, "float")})`;
+}
+
+function buildPostParamValue(param) {
+    const type = String(param?.type || "float").toLowerCase();
+    const value = param?.value ?? "";
+    if (type === "int") {
+        return `PostEffectParamValue.IntValue(${kotlinScalar(value, "int")})`;
+    }
+    if (type === "bool") {
+        return `PostEffectParamValue.BoolValue(${kotlinScalar(value, "bool")})`;
+    }
+    if (type === "vec2") {
+        const vec = parseVec(String(value), 2) || [0, 0];
+        return `PostEffectParamValue.Vec2Value(${kotlinScalar(vec[0], "float")}, ${kotlinScalar(vec[1], "float")})`;
+    }
+    if (type === "vec3") {
+        const vec = parseVec(String(value), 3) || [0, 0, 0];
+        return `PostEffectParamValue.Vec3Value(${kotlinDouble(vec[0])}, ${kotlinDouble(vec[1])}, ${kotlinDouble(vec[2])})`;
+    }
+    return `PostEffectParamValue.FloatValue(${kotlinScalar(value, "float")})`;
+}
+
+function buildPostUniformLine(param, indent = "            ") {
+    const name = String(param?.name || "uParam");
+    return `${indent}uniform(${ktString(name)}) { it.params[${ktString(name)}] ?: ${buildPostParamValue(param)} }`;
 }
 
 function parseSamplerSlot(raw, fallback = 0) {
     const slot = Number.parseInt(String(raw ?? fallback), 10);
     if (!Number.isFinite(slot)) return fallback;
-    return Math.max(0, slot);
+    return Math.max(0, Math.min(31, slot));
+}
+
+function postSamplerSlot(_param, samplerIndex = 0) {
+    const slot = Number(samplerIndex);
+    if (!Number.isFinite(slot)) return 0;
+    return Math.max(0, Math.min(31, Math.round(slot)));
 }
 
 function sanitizeResourceFileName(name, fallback = "texture.png") {
@@ -104,22 +175,52 @@ function buildUploadedTextureResourcePath(textureName) {
     return `core/textures/${file}`;
 }
 
+function resourceExpr(path) {
+    return `ResourceLocation.fromNamespaceAndPath(CooParticlesConstants.MOD_ID, ${ktString(path)})`;
+}
+
+function shaderExpr(path) {
+    return resourceExpr(path);
+}
+
+function isTextureParam(param) {
+    return String(param?.type || "").toLowerCase() === "texture";
+}
+
 function isTextureUploadParam(param) {
     if (!param || typeof param !== "object") return false;
-    return String(param.type || "").toLowerCase() === "texture"
+    return isTextureParam(param)
         && String(param.sourceType || "value").toLowerCase() === "upload";
+}
+
+function nodeType(node) {
+    const type = String(node?.type || "simple").trim().toLowerCase();
+    if (type === "texture") return "texture";
+    if (type === "pingpong") return "pingpong";
+    return "simple";
+}
+
+function getTextureParams(params = []) {
+    return (Array.isArray(params) ? params : []).filter(isTextureParam);
+}
+
+function getUniformParams(params = []) {
+    return (Array.isArray(params) ? params : []).filter((param) => !isTextureParam(param));
+}
+
+function buildTextureLookup(state) {
+    const map = new Map();
+    for (const tex of state?.textures || []) {
+        const id = String(tex?.id || "").trim();
+        if (!id || map.has(id)) continue;
+        map.set(id, tex);
+    }
+    return map;
 }
 
 function collectModelTextureBindings(state) {
     const params = Array.isArray(state?.model?.shader?.params) ? state.model.shader.params : [];
-    const textures = Array.isArray(state?.textures) ? state.textures : [];
-    const textureById = new Map();
-    for (const tex of textures) {
-        const id = String(tex?.id || "");
-        if (!id) continue;
-        textureById.set(id, tex);
-    }
-
+    const textureById = buildTextureLookup(state);
     const textureDefs = [];
     const bindings = [];
     const missing = [];
@@ -129,15 +230,7 @@ function collectModelTextureBindings(state) {
 
     const allocTextureVar = (seed, fallback) => {
         const base = `modelTex_${safeName(seed, fallback)}`;
-        if (!usedVarNames.has(base)) {
-            usedVarNames.add(base);
-            return base;
-        }
-        let idx = 2;
-        while (usedVarNames.has(`${base}_${idx}`)) idx += 1;
-        const name = `${base}_${idx}`;
-        usedVarNames.add(name);
-        return name;
+        return uniqueName(base, usedVarNames);
     };
 
     for (let i = 0; i < params.length; i += 1) {
@@ -181,158 +274,148 @@ function collectModelTextureBindings(state) {
     return { textureDefs, bindings, missing };
 }
 
-function nodeVarMap(nodes) {
-    const map = new Map();
-    nodes.forEach((node, i) => {
-        const base = safeName(node.name || `Pipe${i + 1}`, `pipe_${i + 1}`);
-        const varName = `pipe_${base}`;
-        map.set(node.id, varName);
-    });
-    return map;
-}
-
-function buildTextureLookup(state) {
-    const map = new Map();
-    for (const tex of state?.textures || []) {
-        const id = String(tex?.id || "").trim();
-        if (!id || map.has(id)) continue;
-        map.set(id, tex);
-    }
-    return map;
-}
-
-function pickPrimaryTextureParam(node) {
-    for (const param of node?.params || []) {
-        if (String(param?.type || "").toLowerCase() !== "texture") continue;
-        return param;
-    }
-    return null;
-}
-
-function buildTextureNodeSourceLines(node, textureById) {
-    const param = pickPrimaryTextureParam(node);
-    const sourceType = String(param?.sourceType || "value").toLowerCase();
-    const textureId = String(param?.textureId || "").trim();
-
-    if (sourceType === "upload" && textureId && textureById.has(textureId)) {
-        const texDef = textureById.get(textureId) || {};
-        const path = buildUploadedTextureResourcePath(texDef.name || textureId);
-        return [
-            "addTexture(",
-            "    IdentifierTexture(",
-            "        ResourceLocation.fromNamespaceAndPath(CooParticlesConstants.MOD_ID, \"" + path + "\")",
-            "    )",
-            ")"
-        ];
-    }
-
-    return [
-        "addTexture(ReferenceTexture(minecraft.mainRenderTarget.colorTextureId))"
-    ];
-}
-
-function resolveNodeExpression(node, variableName, textureById = new Map()) {
-    const fragmentPath = node.fragmentPath || "pipe/frags/screen.fsh";
-    const baseIndent = "            ";
-    const nodeType = String(node?.type || "simple").toLowerCase();
-
-    if (nodeType === "texture") {
-        const sourceLines = buildTextureNodeSourceLines(node, textureById);
-        const body = [
-            `${baseIndent}TextureShaderPipe(`,
-            `${baseIndent}    SimpleTextures().apply {`,
-            ...sourceLines.map((line) => `${baseIndent}        ${line}`),
-            `${baseIndent}    }`,
-            `${baseIndent})`
-        ];
-
-        let suffix = "";
-        if (node.useMipmap) suffix += ".useMipmap()";
-        return {
-            header: body.join("\n"),
-            suffix,
-            variableName
-        };
-    }
-
-    if (nodeType === "pingpong") {
-        const body = [
-            `${baseIndent}PingPongShaderPipe(`,
-            `${baseIndent}    IdentifierShader(`,
-            `${baseIndent}        ResourceLocation.fromNamespaceAndPath(CooParticlesConstants.MOD_ID, "${fragmentPath}"),`,
-            `${baseIndent}        GlShaderType.FRAGMENT`,
-            `${baseIndent}    ),`,
-            `${baseIndent}    { minecraft.mainRenderTarget.depthTextureId },`,
-            `${baseIndent}    ${Number(node.textureUnit || 1)},`,
-            `${baseIndent}    ${Number(node.iterations || 1)},`,
-            `${baseIndent}    ${node.filter || "GL33.GL_LINEAR"}`,
-            `${baseIndent})`
-        ];
-        let suffix = ".addRenderHandlerPong { program ->\n";
-        for (const param of node.params || []) suffix += `                ${buildProgramSetter(param)}\n`;
-        suffix += "            }.addRenderHandler { program ->\n";
-        for (const param of node.params || []) suffix += `                ${buildProgramSetter(param)}\n`;
-        suffix += "            }";
-        if (node.useMipmap) suffix += ".useMipmap()";
-
-        return {
-            header: body.join("\n"),
-            suffix,
-            variableName
-        };
-    }
-
-    const body = [
-        `${baseIndent}SimpleShaderPipe(`,
-        `${baseIndent}    IdentifierShader(`,
-        `${baseIndent}        ResourceLocation.fromNamespaceAndPath(CooParticlesConstants.MOD_ID, "${fragmentPath}"),`,
-        `${baseIndent}        GlShaderType.FRAGMENT`,
-        `${baseIndent}    ),`,
-        `${baseIndent}    { minecraft.mainRenderTarget.depthTextureId },`,
-        `${baseIndent}    ${Number(node.inputs || 1)},`,
-        `${baseIndent}    ${node.filter || "GL33.GL_LINEAR"}`,
-        `${baseIndent})`
-    ];
-    let suffix = ".addRenderHandler { program ->\n";
-    for (const param of node.params || []) suffix += `                ${buildProgramSetter(param)}\n`;
-    suffix += "            }";
-    if (node.useMipmap) suffix += ".useMipmap()";
-
-    return {
-        header: body.join("\n"),
-        suffix,
-        variableName
-    };
-}
-
-function resolveEndpointExpr(nodeId, map) {
-    if (nodeId === GRAPH_INPUT_ID) return "valueInputPipe!!";
-    if (nodeId === GRAPH_OUTPUT_ID) return "valueOutput!!";
-    return map.get(nodeId) || "valueInputPipe!!";
-}
-
 function createTargetHeader() {
     const lines = [];
     lines.push(`// Target: Minecraft ${MC_COMPAT.mcVersion} (${MC_COMPAT.openGL}, ${MC_COMPAT.glsl})`);
     lines.push(`// Axis: ${MC_COMPAT.axis}`);
+    lines.push("// Generated for CooParticlesAPI renderer v2.");
     lines.push("");
     return lines;
 }
 
-export function generateModelKotlin(state) {
-    const primitive = String(state?.model?.primitive || "sphere");
-    const modelVertexPath = String(state?.model?.shader?.vertexPath || "core/vertex/point.vsh");
-    const modelFragmentPath = String(state?.model?.shader?.fragmentPath || "core/fragment/color.fsh");
-    const modelParams = Array.isArray(state?.model?.shader?.params) ? state.model.shader.params : [];
-    const modelTextureInfo = collectModelTextureBindings(state);
-    const uploadedTextureParamKey = new Set(
-        modelTextureInfo.bindings.map((b) => `${b.paramName}:${b.textureId}`)
-    );
-    const lines = createTargetHeader();
-    lines.push("// ---- Model Shader ----");
-    lines.push("companion object {");
-    lines.push(`    private val modelPrimitive = "${primitive}"`);
-    lines.push("");
+function projectSeed(state) {
+    return safeResourceSegment(state?.projectName || "shader_workbench", "shader_workbench");
+}
+
+function generatedClassName(state, suffix) {
+    return `${pascalName(state?.projectName || "ShaderWorkbench", "ShaderWorkbench")}${suffix}`;
+}
+
+function numberValue(value, fallback = 0, min = -Infinity, max = Infinity) {
+    const n = Number(value);
+    if (!Number.isFinite(n)) return fallback;
+    return Math.max(min, Math.min(max, n));
+}
+
+function intValue(value, fallback = 0, min = -Infinity, max = Infinity) {
+    return Math.round(numberValue(value, fallback, min, max));
+}
+
+function colorValues(raw) {
+    const parts = String(raw || "").split(",").map((part) => Number(part.trim()));
+    return [0, 1, 2, 3].map((index) => {
+        const fallback = index === 3 ? 1 : 1;
+        const n = parts[index];
+        return Number.isFinite(n) ? Math.max(0, Math.min(1, n)) : fallback;
+    });
+}
+
+function modelBuilderSteps(state) {
+    const builder = state?.model?.builder;
+    return Array.isArray(builder?.steps) ? builder.steps : [];
+}
+
+function modelBuilderEnabled(state) {
+    const builder = state?.model?.builder;
+    return !!builder?.enabled && modelBuilderSteps(state).length > 0;
+}
+
+function shapeVarName(index) {
+    return `shape${index + 1}`;
+}
+
+function colorVarName(index) {
+    return `shape${index + 1}Color`;
+}
+
+function vector3Expr(x, y, z) {
+    return `Vector3f(${kotlinScalar(x, "float")}, ${kotlinScalar(y, "float")}, ${kotlinScalar(z, "float")})`;
+}
+
+function pushBoxShapeLines(lines, step, varName, colorName) {
+    const hx = numberValue(step.width, 1, 0.001, 1000) / 2;
+    const hy = numberValue(step.height, 1, 0.001, 1000) / 2;
+    const hz = numberValue(step.depth, 1, 0.001, 1000) / 2;
+    const faces = [
+        [[-hx, -hy, hz], [hx, -hy, hz], [hx, hy, hz], [-hx, hy, hz]],
+        [[hx, -hy, -hz], [-hx, -hy, -hz], [-hx, hy, -hz], [hx, hy, -hz]],
+        [[-hx, hy, hz], [hx, hy, hz], [hx, hy, -hz], [-hx, hy, -hz]],
+        [[-hx, -hy, -hz], [hx, -hy, -hz], [hx, -hy, hz], [-hx, -hy, hz]],
+        [[hx, -hy, hz], [hx, -hy, -hz], [hx, hy, -hz], [hx, hy, hz]],
+        [[-hx, -hy, -hz], [-hx, -hy, hz], [-hx, hy, hz], [-hx, hy, -hz]]
+    ];
+    for (const face of faces) {
+        lines.push(`        ${varName}.addQuad(`);
+        lines.push(`            ${vector3Expr(...face[0])},`);
+        lines.push(`            ${vector3Expr(...face[1])},`);
+        lines.push(`            ${vector3Expr(...face[2])},`);
+        lines.push(`            ${vector3Expr(...face[3])},`);
+        lines.push(`            ${colorName}`);
+        lines.push("        )");
+    }
+}
+
+function pushShapeGeometryLines(lines, step, index) {
+    const kind = String(step?.kind || "box").toLowerCase();
+    const varName = shapeVarName(index);
+    const colorName = colorVarName(index);
+    const [r, g, b, a] = colorValues(step?.color);
+    lines.push(`        val ${colorName} = Vector4f(${kotlinScalar(r, "float")}, ${kotlinScalar(g, "float")}, ${kotlinScalar(b, "float")}, ${kotlinScalar(a, "float")})`);
+    lines.push(`        val ${varName} = RenderVertexBuilder.create().color(${colorName})`);
+    if (kind === "plane") {
+        lines.push(`        ${varName}.addPlane(${kotlinScalar(numberValue(step.width, 1, 0.001, 1000), "float")}, ${kotlinScalar(numberValue(step.height, 1, 0.001, 1000), "float")}, 0f, ${colorName})`);
+    } else if (kind === "sphere") {
+        lines.push(`        ${varName}.addSphere(${kotlinScalar(numberValue(step.radius, 1, 0.001, 1000), "float")}, ${intValue(step.latSegments, 12, 2, 128)}, ${intValue(step.lonSegments, 24, 3, 256)}, ${colorName})`);
+    } else if (kind === "disc") {
+        lines.push(`        ${varName}.addDisc(${kotlinScalar(numberValue(step.radius, 1, 0.001, 1000), "float")}, ${intValue(step.segments, 32, 3, 256)}, 0f, ${colorName})`);
+    } else if (kind === "ring") {
+        const inner = numberValue(step.innerRadius, 0.55, 0, 1000);
+        const outer = Math.max(inner + 0.001, numberValue(step.outerRadius, 1, 0.001, 1000));
+        lines.push(`        ${varName}.addRing(${kotlinScalar(inner, "float")}, ${kotlinScalar(outer, "float")}, ${intValue(step.segments, 32, 3, 256)}, 0f, ${colorName})`);
+    } else {
+        pushBoxShapeLines(lines, step, varName, colorName);
+    }
+
+    const sx = numberValue(step.scaleX, 1, -1000, 1000);
+    const sy = numberValue(step.scaleY, 1, -1000, 1000);
+    const sz = numberValue(step.scaleZ, 1, -1000, 1000);
+    if (Math.abs(sx - 1) > 0.0001 || Math.abs(sy - 1) > 0.0001 || Math.abs(sz - 1) > 0.0001) {
+        lines.push(`        ${varName}.scale(${kotlinScalar(sx, "float")}, ${kotlinScalar(sy, "float")}, ${kotlinScalar(sz, "float")})`);
+    }
+    for (const axis of ["X", "Y", "Z"]) {
+        const degrees = numberValue(step[`rot${axis}`], 0, -3600, 3600);
+        if (Math.abs(degrees) <= 0.0001) continue;
+        const radians = degrees * Math.PI / 180;
+        lines.push(`        ${varName}.rotate${axis}(${kotlinScalar(radians, "float")})`);
+    }
+    const x = numberValue(step.x, 0, -1000, 1000);
+    const y = numberValue(step.y, 0, -1000, 1000);
+    const z = numberValue(step.z, 0, -1000, 1000);
+    if (Math.abs(x) > 0.0001 || Math.abs(y) > 0.0001 || Math.abs(z) > 0.0001) {
+        lines.push(`        ${varName}.translate(${kotlinScalar(x, "float")}, ${kotlinScalar(y, "float")}, ${kotlinScalar(z, "float")})`);
+    }
+    lines.push(`        builder.addVertices(${varName}.create())`);
+}
+
+function pushModelBuilderVertexHelper(lines, state, functionName = "buildModelVertexes", visibility = "private ") {
+    const steps = modelBuilderSteps(state);
+    lines.push(`    ${visibility}fun ${functionName}(): List<VertexData> {`);
+    lines.push("        val builder = RenderVertexBuilder.create()");
+    if (!steps.length) {
+        lines.push("        val fallback = RenderVertexBuilder.create().addPlane(1f, 1f)");
+        lines.push("        builder.addVertices(fallback.create())");
+    } else {
+        steps.forEach((step, index) => pushShapeGeometryLines(lines, step, index));
+    }
+    lines.push("        return builder.createVertexData()");
+    lines.push("    }");
+}
+
+function buildModelVertexHelpers(lines, state) {
+    if (modelBuilderEnabled(state)) {
+        pushModelBuilderVertexHelper(lines, state);
+        return;
+    }
     lines.push("    private fun buildFallbackRingVertexes(radiusOuter: Float, radiusInner: Float, z: Float): List<VertexData> {");
     lines.push("        val p1 = Vector3f(-radiusOuter, 0f, z)");
     lines.push("        val p2 = Vector3f(radiusOuter, 0f, z)");
@@ -363,88 +446,162 @@ export function generateModelKotlin(state) {
     lines.push("        \"torusKnot\" -> buildFallbackRingVertexes(4.6f, 2.1f, 0.9f)");
     lines.push("        else -> ShaderUtil.genBall(5f, 64, 64)");
     lines.push("    }");
+}
+
+export function generateModelKotlin(state) {
+    const primitive = String(state?.model?.primitive || "sphere");
+    const useModelBuilder = modelBuilderEnabled(state);
+    const modelVertexPath = String(state?.model?.shader?.vertexPath || "core/vertex/point.vsh");
+    const modelFragmentPath = String(state?.model?.shader?.fragmentPath || "core/fragment/color.fsh");
+    const modelParams = Array.isArray(state?.model?.shader?.params) ? state.model.shader.params : [];
+    const modelTextureInfo = collectModelTextureBindings(state);
+    const uploadedTextureParamKey = new Set(
+        modelTextureInfo.bindings.map((b) => `${b.paramName}:${b.textureId}`)
+    );
+    const className = generatedClassName(state, "ModelRenderer");
+    const managedId = `shader_builder/${projectSeed(state)}/model`;
+    const lines = createTargetHeader();
+
+    lines.push("// Required imports:");
+    lines.push("// import cn.coostack.cooparticlesapi.CooParticlesConstants");
+    lines.push("// import cn.coostack.cooparticlesapi.renderer.RenderEntity");
+    lines.push("// import cn.coostack.cooparticlesapi.renderer.backend.RenderFrameStage");
+    lines.push("// import cn.coostack.cooparticlesapi.renderer.runtime.*");
+    lines.push("// import cn.coostack.cooparticlesapi.renderer.shader.AdvancedShaderProgramBuilder");
+    lines.push("// import cn.coostack.cooparticlesapi.renderer.shader.api.CooShaderProgram");
+    lines.push("// import cn.coostack.cooparticlesapi.renderer.shader.data.CooVertexFormat");
+    lines.push("// import cn.coostack.cooparticlesapi.renderer.shader.data.VertexData");
+    lines.push("// import cn.coostack.cooparticlesapi.renderer.shader.texture.IdentifierTexture");
+    lines.push("// import cn.coostack.cooparticlesapi.renderer.shader.texture.SimpleTextures");
+    lines.push("// import cn.coostack.cooparticlesapi.renderer.utils.ShaderUtil");
+    if (useModelBuilder) lines.push("// import cn.coostack.cooparticlesapi.renderer.utils.RenderVertexBuilder");
+    lines.push("// import cn.coostack.cooparticlesapi.renderer.shader.vertex.DynamicVertexBuffer");
+    lines.push("// import net.minecraft.resources.ResourceLocation");
+    lines.push("// import org.joml.Matrix4f");
+    lines.push("// import org.joml.Vector3f");
+    if (useModelBuilder) lines.push("// import org.joml.Vector4f");
+    lines.push("// import org.lwjgl.opengl.GL33");
     lines.push("");
-    lines.push("    private val modelBuffer = SimpleVertexBuffer().apply {");
-    lines.push("        setVertexes(buildModelVertexes(modelPrimitive), CooVertexFormat.POINT_TEXTURE_UV_FORMAT)");
+    lines.push(`class ${className}<T : RenderEntity> : WorldPassRenderEntityRenderer<T> {`);
+    lines.push("    override fun initialize(instance: RenderEntityInstance<T>) {");
+    lines.push("        ensureProgram()");
+    lines.push("        ensureBuffer()");
+    if (modelTextureInfo.textureDefs.length) lines.push("        ensureTextures()");
     lines.push("    }");
     lines.push("");
-    lines.push("    private val modelShader = ShaderProgramBuilder()");
-    lines.push(`        .vertex("${modelVertexPath}")`);
-    lines.push(`        .fragment("${modelFragmentPath}")`);
-    lines.push("        .build()");
-    if (modelTextureInfo.textureDefs.length) {
-        lines.push("");
-        for (const tex of modelTextureInfo.textureDefs) {
-            lines.push(`    private val ${tex.textureVarName} = IdentifierTexture(`);
-            lines.push("        ResourceLocation.fromNamespaceAndPath(");
-            lines.push("            CooParticlesConstants.MOD_ID,");
-            lines.push(`            "${tex.resourcePath}"`);
-            lines.push("        )");
-            lines.push("    )");
-            lines.push("");
-        }
-        lines.push("    private val modelTextures = SimpleTextures().apply {");
-        for (const tex of modelTextureInfo.textureDefs) {
-            lines.push(`        addTexture(${tex.textureVarName}) // channel ${Number(tex.channel || 0)}`);
-        }
-        lines.push("    }");
-        lines.push("");
-    }
-    lines.push("");
-    lines.push("    private var initialized = false");
-    lines.push("");
-    lines.push("    private fun initStatic() {");
-    lines.push("        if (initialized) return");
-    lines.push("        initialized = true");
-    lines.push("        modelBuffer.init()");
-    lines.push("        modelShader.init()");
-    if (modelTextureInfo.textureDefs.length) {
-        lines.push("        modelTextures.init()");
-    }
+    lines.push("    override fun describeFeatures(entity: T): RenderEntityFeatureSet {");
+    lines.push("        return RenderEntityFeatureSet(");
+    lines.push("            stages = setOf(RenderFrameStage.WORLD_PASS),");
+    lines.push("            requestedSceneTargets = emptySet(),");
+    lines.push("            effectTypes = emptySet(),");
+    lines.push("            localRendererEnabled = true,");
+    lines.push("            effectGraphEnabled = false");
+    lines.push("        )");
     lines.push("    }");
-    lines.push("}");
     lines.push("");
-    lines.push("override fun initialize() {");
-    lines.push("    initStatic()");
-    lines.push("}");
+    lines.push("    override fun createVisualProfile(entity: T): RenderEntityVisualProfile {");
+    lines.push("        return RenderEntityVisualProfile(");
+    lines.push("            compositeMode = CompositeMode.ALPHA,");
+    lines.push("            needsSceneColorCopy = false,");
+    lines.push("            needsSceneDepth = false,");
+    lines.push("            renderPriority = 180");
+    lines.push("        )");
+    lines.push("    }");
     lines.push("");
-    lines.push("override fun render(");
-    lines.push("    matrices: Matrix4fStack, viewMatrix: Matrix4f,");
-    lines.push("    projMatrix: Matrix4f, tickDelta: Float");
-    lines.push(") {");
-    lines.push("    RenderSystem.disableCull()");
-    lines.push("    modelShader.useOnContext {");
-    lines.push("        matrices.pushMatrix()");
-    lines.push("        setMatrix4(\"projMat\", projMatrix)");
-    lines.push("        setMatrix4(\"viewMat\", viewMatrix)");
-    lines.push("        setMatrix4(\"transMat\", matrices)");
+    lines.push("    override fun renderLocal(input: LocalRenderInput<T>) {");
+    lines.push("        val program = ensureProgram()");
+    lines.push("        val buffer = ensureBuffer()");
+    if (modelTextureInfo.textureDefs.length) lines.push("        val textures = ensureTextures()");
+    lines.push("        val entity = input.instance.entity");
+    lines.push(useModelBuilder
+        ? "        val vertices = buildModelVertexes()"
+        : `        val vertices = buildModelVertexes(${ktString(primitive)})`);
+    lines.push("        program.useOnContext {");
+    lines.push("            setMatrix4(\"projMat\", input.projMatrix)");
+    lines.push("            setMatrix4(\"viewMat\", input.viewMatrix)");
+    lines.push("            setMatrix4(\"transMat\", Matrix4f(input.modelMatrix))");
+    lines.push("            setFloat(\"time\", entity.getTime(input.tickDelta))");
     for (const param of modelParams) {
         if (isTextureUploadParam(param) && uploadedTextureParamKey.has(`${String(param?.name || "uParam")}:${String(param?.textureId || "")}`)) {
             continue;
         }
-        lines.push(`        ${buildProgramSetter(param, "this")}`);
+        lines.push(`            ${buildProgramSetter(param, "this")}`);
     }
     if (modelTextureInfo.bindings.length) {
         for (const binding of modelTextureInfo.bindings) {
-            lines.push(`        setInt("${binding.paramName}", ${binding.samplerSlot})`);
+            lines.push(`            setInt(${ktString(binding.paramName)}, ${binding.samplerSlot})`);
         }
-        lines.push("        modelTextures.drawWith {");
-        lines.push("            modelBuffer.draw()");
-        lines.push("        }");
-    } else {
-        lines.push("        modelBuffer.draw()");
     }
-    lines.push("        matrices.popMatrix()");
+    lines.push("            buffer.drawMode = GL33.GL_TRIANGLES");
+    lines.push("            buffer.setVertexes(vertices, CooVertexFormat.POINT_TEXTURE_UV_FORMAT)");
+    if (modelTextureInfo.textureDefs.length) {
+        lines.push("            textures.drawWith(Runnable {");
+        lines.push("                buffer.draw()");
+        lines.push("            })");
+    } else {
+        lines.push("            buffer.draw()");
+    }
+    lines.push("        }");
+    lines.push("    }");
+    lines.push("");
+    lines.push("    companion object {");
+    lines.push("        private var program: CooShaderProgram? = null");
+    lines.push("        private var buffer: DynamicVertexBuffer? = null");
+    if (modelTextureInfo.textureDefs.length) lines.push("        private var textures: SimpleTextures? = null");
+    lines.push("");
+    lines.push("        private fun ensureProgram(): CooShaderProgram {");
+    lines.push("            val current = program");
+    lines.push("            if (current != null) {");
+    lines.push("                if (current.program == 0) current.init()");
+    lines.push("                return current");
+    lines.push("            }");
+    lines.push("            return AdvancedShaderProgramBuilder()");
+    lines.push(`                .vertex(${ktString(modelVertexPath)})`);
+    lines.push(`                .fragment(${ktString(modelFragmentPath)})`);
+    lines.push(`                .managedId(${ktString(managedId)})`);
+    lines.push("                .build()");
+    lines.push("                .also {");
+    lines.push("                    it.init()");
+    lines.push("                    program = it");
+    lines.push("                }");
+    lines.push("        }");
+    lines.push("");
+    lines.push("        private fun ensureBuffer(): DynamicVertexBuffer {");
+    lines.push("            return buffer ?: DynamicVertexBuffer().also {");
+    lines.push("                it.init()");
+    lines.push("                buffer = it");
+    lines.push("            }");
+    lines.push("        }");
+    if (modelTextureInfo.textureDefs.length) {
+        lines.push("");
+        lines.push("        private fun ensureTextures(): SimpleTextures {");
+        lines.push("            val current = textures");
+        lines.push("            if (current != null) return current");
+        lines.push("            return SimpleTextures().also { target ->");
+        for (const tex of modelTextureInfo.textureDefs) {
+            lines.push("                target.addTexture(");
+            lines.push("                    IdentifierTexture(");
+            lines.push(`                        ${resourceExpr(tex.resourcePath)}`);
+            lines.push("                    )");
+            lines.push(`                ) // channel ${Number(tex.channel || 0)} -> ${tex.textureName}`);
+        }
+        lines.push("                target.init()");
+        lines.push("                textures = target");
+        lines.push("            }");
+        lines.push("        }");
+    }
+    lines.push("");
+    buildModelVertexHelpers(lines, state);
     lines.push("    }");
     lines.push("}");
     lines.push("");
     lines.push("// Notes:");
-    lines.push("// 1) 将模型 shader 文本保存到资源目录后，把 vertexPath/fragmentPath 指向真实资源路径。");
-    lines.push("// 2) 顶点构建优先使用 ShaderUtil；torus/torusKnot 以手动 VertexData 作为 fallback。");
-    lines.push("// 3) 上传纹理会生成 IdentifierTexture + SimpleTextures 绑定代码；资源默认路径在 core/textures/ 下。");
-    lines.push("// 4) 需要导入 VertexData / Vector3f（示例中由 companion object 内构建方法使用）。");
+    lines.push("// 1) This is a renderer-v2 skeleton. Register it through ClientRenderEntityRegistry for your concrete RenderEntity type.");
+    lines.push("// 2) Texture uniforms are fixed to the SimpleTextures channel order: first addTexture -> sampler 0, second -> sampler 1.");
+    lines.push("// 3) IdentifierTexture receives ResourceLocation path without the leading textures/ prefix.");
+    lines.push("// 4) The generated vertex buffer uses POINT_TEXTURE_UV_FORMAT: layout(location=0) vec3 pos, layout(location=1) vec2 uv.");
     if (modelTextureInfo.missing.length) {
-        lines.push("// 5) 以下 texture 参数引用了缺失纹理（请先上传，或改为连接/数值）：");
+        lines.push("// 5) Missing uploaded model textures:");
         for (const miss of modelTextureInfo.missing) {
             lines.push(`//    - ${miss.paramName}: uploaded:${miss.textureId}`);
         }
@@ -453,62 +610,293 @@ export function generateModelKotlin(state) {
     return lines.join("\n");
 }
 
-export function generatePostKotlin(state) {
+export function generateModelBuilderKotlin(state) {
+    const functionName = `build${pascalName(state?.projectName || "ShaderWorkbench", "ShaderWorkbench")}ModelVertexes`;
+    const lines = createTargetHeader();
+    lines.push("// Required imports:");
+    lines.push("// import cn.coostack.cooparticlesapi.renderer.shader.data.VertexData");
+    lines.push("// import cn.coostack.cooparticlesapi.renderer.utils.RenderVertexBuilder");
+    lines.push("// import org.joml.Vector3f");
+    lines.push("// import org.joml.Vector4f");
+    lines.push("");
+    pushModelBuilderVertexHelper(lines, state, functionName, "");
+    return lines.join("\n");
+}
+
+function buildNodeMaps(nodes) {
+    const byId = new Map();
+    nodes.forEach((node) => {
+        const id = String(node?.id || "");
+        if (id) byId.set(id, node);
+    });
+    return byId;
+}
+
+function incomingLinkMap(links) {
+    const map = new Map();
+    for (const link of links || []) {
+        const toNode = String(link?.toNode || "");
+        if (!toNode) continue;
+        const toSlot = Math.max(0, Math.round(Number(link?.toSlot || 0)));
+        map.set(`${toNode}:${toSlot}`, link);
+    }
+    return map;
+}
+
+function hasOutputToGraphOutput(node, links) {
+    const id = String(node?.id || "");
+    return (links || []).some((link) => String(link?.fromNode || "") === id && String(link?.toNode || "") === GRAPH_OUTPUT_ID);
+}
+
+function firstSamplerParam(node) {
+    return getTextureParams(node?.params || [])[0] || { name: "scene", value: "0" };
+}
+
+function extractSamplerUniformNames(source) {
+    const names = [];
+    const code = String(source || "");
+    const re = /\buniform\s+sampler[A-Za-z0-9_]*\s+([A-Za-z_][A-Za-z0-9_]*)\s*(?:\[[^\]]+\])?\s*;/g;
+    let match = re.exec(code);
+    while (match) {
+        names.push(match[1]);
+        match = re.exec(code);
+    }
+    return names;
+}
+
+function defaultPostSamplerName(index = 0) {
+    return index <= 0 ? "samp" : `samp${index + 1}`;
+}
+
+function samplerNameForNode(node, param, index = 0) {
+    const declared = extractSamplerUniformNames(node?.fragmentSource || "");
+    const fallback = declared[index] || defaultPostSamplerName(index);
+    const raw = String(param?.name || "").trim();
+    if (!raw || raw === "uParam" || raw === defaultPostSamplerName(index)) {
+        return fallback;
+    }
+    return raw;
+}
+
+function createPostPlan(state) {
     const nodes = Array.isArray(state?.post?.nodes) ? state.post.nodes : [];
     const links = Array.isArray(state?.post?.links) ? state.post.links : [];
-    const map = nodeVarMap(nodes);
     const textureById = buildTextureLookup(state);
-    const lines = createTargetHeader();
-
-    lines.push("// ---- Post Process Pipeline ----");
-    lines.push("valueInput(");
-    lines.push("    SimpleShaderPipe(");
-    lines.push("        IdentifierShader(");
-    lines.push("            ResourceLocation.fromNamespaceAndPath(CooParticlesConstants.MOD_ID, \"pipe/frags/screen.fsh\"),");
-    lines.push("            GlShaderType.FRAGMENT");
-    lines.push("        ),");
-    lines.push("        { minecraft.mainRenderTarget.depthTextureId }, 1, GL33.GL_LINEAR");
-    lines.push("    )");
-    lines.push(")");
-    lines.push("");
+    const nodeById = buildNodeMaps(nodes);
+    const incoming = incomingLinkMap(links);
+    const usedVarNames = new Set();
+    const usedPassNames = new Set();
+    const passPlans = [];
+    const firstPassVarByNode = new Map();
+    const lastPassVarByNode = new Map();
+    const linkLines = [];
+    const customTextureBindings = [];
+    const notes = [];
 
     for (const node of nodes) {
-        const variableName = map.get(node.id) || "pipe_unknown";
-        const expr = resolveNodeExpression(node, variableName, textureById);
-        lines.push(`val ${variableName} = addPipe(`);
-        lines.push(expr.header);
-        if (expr.suffix) lines.push(`            ${expr.suffix}`);
-        lines.push(")");
-        lines.push("");
-    }
+        if (nodeType(node) === "texture") continue;
+        const passCount = nodeType(node) === "pingpong"
+            ? Math.max(1, Math.min(16, Math.round(Number(node.iterations || 1))))
+            : 1;
+        const nodeBaseName = safeName(node.name || "pass", "pass");
+        const samplerParams = getTextureParams(node.params || []);
+        let previousVar = "";
 
-    lines.push("valueOutput(");
-    lines.push("    SimpleShaderPipe(");
-    lines.push("        IdentifierShader(");
-    lines.push("            ResourceLocation.fromNamespaceAndPath(CooParticlesConstants.MOD_ID, \"pipe/frags/screen.fsh\"),");
-    lines.push("            GlShaderType.FRAGMENT");
-    lines.push("        ),");
-    lines.push("        { minecraft.mainRenderTarget.depthTextureId }, 1, GL33.GL_LINEAR");
-    lines.push("    )");
-    lines.push(")");
-    lines.push("");
+        for (let iteration = 0; iteration < passCount; iteration += 1) {
+            const passName = uniqueName(
+                passCount > 1 ? `${safeResourceSegment(nodeBaseName)}_${iteration + 1}` : safeResourceSegment(nodeBaseName),
+                usedPassNames
+            );
+            const varName = uniqueName(`pass_${safeName(passName, "pass")}`, usedVarNames);
+            if (iteration === 0) firstPassVarByNode.set(node.id, varName);
+            if (iteration === passCount - 1) lastPassVarByNode.set(node.id, varName);
 
-    const printedLinks = links.filter((l) => l && l.fromNode && l.toNode);
-    if (!printedLinks.length) {
-        lines.push("// linker.from(valueInputPipe!!, 0).to(valueOutput!!, 0)");
-    } else {
-        for (const link of printedLinks) {
-            const fromExpr = resolveEndpointExpr(link.fromNode, map);
-            const toExpr = resolveEndpointExpr(link.toNode, map);
-            lines.push(`linker.from(${fromExpr}, ${Number(link.fromSlot || 0)}).to(${toExpr}, ${Number(link.toSlot || 0)})`);
+            const inputLines = [];
+            if (iteration === 0) {
+                samplerParams.forEach((param, samplerIndex) => {
+                    const samplerName = samplerNameForNode(node, param, samplerIndex);
+                    const slot = postSamplerSlot(param, samplerIndex);
+                    const link = incoming.get(`${node.id}:${samplerIndex}`);
+                    if (!link || String(link.fromNode || "") === GRAPH_INPUT_ID) {
+                        inputLines.push(`            inputSceneColor(${ktString(samplerName)}, textureSlot = ${slot})`);
+                        return;
+                    }
+
+                    const sourceNode = nodeById.get(String(link.fromNode || ""));
+                    if (sourceNode && nodeType(sourceNode) === "texture") {
+                        inputLines.push(`            inputCustomTexture(${ktString(samplerName)}, textureSlot = ${slot})`);
+                        const texParam = firstSamplerParam(sourceNode);
+                        const textureId = String(texParam?.textureId || "").trim();
+                        const tex = textureById.get(textureId);
+                        if (tex) {
+                            customTextureBindings.push({
+                                samplerName,
+                                resourcePath: buildUploadedTextureResourcePath(tex.name || textureId),
+                                textureName: String(tex.name || textureId),
+                                sourceNodeName: String(sourceNode.name || "texture")
+                            });
+                        } else {
+                            notes.push(`Missing uploaded texture for post texture node ${String(sourceNode.name || sourceNode.id || "texture")} -> sampler ${samplerName}.`);
+                        }
+                        return;
+                    }
+
+                    if (sourceNode) {
+                        return;
+                    }
+
+                    inputLines.push(`            inputSceneColor(${ktString(samplerName)}, optional = true, textureSlot = ${slot})`);
+                    notes.push(`Sampler ${samplerName} on ${String(node.name || node.id)} had an unresolved graph link; generated optional scene color fallback.`);
+                });
+            } else {
+                const sampler = firstSamplerParam(node);
+                const samplerName = samplerNameForNode(node, sampler, 0);
+                const slot = postSamplerSlot(sampler, 0);
+                linkLines.push(`        ${previousVar}.asInputTo(${varName}, ${ktString(samplerName)}, textureSlot = ${slot})`);
+            }
+
+            const outputFinal = iteration === passCount - 1 && hasOutputToGraphOutput(node, links);
+            passPlans.push({
+                node,
+                passName,
+                varName,
+                fragmentPath: String(node.fragmentPath || "core/post/pass.fsh"),
+                inputLines,
+                outputFinal
+            });
+            previousVar = varName;
+        }
+
+        if (passCount > 1) {
+            notes.push(`${String(node.name || node.id)} was a pingpong node; generated ${passCount} explicit PostEffect passes because renderer v2 uses pass graph topology instead of PingPongShaderPipe.`);
         }
     }
 
+    for (const link of links) {
+        const fromNode = String(link?.fromNode || "");
+        const toNode = String(link?.toNode || "");
+        if (!fromNode || !toNode || fromNode === GRAPH_INPUT_ID || toNode === GRAPH_OUTPUT_ID) continue;
+        const source = nodeById.get(fromNode);
+        const target = nodeById.get(toNode);
+        if (!source || !target || nodeType(source) === "texture" || nodeType(target) === "texture") continue;
+        const targetSampler = getTextureParams(target.params || [])[Math.max(0, Math.round(Number(link?.toSlot || 0)))] || firstSamplerParam(target);
+        const toSlot = Math.max(0, Math.round(Number(link?.toSlot || 0)));
+        const samplerName = samplerNameForNode(target, targetSampler, toSlot);
+        const slot = postSamplerSlot(targetSampler, toSlot);
+        const fromVar = lastPassVarByNode.get(fromNode);
+        const toVar = firstPassVarByNode.get(toNode);
+        if (fromVar && toVar) {
+            linkLines.push(`        ${fromVar}.asInputTo(${toVar}, ${ktString(samplerName)}, textureSlot = ${slot})`);
+        }
+    }
+
+    for (const link of links) {
+        const fromNode = String(link?.fromNode || "");
+        const toNode = String(link?.toNode || "");
+        const source = nodeById.get(fromNode);
+        if (toNode === GRAPH_OUTPUT_ID && source && nodeType(source) === "texture") {
+            notes.push(`Texture node ${String(source.name || source.id)} is linked directly to output. Renderer v2 post chains need a shader pass to draw a custom texture to the final screen.`);
+        }
+    }
+
+    return { passPlans, linkLines, customTextureBindings, notes };
+}
+
+function uniqueBindings(bindings) {
+    const seen = new Set();
+    const out = [];
+    for (const binding of bindings) {
+        const key = `${binding.samplerName}:${binding.resourcePath}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        out.push(binding);
+    }
+    return out;
+}
+
+export function generatePostKotlin(state) {
+    const typeName = `${safeConstName(state?.projectName || "shader_workbench", "SHADER_WORKBENCH")}_POST`;
+    const objectName = generatedClassName(state, "PostEffects");
+    const typePath = `shader_builder/${projectSeed(state)}/post`;
+    const plan = createPostPlan(state);
+    const bindings = uniqueBindings(plan.customTextureBindings);
+    const needsSceneColorCopy = plan.passPlans.some((pass) => pass.inputLines.some((line) => line.includes("inputSceneColor(")));
+    const lines = createTargetHeader();
+
+    lines.push("// Required imports:");
+    lines.push("// import cn.coostack.cooparticlesapi.CooParticlesConstants");
+    lines.push("// import cn.coostack.cooparticlesapi.renderer.backend.RenderBackendCapability");
+    lines.push("// import cn.coostack.cooparticlesapi.renderer.post.*");
+    lines.push("// import net.minecraft.resources.ResourceLocation");
+    lines.push("");
+    lines.push(`object ${objectName} {`);
+    lines.push(`    val ${typeName}: PostEffectType = CooPostEffectTypes.register(`);
+    lines.push(`        ${resourceExpr(typePath)}`);
+    lines.push("    ) {");
+    lines.push("        screenQuad()");
+    lines.push("        require(RenderBackendCapability.FINAL_FRAME_POST)");
+    if (needsSceneColorCopy) {
+        lines.push("        require(RenderBackendCapability.SCENE_COLOR_COPY)");
+    }
+    lines.push("");
+
+    if (!plan.passPlans.length) {
+        lines.push("        // No post pass nodes are currently defined.");
+    }
+
+    for (const pass of plan.passPlans) {
+        lines.push(`        val ${pass.varName} = pass(${ktString(pass.passName)}, ${shaderExpr(pass.fragmentPath)}) {`);
+        if (pass.inputLines.length) {
+            lines.push(...pass.inputLines);
+        }
+        if (pass.outputFinal) {
+            lines.push("            outputToFinalScreen()");
+        } else {
+            lines.push("            outputToTemporary()");
+        }
+        for (const param of getUniformParams(pass.node.params || [])) {
+            lines.push(buildPostUniformLine(param, "            "));
+        }
+        lines.push("        }");
+        lines.push("");
+    }
+
+    for (const line of plan.linkLines) {
+        lines.push(line);
+    }
+    if (plan.linkLines.length) lines.push("");
+    lines.push("        outputToFinalScreen()");
+    lines.push("    }");
+    lines.push("");
+    lines.push("    fun createInstance(");
+    lines.push("        durationTicks: Int = 40");
+    lines.push("    ): PostEffectInstance {");
+    lines.push(`        return ${typeName}.create()`);
+    lines.push("            .bindScreen()");
+    lines.push("            .duration(durationTicks)");
+    if (bindings.length) {
+        lines.push("            .params {");
+        for (const binding of bindings) {
+            lines.push(`                resource(${ktString(binding.samplerName)}, ${resourceExpr(binding.resourcePath)}) // ${binding.textureName}`);
+        }
+        lines.push("            }");
+    }
+    lines.push("    }");
+    lines.push("}");
+    lines.push("");
+    lines.push("// Usage:");
+    lines.push(`// CooPostEffects.client.add(${objectName}.createInstance())`);
+    lines.push("// Server sync:");
+    lines.push(`// CooPostEffects.server.spawn(serverLevel, ${objectName}.createInstance())`);
     lines.push("");
     lines.push("// Notes:");
-    lines.push("// 1) 上传的后处理 shader 文本请保存到资源目录后，把 fragmentPath 指向真实资源路径。");
-    lines.push("// 2) texture 参数支持 uploaded/connection；connection 会在注释里保留来源，按你的管线映射到 sampler slot。");
-    lines.push("// 3) texture 类型节点会生成 TextureShaderPipe；若未绑定上传纹理，会回退到主渲染目标颜色纹理。");
+    lines.push("// 1) Sampler uniforms are declared as pass inputs. The backend binds GL texture slots and calls program.setInt for you.");
+    lines.push("// 2) Uploaded post textures use inputCustomTexture(name) and must be supplied by instance params.resource(name, ResourceLocation).");
+    lines.push("// 3) inputSceneColor declares SCENE_COLOR_COPY. Add inputSceneDepth manually when the shader needs scene depth.");
+    lines.push("// 4) Pass shader ResourceLocation paths map to assets/<modid>/shaders/<path>.");
+    for (const note of plan.notes) {
+        lines.push(`// - ${note}`);
+    }
 
     return lines.join("\n");
 }

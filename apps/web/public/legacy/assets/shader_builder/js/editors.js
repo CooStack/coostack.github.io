@@ -227,27 +227,64 @@ function isInsideLayoutQualifier(text, index) {
     return depth > 0;
 }
 
-function highlightGLSL(source) {
+function highlightGLSLRange(source, start = 0, end = undefined, knownSet = null) {
     const text = String(source || "");
-    const knownSet = collectKnownIdentifiers(text);
+    const from = Math.max(0, Math.min(Number(start) || 0, text.length));
+    const to = Math.max(from, Math.min(end === undefined ? text.length : (Number(end) || 0), text.length));
+    const known = knownSet || collectKnownIdentifiers(text);
+    const segment = text.slice(from, to);
     let out = "";
     let last = 0;
 
-    for (const match of text.matchAll(TOKEN_RE)) {
+    for (const match of segment.matchAll(TOKEN_RE)) {
         const token = match[0] || "";
         const idx = match.index || 0;
+        const fullIdx = from + idx;
         let cls = classifyToken(token);
-        if (cls === "tok-id" && isUnknownIdentifierToken(token, idx, text, knownSet)) {
+        if (cls === "tok-id" && isUnknownIdentifierToken(token, fullIdx, text, known)) {
             cls = "tok-unknown";
         }
-        out += escapeHtml(text.slice(last, idx));
+        out += escapeHtml(segment.slice(last, idx));
         out += `<span class="${cls}">${escapeHtml(token)}</span>`;
         last = idx + token.length;
     }
 
-    out += escapeHtml(text.slice(last));
+    out += escapeHtml(segment.slice(last));
+    return out;
+}
+
+function highlightGLSL(source) {
+    const text = String(source || "");
+    let out = highlightGLSLRange(text);
 
     // Ensure the last empty line has height.
+    if (text.endsWith("\n")) out += "\n";
+    return out;
+}
+
+function highlightGLSLWithEditorState(source, selectionStart = 0, selectionEnd = 0, focused = false) {
+    const text = String(source || "");
+    const knownSet = collectKnownIdentifiers(text);
+    const rawStart = Math.max(0, Math.min(Number(selectionStart) || 0, text.length));
+    const rawEnd = Math.max(0, Math.min(Number(selectionEnd) || 0, text.length));
+    const start = Math.min(rawStart, rawEnd);
+    const end = Math.max(rawStart, rawEnd);
+    let out = "";
+
+    if (!focused) {
+        out = highlightGLSLRange(text, 0, text.length, knownSet);
+    } else if (start === end) {
+        out += highlightGLSLRange(text, 0, start, knownSet);
+        out += `<span class="editor-caret-proxy" aria-hidden="true"></span>`;
+        out += highlightGLSLRange(text, start, text.length, knownSet);
+    } else {
+        out += highlightGLSLRange(text, 0, start, knownSet);
+        out += `<span class="editor-selection-proxy">`;
+        out += highlightGLSLRange(text, start, end, knownSet);
+        out += `</span>`;
+        out += highlightGLSLRange(text, end, text.length, knownSet);
+    }
+
     if (text.endsWith("\n")) out += "\n";
     return out;
 }
@@ -833,6 +870,7 @@ export class ShaderCodeEditor {
         this.localHistory = [];
         this.localHistoryIndex = -1;
         this.historyApplying = false;
+        this.focused = false;
 
         this.buildDOM();
         this.bindEvents();
@@ -914,6 +952,19 @@ export class ShaderCodeEditor {
         };
 
         this.onScrollHandler = () => {
+            this.syncScroll();
+        };
+
+        this.onFocusHandler = () => {
+            this.focused = true;
+            this.renderHighlight();
+            this.syncScroll();
+        };
+
+        this.onSelectionHandler = () => {
+            if (document.activeElement !== this.textarea) return;
+            this.focused = true;
+            this.renderHighlight();
             this.syncScroll();
         };
 
@@ -1023,6 +1074,8 @@ export class ShaderCodeEditor {
         };
 
         this.onBlurHandler = () => {
+            this.focused = false;
+            this.renderHighlight();
             setTimeout(() => this.closeSuggest(), 120);
         };
 
@@ -1059,8 +1112,13 @@ export class ShaderCodeEditor {
 
         this.textarea.addEventListener("input", this.onInputHandler);
         this.textarea.addEventListener("scroll", this.onScrollHandler);
+        this.textarea.addEventListener("focus", this.onFocusHandler);
+        this.textarea.addEventListener("select", this.onSelectionHandler);
+        this.textarea.addEventListener("keyup", this.onSelectionHandler);
+        this.textarea.addEventListener("mouseup", this.onSelectionHandler);
         this.textarea.addEventListener("keydown", this.onKeydownHandler);
         this.textarea.addEventListener("blur", this.onBlurHandler);
+        document.addEventListener("selectionchange", this.onSelectionHandler);
         this.suggestEl.addEventListener("mousedown", (ev) => ev.preventDefault());
         this.suggestEl.addEventListener("click", this.onClickSuggestHandler);
         this.btnMaxEl.addEventListener("click", this.onBtnMaxHandler);
@@ -1071,8 +1129,13 @@ export class ShaderCodeEditor {
     dispose() {
         this.textarea.removeEventListener("input", this.onInputHandler);
         this.textarea.removeEventListener("scroll", this.onScrollHandler);
+        this.textarea.removeEventListener("focus", this.onFocusHandler);
+        this.textarea.removeEventListener("select", this.onSelectionHandler);
+        this.textarea.removeEventListener("keyup", this.onSelectionHandler);
+        this.textarea.removeEventListener("mouseup", this.onSelectionHandler);
         this.textarea.removeEventListener("keydown", this.onKeydownHandler);
         this.textarea.removeEventListener("blur", this.onBlurHandler);
+        document.removeEventListener("selectionchange", this.onSelectionHandler);
         this.suggestEl.removeEventListener("click", this.onClickSuggestHandler);
         this.btnMaxEl.removeEventListener("click", this.onBtnMaxHandler);
         this.bodyEl.removeEventListener("pointerdown", this.onBodyPointerDownHandler);
@@ -1158,7 +1221,12 @@ export class ShaderCodeEditor {
     }
 
     renderHighlight() {
-        this.highlightEl.innerHTML = highlightGLSL(this.textarea.value);
+        this.highlightEl.innerHTML = highlightGLSLWithEditorState(
+            this.textarea.value,
+            this.textarea.selectionStart,
+            this.textarea.selectionEnd,
+            this.focused || document.activeElement === this.textarea
+        );
     }
 
     syncScroll() {

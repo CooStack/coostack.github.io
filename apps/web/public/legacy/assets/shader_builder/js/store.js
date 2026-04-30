@@ -12,6 +12,8 @@ import { deepClone, uid } from "./utils.js";
 export const GRAPH_INPUT_ID = "__input__";
 export const GRAPH_OUTPUT_ID = "__output__";
 export const POST_INPUT_SAMPLER_NAME = "samp";
+export const MODEL_BUILDER_DEFAULT_KIND = "box";
+export const MODEL_BUILDER_KINDS = ["plane", "box", "sphere", "disc", "ring"];
 
 export function getPostInputTextureMinCount(rawInputs = 1) {
     const n = Number(rawInputs);
@@ -83,6 +85,10 @@ export function createDefaultState() {
             primitive: "sphere",
             uploadedModelName: "",
             enablePost: true,
+            builder: {
+                enabled: false,
+                steps: []
+            },
             shader: {
                 vertexPath: "core/vertex/point.vsh",
                 fragmentPath: "core/fragment/color.fsh",
@@ -133,6 +139,121 @@ function defaultPostTextureParamName(index = 0) {
     return `${POST_INPUT_SAMPLER_NAME}${index + 1}`;
 }
 
+function normalizeFiniteNumber(value, fallback = 0, min = -Infinity, max = Infinity) {
+    const n = Number(value);
+    if (!Number.isFinite(n)) return fallback;
+    return Math.max(min, Math.min(max, n));
+}
+
+function normalizeFiniteInt(value, fallback = 0, min = -Infinity, max = Infinity) {
+    return Math.round(normalizeFiniteNumber(value, fallback, min, max));
+}
+
+function normalizeModelBuilderKind(kind) {
+    const k = String(kind || "").trim().toLowerCase();
+    return MODEL_BUILDER_KINDS.includes(k) ? k : MODEL_BUILDER_DEFAULT_KIND;
+}
+
+function normalizeBuilderColor(value) {
+    const raw = String(value || "").trim();
+    const parts = raw.split(",").map((part) => Number(part.trim()));
+    const fallback = [1, 1, 1, 1];
+    const out = fallback.map((v, index) => {
+        const n = parts[index];
+        return Number.isFinite(n) ? Math.max(0, Math.min(1, n)) : v;
+    });
+    return out.join(",");
+}
+
+export function createDefaultModelBuilderStep(index = 0, kind = MODEL_BUILDER_DEFAULT_KIND) {
+    const normalizedKind = normalizeModelBuilderKind(kind);
+    return {
+        id: uid("shape"),
+        name: `${normalizedKind}_${index + 1}`,
+        kind: normalizedKind,
+        width: 1,
+        height: 1,
+        depth: 1,
+        radius: 1,
+        innerRadius: 0.55,
+        outerRadius: 1,
+        segments: 32,
+        latSegments: 12,
+        lonSegments: 24,
+        x: 0,
+        y: 0,
+        z: 0,
+        rotX: 0,
+        rotY: 0,
+        rotZ: 0,
+        scaleX: 1,
+        scaleY: 1,
+        scaleZ: 1,
+        color: "1,1,1,1"
+    };
+}
+
+export function normalizeModelBuilderStep(step, index = 0) {
+    const base = createDefaultModelBuilderStep(index, step?.kind);
+    const merged = Object.assign({}, base, step || {});
+    const kind = normalizeModelBuilderKind(merged.kind);
+    return {
+        id: String(merged.id || base.id),
+        name: String(merged.name || `${kind}_${index + 1}`).trim() || `${kind}_${index + 1}`,
+        kind,
+        width: normalizeFiniteNumber(merged.width, base.width, 0.001, 1000),
+        height: normalizeFiniteNumber(merged.height, base.height, 0.001, 1000),
+        depth: normalizeFiniteNumber(merged.depth, base.depth, 0.001, 1000),
+        radius: normalizeFiniteNumber(merged.radius, base.radius, 0.001, 1000),
+        innerRadius: normalizeFiniteNumber(merged.innerRadius, base.innerRadius, 0, 1000),
+        outerRadius: normalizeFiniteNumber(merged.outerRadius, base.outerRadius, 0.001, 1000),
+        segments: normalizeFiniteInt(merged.segments, base.segments, 3, 256),
+        latSegments: normalizeFiniteInt(merged.latSegments, base.latSegments, 2, 128),
+        lonSegments: normalizeFiniteInt(merged.lonSegments, base.lonSegments, 3, 256),
+        x: normalizeFiniteNumber(merged.x, base.x, -1000, 1000),
+        y: normalizeFiniteNumber(merged.y, base.y, -1000, 1000),
+        z: normalizeFiniteNumber(merged.z, base.z, -1000, 1000),
+        rotX: normalizeFiniteNumber(merged.rotX, base.rotX, -3600, 3600),
+        rotY: normalizeFiniteNumber(merged.rotY, base.rotY, -3600, 3600),
+        rotZ: normalizeFiniteNumber(merged.rotZ, base.rotZ, -3600, 3600),
+        scaleX: normalizeFiniteNumber(merged.scaleX, base.scaleX, -1000, 1000),
+        scaleY: normalizeFiniteNumber(merged.scaleY, base.scaleY, -1000, 1000),
+        scaleZ: normalizeFiniteNumber(merged.scaleZ, base.scaleZ, -1000, 1000),
+        color: normalizeBuilderColor(merged.color)
+    };
+}
+
+export function normalizeModelBuilderState(state) {
+    if (!state || typeof state !== "object") return;
+    if (!state.model || typeof state.model !== "object") state.model = {};
+    const raw = state.model.builder && typeof state.model.builder === "object"
+        ? state.model.builder
+        : {};
+    const steps = Array.isArray(raw.steps)
+        ? raw.steps.map((step, index) => normalizeModelBuilderStep(step, index))
+        : [];
+    state.model.builder = {
+        enabled: !!raw.enabled,
+        steps
+    };
+}
+
+export function dedupeShaderParams(params = []) {
+    const out = [];
+    const seenNamed = new Set();
+    for (const param of Array.isArray(params) ? params : []) {
+        const copy = Object.assign({}, param || {});
+        const name = String(copy.name || "").trim();
+        if (name) {
+            if (seenNamed.has(name)) continue;
+            seenNamed.add(name);
+            copy.name = name;
+        }
+        out.push(copy);
+    }
+    return out;
+}
+
 function normalizePostInputSamplerParam(param, textureIndex = 0) {
     const base = Object.assign(createParamTemplate(), param || {});
     const name = String(base.name || "").trim();
@@ -150,14 +271,19 @@ function normalizePostInputSamplerParam(param, textureIndex = 0) {
 
 export function ensurePostInputSamplerParam(params = [], requiredCount = 1) {
     const minCount = getPostInputTextureMinCount(requiredCount);
-    const list = Array.isArray(params) ? params.map((p) => Object.assign({}, p || {})) : [];
+    const list = dedupeShaderParams(Array.isArray(params) ? params.map((p) => Object.assign({}, p || {})) : []);
     const out = [];
+    const textureNames = new Set();
     let textureIndex = 0;
 
     for (const p of list) {
         const copy = Object.assign({}, p || {});
         if (isTextureParam(copy)) {
-            out.push(normalizePostInputSamplerParam(copy, textureIndex));
+            const normalized = normalizePostInputSamplerParam(copy, textureIndex);
+            const textureName = String(normalized.name || "").trim();
+            if (textureName && textureNames.has(textureName)) continue;
+            if (textureName) textureNames.add(textureName);
+            out.push(normalized);
             textureIndex += 1;
             continue;
         }
@@ -165,7 +291,13 @@ export function ensurePostInputSamplerParam(params = [], requiredCount = 1) {
     }
 
     while (textureIndex < minCount) {
-        out.push(normalizePostInputSamplerParam(null, textureIndex));
+        let normalized = normalizePostInputSamplerParam(null, textureIndex);
+        while (textureNames.has(String(normalized.name || "").trim())) {
+            textureIndex += 1;
+            normalized = normalizePostInputSamplerParam(null, textureIndex);
+        }
+        textureNames.add(String(normalized.name || "").trim());
+        out.push(normalized);
         textureIndex += 1;
     }
 
@@ -174,6 +306,7 @@ export function ensurePostInputSamplerParam(params = [], requiredCount = 1) {
 
 function normalizePostGraphState(state) {
     if (!state || typeof state !== "object") return;
+    normalizeModelBuilderState(state);
     if (!state.post || typeof state.post !== "object") state.post = {};
     if (!Array.isArray(state.post.nodes)) state.post.nodes = [];
     if (!Array.isArray(state.post.links)) state.post.links = [];

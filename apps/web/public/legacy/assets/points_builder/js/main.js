@@ -1,6 +1,6 @@
 import * as THREE from "three";
 import {OrbitControls} from "three/addons/controls/OrbitControls.js";
-import { createCardInputs, initCardSystem } from "./cards.js?v=20260429_9";
+import { createCardInputs, initCardSystem } from "./cards.js?v=20260429_12";
 import { initFilterSystem } from "./filters.js?v=20260429_7";
 import { initHotkeysSystem } from "./hotkeys.js?v=20260321_5";
 import { createKindDefs } from "./kinds.js?v=20260429_8";
@@ -113,6 +113,7 @@ function initPointsBuilderMain() {
     const chkPointPickPreview = document.getElementById("chkPointPickPreview");
     const chkShowGeometryCenters = document.getElementById("chkShowGeometryCenters");
     const inpLineDivisionPoints = document.getElementById("inpLineDivisionPoints");
+    const snapPriorityList = document.getElementById("snapPriorityList");
     const btnResetCamera = document.getElementById("btnResetCamera");
     const themeSelect = document.getElementById("themeSelect");
     const chkSnapGrid = document.getElementById("chkSnapGrid");
@@ -163,7 +164,7 @@ function initPointsBuilderMain() {
 
     function isInternalDragHandleTarget(target) {
         if (!target || !target.closest) return false;
-        return !!target.closest(".handle, .drag-handle");
+        return !!target.closest(".handle, .drag-handle, .snap-priority-item");
     }
 
     function bindDragCopyGuards() {
@@ -990,8 +991,17 @@ function initPointsBuilderMain() {
         pointSize: 0.5,
         offsetPreviewLimit: -1,
         snapGridKeyToggleMode: false,
-        snapParticleKeyToggleMode: false
+        snapParticleKeyToggleMode: false,
+        snapPriority: ["line_division", "geometry_center", "grid", "particle"]
     };
+    const SNAP_PRIORITY_DEFS = [
+        { id: "line_division", label: "N分点" },
+        { id: "geometry_center", label: "中心" },
+        { id: "grid", label: "网格" },
+        { id: "particle", label: "粒子点" }
+    ];
+    const SNAP_PRIORITY_IDS = SNAP_PRIORITY_DEFS.map((it) => it.id);
+    const SNAP_PRIORITY_LABELS = new Map(SNAP_PRIORITY_DEFS.map((it) => [it.id, it.label]));
     let paramStep = DEFAULT_SETTINGS_PAYLOAD.paramStep;
     let snapStep = DEFAULT_SETTINGS_PAYLOAD.snapStep;
     let particleSnapRange = DEFAULT_SETTINGS_PAYLOAD.particleSnapRange;
@@ -1002,6 +1012,7 @@ function initPointsBuilderMain() {
     let lineDivisionPoints = DEFAULT_SETTINGS_PAYLOAD.lineDivisionPoints;
     let snapGridKeyToggleMode = DEFAULT_SETTINGS_PAYLOAD.snapGridKeyToggleMode;
     let snapParticleKeyToggleMode = DEFAULT_SETTINGS_PAYLOAD.snapParticleKeyToggleMode;
+    let snapPriority = DEFAULT_SETTINGS_PAYLOAD.snapPriority.slice();
 
     function normalizeParamStep(v) {
         const n = parseFloat(v);
@@ -1036,6 +1047,24 @@ function initPointsBuilderMain() {
         const n = Math.trunc(Number(v));
         if (!Number.isFinite(n) || n < 0) return DEFAULT_SETTINGS_PAYLOAD.lineDivisionPoints;
         return Math.min(64, n);
+    }
+
+    function normalizeSnapPriority(value) {
+        const out = [];
+        const seen = new Set();
+        const input = Array.isArray(value) ? value : DEFAULT_SETTINGS_PAYLOAD.snapPriority;
+        for (const raw of input) {
+            const id = String(raw || "").trim();
+            if (!SNAP_PRIORITY_IDS.includes(id) || seen.has(id)) continue;
+            seen.add(id);
+            out.push(id);
+        }
+        for (const id of DEFAULT_SETTINGS_PAYLOAD.snapPriority) {
+            if (seen.has(id)) continue;
+            seen.add(id);
+            out.push(id);
+        }
+        return out;
     }
 
 
@@ -1133,6 +1162,7 @@ function initPointsBuilderMain() {
         }
         rebuildPreviewAndKotlin();
         if (!opts.skipSave) saveSettingsToStorage();
+        renderSnapPriorityList();
     }
 
     function setLineDivisionPoints(v, opts = {}) {
@@ -1142,6 +1172,13 @@ function initPointsBuilderMain() {
             inpLineDivisionPoints.value = String(next);
         }
         rebuildPreviewAndKotlin();
+        if (!opts.skipSave) saveSettingsToStorage();
+        renderSnapPriorityList();
+    }
+
+    function setSnapPriorityOrder(value, opts = {}) {
+        snapPriority = normalizeSnapPriority(value);
+        renderSnapPriorityList();
         if (!opts.skipSave) saveSettingsToStorage();
     }
 
@@ -1161,6 +1198,95 @@ function initPointsBuilderMain() {
             chkSnapParticleKeyToggleMode.checked = next;
         }
         if (!opts.skipSave) saveSettingsToStorage();
+    }
+
+    function isSnapPrioritySourceEnabled(id) {
+        if (id === "line_division") return lineDivisionPoints > 0;
+        if (id === "geometry_center") return !!geometryCenterPreviewEnabled;
+        if (id === "grid") return !!(chkSnapGrid && chkSnapGrid.checked);
+        if (id === "particle") return !!(chkSnapParticle && chkSnapParticle.checked);
+        return false;
+    }
+
+    function getSnapPriorityStateLabel(id) {
+        if (id === "line_division") return lineDivisionPoints > 0 ? `${lineDivisionPoints}点` : "关闭";
+        if (id === "geometry_center") return geometryCenterPreviewEnabled ? "开启" : "关闭";
+        if (id === "grid") return (chkSnapGrid && chkSnapGrid.checked) ? "开启" : "关闭";
+        if (id === "particle") return (chkSnapParticle && chkSnapParticle.checked) ? "开启" : "关闭";
+        return "";
+    }
+
+    function renderSnapPriorityList() {
+        if (!snapPriorityList) return;
+        const order = normalizeSnapPriority(snapPriority);
+        snapPriority = order;
+        snapPriorityList.textContent = "";
+        order.forEach((id) => {
+            const item = document.createElement("div");
+            item.className = "snap-priority-item";
+            item.draggable = true;
+            item.dataset.snapPriorityId = id;
+            item.title = "拖动调整吸附优先级";
+            if (!isSnapPrioritySourceEnabled(id)) item.classList.add("disabled");
+
+            const grip = document.createElement("span");
+            grip.className = "snap-priority-grip";
+            grip.textContent = "≡";
+
+            const title = document.createElement("span");
+            title.className = "snap-priority-title";
+            title.textContent = SNAP_PRIORITY_LABELS.get(id) || id;
+
+            const state = document.createElement("span");
+            state.className = "snap-priority-state";
+            state.textContent = getSnapPriorityStateLabel(id);
+
+            item.append(grip, title, state);
+            snapPriorityList.appendChild(item);
+        });
+    }
+
+    function bindSnapPriorityList() {
+        if (!snapPriorityList || snapPriorityList.__pbBound) return;
+        snapPriorityList.__pbBound = true;
+        let draggingId = "";
+        snapPriorityList.addEventListener("dragstart", (ev) => {
+            const item = ev.target?.closest?.(".snap-priority-item");
+            if (!item) return;
+            draggingId = item.dataset.snapPriorityId || "";
+            item.classList.add("dragging");
+            ev.dataTransfer.effectAllowed = "move";
+            try { ev.dataTransfer.setData("text/plain", draggingId); } catch {}
+        });
+        snapPriorityList.addEventListener("dragover", (ev) => {
+            const item = ev.target?.closest?.(".snap-priority-item");
+            if (!item || !draggingId || item.dataset.snapPriorityId === draggingId) return;
+            ev.preventDefault();
+            item.classList.add("drag-over");
+        });
+        snapPriorityList.addEventListener("dragleave", (ev) => {
+            const item = ev.target?.closest?.(".snap-priority-item");
+            if (item) item.classList.remove("drag-over");
+        });
+        snapPriorityList.addEventListener("drop", (ev) => {
+            const item = ev.target?.closest?.(".snap-priority-item");
+            if (!item || !draggingId) return;
+            ev.preventDefault();
+            const targetId = item.dataset.snapPriorityId || "";
+            if (!targetId || targetId === draggingId) return;
+            const next = normalizeSnapPriority(snapPriority).filter((id) => id !== draggingId);
+            const targetIndex = Math.max(0, next.indexOf(targetId));
+            const rect = item.getBoundingClientRect();
+            const after = Number.isFinite(ev.clientY) && ev.clientY > rect.top + rect.height / 2;
+            next.splice(targetIndex + (after ? 1 : 0), 0, draggingId);
+            setSnapPriorityOrder(next);
+        });
+        snapPriorityList.addEventListener("dragend", () => {
+            draggingId = "";
+            snapPriorityList.querySelectorAll(".snap-priority-item").forEach((item) => {
+                item.classList.remove("dragging", "drag-over");
+            });
+        });
     }
 
     function collectSettingsPayload() {
@@ -1184,7 +1310,8 @@ function initPointsBuilderMain() {
             pointSize,
             offsetPreviewLimit,
             snapGridKeyToggleMode,
-            snapParticleKeyToggleMode
+            snapParticleKeyToggleMode,
+            snapPriority
         };
     }
 
@@ -1227,6 +1354,11 @@ function initPointsBuilderMain() {
         }
         if (payload.snapParticleKeyToggleMode !== undefined) {
             setSnapParticleKeyToggleMode(payload.snapParticleKeyToggleMode, { skipSave: true });
+        }
+        if (payload.snapPriority !== undefined) {
+            setSnapPriorityOrder(payload.snapPriority, { skipSave: true });
+        } else {
+            setSnapPriorityOrder(DEFAULT_SETTINGS_PAYLOAD.snapPriority, { skipSave: true });
         }
         if (payload.theme) {
             const next = normalizeTheme(payload.theme);
@@ -2634,7 +2766,7 @@ function initPointsBuilderMain() {
         }
         if (!ids.length) return false;
 
-        const contexts = [];
+        let contexts = [];
         for (const id of ids) {
             const ctx = findNodeContextById(id);
             if (!ctx || !ctx.node || !Array.isArray(ctx.parentList)) continue;
@@ -2643,40 +2775,56 @@ function initPointsBuilderMain() {
         if (!contexts.length) return false;
 
         // 允许“部分可移动”：当多选里包含目标子卡片自身（或其祖先）时，仅跳过这些非法项。
-        const movable = [];
+        let movable = [];
         for (const ctx of contexts) {
             if (targetOwnerNode && nodeContainsId(ctx.node, targetOwnerNode.id)) continue;
             movable.push(ctx);
         }
         if (!movable.length) return false;
 
-        const fromList = movable[0].parentList;
-        for (const ctx of movable) {
-            if (ctx.parentList !== fromList) return false;
-        }
+        const movableIds = new Set(movable.map((ctx) => ctx.node.id).filter(Boolean));
+        movable = movable.filter((ctx) => {
+            const path = findNodePathById(ctx.node.id);
+            if (!Array.isArray(path) || path.length <= 1) return true;
+            return !path.slice(0, -1).some((step) => step?.node?.id && movableIds.has(step.node.id));
+        });
+        if (!movable.length) return false;
 
         const scopeId = targetOwnerNode ? targetOwnerNode.id : null;
-        if (typeof isFilterActive === "function" && isFilterActive(scopeId) && fromList === targetList) {
+        if (typeof isFilterActive === "function" && isFilterActive(scopeId) && movable.some((ctx) => ctx.parentList === targetList)) {
             return false;
         }
 
-        movable.sort((a, b) => a.index - b.index);
-        const moved = [];
-        for (let i = movable.length - 1; i >= 0; i--) {
-            const ctx = movable[i];
-            const item = fromList.splice(ctx.index, 1)[0];
-            if (item) moved.unshift(item);
-        }
-        if (!moved.length) return false;
+        const movableById = new Map(movable.map((ctx) => [ctx.node.id, ctx]));
+        movable = ids.map((id) => movableById.get(id)).filter(Boolean);
 
         let idx = Math.max(0, Math.min(targetIndex, targetList.length));
-        if (fromList === targetList) {
-            let removedBefore = 0;
-            for (const ctx of movable) {
-                if (ctx.index < idx) removedBefore++;
-            }
-            idx = Math.max(0, idx - removedBefore);
+        let removedBefore = 0;
+        for (const ctx of movable) {
+            if (ctx.parentList === targetList && ctx.index < idx) removedBefore++;
         }
+        idx = Math.max(0, idx - removedBefore);
+
+        const byList = new Map();
+        for (const ctx of movable) {
+            const group = byList.get(ctx.parentList) || [];
+            group.push(ctx);
+            byList.set(ctx.parentList, group);
+        }
+
+        const movedById = new Map();
+        for (const group of byList.values()) {
+            group.sort((a, b) => b.index - a.index);
+            for (const ctx of group) {
+                const item = ctx.parentList.splice(ctx.index, 1)[0];
+                if (item) movedById.set(ctx.node.id, item);
+            }
+        }
+
+        const moved = movable.map((ctx) => movedById.get(ctx.node.id)).filter(Boolean);
+        if (!moved.length) return false;
+
+        idx = Math.max(0, Math.min(idx, targetList.length));
         targetList.splice(idx, 0, ...moved);
         ensureAxisEverywhere();
         return true;
@@ -3510,39 +3658,79 @@ function initPointsBuilderMain() {
         return {point: {x: best.x, y: best.y, z: best.z}, d2: bestD2};
     }
 
-    function mapPickPointBase(hitVec3, particlePoint = null) {
-        const raw = mapHitToPlaneRaw(hitVec3);
-
-        const useGrid = chkSnapGrid && chkSnapGrid.checked;
-        const useParticle = chkSnapParticle && chkSnapParticle.checked;
-        const snapRange = particleSnapRange;
-        if (!useGrid && !useParticle) return raw;
-
-        const gridP = useGrid ? snapToGridOnPlane(raw, getSnapStep(), getPlaneInfo().axis) : null;
-
-        let particleP = null;
-        let particleFromHit = false;
-        const particleHit = particlePoint ? {x: particlePoint.x, y: particlePoint.y, z: particlePoint.z} : null;
-        if (useParticle) {
-            if (particleHit) {
-                particleP = particleHit;
-                particleFromHit = true;
-            } else {
-                const cand = nearestPointCandidate(raw, snapRange, getPlaneInfo().axis);
-                particleP = cand ? cand.point : null;
+    function nearestHelperPointCandidate(ref, helperType, maxDist = particleSnapRange, planeKey = getPlaneInfo().axis) {
+        if (!helperType || !lastGeometryCenterPoints || lastGeometryCenterPoints.length === 0) return null;
+        const plane = planeKey || getPlaneInfo().axis;
+        const normalAxis = getPlaneNormalAxisKeyByPlane(plane);
+        const refNormal = Number(ref?.[normalAxis]);
+        let best = null;
+        let bestD2 = Infinity;
+        for (const q of lastGeometryCenterPoints) {
+            if (!q || q.helperType !== helperType) continue;
+            const qNormal = Number(q[normalAxis]);
+            if (Number.isFinite(refNormal) && Number.isFinite(qNormal) && Math.abs(qNormal - refNormal) > maxDist) {
+                continue;
+            }
+            const d2 = dist2OnPlane(ref, q, plane);
+            if (d2 < bestD2) {
+                bestD2 = d2;
+                best = q;
             }
         }
+        if (!best) return null;
+        const limit2 = maxDist * maxDist;
+        if (bestD2 > limit2) return null;
+        return { point: { x: best.x, y: best.y, z: best.z }, d2: bestD2 };
+    }
 
-        // 鼠标命中粒子时优先吸附粒子
-        if (useParticle && particleFromHit) return particleP;
-        if (useParticle && !useGrid) return particleP || raw;
-        if (useGrid && useParticle) return particleP || gridP;
-        if (useGrid && !useParticle) return gridP;
+    function normalizeParticleSnapContext(raw) {
+        if (!raw) return { point: null, fromHit: false, source: "" };
+        if (raw.point && typeof raw === "object") {
+            return {
+                point: raw.point ? { x: raw.point.x, y: raw.point.y, z: raw.point.z } : null,
+                fromHit: raw.fromHit === true,
+                source: String(raw.source || "")
+            };
+        }
+        return { point: { x: raw.x, y: raw.y, z: raw.z }, fromHit: true, source: "particle" };
+    }
+
+    function mapPickPointBase(hitVec3, particleSnap = null) {
+        const raw = mapHitToPlaneRaw(hitVec3);
+        const particleContext = normalizeParticleSnapContext(particleSnap);
+        const snapRange = particleSnapRange;
+        const plane = getPlaneInfo().axis;
+        for (const source of normalizeSnapPriority(snapPriority)) {
+            if (source === "line_division") {
+                if (lineDivisionPoints <= 0) continue;
+                if (particleContext.point && particleContext.source === "line_division") return particleContext.point;
+                const cand = nearestHelperPointCandidate(raw, "line_division", snapRange, plane);
+                if (cand && cand.point) return cand.point;
+                continue;
+            }
+            if (source === "geometry_center") {
+                if (!geometryCenterPreviewEnabled) continue;
+                if (particleContext.point && particleContext.source === "geometry_center") return particleContext.point;
+                const cand = nearestHelperPointCandidate(raw, "geometry_center", snapRange, plane);
+                if (cand && cand.point) return cand.point;
+                continue;
+            }
+            if (source === "grid") {
+                if (!(chkSnapGrid && chkSnapGrid.checked)) continue;
+                return snapToGridOnPlane(raw, getSnapStep(), plane);
+            }
+            if (source === "particle") {
+                if (!(chkSnapParticle && chkSnapParticle.checked)) continue;
+                if (particleContext.point && (!particleContext.source || particleContext.source === "particle")) return particleContext.point;
+                const cand = nearestPointCandidate(raw, snapRange, plane);
+                if (cand && cand.point) return cand.point;
+            }
+        }
         return raw;
     }
 
-    function mapPickPoint(hitVec3, particlePoint = null) {
-        const base = mapPickPointBase(hitVec3, particlePoint);
+    function mapPickPoint(hitVec3, particleSnap = null) {
+        const base = mapPickPointBase(hitVec3, particleSnap);
         lastPickBasePoint = base ? {x: base.x, y: base.y, z: base.z} : null;
         lastPickMappedPoint = base ? {x: base.x, y: base.y, z: base.z} : null;
         return base;
@@ -3783,9 +3971,13 @@ function initPointsBuilderMain() {
             selMirrorPlane.addEventListener("change", () => setMirrorPlane(selMirrorPlane.value));
         }
         if (inpSnapStep) inpSnapStep.disabled = !(chkSnapGrid && chkSnapGrid.checked);
+        bindSnapPriorityList();
+        renderSnapPriorityList();
         chkSnapGrid?.addEventListener("change", () => {
             if (inpSnapStep) inpSnapStep.disabled = !chkSnapGrid.checked;
+            renderSnapPriorityList();
         });
+        chkSnapParticle?.addEventListener("change", () => renderSnapPriorityList());
         if (chkSnapGridKeyToggleMode) {
             chkSnapGridKeyToggleMode.addEventListener("change", () => {
                 setSnapGridKeyToggleMode(!!chkSnapGridKeyToggleMode.checked);
@@ -5520,10 +5712,11 @@ function getParticleSnapFromEvent(ev) {
     const idx = hit.index;
     if (idx === null || idx === undefined) return null;
     if (hit.object === geometryCenterObj) {
-        return lastGeometryCenterPoints[idx] || null;
+        const point = lastGeometryCenterPoints[idx] || null;
+        return point ? { point, fromHit: true, source: point.helperType || "helper" } : null;
     }
     if (!lastPoints || !lastPoints[idx]) return null;
-    return lastPoints[idx];
+    return { point: lastPoints[idx], fromHit: true, source: "particle" };
 }
 
 function getMappedPointFromEvent(ev) {
@@ -6059,6 +6252,68 @@ function areActionTargetsSameKind(ids) {
         if (!kind) kind = ctx.node.kind;
         else if (kind !== ctx.node.kind) return false;
     }
+    return true;
+}
+
+function wrapTargetIdsInGroup(ids, kind = "add_builder") {
+    const valid = normalizeActionTargetIds(ids);
+    if (!valid.length) return false;
+
+    const rows = [];
+    for (const id of valid) {
+        const ctx = findNodeContextById(id);
+        if (!ctx || !ctx.node || !Array.isArray(ctx.parentList)) continue;
+        rows.push({ id, ctx });
+    }
+    if (!rows.length) return false;
+
+    const parentList = rows[0].ctx.parentList;
+    for (const row of rows) {
+        if (row.ctx.parentList !== parentList) {
+            showToast("创建组失败：只能包裹同一层级的卡片", "error");
+            return false;
+        }
+    }
+
+    rows.sort((a, b) => a.ctx.index - b.ctx.index);
+    const insertIndex = rows[0].ctx.index;
+    const groupNode = makeNode(kind);
+    if (!groupNode) return false;
+    if (!Array.isArray(groupNode.children)) groupNode.children = [];
+
+    historyCapture(`wrap_${kind}`);
+    const children = [];
+    for (let i = rows.length - 1; i >= 0; i--) {
+        const row = rows[i];
+        const at = parentList.findIndex((item) => item && item.id === row.id);
+        if (at < 0) continue;
+        const [moved] = parentList.splice(at, 1);
+        if (moved) children.unshift(moved);
+    }
+    if (!children.length) return false;
+
+    groupNode.children.splice(0, groupNode.children.length, ...children);
+    const at = Math.max(0, Math.min(insertIndex, parentList.length));
+    parentList.splice(at, 0, groupNode);
+    ensureAxisEverywhere();
+
+    if (typeof setCardSelectionIds === "function") {
+        setCardSelectionIds(children.map((node) => node.id).filter(Boolean), {
+            replace: true,
+            focus: false,
+            syncWithParamSync: false
+        });
+    }
+    setFocusedNode(groupNode.id, false);
+    renderAll();
+    requestAnimationFrame(() => {
+        const el = elCardsRoot?.querySelector?.(`.card[data-id="${groupNode.id}"]`);
+        if (el) {
+            try { el.focus(); } catch {}
+            try { el.scrollIntoView({ block: "nearest" }); } catch {}
+        }
+    });
+    showToast(`已创建组并移入 ${children.length} 张卡片`, "success");
     return true;
 }
 
@@ -6663,6 +6918,10 @@ function openActionMenuForTargets(ev, targetIds, options = {}) {
     const allowQuickSync = !!options.allowQuickSync;
     const sameKind = areActionTargetsSameKind(ids);
     const items = [];
+    items.push({
+        label: ids.length > 1 ? "创建组并移入选中卡片" : "创建组并移入此卡片",
+        onSelect: () => wrapTargetIdsInGroup(ids, "add_builder")
+    });
     if (ids.length === 1) {
         const ctxNode = findNodeContextById(ids[0]);
         if (ctxNode && Array.isArray(ctxNode.parentList)) {
@@ -6686,10 +6945,6 @@ function openActionMenuForTargets(ev, targetIds, options = {}) {
                 insertIndex: ctxNode.index + 1,
                 label,
                 ownerNode: null
-            });
-            items.push({
-                label: "下方添加组",
-                onSelect: () => addShortcutKindInContext("add_builder", getAfterContext)
             });
             items.push({
                 label: "下方添加旋转嵌套组",
