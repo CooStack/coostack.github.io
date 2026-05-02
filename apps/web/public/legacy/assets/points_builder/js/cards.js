@@ -529,7 +529,10 @@ export function createCardInputs(ctx) {
         if (exprMode) i.inputMode = "decimal";
         const step = (typeof getParamStep === "function") ? getParamStep() : null;
         if (!exprMode) i.step = Number.isFinite(step) ? String(step) : "any";
-        i.value = String(value ?? 0);
+        const initialValue = (value === null || value === undefined || (typeof value === "string" && value.trim() === ""))
+            ? 0
+            : value;
+        i.value = String(initialValue);
         if (exprMode) {
             i.placeholder = i.placeholder || "支持变量/表达式";
             i.autocomplete = "off";
