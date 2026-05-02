@@ -2820,6 +2820,7 @@ body.resizing-panels .panel.right {
 }
 
 #inpSnapStep,
+#inpRotateSnapDeg,
 #inpPointSize {
     height: 26px !important;
     padding: 0 10px !important;
@@ -2836,6 +2837,7 @@ body.resizing-panels .panel.right {
 }
 
 #inpSnapStep:focus,
+#inpRotateSnapDeg:focus,
 #inpPointSize:focus {
     border-color: color-mix(in srgb, var(--accent) 55%, var(--line2)) !important;
     background: color-mix(in srgb, var(--panel2) 82%, transparent) !important;

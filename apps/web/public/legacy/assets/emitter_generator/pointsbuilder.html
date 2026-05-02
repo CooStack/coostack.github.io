@@ -4,7 +4,7 @@
     <meta charset="utf-8"/>
     <meta name="viewport" content="width=device-width,initial-scale=1"/>
     <title>EmitterGenerator - PointsBuilder 编辑器</title>
-    <link rel="stylesheet" href="../points_builder/css/style.css?v=20260502_11"/>
+    <link rel="stylesheet" href="../points_builder/css/style.css?v=20260502_12"/>
     <style>
         body.emitter-no-kotlin #btnRightKotlinTab,
         body.emitter-no-kotlin #rightKotlinPage {
@@ -25,6 +25,7 @@
 
         <div class="topbar-tools">
             <button id="btnSnapRenderSettings" class="btn tool-btn" title="吸附渲染设置">吸附渲染</button>
+            <button id="btnLocalRotate" class="btn tool-btn" title="本地旋转：先选卡片，再点锚点并拖动旋转">本地旋转</button>
         </div>
 
         <div class="topbar-right">
@@ -275,6 +276,11 @@
                             <div class="settings-label">网格步长</div>
                             <input id="inpSnapStep" class="input" type="number" value="1" step="0.1" min="0.000001"
                                    title="吸附网格开启时生效"/>
+                        </div>
+                        <div class="settings-row">
+                            <div class="settings-label">旋转吸附角度</div>
+                            <input id="inpRotateSnapDeg" class="input" type="number" value="22.5" step="0.5" min="0.000001"
+                                   title="旋转时按住 Shift 吸附到该角度"/>
                         </div>
                         <div class="settings-row">
                             <div class="settings-label">粒子吸附范围</div>
