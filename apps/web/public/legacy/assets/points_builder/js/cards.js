@@ -1586,9 +1586,7 @@ export function initCardSystem(ctx = {}) {
 
     const selectedNodeIds = new Set();
     let selectionAnchorNodeId = null;
-    const CARD_BOX_DELAY_MS = 220;
     let cardBoxEl = null;
-    let cardBoxTimer = 0;
     let cardBoxPending = null; // { pointerId,startX,startY,ctrlKey,shiftKey }
     let cardBoxSelecting = false;
     let cardBoxRect = null; // {left,top,right,bottom}
@@ -1814,10 +1812,6 @@ export function initCardSystem(ctx = {}) {
     }
 
     function clearCardBoxState(pointerId = null) {
-        if (cardBoxTimer) {
-            clearTimeout(cardBoxTimer);
-            cardBoxTimer = 0;
-        }
         cardBoxPending = null;
         cardBoxSelecting = false;
         cardBoxRect = null;
@@ -1899,15 +1893,7 @@ export function initCardSystem(ctx = {}) {
             if (elCardsRoot.setPointerCapture) {
                 try { elCardsRoot.setPointerCapture(ev.pointerId); } catch {}
             }
-            cardBoxTimer = setTimeout(() => {
-                cardBoxTimer = 0;
-                if (!cardBoxPending) return;
-                startCardBoxSelecting({
-                    pointerId: cardBoxPending.pointerId,
-                    clientX: cardBoxPending.startX,
-                    clientY: cardBoxPending.startY
-                });
-            }, CARD_BOX_DELAY_MS);
+            startCardBoxSelecting(ev);
         }, true);
 
         window.addEventListener("pointermove", (ev) => {

@@ -2,7 +2,7 @@ import * as THREE from "three";
 import {OrbitControls} from "three/addons/controls/OrbitControls.js";
 import { createCardInputs, initCardSystem } from "./cards.js?v=20260502_9";
 import { initFilterSystem } from "./filters.js?v=20260429_7";
-import { initHotkeysSystem } from "./hotkeys.js?v=20260321_6";
+import { initHotkeysSystem } from "./hotkeys.js?v=20260321_7";
 import { createKindDefs } from "./kinds.js?v=20260429_8";
 import { createBuilderTools } from "./builder.js?v=20260429_9";
 import { initLayoutSystem } from "./layout.js?v=20260429_1";

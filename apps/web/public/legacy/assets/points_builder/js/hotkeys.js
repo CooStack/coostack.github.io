@@ -38,7 +38,7 @@ export function initHotkeysSystem(ctx) {
     const HOTKEY_STORAGE_KEY = "pb_hotkeys_v2";
 
     const DEFAULT_HOTKEYS = {
-        version: 11,
+        version: 12,
         actions: {
             openPicker: "KeyN",
             openPresetPicker: "Shift+KeyP",
@@ -48,7 +48,7 @@ export function initHotkeysSystem(ctx) {
             pickPoint: "KeyE",
             pickBezierStartEnd: "KeyW",
             openMeasureTool: "KeyM",
-            toggleFullscreen: "Shift+KeyF",
+            toggleFullscreen: "KeyG",
             resetCamera: "Shift+KeyR",
             importJson: "Shift+KeyN",
             toggleSettings: "KeyH",
@@ -195,8 +195,8 @@ export function initHotkeysSystem(ctx) {
                 if (!Number.isFinite(storedVersion) || storedVersion < 6) {
                     out.actions.toggleSnapQuick = "";
                 }
-                // v11 migration: F is now reserved for local rotate.
-                if (out.actions.toggleFullscreen === "KeyF") out.actions.toggleFullscreen = "Shift+KeyF";
+                // v12 migration: fullscreen defaults to G.
+                if (out.actions.toggleFullscreen === "KeyF" || out.actions.toggleFullscreen === "Shift+KeyF") out.actions.toggleFullscreen = "KeyG";
                 if (!out.actions.triggerFocusedLocalRotate) out.actions.triggerFocusedLocalRotate = "KeyF";
                 return out;
             }
@@ -274,7 +274,7 @@ export function initHotkeysSystem(ctx) {
         {id: "pickPoint", title: "点拾取（填充当前输入）", desc: "默认 E"},
         {id: "pickBezierStartEnd", title: "进入 Bezier 创建流", desc: "默认 W"},
         {id: "openMeasureTool", title: "打开预览测距", desc: "默认 M"},
-        {id: "toggleFullscreen", title: "预览全屏 / 退出全屏", desc: "默认 Shift+F"},
+        {id: "toggleFullscreen", title: "预览全屏 / 退出全屏", desc: "默认 G"},
         {id: "resetCamera", title: "重置镜头", desc: "默认 Shift + R"},
         {id: "importJson", title: "导入 JSON", desc: "默认 Ctrl/Cmd+O"},
         {id: "toggleSettings", title: "打开/隐藏 设置", desc: "默认 H"},
