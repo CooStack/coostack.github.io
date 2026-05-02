@@ -10,7 +10,7 @@ import { createNodeHelpers } from "./nodes.js?v=20260316_1";
 import { toggleFullscreen } from "./viewer.js";
 import { createPickerModule } from "./main-picker.js?v=20260502_4";
 import { initGlobalShortcuts } from "./main-shortcuts.js?v=20260321_4";
-import { initTopbarAndBoot } from "./main-topbar-boot.js?v=20260502_3";
+import { initTopbarAndBoot } from "./main-topbar-boot.js?v=20260502_4";
 import { createPreviewDistanceTool } from "../../src/js/shared/preview-distance-tool.js";
 import {
     sanitizeFileBase,
@@ -28,6 +28,41 @@ import {
 } from "./io.js?v=20260501_7";
 
 const JSZIP_URL = new URL("../../shader_builder/js/jszip.min.js", import.meta.url).href;
+const NATIVE_SUGGESTION_SKIP_INPUT_TYPES = new Set([
+    "button",
+    "checkbox",
+    "color",
+    "file",
+    "hidden",
+    "image",
+    "radio",
+    "range",
+    "reset",
+    "submit"
+]);
+
+function disableNativeInputSuggestions(root = document) {
+    const apply = (input) => {
+        if (!(input instanceof HTMLInputElement)) return;
+        const type = String(input.type || "text").toLowerCase();
+        if (NATIVE_SUGGESTION_SKIP_INPUT_TYPES.has(type)) return;
+        input.autocomplete = "off";
+        input.setAttribute("autocomplete", "off");
+        input.setAttribute("autocorrect", "off");
+        input.setAttribute("autocapitalize", "off");
+        input.setAttribute("spellcheck", "false");
+        input.setAttribute("aria-autocomplete", "none");
+        input.setAttribute("data-lpignore", "true");
+        input.setAttribute("data-form-type", "other");
+    };
+
+    if (root instanceof HTMLInputElement) {
+        apply(root);
+        return;
+    }
+
+    root?.querySelectorAll?.("input").forEach(apply);
+}
 
 function initPointsBuilderMain() {
     const U = globalThis.Utils;
@@ -121,6 +156,15 @@ function initPointsBuilderMain() {
     const btnCancelModal = document.getElementById("btnCancelModal");
     const cardPicker = document.getElementById("cardPicker");
     const cardSearch = document.getElementById("cardSearch");
+    disableNativeInputSuggestions(document);
+    if (document.body && typeof MutationObserver !== "undefined") {
+        const nativeSuggestionObserver = new MutationObserver((mutations) => {
+            for (const mutation of mutations) {
+                mutation.addedNodes?.forEach((node) => disableNativeInputSuggestions(node));
+            }
+        });
+        nativeSuggestionObserver.observe(document.body, { childList: true, subtree: true });
+    }
 
     // -------------------------
     // Hotkeys DOM
@@ -196,6 +240,7 @@ function initPointsBuilderMain() {
     let presetSaveSourceLabel = "";
     let presetSaveVariableInfo = null;
     let presetSaveVariablePanelEl = null;
+    let presetSaveOverwriteTarget = null;
     const DEFAULT_PRESET_GROUP = "默认分组";
     const LEGACY_UNGROUPED_PRESET_GROUP = "未分组";
     let draggingPresetId = "";
@@ -2565,6 +2610,14 @@ function initPointsBuilderMain() {
         presetSaveSourceLabel = children ? `${children.length} 张选中卡片` : "全部卡片";
     }
 
+    function getCurrentPresetSourceOptions() {
+        const selected = (typeof getCardSelectionIds === "function") ? getCardSelectionIds() : null;
+        const ids = selected && typeof selected[Symbol.iterator] === "function"
+            ? Array.from(selected).map((id) => String(id || "").trim()).filter(Boolean)
+            : [];
+        return ids.length ? { sourceIds: ids } : {};
+    }
+
     function makePresetFromCurrentProject(options = {}) {
         const sourceChildren = Array.isArray(options.children) ? options.children : (state.root.children || []);
         const children = preparePresetChildrenForStorage(sourceChildren);
@@ -3562,21 +3615,25 @@ function initPointsBuilderMain() {
 
     function openPresetPanel(mode = "list", options = {}) {
         if (mode === "save") {
+            const overwritePreset = options.overwritePreset
+                ? normalizePresetList([options.overwritePreset])[0] || null
+                : null;
+            presetSaveOverwriteTarget = overwritePreset;
             if (Array.isArray(options.children)) {
                 presetSaveSourceChildren = deepCloneJson(options.children) || [];
                 presetSaveSourceLabel = options.label || `${presetSaveSourceChildren.length} 张选中卡片`;
-                presetSaveVariableInfo = null;
             } else if (Array.isArray(options.sourceIds)) {
                 setPresetSaveSourceFromIds(options.sourceIds);
-                presetSaveVariableInfo = null;
             } else {
                 presetSaveSourceChildren = null;
                 presetSaveSourceLabel = "全部卡片";
-                presetSaveVariableInfo = null;
             }
+            presetSaveVariableInfo = overwritePreset?.variables
+                ? normalizePresetVariableInfoForStorage(overwritePreset.variables)
+                : null;
             if (showPresetSaveDialog()) {
                 requestAnimationFrame(() => {
-                    fillPresetForm();
+                    fillPresetForm(overwritePreset);
                     if (presetNameInput) presetNameInput.focus();
                 });
                 return;
@@ -3594,7 +3651,7 @@ function initPointsBuilderMain() {
         const name = String(presetNameInput.value || projectName || `预设${presetList.length + 1}`).trim() || "未命名预设";
         const group = getPresetGroupLabel(presetGroupInput?.value || DEFAULT_PRESET_GROUP);
         const origin = readPresetOriginInputs();
-        const overwrite = overwritePreset || presetList.find((it) => (
+        const overwrite = overwritePreset || presetSaveOverwriteTarget || presetList.find((it) => (
             it.name === name && getPresetGroupLabel(it.group) === group
         ));
         const variableInfo = refreshPresetSaveVariableInfoForSource({ preserveInputs: true });
@@ -3610,6 +3667,7 @@ function initPointsBuilderMain() {
             presetSaveSourceChildren = null;
             presetSaveSourceLabel = "";
             presetSaveVariableInfo = null;
+            presetSaveOverwriteTarget = null;
             fillPresetForm(preset);
             hidePresetSaveDialog();
         }
@@ -3755,6 +3813,15 @@ function initPointsBuilderMain() {
 
     function applyPresetFromLibrary(preset) {
         startPresetPick(preset);
+    }
+
+    function openPresetOverwriteDialog(preset) {
+        const normalized = normalizePresetList([preset])[0];
+        if (!normalized) return false;
+        openPresetPanel("save", Object.assign(getCurrentPresetSourceOptions(), {
+            overwritePreset: normalized
+        }));
+        return true;
     }
 
     function setPresetDragLockPlaneActive(next) {
@@ -4326,13 +4393,7 @@ function initPointsBuilderMain() {
                     '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 7h10m-10 5h6m-4 9h8a2 2 0 0 0 2-2v-8l-4-4H9a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2Zm4-12v5m-2-2h4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>',
                     "用当前内容覆盖",
                     () => {
-                    const saved = saveCurrentAsPreset({
-                        name: preset.name,
-                        group: getPresetGroupLabel(preset.group),
-                        origin: normalizePointValue(preset.origin),
-                        overwriteId: preset.id
-                    });
-                    showToast(saved ? `已覆盖预设：${preset.name}` : "覆盖预设失败", saved ? "success" : "error");
+                        if (!openPresetOverwriteDialog(preset)) showToast("打开预设编辑失败", "error");
                     }
                 );
                 const deleteBtn = makePresetIconButton(

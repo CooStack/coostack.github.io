@@ -826,22 +826,6 @@ export function initTopbarAndBoot(ctx = {}) {
     });
 
     btnImportPresets?.addEventListener("click", async () => {
-        if (typeof importPresetDirectory === "function" && window.showDirectoryPicker) {
-            try {
-                const options = (typeof getPresetImportOptions === "function")
-                    ? getPresetImportOptions()
-                    : { overwrite: confirm("导入预设：确定=覆盖同名/同ID预设，取消=作为新预设导入") };
-                const count = await importPresetDirectory(options);
-                showToast(`已导入 ${count} 个预设`, "success");
-            } catch (e) {
-                if (e && e.name === "AbortError") {
-                    showToast("取消导入", "info");
-                    return;
-                }
-                showToast(`导入预设失败：${e.message || e}`, "error");
-            }
-            return;
-        }
         filePresetJson?.click();
     });
     filePresetJson?.addEventListener("change", async () => {
