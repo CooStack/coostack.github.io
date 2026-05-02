@@ -2480,6 +2480,13 @@ function initPointsBuilderMain() {
                 matched = true;
             }
         }
+        if (!matched) {
+            const plain = normalizeContextIdentifier(expr);
+            if (plain && !PRESET_VARIABLE_IGNORE_NAMES.has(plain)) {
+                scalarRefs.add(plain);
+                matched = true;
+            }
+        }
         return matched;
     }
 
@@ -2492,6 +2499,7 @@ function initPointsBuilderMain() {
         const defParams = KIND?.[node?.kind]?.defaultParams || {};
         if (Object.prototype.hasOwnProperty.call(defParams, keyText) && typeof defParams[keyText] === "number") return true;
         if (/[A-Za-z_$][A-Za-z0-9_$]*\s*\.\s*[xyz]\b/.test(expr)) return true;
+        if (isIdentifier(expr)) return true;
         return /[+\-*/()%]/.test(expr);
     }
 
