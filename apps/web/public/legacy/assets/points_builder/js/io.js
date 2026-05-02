@@ -1,6 +1,8 @@
 export const PROJECT_NAME_KEY = "pb_project_name_v1";
 export const KOTLIN_END_KEY = "pb_kotlin_end_v1";
 export const STATE_STORAGE_KEY = "pb_state_v1";
+export const PRESET_STORAGE_KEY = "pb_presets_v1";
+export const PRESET_GROUPS_KEY = "pb_preset_groups_v1";
 
 export function sanitizeFileBase(name) {
     const raw = String(name || "").trim();
@@ -66,6 +68,50 @@ export function saveAutoState(state) {
 export function clearAutoState() {
     try {
         localStorage.removeItem(STATE_STORAGE_KEY);
+        return true;
+    } catch {
+        return false;
+    }
+}
+
+export function loadPresetList() {
+    try {
+        const raw = localStorage.getItem(PRESET_STORAGE_KEY);
+        if (!raw) return [];
+        const obj = JSON.parse(raw);
+        const list = Array.isArray(obj) ? obj : (Array.isArray(obj?.presets) ? obj.presets : []);
+        return list.filter((it) => it && typeof it === "object");
+    } catch {
+        return [];
+    }
+}
+
+export function savePresetList(presets) {
+    try {
+        const list = Array.isArray(presets) ? presets : [];
+        localStorage.setItem(PRESET_STORAGE_KEY, JSON.stringify({ presets: list, ts: Date.now() }));
+        return true;
+    } catch {
+        return false;
+    }
+}
+
+export function loadPresetGroups() {
+    try {
+        const raw = localStorage.getItem(PRESET_GROUPS_KEY);
+        if (!raw) return [];
+        const obj = JSON.parse(raw);
+        const list = Array.isArray(obj) ? obj : (Array.isArray(obj?.groups) ? obj.groups : []);
+        return list.map((it) => String(it || "").trim()).filter(Boolean);
+    } catch {
+        return [];
+    }
+}
+
+export function savePresetGroups(groups) {
+    try {
+        const list = Array.isArray(groups) ? groups : [];
+        localStorage.setItem(PRESET_GROUPS_KEY, JSON.stringify({ groups: list, ts: Date.now() }));
         return true;
     } catch {
         return false;

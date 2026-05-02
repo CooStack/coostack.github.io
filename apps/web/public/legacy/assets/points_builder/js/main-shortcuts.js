@@ -6,6 +6,7 @@ export function initGlobalShortcuts(ctx = {}) {
         stopRotateMode,
         getOffsetMode,
         stopOffsetMode,
+        openPresetPicker,
         hkModal,
         hideHotkeysModal,
         settingsModal,
@@ -49,6 +50,9 @@ export function initGlobalShortcuts(ctx = {}) {
         startDottedLinePick,
         startTrianglePick,
         startPointPick,
+        startLocalRotateForTargetIds,
+        togglePointPickCallbackRotate,
+        startPresetPickById,
         startBezierCreate,
         setSnapPlane,
         setMirrorPlane,
@@ -64,7 +68,8 @@ export function initGlobalShortcuts(ctx = {}) {
         onWindowBlurCleanup,
         getIsModalOpen,
         getIsHotkeysOpen,
-        getIsSettingsOpen
+        getIsSettingsOpen,
+        isPresetDragActive
     } = ctx;
 
     let gridHoldKeyDown = false;
@@ -161,6 +166,21 @@ export function initGlobalShortcuts(ctx = {}) {
 
         // ignore plain single-key hotkeys when typing
         const isPlainKey = !(e.ctrlKey || e.metaKey || e.altKey);
+        if (
+            isPlainKey &&
+            typeof isPresetDragActive === "function" &&
+            isPresetDragActive() &&
+            hotkeyMatchEvent(e, hotkeys.actions.lockPlaneHold)
+        ) {
+            if (lockPlaneKeyDown && lockPlaneKeyCode === e.code) return;
+            lockPlaneKeyDown = true;
+            lockPlaneKeyCode = e.code;
+            if (typeof setLockPlaneActive === "function") {
+                e.preventDefault();
+                setLockPlaneActive(true);
+            }
+            return;
+        }
         if (isPlainKey && shouldIgnorePlainHotkeys()) return;
 
         // when Add-Card modal is open, avoid triggering kind hotkeys while typing search
@@ -223,6 +243,15 @@ export function initGlobalShortcuts(ctx = {}) {
             if (pickCtx && typeof openModal === "function") {
                 openModal(pickCtx.list, pickCtx.insertIndex, pickCtx.label, ownerNodeId);
             }
+            return;
+        }
+
+        if (hotkeyMatchEvent(e, hotkeys.actions.openPresetPicker)) {
+            e.preventDefault();
+            if (hkModal && !hkModal.classList.contains("hidden") && typeof hideHotkeysModal === "function") hideHotkeysModal();
+            if (settingsModal && !settingsModal.classList.contains("hidden") && typeof hideSettingsModal === "function") hideSettingsModal();
+            if (modal && !modal.classList.contains("hidden") && typeof hideModal === "function") hideModal();
+            if (typeof openPresetPicker === "function") openPresetPicker();
             return;
         }
 
@@ -454,6 +483,9 @@ export function initGlobalShortcuts(ctx = {}) {
         if (hotkeyMatchEvent(e, hotkeys.actions.triggerFocusedRotate)) {
             if ((modal && !modal.classList.contains("hidden")) || (hkModal && !hkModal.classList.contains("hidden"))) return;
             e.preventDefault();
+            if (typeof togglePointPickCallbackRotate === "function" && togglePointPickCallbackRotate()) {
+                return;
+            }
             if (offsetMode) {
                 if (typeof stopOffsetMode === "function") stopOffsetMode();
                 return;
@@ -475,6 +507,34 @@ export function initGlobalShortcuts(ctx = {}) {
             if (!targetId) return;
             if (typeof focusCardById === "function") focusCardById(targetId, false, false, true);
             if (typeof addRotateForTargetIds === "function") addRotateForTargetIds(selectedIds.length > 1 ? selectedIds : [targetId]);
+            return;
+        }
+        if (hotkeyMatchEvent(e, hotkeys.actions.triggerFocusedLocalRotate)) {
+            if ((modal && !modal.classList.contains("hidden")) || (hkModal && !hkModal.classList.contains("hidden"))) return;
+            e.preventDefault();
+            if (offsetMode) {
+                if (typeof stopOffsetMode === "function") stopOffsetMode();
+                return;
+            }
+            if (rotateMode) {
+                if (typeof stopRotateMode === "function") stopRotateMode({ silent: true });
+                return;
+            }
+            let targetId = (typeof getFocusedNodeId === "function") ? getFocusedNodeId() : null;
+            let selectedIds = [];
+            if (!targetId && typeof getCardSelectionIds === "function") {
+                const sel = getCardSelectionIds();
+                if (sel && sel.size) targetId = Array.from(sel)[0] || null;
+            }
+            if (typeof getCardSelectionIds === "function") {
+                const sel = getCardSelectionIds();
+                if (sel && sel.size) selectedIds = Array.from(sel).filter(Boolean);
+            }
+            if (!targetId) return;
+            if (typeof focusCardById === "function") focusCardById(targetId, false, false, true);
+            if (typeof startLocalRotateForTargetIds === "function") {
+                startLocalRotateForTargetIds(selectedIds.length > 1 ? selectedIds : [targetId]);
+            }
             return;
         }
         if (hotkeyMatchEvent(e, hotkeys.actions.triggerFocusedMove)) {
@@ -515,6 +575,15 @@ export function initGlobalShortcuts(ctx = {}) {
                 e.preventDefault();
                 const pickCtx = (typeof getInsertContextFromFocus === "function") ? getInsertContextFromFocus() : null;
                 if (pickCtx && typeof addKindInContext === "function") addKindInContext(kind, pickCtx);
+                return;
+            }
+        }
+
+        for (const [presetId, hk] of Object.entries(hotkeys.presets || {})) {
+            if (!hk) continue;
+            if (hotkeyMatchEvent(e, hk)) {
+                e.preventDefault();
+                if (typeof startPresetPickById === "function") startPresetPickById(presetId);
                 return;
             }
         }

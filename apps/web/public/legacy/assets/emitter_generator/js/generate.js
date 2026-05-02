@@ -256,6 +256,7 @@ import {
     let focusedEmitterId = null;
     let focusedCommandId = null;
     let commandWorkspace = "queue_list"; // queue_list | queue_editor
+    let currentConfigTab = "emitters";
     const doTickEditorState = {
         editor: null,
         textarea: null,
@@ -508,7 +509,7 @@ import {
 
         // UI 状态（折叠/展开）
         if (!card.ui || typeof card.ui !== "object") card.ui = { collapsed: false };
-        card.ui.collapsed = !!card.ui.collapsed;
+        card.ui.collapsed = false;
 
         // Kotlin 变量名（可选）
         if (!card.vars || typeof card.vars !== "object") card.vars = { template: "", data: "" };
@@ -1224,7 +1225,8 @@ import {
     }
 
     function applyConfigPage(tab) {
-        const next = (tab === "kotlin" || tab === "tick" || tab === "death") ? tab : "emitters";
+        const next = (tab === "queues" || tab === "kotlin" || tab === "tick" || tab === "death") ? tab : "emitters";
+        currentConfigTab = next;
         try {
             localStorage.setItem(CONFIG_PAGE_KEY, next);
         } catch {}
@@ -1234,6 +1236,7 @@ import {
         });
         const pageMap = {
             emitters: document.getElementById("cfgPageEmitters"),
+            queues: document.getElementById("cfgPageQueues"),
             kotlin: document.getElementById("cfgPageKotlin"),
             tick: document.getElementById("cfgPageTick"),
             death: document.getElementById("cfgPageDeath"),
@@ -1243,6 +1246,13 @@ import {
             if (!el) return;
             el.classList.toggle("active", key === next);
         });
+        if (next === "queues") {
+            setCommandWorkspace("queue_editor");
+        } else if (commandWorkspace === "queue_editor") {
+            setCommandWorkspace("queue_list");
+        } else {
+            renderSelectionInspector();
+        }
     }
 
     function initConfigPages() {
@@ -2623,6 +2633,7 @@ function setColorLifecycleSection($card, enabled) {
         renderEmitterBehaviorEditors();
         renderEmitterList();
         renderCommandQueueList();
+        renderSelectionInspector();
         if (commandWorkspace === "queue_editor") {
             renderCommandList();
         }
@@ -2666,15 +2677,14 @@ function setColorLifecycleSection($card, enabled) {
             const builderNodeCount = builderStats.nodeCount;
             const builderPointCount = builderStats.pointCount;
             const esc = (v) => escapeHtml(String(v ?? ""));
-            const foldIcon = (card.ui && card.ui.collapsed) ? "▸" : "▾";
+            const isActive = String(card.id) === String(focusedEmitterId || state.focusedEmitterId || "");
             const lines = [
-                `<div class="emitCard${card.ui && card.ui.collapsed ? " collapsed" : ""}" data-id="${card.id}">`,
+                `<div class="emitCard${isActive ? " active" : ""}" data-id="${card.id}">`,
                 `  <div class="emitHead">`,
                 `    <div class="dragHandle">≡</div>`,
                 `    <div class="emitTitle">发射器 #${index + 1}<span class="sub">${esc(typeLabel)}</span></div>`,
                 `    <div class="emitRight">`,
                 `      <div class="emitBtns">`,
-                `        <button class="iconBtn btnFold" title="折叠/展开">${foldIcon}</button>`,
                 `        <button class="iconBtn btnDup" title="复制">⎘</button>`,
                 `        <button class="iconBtn btnDel" title="删除">🗑</button>`,
                 `      </div>`,
@@ -3715,8 +3725,10 @@ function setColorLifecycleSection($card, enabled) {
         scheduleSave();
         autoGenKotlin();
 
-        if (syncChanged) {
+        if (!editingSync || syncChanged) {
             renderEmitterList();
+        }
+        if (syncChanged) {
             if (!editingSync) renderEmitterSyncMenu();
         } else if (!editingSync && emitterSync && emitterSync.open && ((path === "externalData" || path === "externalTemplate") || sameSignLifecycleChanged)) {
             renderEmitterSyncMenu();
@@ -5009,20 +5021,129 @@ function setColorLifecycleSection($card, enabled) {
         $("#activeQueueBadge").text(`编辑队列：${name}`);
     }
 
+    function getSelectedEmitterForInspector() {
+        const id = String(focusedEmitterId || state.focusedEmitterId || "").trim();
+        if (!id) return null;
+        return state.emitters.find((it) => String(it?.id || "") === id) || null;
+    }
+
+    function renderEmitterInspector() {
+        const $empty = $("#inspectorEmpty");
+        const $emitter = $("#inspectorEmitter");
+        const $queue = $("#inspectorQueue");
+        const card = getSelectedEmitterForInspector();
+        if (!card) {
+            $empty.removeClass("hidden");
+            $emitter.addClass("hidden").empty();
+            $queue.addClass("hidden").empty();
+            return;
+        }
+
+        sanitizeEmitterCard(card);
+        const $source = $(`#emitList .emitCard[data-id="${card.id}"]`);
+        if (!$source.length) {
+            renderEmitterList();
+        }
+        const $freshSource = $(`#emitList .emitCard[data-id="${card.id}"]`);
+        if (!$freshSource.length) {
+            $empty.removeClass("hidden");
+            $emitter.addClass("hidden").empty();
+            $queue.addClass("hidden").empty();
+            return;
+        }
+        const $clone = $freshSource.clone(false, false).removeClass("collapsed").addClass("emitInspectorCard");
+        $clone.find(".emitBtns, .card-actions").remove();
+
+        $empty.addClass("hidden");
+        $queue.addClass("hidden").empty();
+        $emitter.removeClass("hidden").empty().append($clone);
+        applyEmitterInputValues($clone, card);
+    }
+
+    function renderQueueInspector() {
+        const $empty = $("#inspectorEmpty");
+        const $emitter = $("#inspectorEmitter");
+        const $queue = $("#inspectorQueue");
+        const queue = getActiveCommandQueue();
+        if (!queue) {
+            $empty.removeClass("hidden");
+            $emitter.addClass("hidden").empty();
+            $queue.addClass("hidden").empty();
+            return;
+        }
+        const esc = (v) => escapeHtml(String(v ?? ""));
+        const signs = Array.isArray(queue.signs) ? queue.signs : [];
+        const chipHtml = signs.length
+            ? signs.map((s) => `<span class="chip" data-sign="${esc(s)}">${esc(s)}</span>`).join("")
+            : `<span class="chip chip-muted">(全部)</span>`;
+        const commandCount = Array.isArray(queue.commands) ? queue.commands.length : 0;
+        const html = [
+            `<div class="inspector-head">`,
+            `  <div class="panel-subtitle">命令队列</div>`,
+            `  <div class="hint">选择左侧队列后，在右侧编辑命令；队列名称和 sign 在左侧卡片内维护。</div>`,
+            `</div>`,
+            `  <div class="grid2">`,
+            `    <div class="field">`,
+            `      <label>队列名称</label>`,
+            `      <div class="queueInspectorValue">${esc(queue.name || "command")}</div>`,
+            `    </div>`,
+            `    <div class="field">`,
+            `      <label>命令数量</label>`,
+            `      <div class="queueInspectorValue">${commandCount}</div>`,
+            `    </div>`,
+            `  </div>`,
+            `  <div class="field field-wide queueSignWrap">`,
+            `    <label>生效 sign 列表</label>`,
+            `    <div class="signChips">${chipHtml}</div>`,
+            `    <div class="small">为空=对全部 sign 生效。</div>`,
+            `  </div>`,
+        ].join("");
+
+        $empty.addClass("hidden");
+        $emitter.addClass("hidden").empty();
+        $queue.removeClass("hidden").html(html);
+    }
+
+    function renderSelectionInspector() {
+        const isEditor = commandWorkspace === "queue_editor";
+        $("#selectionInspector").toggleClass("hidden", isEditor);
+        $("#inspectorEmpty").toggleClass("hidden", isEditor);
+        $("#inspectorEmitter").toggleClass("hidden", isEditor);
+        $("#inspectorQueue").toggleClass("hidden", isEditor);
+        if (isEditor) return;
+        if (currentConfigTab === "queues") {
+            $("#commandPanelTitle").show().text("命令队列参数");
+            renderQueueInspector();
+            return;
+        }
+        if (getSelectedEmitterForInspector()) {
+            $("#commandPanelTitle").hide().text("");
+            renderEmitterInspector();
+            return;
+        }
+        $("#commandPanelTitle").show().text("参数编辑");
+        $("#inspectorEmpty").removeClass("hidden");
+        $("#inspectorEmitter").addClass("hidden").empty();
+        $("#inspectorQueue").addClass("hidden").empty();
+    }
+
     function setCommandWorkspace(mode, opts = {}) {
         const next = (mode === "queue_editor") ? "queue_editor" : "queue_list";
         commandWorkspace = next;
         const isEditor = next === "queue_editor";
-        $("#commandQueuePage").toggleClass("active", !isEditor);
         $("#commandEditorPage").toggleClass("active", isEditor);
-        $("#commandPanelTitle").text(isEditor ? "命令队列编辑" : "命令队列");
         if (isEditor) {
+            $("#commandPanelTitle").show().text("命令队列编辑");
             updateActiveQueueBadge();
             if (opts.render !== false) renderCommandList();
+            $("#selectionInspector").addClass("hidden");
+            $("#inspectorEmpty").addClass("hidden");
+            $("#inspectorEmitter").addClass("hidden");
+            $("#inspectorQueue").addClass("hidden");
         } else if (opts.render !== false) {
             setActiveMotionEditor("");
             hideMotionPointMenu();
-            renderCommandQueueList();
+            renderSelectionInspector();
         }
     }
 
@@ -5030,10 +5151,6 @@ function setColorLifecycleSection($card, enabled) {
         setActiveCommandQueue(queueId);
         if (typeof clearCommandSyncTargets === "function") clearCommandSyncTargets();
         setCommandWorkspace("queue_editor");
-    }
-
-    function backToCommandQueueList() {
-        setCommandWorkspace("queue_list");
     }
 
     function focusQueueSignInputById(id, selectAll = true) {
@@ -5044,24 +5161,25 @@ function setColorLifecycleSection($card, enabled) {
         if (selectAll && typeof target.select === "function") target.select();
     }
 
-    function applyQueueSignAdd($card, opts = {}) {
-        if (!$card || !$card.length) return;
+    function applyQueueSignAdd($root, opts = {}) {
+        if (!$root || !$root.length) return;
         ensureCommandQueuesState();
-        const id = String($card.data("id") || "");
+        const id = String($root.data("id") || "");
         if (!id) return;
         const queue = state.commandQueues.find((it) => it.id === id);
         if (!queue) return;
-        const raw = $card.find(".queueSignInput").val();
+        const raw = $root.find(".queueSignInput").val();
         const v = parseSignInputValue(raw);
         if (v == null) return;
         const arr = Array.isArray(queue.signs) ? queue.signs.slice() : [];
         if (!arr.includes(v)) arr.push(v);
         queue.signs = normalizeSignList(arr);
         cardHistory.push();
+        $root.find(".queueSignInput").val("");
         renderCommandQueueList();
+        renderSelectionInspector();
         scheduleSave();
         autoGenKotlin();
-        $card.find(".queueSignInput").val("");
         if (opts.keepFocus) {
             setTimeout(() => focusQueueSignInputById(id), 0);
         }
@@ -5091,7 +5209,6 @@ function setColorLifecycleSection($card, enabled) {
                 `    <div class="dragHandle">≡</div>`,
                 `    <div class="cmdQueueTitle">队列 #${index + 1}<span class="sub">${esc(queue.name || `command${index + 1}`)}</span></div>`,
                 `    <div class="cmdQueueBtns">`,
-                `      <button class="iconBtn btnOpenCmdQueue" type="button" title="编辑">✎</button>`,
                 `      <button class="iconBtn btnDelCmdQueue" type="button" title="删除">🗑</button>`,
                 `    </div>`,
                 `  </div>`,
@@ -5110,7 +5227,7 @@ function setColorLifecycleSection($card, enabled) {
                 `      </div>`,
                 `      <div class="small">为空=对全部 sign 生效。</div>`,
                 `    </div>`,
-                `    <div class="small cmdQueueMeta">命令数：${commandCount}（双击卡片进入编辑）</div>`,
+                `    <div class="small cmdQueueMeta">命令数：${commandCount}</div>`,
                 `  </div>`,
                 `</div>`,
             ].join("\n");
@@ -7663,6 +7780,8 @@ function setColorLifecycleSection($card, enabled) {
             state.commands.splice(idx + 1, 0, clone);
             cardHistory.push();
             renderCommandList();
+            renderCommandQueueList();
+            renderSelectionInspector();
             scheduleSave();
             autoGenKotlin();
         });
@@ -7678,6 +7797,8 @@ function setColorLifecycleSection($card, enabled) {
             if (commandSync) removeCommandSyncTarget(id);
             cardHistory.push();
             renderCommandList();
+            renderCommandQueueList();
+            renderSelectionInspector();
             scheduleSave();
             autoGenKotlin();
         });
@@ -8188,11 +8309,11 @@ function setColorLifecycleSection($card, enabled) {
             if (!out.rerendered) renderMotionFieldBody($field);
         });
 
-        $("#emitList").on("input change", ".emitInput", function () {
+        $("#emitList, #inspectorEmitter").on("input change", ".emitInput", function () {
             handleEmitterInputChange(this);
         });
 
-        $("#emitList").on("focusin", ".emitInput", function () {
+        $("#emitList, #inspectorEmitter").on("focusin", ".emitInput", function () {
             const id = $(this).closest(".emitCard").data("id");
             if (!id) return;
             if (focusedEmitterId !== id) {
@@ -8202,9 +8323,9 @@ function setColorLifecycleSection($card, enabled) {
             }
         });
 
-        $("#emitList").on("focusout", ".emitInput", function (e) {
+        $("#emitList, #inspectorEmitter").on("focusout", ".emitInput", function (e) {
             const to = e.relatedTarget;
-            if (to && $(to).closest("#emitList .emitCard").length) return;
+            if (to && $(to).closest(".emitCard").length) return;
             if (!focusedEmitterId) return;
             handleEmitterCollapseFocusChange(focusedEmitterId, null);
             focusedEmitterId = null;
@@ -8228,7 +8349,7 @@ function setColorLifecycleSection($card, enabled) {
             }
         });
 
-        $("#emitList").on("click", ".btnDup", function (e) {
+        $("#emitList, #inspectorEmitter").on("click", ".btnDup", function (e) {
             e.stopPropagation();
             const id = $(this).closest(".emitCard").data("id");
             const idx = state.emitters.findIndex((it) => it.id === id);
@@ -8248,7 +8369,7 @@ function setColorLifecycleSection($card, enabled) {
             if (preview) preview.resetEmission();
         });
 
-        $("#emitList").on("click", ".btnDel", function (e) {
+        $("#emitList, #inspectorEmitter").on("click", ".btnDel", function (e) {
             e.stopPropagation();
             const id = $(this).closest(".emitCard").data("id");
             if (state.emitters.length <= 1) {
@@ -8260,30 +8381,31 @@ function setColorLifecycleSection($card, enabled) {
             if (emitterSync) removeEmitterSyncTarget(id);
             cardHistory.push();
             renderEmitterList();
+            renderSelectionInspector();
             scheduleSave();
             autoGenKotlin();
             if (preview) preview.resetEmission();
         });
 
-        $("#emitList").on("click", ".btnOpenEmitterBuilder", function (e) {
+        $("#emitList, #inspectorEmitter").on("click", ".btnOpenEmitterBuilder", function (e) {
             e.stopPropagation();
             const id = $(this).closest(".emitCard").data("id");
             openEmitterBuilderEditor(id);
         });
 
-        $("#emitList").on("click", ".btnImportEmitterBuilder", function (e) {
+        $("#emitList, #inspectorEmitter").on("click", ".btnImportEmitterBuilder", function (e) {
             e.stopPropagation();
             const id = $(this).closest(".emitCard").data("id");
             importEmitterBuilderJson(id);
         });
 
-        $("#emitList").on("click", ".btnExportEmitterBuilder", function (e) {
+        $("#emitList, #inspectorEmitter").on("click", ".btnExportEmitterBuilder", function (e) {
             e.stopPropagation();
             const id = $(this).closest(".emitCard").data("id");
             exportEmitterBuilderJson(id);
         });
 
-        $("#emitList").on("click", ".btnClearEmitterBuilder", function (e) {
+        $("#emitList, #inspectorEmitter").on("click", ".btnClearEmitterBuilder", function (e) {
             e.stopPropagation();
             const id = $(this).closest(".emitCard").data("id");
             clearEmitterBuilder(id);
@@ -8309,12 +8431,23 @@ function setColorLifecycleSection($card, enabled) {
         });
 
         $("#emitList").on("click", ".emitCard", function (e) {
-            if (!emitterSync || !emitterSync.open) return;
-            if (!isSyncSelectableEvent(e)) return;
-            const id = $(this).data("id");
+            if (emitterSync && emitterSync.open) {
+                if (!isSyncSelectableEvent(e)) return;
+                const id = $(this).data("id");
+                const card = state.emitters.find((it) => it.id === id);
+                if (!card) return;
+                toggleEmitterSyncTarget(card);
+                return;
+            }
+            if ($(e.target).closest(".btnFold, .btnDup, .btnDel, .dragHandle, .emitInput, .builder-actions, .btnOpenEmitterBuilder, .btnImportEmitterBuilder, .btnExportEmitterBuilder, .btnClearEmitterBuilder").length) {
+                return;
+            }
+            const id = String($(this).data("id") || "");
             const card = state.emitters.find((it) => it.id === id);
             if (!card) return;
-            toggleEmitterSyncTarget(card);
+            focusedEmitterId = id;
+            state.focusedEmitterId = id;
+            renderSelectionInspector();
         });
 
         $("#cmdList").on("click", ".cmdCard", function (e) {
@@ -8327,37 +8460,19 @@ function setColorLifecycleSection($card, enabled) {
         });
 
         $("#cmdQueueList").on("click", ".cmdQueueCard", function (e) {
-            if ($(e.target).closest(".btnOpenCmdQueue, .btnDelCmdQueue, .queueSignAdd, .queueSignClear, .queueSignDel, .queueNameInput, .queueSignInput, .dragHandle").length) {
+            if ($(e.target).closest(".btnDelCmdQueue, .queueSignAdd, .queueSignClear, .queueSignDel, .queueNameInput, .queueSignInput, .dragHandle").length) {
                 return;
             }
-            ensureCommandQueuesState();
             const id = String($(this).data("id") || "");
             if (!id) return;
-            setActiveCommandQueue(id);
+            openCommandQueueEditor(id);
             renderCommandQueueList();
             scheduleSave();
+            autoGenKotlin();
         });
 
         $("#cmdQueueList").on("pointerdown", ".queueNameInput, .queueSignInput", function (e) {
             e.stopPropagation();
-        });
-
-        $("#cmdQueueList").on("dblclick", ".cmdQueueCard", function (e) {
-            if ($(e.target).closest(".queueNameInput, .queueSignInput").length) return;
-            ensureCommandQueuesState();
-            const id = String($(this).data("id") || "");
-            if (!id) return;
-            openCommandQueueEditor(id);
-            scheduleSave();
-        });
-
-        $("#cmdQueueList").on("click", ".btnOpenCmdQueue", function (e) {
-            e.stopPropagation();
-            ensureCommandQueuesState();
-            const id = String($(this).closest(".cmdQueueCard").data("id") || "");
-            if (!id) return;
-            openCommandQueueEditor(id);
-            scheduleSave();
         });
 
         $("#cmdQueueList").on("click", ".btnDelCmdQueue", function (e) {
@@ -8375,6 +8490,7 @@ function setColorLifecycleSection($card, enabled) {
             cardHistory.push();
             if (commandWorkspace === "queue_editor") renderCommandList();
             renderCommandQueueList();
+            renderSelectionInspector();
             scheduleSave();
             autoGenKotlin();
         });
@@ -8389,6 +8505,7 @@ function setColorLifecycleSection($card, enabled) {
             scheduleHistoryPush();
             scheduleSave();
             autoGenKotlin();
+            renderSelectionInspector();
         });
 
         $("#cmdQueueList").on("change", ".queueNameInput", function () {
@@ -8402,19 +8519,20 @@ function setColorLifecycleSection($card, enabled) {
             updateActiveQueueBadge();
             scheduleSave();
             autoGenKotlin();
+            renderSelectionInspector();
         });
 
         $("#cmdQueueList").on("keydown", ".queueSignInput", function (e) {
             if (e.key !== "Enter") return;
             e.preventDefault();
-            const $card = $(this).closest(".cmdQueueCard");
-            applyQueueSignAdd($card, { keepFocus: true });
+            const $root = $(this).closest(".cmdQueueCard");
+            applyQueueSignAdd($root, { keepFocus: true });
         });
 
         $("#cmdQueueList").on("click", ".queueSignAdd", function (e) {
             e.stopPropagation();
-            const $card = $(this).closest(".cmdQueueCard");
-            applyQueueSignAdd($card);
+            const $root = $(this).closest(".cmdQueueCard");
+            applyQueueSignAdd($root);
         });
 
         $("#cmdQueueList").on("click", ".queueSignClear", function (e) {
@@ -8426,6 +8544,7 @@ function setColorLifecycleSection($card, enabled) {
             queue.signs = [];
             cardHistory.push();
             renderCommandQueueList();
+            renderSelectionInspector();
             scheduleSave();
             autoGenKotlin();
         });
@@ -8433,14 +8552,15 @@ function setColorLifecycleSection($card, enabled) {
         $("#cmdQueueList").on("click", ".queueSignDel", function (e) {
             e.stopPropagation();
             ensureCommandQueuesState();
-            const $card = $(this).closest(".cmdQueueCard");
-            const id = String($card.data("id") || "");
+            const $root = $(this).closest(".cmdQueueCard");
+            const id = String($root.data("id") || "");
             const queue = state.commandQueues.find((q) => q.id === id);
             if (!queue) return;
             const sign = Math.trunc(Number($(this).closest(".chip").data("sign")));
             queue.signs = normalizeSignList((Array.isArray(queue.signs) ? queue.signs : []).filter((v) => Math.trunc(Number(v)) !== sign));
             cardHistory.push();
             renderCommandQueueList();
+            renderSelectionInspector();
             scheduleSave();
             autoGenKotlin();
         });
@@ -8469,17 +8589,16 @@ function setColorLifecycleSection($card, enabled) {
             if (preview) preview.resetEmission();
         });
 
-        $("#btnExpandEmitters").on("click", () => setAllEmittersCollapsed(false));
-        $("#btnCollapseEmitters").on("click", () => setAllEmittersCollapsed(true));
         $("#btnExpandCommands").on("click", () => setAllCommandsCollapsed(false));
         $("#btnCollapseCommands").on("click", () => setAllCommandsCollapsed(true));
-        $("#btnBackCmdQueues").on("click", () => backToCommandQueueList());
         $("#btnAddCmdQueue").on("click", () => {
             const next = makeDefaultCommandQueue(state.commandQueues.length + 1);
             state.commandQueues.push(next);
             setActiveCommandQueue(next.id);
             cardHistory.push();
+            setCommandWorkspace("queue_editor");
             renderCommandQueueList();
+            renderSelectionInspector();
             scheduleSave();
             autoGenKotlin();
         });
@@ -8490,6 +8609,8 @@ function setColorLifecycleSection($card, enabled) {
             cardHistory.push();
             scheduleSave();
             renderCommandList();
+            renderCommandQueueList();
+            renderSelectionInspector();
             autoGenKotlin();
         });
 

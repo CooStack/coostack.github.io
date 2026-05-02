@@ -58,8 +58,6 @@
             <div class="panel-title">粒子发射器</div>
             <div id="emitterTools" class="panel-tools emitter-tools">
                 <button class="btn small" id="btnAddEmitter">➕ 添加发射器</button>
-                <button class="btn small" id="btnExpandEmitters">展开全部</button>
-                <button class="btn small" id="btnCollapseEmitters">折叠全部</button>
             </div>
 
             <div class="panel-subtitle">预览参数</div>
@@ -81,6 +79,7 @@
             <div class="panel-subtitle behavior-config-title">页面切换</div>
             <div class="config-tabs" id="cfgPageTabs">
                 <button class="config-tab active" type="button" data-cfg-tab="emitters">发射器卡片</button>
+                <button class="config-tab" type="button" data-cfg-tab="queues">命令队列</button>
                 <button class="config-tab" type="button" data-cfg-tab="kotlin">项目设置</button>
                 <button class="config-tab" type="button" data-cfg-tab="tick">doTick 表达式</button>
                 <button class="config-tab" type="button" data-cfg-tab="death">死亡行为</button>
@@ -89,6 +88,15 @@
             <div id="cfgPageEmitters" class="cfg-page active">
                 <div class="panel-subtitle">发射器卡片</div>
                 <div id="emitList" class="emitList"></div>
+            </div>
+
+            <div id="cfgPageQueues" class="cfg-page">
+                <div class="panel-subtitle">命令队列</div>
+                <div class="panel-tools emitter-tools">
+                    <button class="btn small" id="btnAddCmdQueue">➕ 添加队列</button>
+                </div>
+                <div id="cmdQueueList" class="cmdQueueList"></div>
+                <div class="hint">选择队列后，右侧编辑命令；队列名称和 sign 在卡片内维护。</div>
             </div>
 
             <div id="cfgPageKotlin" class="cfg-page">
@@ -261,16 +269,18 @@
 
         <!-- 右侧命令队列 -->
         <section class="panel right">
-            <div id="commandPanelTitle" class="panel-title">命令队列</div>
+            <div id="commandPanelTitle" class="panel-title">参数编辑</div>
 
-            <div id="commandQueuePage" class="cmd-page active">
-                <div class="panel-tools command-tools"><button class="btn small" id="btnAddCmdQueue">+ 添加命令队列</button></div>
-                <div id="cmdQueueList" class="cmdQueueList"></div>
-                <div class="hint">每个队列：command 名字 + sign 列表，sign 不填代表全部生效。<br/>双击卡片进入命令编辑。</div>
+            <div id="selectionInspector" class="inspector-page active">
+                <div id="inspectorEmpty" class="inspector-empty">
+                    <div class="hint">在左侧选择发射器或命令队列。</div>
+                </div>
+                <div id="inspectorEmitter" class="inspector-card hidden"></div>
+                <div id="inspectorQueue" class="inspector-card hidden"></div>
             </div>
 
             <div id="commandEditorPage" class="cmd-page">
-                <div id="commandTools" class="panel-tools command-tools"><button class="btn small" id="btnBackCmdQueues">返回队列</button><span class="chip" id="activeQueueBadge">队列 #1</span><button class="btn small" id="btnExpandCommands">展开全部</button><button class="btn small" id="btnCollapseCommands">折叠全部</button></div>
+                <div id="commandTools" class="panel-tools command-tools"><span class="chip" id="activeQueueBadge">队列 #1</span><button class="btn small" id="btnExpandCommands">展开全部</button><button class="btn small" id="btnCollapseCommands">折叠全部</button></div>
                 <div class="add-row"><select id="addCommandType"><option value="ParticleNoiseCommand">Noise 噪声扰动</option><option value="ParticleDragCommand">Drag 空气阻力</option><option value="ParticleFlowFieldCommand">FlowField 流场</option><option value="ParticleAttractionCommand">Attraction 吸引/排斥</option><option value="ParticleOrbitCommand">Orbit 轨道</option><option value="ParticleVortexCommand">Vortex 旋涡（吸入 center）</option><option value="ParticleRotationForceCommand">RotationForce 切向旋转力</option><option value="ParticleDistortionCommand">Distortion 扭曲环</option><option value="ParticleGravityCommand">Gravity 重力(物理)</option><option value="ParticleLifetimeMotionCommand">LifetimeMotion 生命周期运动</option><option value="ParticleInheritVelocityCommand">InheritVelocity 继承速度</option></select><button class="btn" id="btnAddCmd">➕ 添加</button></div>
                 <div id="cmdList" class="cmdList"></div>
                 <div class="hint">拖动卡片左侧“≡”排序；关闭“启用”则生成代码时跳过该命令。<br/>Gravity 历史 bug：生成模板必须回写 <code>data.velocity = data.velocity.add(...)</code>。</div>
@@ -414,7 +424,7 @@
     </footer>
 </div>
 <!-- app -->
-<script type="module" src="./assets/src/js/pages/generator.page.js?v=20260313_4"></script>
+<script type="module" src="./assets/src/js/pages/generator.page.js?v=20260501_1"></script>
 
 <!-- modal / file input -->
 <div id="modalMask" class="modal-mask hidden" aria-hidden="true">

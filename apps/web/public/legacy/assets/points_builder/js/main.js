@@ -1,16 +1,16 @@
 import * as THREE from "three";
 import {OrbitControls} from "three/addons/controls/OrbitControls.js";
-import { createCardInputs, initCardSystem } from "./cards.js?v=20260429_12";
+import { createCardInputs, initCardSystem } from "./cards.js?v=20260502_9";
 import { initFilterSystem } from "./filters.js?v=20260429_7";
-import { initHotkeysSystem } from "./hotkeys.js?v=20260321_5";
+import { initHotkeysSystem } from "./hotkeys.js?v=20260321_6";
 import { createKindDefs } from "./kinds.js?v=20260429_8";
 import { createBuilderTools } from "./builder.js?v=20260429_9";
 import { initLayoutSystem } from "./layout.js?v=20260429_1";
 import { createNodeHelpers } from "./nodes.js?v=20260316_1";
 import { toggleFullscreen } from "./viewer.js";
-import { createPickerModule } from "./main-picker.js";
-import { initGlobalShortcuts } from "./main-shortcuts.js?v=20260321_2";
-import { initTopbarAndBoot } from "./main-topbar-boot.js?v=20260429_10";
+import { createPickerModule } from "./main-picker.js?v=20260502_4";
+import { initGlobalShortcuts } from "./main-shortcuts.js?v=20260321_4";
+import { initTopbarAndBoot } from "./main-topbar-boot.js?v=20260502_3";
 import { createPreviewDistanceTool } from "../../src/js/shared/preview-distance-tool.js";
 import {
     sanitizeFileBase,
@@ -20,8 +20,14 @@ import {
     saveKotlinEndMode,
     loadAutoState,
     saveAutoState,
+    loadPresetList,
+    savePresetList,
+    loadPresetGroups,
+    savePresetGroups,
     downloadText
-} from "./io.js";
+} from "./io.js?v=20260501_7";
+
+const JSZIP_URL = new URL("../../shader_builder/js/jszip.min.js", import.meta.url).href;
 
 function initPointsBuilderMain() {
     const U = globalThis.Utils;
@@ -52,6 +58,7 @@ function initPointsBuilderMain() {
             try { pickPointBtns[i].remove(); } catch {}
         }
     }
+    const btnLocalRotate = document.getElementById("btnLocalRotate");
     const btnHotkeys = document.getElementById("btnHotkeys");
     const btnSnapRenderSettings = document.getElementById("btnSnapRenderSettings");
     const btnFullscreen = document.getElementById("btnFullscreen");
@@ -65,17 +72,45 @@ function initPointsBuilderMain() {
     const btnDownloadKotlin2 = document.getElementById("btnDownloadKotlin2");
     const selKotlinEnd = document.getElementById("selKotlinEnd");
     const btnRightParamsTab = document.getElementById("btnRightParamsTab");
+    const btnRightPresetsTab = document.getElementById("btnRightPresetsTab");
     const btnRightKotlinTab = document.getElementById("btnRightKotlinTab");
     const rightParamsPage = document.getElementById("rightParamsPage");
+    const rightPresetsPage = document.getElementById("rightPresetsPage");
     const rightKotlinPage = document.getElementById("rightKotlinPage");
     const paramEditorStatus = document.getElementById("paramEditorStatus");
     const paramEditorSyncHint = document.getElementById("paramEditorSyncHint");
     const paramEditorHost = document.getElementById("paramEditorHost");
+    const presetNameInput = document.getElementById("presetNameInput");
+    const presetGroupInput = document.getElementById("presetGroupInput");
+    const presetGroupList = document.getElementById("presetGroupList");
+    const presetOriginX = document.getElementById("presetOriginX");
+    const presetOriginY = document.getElementById("presetOriginY");
+    const presetOriginZ = document.getElementById("presetOriginZ");
+    const btnPresetUseCurrentOrigin = document.getElementById("btnPresetUseCurrentOrigin");
+    const btnPresetPickOrigin = document.getElementById("btnPresetPickOrigin");
+    const btnPresetCreateGroup = document.getElementById("btnPresetCreateGroup");
+    const btnPresetCreateLibraryGroup = document.getElementById("btnPresetCreateLibraryGroup");
+    const btnPresetSaveCurrent = document.getElementById("btnPresetSaveCurrent");
+    const presetSaveMask = document.getElementById("presetSaveMask");
+    const presetSaveModal = document.getElementById("presetSaveModal");
+    const btnClosePresetSave = document.getElementById("btnClosePresetSave");
+    const btnCancelPresetSave = document.getElementById("btnCancelPresetSave");
+    const btnPresetExportZip = document.getElementById("btnPresetExportZip");
+    const btnPresetImportFolder = document.getElementById("btnPresetImportFolder");
+    const btnPresetImportZip = document.getElementById("btnPresetImportZip");
+    const presetLibraryStatus = document.getElementById("presetLibraryStatus");
+    const presetLibraryList = document.getElementById("presetLibraryList");
 
     const btnSaveJson = document.getElementById("btnSaveJson");
     const btnLoadJson = document.getElementById("btnLoadJson");
+    const btnSavePreset = document.getElementById("btnSavePreset");
+    const btnApplyPreset = document.getElementById("btnApplyPreset");
+    const btnExportPresets = document.getElementById("btnExportPresets");
+    const btnImportPresets = document.getElementById("btnImportPresets");
+    const btnEditVariables = document.getElementById("btnEditVariables");
     const fileJson = document.getElementById("fileJson");
     const fileBuilderJson = document.getElementById("fileBuilderJson");
+    const filePresetJson = document.getElementById("filePresetJson");
     const btnReset = document.getElementById("btnReset");
     const inpProjectName = document.getElementById("inpProjectName");
     let builderJsonTargetNode = null;
@@ -111,6 +146,7 @@ function initPointsBuilderMain() {
     const chkGrid = document.getElementById("chkGrid");
     const chkRealtimeKotlin = document.getElementById("chkRealtimeKotlin");
     const chkPointPickPreview = document.getElementById("chkPointPickPreview");
+    const chkAutoSelectCompleteGroups = document.getElementById("chkAutoSelectCompleteGroups");
     const chkShowGeometryCenters = document.getElementById("chkShowGeometryCenters");
     const inpLineDivisionPoints = document.getElementById("inpLineDivisionPoints");
     const snapPriorityList = document.getElementById("snapPriorityList");
@@ -126,6 +162,7 @@ function initPointsBuilderMain() {
     const inpParamStep = document.getElementById("inpParamStep");
     const inpOffsetPreviewLimit = document.getElementById("inpOffsetPreviewLimit");
     const inpSnapStep = document.getElementById("inpSnapStep");
+    const inpRotateSnapDeg = document.getElementById("inpRotateSnapDeg");
     const inpSnapParticleRange = document.getElementById("inpSnapParticleRange");
     const statusLinePick = document.getElementById("statusLinePick");
     const statusSnapMode = document.getElementById("statusSnapMode");
@@ -149,6 +186,25 @@ function initPointsBuilderMain() {
     let paramEditorSyncState = null;
     let paramEditorRenderRaf = 0;
     let paramEditorHistoryLockTimer = 0;
+    let presetLibraryRenderRaf = 0;
+    let presetGroupEditState = null;
+    let presetItemEditState = null;
+    const presetCollapsedGroups = new Set();
+    const presetGroupCollapsedSnapshot = new Map();
+    let presetGroupAnimationTarget = "";
+    let presetSaveSourceChildren = null;
+    let presetSaveSourceLabel = "";
+    let presetSaveVariableInfo = null;
+    let presetSaveVariablePanelEl = null;
+    const DEFAULT_PRESET_GROUP = "默认分组";
+    const LEGACY_UNGROUPED_PRESET_GROUP = "未分组";
+    let draggingPresetId = "";
+    let draggingPresetGroup = "";
+    let presetPointerDragState = null;
+    let presetPointerDragClickSuppressUntil = 0;
+    let presetDragLockPlaneKeyDown = false;
+    let presetDragLockPlanePreviousState = false;
+    let suppressPresetGroupToggleUntil = 0;
 
     // -------------------------
     // helpers
@@ -164,7 +220,7 @@ function initPointsBuilderMain() {
 
     function isInternalDragHandleTarget(target) {
         if (!target || !target.closest) return false;
-        return !!target.closest(".handle, .drag-handle, .snap-priority-item");
+        return !!target.closest(".handle, .drag-handle, .snap-priority-item, .preset-item, .preset-group-head");
     }
 
     function bindDragCopyGuards() {
@@ -177,6 +233,7 @@ function initPointsBuilderMain() {
         }, true);
 
         document.addEventListener("dragstart", (ev) => {
+            if (ev.target && ev.target.closest && ev.target.closest(".preset-item, .preset-group-head")) return;
             if (isInternalDragHandleTarget(ev.target)) return;
             if (isDragCopyAllowedTarget(ev.target)) return;
             ev.preventDefault();
@@ -337,21 +394,44 @@ function initPointsBuilderMain() {
         const wrap = ensureActionMenuEl();
         const host = actionMenuListEl;
         if (!wrap || !host) return false;
-        host.innerHTML = "";
-        for (const item of list) {
-            if (!item || !item.label || typeof item.onSelect !== "function") continue;
-            const btn = document.createElement("button");
-            btn.type = "button";
-            btn.className = `pb-context-menu-item${item.danger ? " danger" : ""}`;
-            btn.textContent = item.label;
-            btn.addEventListener("click", (ev) => {
-                ev.preventDefault();
-                ev.stopPropagation();
-                hideActionMenu();
-                item.onSelect();
-            });
-            host.appendChild(btn);
-        }
+        const renderItems = (menuItems, parentItems = null) => {
+            host.innerHTML = "";
+            if (parentItems) {
+                const back = document.createElement("button");
+                back.type = "button";
+                back.className = "pb-context-menu-item muted";
+                back.textContent = "返回";
+                back.addEventListener("click", (ev) => {
+                    ev.preventDefault();
+                    ev.stopPropagation();
+                    renderItems(parentItems, null);
+                    positionFloatingPanel(wrap, clientX, clientY);
+                });
+                host.appendChild(back);
+            }
+            for (const item of menuItems) {
+                if (!item || !item.label) continue;
+                const hasChildren = Array.isArray(item.children) && item.children.length;
+                if (!hasChildren && typeof item.onSelect !== "function") continue;
+                const btn = document.createElement("button");
+                btn.type = "button";
+                btn.className = `pb-context-menu-item${item.danger ? " danger" : ""}${hasChildren ? " has-children" : ""}`;
+                btn.textContent = hasChildren ? `${item.label} ›` : item.label;
+                btn.addEventListener("click", (ev) => {
+                    ev.preventDefault();
+                    ev.stopPropagation();
+                    if (hasChildren) {
+                        renderItems(item.children, menuItems);
+                        positionFloatingPanel(wrap, clientX, clientY);
+                        return;
+                    }
+                    hideActionMenu();
+                    item.onSelect();
+                });
+                host.appendChild(btn);
+            }
+        };
+        renderItems(list);
         if (!host.children.length) {
             hideActionMenu();
             return false;
@@ -395,20 +475,27 @@ function initPointsBuilderMain() {
     }
 
     function setRightPanelPage(page) {
-        const next = page === "kotlin" ? "kotlin" : "params";
+        const next = page === "kotlin" ? "kotlin" : (page === "presets" ? "presets" : "params");
         rightPanelPage = next;
         const paramsActive = next === "params";
+        const presetsActive = next === "presets";
+        const kotlinActive = next === "kotlin";
         btnRightParamsTab?.classList.toggle("active", paramsActive);
-        btnRightKotlinTab?.classList.toggle("active", !paramsActive);
+        btnRightPresetsTab?.classList.toggle("active", presetsActive);
+        btnRightKotlinTab?.classList.toggle("active", kotlinActive);
         rightParamsPage?.classList.toggle("active", paramsActive);
-        rightKotlinPage?.classList.toggle("active", !paramsActive);
+        rightPresetsPage?.classList.toggle("active", presetsActive);
+        rightKotlinPage?.classList.toggle("active", kotlinActive);
         btnRightParamsTab?.setAttribute("aria-selected", paramsActive ? "true" : "false");
-        btnRightKotlinTab?.setAttribute("aria-selected", paramsActive ? "false" : "true");
+        btnRightPresetsTab?.setAttribute("aria-selected", presetsActive ? "true" : "false");
+        btnRightKotlinTab?.setAttribute("aria-selected", kotlinActive ? "true" : "false");
         if (paramsActive) scheduleParamEditorRender();
+        if (presetsActive) schedulePresetLibraryRender();
     }
 
     function bindRightPanelTabs() {
         btnRightParamsTab?.addEventListener("click", () => setRightPanelPage("params"));
+        btnRightPresetsTab?.addEventListener("click", () => setRightPanelPage("presets"));
         btnRightKotlinTab?.addEventListener("click", () => setRightPanelPage("kotlin"));
         setRightPanelPage(rightPanelPage);
     }
@@ -931,6 +1018,111 @@ function initPointsBuilderMain() {
             : [];
     }
 
+    function isEmbeddedVariableHost() {
+        const cls = document.body && document.body.classList;
+        return !!(cls && (cls.contains("composition-no-kotlin") || cls.contains("emitter-no-kotlin")));
+    }
+
+    function normalizeVariableState(raw) {
+        const src = raw && typeof raw === "object" ? raw : {};
+        const scalar = {};
+        const vector = {};
+        const scalarSrc = src.scalar && typeof src.scalar === "object" ? src.scalar : {};
+        for (const [key, value] of Object.entries(scalarSrc)) {
+            const name = normalizeContextIdentifier(key);
+            if (!name) continue;
+            const n = Number(value);
+            if (Number.isFinite(n)) scalar[name] = n;
+        }
+        const vectorSrc = src.vector && typeof src.vector === "object" ? src.vector : {};
+        for (const [key, value] of Object.entries(vectorSrc)) {
+            const name = normalizeContextIdentifier(key);
+            if (!name || !value || typeof value !== "object") continue;
+            vector[name] = normalizePointValue(value);
+        }
+        return { scalar, vector };
+    }
+
+    function getLocalVariableState() {
+        state.variables = normalizeVariableState(state.variables);
+        return state.variables;
+    }
+
+    function getLocalNumericMap() {
+        const vars = getLocalVariableState();
+        const map = Object.assign({ PI: Math.PI }, vars.scalar || {});
+        for (const [name, vec] of Object.entries(vars.vector || {})) {
+            map[name] = makeVectorProxy(vec, "Vec3");
+        }
+        return map;
+    }
+
+    function getLocalNumericSuggestions() {
+        const vars = getLocalVariableState();
+        const out = Object.keys(vars.scalar || {});
+        for (const name of Object.keys(vars.vector || {})) {
+            out.push(`${name}.x`, `${name}.y`, `${name}.z`);
+        }
+        return out.sort((a, b) => a.localeCompare(b));
+    }
+
+    function getLocalVec3VariableOptions() {
+        const vars = getLocalVariableState();
+        return Object.keys(vars.vector || {}).sort((a, b) => a.localeCompare(b)).map((name) => ({
+            name,
+            ref: name,
+            type: "Vec3",
+            label: `${name}（本地 Vec3）`
+        }));
+    }
+
+    function getLocalVariableCacheKey() {
+        try {
+            return JSON.stringify(getLocalVariableState());
+        } catch {
+            return "";
+        }
+    }
+
+    function getEffectiveNumericMap() {
+        const map = hasCompositionNumericContext()
+            ? Object.assign({}, compositionNumericContext.map || {})
+            : { PI: Math.PI };
+        Object.assign(map, getLocalNumericMap());
+        if (!Object.prototype.hasOwnProperty.call(map, "PI")) map.PI = Math.PI;
+        return map;
+    }
+
+    function getEffectiveNumericSuggestions() {
+        const seen = new Set();
+        const out = [];
+        const add = (value) => {
+            const text = String(value || "").trim();
+            if (!text || seen.has(text)) return;
+            seen.add(text);
+            out.push(text);
+        };
+        if (hasCompositionNumericContext()) {
+            for (const value of getCompositionNumericSuggestions()) add(value);
+        }
+        for (const value of getLocalNumericSuggestions()) add(value);
+        return out.sort((a, b) => a.localeCompare(b));
+    }
+
+    function getEffectiveVec3VariableOptions() {
+        const byRef = new Map();
+        const add = (option) => {
+            const ref = String(option?.ref || option?.value || option?.name || "").trim();
+            if (!ref) return;
+            byRef.set(ref, Object.assign({}, option, { ref }));
+        };
+        if (hasCompositionNumericContext()) {
+            for (const option of getCompositionVec3VariableOptions()) add(option);
+        }
+        for (const option of getLocalVec3VariableOptions()) add(option);
+        return Array.from(byRef.values()).sort((a, b) => String(a.ref || a.name || "").localeCompare(String(b.ref || b.name || "")));
+    }
+
     function num(v) {
         if (typeof v === "number") return Number.isFinite(v) ? v : 0;
         const raw = String(v ?? "").trim();
@@ -940,13 +1132,14 @@ function initPointsBuilderMain() {
             const n = Number(expr);
             return Number.isFinite(n) ? n : 0;
         }
-        if (!hasCompositionNumericContext()) {
+        const map = getEffectiveNumericMap();
+        if (Object.keys(map).length <= 1) {
             const x = Number(expr);
             return Number.isFinite(x) ? x : 0;
         }
-        const key = `${compositionNumericContext.version}|${expr}`;
+        const key = `${compositionNumericContext.version}|${getLocalVariableCacheKey()}|${expr}`;
         if (compositionNumericContext.cache.has(key)) return compositionNumericContext.cache.get(key);
-        const value = evaluateExpressionWithMap(expr, compositionNumericContext.map);
+        const value = evaluateExpressionWithMap(expr, map);
         if (compositionNumericContext.cache.size > 4096) compositionNumericContext.cache.clear();
         compositionNumericContext.cache.set(key, value);
         return value;
@@ -957,6 +1150,15 @@ function initPointsBuilderMain() {
     }
 
     function relExpr(x, y, z) {
+        if (isEmbeddedVariableHost()) {
+            const fmtExpr = (v) => {
+                if (typeof v === "number") return U.fmt(Number.isFinite(v) ? v : 0);
+                const raw = stripNumericSuffix(String(v ?? "").trim());
+                if (!raw) return "0";
+                return isNumericLiteral(raw) ? U.fmt(Number(raw)) : raw;
+            };
+            return `RelativeLocation(${fmtExpr(x)}, ${fmtExpr(y)}, ${fmtExpr(z)})`;
+        }
         return `RelativeLocation(${U.fmt(num(x))}, ${U.fmt(num(y))}, ${U.fmt(num(z))})`;
     }
 
@@ -980,12 +1182,14 @@ function initPointsBuilderMain() {
     const DEFAULT_SETTINGS_PAYLOAD = {
         paramStep: 0.5,
         snapStep: 0.125,
+        rotateSnapDeg: 22.5,
         particleSnapRange: 0.5,
         showAxes: true,
         showGrid: true,
         realtimeKotlin: false,
         pointPickPreviewEnabled: true,
         showGeometryCenters: true,
+        autoSelectCompleteGroups: false,
         lineDivisionPoints: 0,
         theme: "dark-1",
         pointSize: 0.5,
@@ -1004,10 +1208,12 @@ function initPointsBuilderMain() {
     const SNAP_PRIORITY_LABELS = new Map(SNAP_PRIORITY_DEFS.map((it) => [it.id, it.label]));
     let paramStep = DEFAULT_SETTINGS_PAYLOAD.paramStep;
     let snapStep = DEFAULT_SETTINGS_PAYLOAD.snapStep;
+    let rotateSnapDeg = DEFAULT_SETTINGS_PAYLOAD.rotateSnapDeg;
     let particleSnapRange = DEFAULT_SETTINGS_PAYLOAD.particleSnapRange;
     let offsetPreviewLimit = DEFAULT_SETTINGS_PAYLOAD.offsetPreviewLimit;
     let realtimeKotlin = DEFAULT_SETTINGS_PAYLOAD.realtimeKotlin;
     let pointPickPreviewEnabled = DEFAULT_SETTINGS_PAYLOAD.pointPickPreviewEnabled;
+    let autoSelectCompleteGroups = DEFAULT_SETTINGS_PAYLOAD.autoSelectCompleteGroups;
     let geometryCenterPreviewEnabled = DEFAULT_SETTINGS_PAYLOAD.showGeometryCenters;
     let lineDivisionPoints = DEFAULT_SETTINGS_PAYLOAD.lineDivisionPoints;
     let snapGridKeyToggleMode = DEFAULT_SETTINGS_PAYLOAD.snapGridKeyToggleMode;
@@ -1023,6 +1229,12 @@ function initPointsBuilderMain() {
     function normalizeSnapStep(v) {
         const n = parseFloat(v);
         if (!Number.isFinite(n) || n <= 0) return DEFAULT_SETTINGS_PAYLOAD.snapStep;
+        return Math.max(0.000001, n);
+    }
+
+    function normalizeRotateSnapDeg(v) {
+        const n = parseFloat(v);
+        if (!Number.isFinite(n) || n <= 0) return DEFAULT_SETTINGS_PAYLOAD.rotateSnapDeg;
         return Math.max(0.000001, n);
     }
 
@@ -1073,6 +1285,7 @@ function initPointsBuilderMain() {
         const inputs = document.querySelectorAll('input[type="number"]');
         inputs.forEach((el) => {
             if (el.id === "inpSnapStep") return;
+            if (el.id === "inpRotateSnapDeg") return;
             if (el.id === "inpParamStep") return;
             if (el.id === "inpSnapParticleRange") return;
             if (el.id === "inpOffsetPreviewLimit") return;
@@ -1097,6 +1310,16 @@ function initPointsBuilderMain() {
             inpSnapStep.value = String(next);
         }
         if (!opts.skipSave) saveSettingsToStorage();
+    }
+
+    function setRotateSnapDeg(v, opts = {}) {
+        const next = normalizeRotateSnapDeg(v);
+        rotateSnapDeg = next;
+        if (inpRotateSnapDeg && inpRotateSnapDeg.value !== String(next)) {
+            inpRotateSnapDeg.value = String(next);
+        }
+        if (!opts.skipSave) saveSettingsToStorage();
+        if (rotateMode) refreshRotateStatus();
     }
 
     function setParticleSnapRange(v, opts = {}) {
@@ -1150,6 +1373,15 @@ function initPointsBuilderMain() {
             hidePointPickPreview();
         } else if (pointPickMode && pointPickHoverPoint) {
             queuePointPickPreview(pointPickHoverPoint);
+        }
+        if (!opts.skipSave) saveSettingsToStorage();
+    }
+
+    function setAutoSelectCompleteGroups(v, opts = {}) {
+        const next = (v !== false);
+        autoSelectCompleteGroups = next;
+        if (chkAutoSelectCompleteGroups && chkAutoSelectCompleteGroups.checked !== next) {
+            chkAutoSelectCompleteGroups.checked = next;
         }
         if (!opts.skipSave) saveSettingsToStorage();
     }
@@ -1299,11 +1531,13 @@ function initPointsBuilderMain() {
         return {
             paramStep,
             snapStep,
+            rotateSnapDeg,
             particleSnapRange,
             showAxes: chkAxes ? !!chkAxes.checked : true,
             showGrid: chkGrid ? !!chkGrid.checked : true,
             realtimeKotlin,
             pointPickPreviewEnabled,
+            autoSelectCompleteGroups,
             showGeometryCenters: geometryCenterPreviewEnabled,
             lineDivisionPoints,
             theme: currentTheme,
@@ -1331,6 +1565,9 @@ function initPointsBuilderMain() {
         if (payload.snapStep !== undefined) {
             setSnapStep(payload.snapStep, { skipSave: true });
         }
+        if (payload.rotateSnapDeg !== undefined) {
+            setRotateSnapDeg(payload.rotateSnapDeg, { skipSave: true });
+        }
         if (payload.particleSnapRange !== undefined) {
             setParticleSnapRange(payload.particleSnapRange, { skipSave: true });
         }
@@ -1342,6 +1579,9 @@ function initPointsBuilderMain() {
         }
         if (payload.pointPickPreviewEnabled !== undefined) {
             setPointPickPreviewEnabled(payload.pointPickPreviewEnabled, { skipSave: true });
+        }
+        if (payload.autoSelectCompleteGroups !== undefined) {
+            setAutoSelectCompleteGroups(payload.autoSelectCompleteGroups, { skipSave: true });
         }
         if (payload.showGeometryCenters !== undefined) {
             setGeometryCenterPreviewEnabled(payload.showGeometryCenters, { skipSave: true });
@@ -1387,6 +1627,13 @@ function initPointsBuilderMain() {
 
     function getSnapParticleKeyToggleMode() {
         return !!snapParticleKeyToggleMode;
+    }
+
+    if (chkAutoSelectCompleteGroups && !chkAutoSelectCompleteGroups.__pbBound) {
+        chkAutoSelectCompleteGroups.__pbBound = true;
+        chkAutoSelectCompleteGroups.addEventListener("change", () => {
+            setAutoSelectCompleteGroups(chkAutoSelectCompleteGroups.checked);
+        });
     }
 
     function loadSettingsFromStorage() {
@@ -1855,12 +2102,2381 @@ function initPointsBuilderMain() {
         if (!Array.isArray(obj.root.children)) obj.root.children = [];
         if (!obj.root.id) obj.root.id = "root";
         if (!obj.root.kind) obj.root.kind = "ROOT";
+        obj.presets = normalizePresetList(obj.presets);
+        obj.variables = normalizeVariableState(obj.variables);
         normalizeNodeTree(obj.root);
         return obj;
     }
 
+    function deepCloneJson(obj) {
+        try {
+            return JSON.parse(JSON.stringify(obj));
+        } catch {
+            return null;
+        }
+    }
+
+    function makePresetId() {
+        return `preset_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+    }
+
+    function normalizePointValue(raw, fallback = { x: 0, y: 0, z: 0 }) {
+        const src = raw && typeof raw === "object" ? raw : fallback;
+        const x = Number(src.x);
+        const y = Number(src.y);
+        const z = Number(src.z);
+        return {
+            x: Number.isFinite(x) ? x : 0,
+            y: Number.isFinite(y) ? y : 0,
+            z: Number.isFinite(z) ? z : 0
+        };
+    }
+
+    function sanitizePresetPathPart(part) {
+        const safe = sanitizeFileBase(String(part || "").trim());
+        return safe.replace(/^\.+|\.+$/g, "").trim() || "";
+    }
+
+    function normalizePresetGroup(raw) {
+        const parts = String(raw || "")
+            .split(/[\\/]+/)
+            .map((it) => sanitizePresetPathPart(it))
+            .filter(Boolean);
+        return parts.join("/");
+    }
+
+    function getPresetGroupLabel(raw) {
+        const group = normalizePresetGroup(raw);
+        return (!group || group === LEGACY_UNGROUPED_PRESET_GROUP) ? DEFAULT_PRESET_GROUP : group;
+    }
+
+    function isDefaultPresetGroup(group) {
+        return getPresetGroupLabel(group) === DEFAULT_PRESET_GROUP;
+    }
+
+    function normalizePresetVariableValues(raw) {
+        const src = raw && typeof raw === "object" ? raw : {};
+        const scalar = {};
+        const vector = {};
+        const scalarSrc = src.scalar && typeof src.scalar === "object" ? src.scalar : {};
+        for (const [key, value] of Object.entries(scalarSrc)) {
+            const name = normalizeContextIdentifier(key);
+            if (!name) continue;
+            const n = Number(value);
+            scalar[name] = Number.isFinite(n) ? n : 0;
+        }
+        const vectorSrc = src.vector && typeof src.vector === "object" ? src.vector : {};
+        for (const [key, value] of Object.entries(vectorSrc)) {
+            const name = normalizeContextIdentifier(key);
+            if (!name) continue;
+            vector[name] = normalizePointValue(value);
+        }
+        return { scalar, vector };
+    }
+
+    function normalizePresetVariableInfoForStorage(raw) {
+        if (!raw || typeof raw !== "object") return null;
+        const refs = { scalar: new Set(), vector: new Set() };
+        const entriesByKey = new Map();
+        const addEntry = (type, name, source = "unknown", label = "") => {
+            const cleanType = type === "vector" ? "vector" : "scalar";
+            const cleanName = normalizeContextIdentifier(name);
+            if (!cleanName) return;
+            refs[cleanType].add(cleanName);
+            const key = `${cleanType}:${cleanName}`;
+            if (!entriesByKey.has(key)) {
+                entriesByKey.set(key, {
+                    type: cleanType,
+                    name: cleanName,
+                    source: source === "external" || source === "internal" ? source : "unknown",
+                    label: String(label || cleanName).trim() || cleanName
+                });
+            }
+        };
+        const rawEntries = Array.isArray(raw.entries) ? raw.entries : [];
+        for (const entry of rawEntries) {
+            addEntry(entry?.type, entry?.name, entry?.source, entry?.label);
+        }
+        const rawRefs = raw.refs && typeof raw.refs === "object" ? raw.refs : {};
+        for (const name of Array.isArray(rawRefs.scalar) ? rawRefs.scalar : []) addEntry("scalar", name);
+        for (const name of Array.isArray(rawRefs.vector) ? rawRefs.vector : []) addEntry("vector", name);
+        const rawInputs = normalizePresetVariableValues(raw.inputs || raw);
+        const inferScalarFromInputs = !refs.scalar.size && !rawEntries.length;
+        const inferVectorFromInputs = !refs.vector.size && !rawEntries.length;
+        for (const name of Object.keys(rawInputs.scalar || {})) {
+            if (inferScalarFromInputs) addEntry("scalar", name);
+        }
+        for (const name of Object.keys(rawInputs.vector || {})) {
+            if (inferVectorFromInputs) addEntry("vector", name);
+        }
+        const scalarRefs = Array.from(refs.scalar).sort((a, b) => a.localeCompare(b));
+        const vectorRefs = Array.from(refs.vector).sort((a, b) => a.localeCompare(b));
+        if (!scalarRefs.length && !vectorRefs.length) return null;
+        const inputs = { scalar: {}, vector: {} };
+        for (const name of scalarRefs) {
+            const n = Number(rawInputs.scalar?.[name]);
+            inputs.scalar[name] = Number.isFinite(n) ? n : 0;
+        }
+        for (const name of vectorRefs) {
+            inputs.vector[name] = normalizePointValue(rawInputs.vector?.[name]);
+        }
+        const entries = Array.from(entriesByKey.values()).sort((a, b) => {
+            if (a.type !== b.type) return a.type === "vector" ? -1 : 1;
+            return a.name.localeCompare(b.name);
+        });
+        for (const name of scalarRefs) {
+            if (!entriesByKey.has(`scalar:${name}`)) entries.push({ type: "scalar", name, source: "unknown", label: name });
+        }
+        for (const name of vectorRefs) {
+            if (!entriesByKey.has(`vector:${name}`)) entries.push({ type: "vector", name, source: "unknown", label: name });
+        }
+        return {
+            version: 2,
+            refs: { scalar: scalarRefs, vector: vectorRefs },
+            inputs,
+            entries
+        };
+    }
+
+    function normalizePresetList(list) {
+        const out = [];
+        const src = Array.isArray(list) ? list : [];
+        const seen = new Set();
+        for (const raw of src) {
+            if (!raw || typeof raw !== "object") continue;
+            const children = Array.isArray(raw.children)
+                ? raw.children
+                : (raw.root && Array.isArray(raw.root.children) ? raw.root.children : []);
+            const clonedChildren = deepCloneJson(children) || [];
+            const idBase = String(raw.id || raw.name || makePresetId()).trim() || makePresetId();
+            let id = idBase;
+            let n = 2;
+            while (seen.has(id)) id = `${idBase}_${n++}`;
+            seen.add(id);
+            const variableInfo = normalizePresetVariableInfoForStorage(raw.variables);
+            const preset = {
+                id,
+                name: String(raw.name || "未命名预设").trim() || "未命名预设",
+                group: getPresetGroupLabel(raw.group),
+                buildInfo: raw.buildInfo && typeof raw.buildInfo === "object" ? Object.assign({}, raw.buildInfo) : {},
+                origin: normalizePointValue(raw.origin),
+                children: clonedChildren,
+                createdAt: Number(raw.createdAt) || Date.now(),
+                updatedAt: Number(raw.updatedAt) || Number(raw.createdAt) || Date.now()
+            };
+            if (variableInfo) preset.variables = variableInfo;
+            normalizeNodeTree(preset.children);
+            out.push(preset);
+        }
+        return out;
+    }
+
+    function dedupePresetList(list) {
+        const out = [];
+        const seenId = new Set();
+        const seenKey = new Set();
+        for (const preset of normalizePresetList(list)) {
+            const key = `${getPresetGroupLabel(preset.group)}::${preset.name}`;
+            if (seenId.has(preset.id) || seenKey.has(key)) continue;
+            seenId.add(preset.id);
+            seenKey.add(key);
+            out.push(preset);
+        }
+        return out;
+    }
+
+    let presetList = [];
+    let presetGroups = [];
+
+    function dedupePresetGroups(groups) {
+        const out = [];
+        const seen = new Set();
+        for (const raw of groups || []) {
+            const group = getPresetGroupLabel(raw);
+            if (!group || seen.has(group)) continue;
+            seen.add(group);
+            out.push(group);
+        }
+        return out;
+    }
+
+    function persistPresetGroups() {
+        presetGroups = dedupePresetGroups(presetGroups);
+        savePresetGroups(presetGroups);
+        updatePresetGroupList();
+        schedulePresetLibraryRender();
+    }
+
+    function persistPresetList() {
+        state.presets = normalizePresetList(presetList);
+        presetList = state.presets;
+        presetGroups = dedupePresetGroups(presetGroups.concat(presetList.map((it) => it.group)));
+        savePresetGroups(presetGroups);
+        savePresetList(presetList);
+        scheduleAutoSave();
+        schedulePresetLibraryRender();
+    }
+
+    const PRESET_VARIABLE_IGNORE_NAMES = new Set([
+        "PI", "Math", "NaN", "Infinity", "true", "false", "null", "undefined",
+        "Vec3", "RelativeLocation", "Vector3f", "this",
+        "sin", "cos", "tan", "asin", "acos", "atan", "atan2", "sqrt", "abs",
+        "min", "max", "pow", "floor", "ceil", "round", "random", "clamp"
+    ]);
+
+    function getVariableCatalog() {
+        const scalar = new Map();
+        const vector = new Map();
+        const addScalar = (name, source, value, label = "") => {
+            const clean = normalizeContextIdentifier(name);
+            if (!clean || clean === "PI") return;
+            const n = Number(value);
+            scalar.set(clean, {
+                name: clean,
+                type: "scalar",
+                source,
+                value: Number.isFinite(n) ? n : 0,
+                label: String(label || clean).trim() || clean
+            });
+        };
+        const addVector = (name, source, value, label = "") => {
+            const clean = normalizeContextIdentifier(name);
+            if (!clean) return;
+            vector.set(clean, {
+                name: clean,
+                type: "vector",
+                source,
+                value: normalizePointValue(value),
+                label: String(label || clean).trim() || clean
+            });
+        };
+        if (hasCompositionNumericContext()) {
+            for (const [name, value] of Object.entries(compositionNumericContext.map || {})) {
+                if (name === "PI") continue;
+                if (isFiniteVectorLike(value)) addVector(name, "external", value, `${name}（外部 Vec3）`);
+                else if (Number.isFinite(Number(value))) addScalar(name, "external", value, `${name}（外部 数值）`);
+            }
+            for (const option of compositionNumericContext.vectorOptions || []) {
+                const ref = String(option?.ref || option?.name || "").trim();
+                const name = String(option?.name || ref).trim();
+                const value = compositionNumericContext.map?.[name] || compositionNumericContext.map?.[ref] || { x: 0, y: 0, z: 0 };
+                const label = String(option?.label || `${ref || name}（外部 Vec3）`).trim();
+                if (ref) addVector(ref, "external", value, label);
+                if (name && name !== ref) addVector(name, "external", value, label);
+            }
+        }
+        const local = getLocalVariableState();
+        for (const [name, value] of Object.entries(local.scalar || {})) {
+            addScalar(name, "internal", value, `${name}（内部 数值）`);
+        }
+        for (const [name, value] of Object.entries(local.vector || {})) {
+            addVector(name, "internal", value, `${name}（内部 Vec3）`);
+        }
+        return { scalar, vector };
+    }
+
+    function getVariableEntryFromCatalog(type, name, catalog) {
+        const clean = normalizeContextIdentifier(name);
+        if (!clean) return null;
+        const map = type === "vector" ? catalog.vector : catalog.scalar;
+        const found = map.get(clean);
+        if (found) return Object.assign({}, found);
+        return {
+            name: clean,
+            type: type === "vector" ? "vector" : "scalar",
+            source: "unknown",
+            value: type === "vector" ? { x: 0, y: 0, z: 0 } : 0,
+            label: clean
+        };
+    }
+
+    function collectVariableRefsFromExpression(value, scalarRefs, vectorRefs) {
+        const expr = stripNumericSuffix(transpileKotlinThisQualifierToJs(String(value ?? "").trim()));
+        if (!expr || isNumericLiteral(expr)) return;
+        const tokenRe = /[A-Za-z_$][A-Za-z0-9_$]*(?:\s*\.\s*[A-Za-z_$][A-Za-z0-9_$]*)?/g;
+        let match;
+        while ((match = tokenRe.exec(expr))) {
+            const token = String(match[0] || "").replace(/\s+/g, "");
+            if (!token) continue;
+            const parts = token.split(".");
+            const base = normalizeContextIdentifier(parts[0]);
+            const prop = parts[1] || "";
+            if (!base || PRESET_VARIABLE_IGNORE_NAMES.has(base)) continue;
+            if (prop) {
+                if (prop === "x" || prop === "y" || prop === "z") vectorRefs.add(base);
+                continue;
+            }
+            scalarRefs.add(base);
+        }
+    }
+
+    function collectKnownVariableRefsFromValue(value, catalog, scalarRefs, vectorRefs) {
+        const expr = stripNumericSuffix(transpileKotlinThisQualifierToJs(String(value ?? "").trim()));
+        if (!expr || isNumericLiteral(expr)) return false;
+        const tokenRe = /[A-Za-z_$][A-Za-z0-9_$]*(?:\s*\.\s*[A-Za-z_$][A-Za-z0-9_$]*)?/g;
+        let matched = false;
+        let match;
+        while ((match = tokenRe.exec(expr))) {
+            const token = String(match[0] || "").replace(/\s+/g, "");
+            if (!token) continue;
+            const parts = token.split(".");
+            const base = normalizeContextIdentifier(parts[0]);
+            const prop = parts[1] || "";
+            if (!base || PRESET_VARIABLE_IGNORE_NAMES.has(base)) continue;
+            if (prop) {
+                if ((prop === "x" || prop === "y" || prop === "z") && catalog?.vector?.has(base)) {
+                    vectorRefs.add(base);
+                    matched = true;
+                }
+                continue;
+            }
+            if (catalog?.scalar?.has(base)) {
+                scalarRefs.add(base);
+                matched = true;
+            }
+        }
+        return matched;
+    }
+
+    function isPresetVariableParamCandidate(node, key, value) {
+        const keyText = String(key || "");
+        if (keyText.startsWith("__pb_")) return false;
+        if (typeof value !== "string") return false;
+        const expr = stripNumericSuffix(transpileKotlinThisQualifierToJs(String(value || "").trim()));
+        if (!expr || isNumericLiteral(expr)) return false;
+        const defParams = KIND?.[node?.kind]?.defaultParams || {};
+        if (Object.prototype.hasOwnProperty.call(defParams, keyText) && typeof defParams[keyText] === "number") return true;
+        if (/[A-Za-z_$][A-Za-z0-9_$]*\s*\.\s*[xyz]\b/.test(expr)) return true;
+        return /[+\-*/()%]/.test(expr);
+    }
+
+    function collectPresetVariableInfo(children) {
+        const scalarRefs = new Set();
+        const vectorRefs = new Set();
+        const catalog = getVariableCatalog();
+        const walk = (node) => {
+            if (!node || typeof node !== "object") return;
+            const p = node.params || {};
+            for (const [key, value] of Object.entries(p)) {
+                const keyText = String(key || "");
+                if (keyText.startsWith("__pb_vec_var_")) {
+                    const ref = normalizeContextIdentifier(value);
+                    if (ref) vectorRefs.add(ref);
+                    continue;
+                }
+                if (isPresetVariableParamCandidate(node, keyText, value)) {
+                    collectVariableRefsFromExpression(value, scalarRefs, vectorRefs);
+                } else if (typeof value === "string") {
+                    collectKnownVariableRefsFromValue(value, catalog, scalarRefs, vectorRefs);
+                }
+            }
+            if (Array.isArray(node.children)) node.children.forEach(walk);
+        };
+        (Array.isArray(children) ? children : []).forEach(walk);
+        for (const name of Array.from(scalarRefs)) {
+            if (vectorRefs.has(name)) scalarRefs.delete(name);
+        }
+        if (!scalarRefs.size && !vectorRefs.size) return null;
+        const entries = [];
+        const inputs = { scalar: {}, vector: {} };
+        const scalar = Array.from(scalarRefs).sort((a, b) => a.localeCompare(b));
+        const vector = Array.from(vectorRefs).sort((a, b) => a.localeCompare(b));
+        for (const name of vector) {
+            const entry = getVariableEntryFromCatalog("vector", name, catalog);
+            entries.push(entry);
+            inputs.vector[name] = normalizePointValue(entry.value);
+        }
+        for (const name of scalar) {
+            const entry = getVariableEntryFromCatalog("scalar", name, catalog);
+            entries.push(entry);
+            const n = Number(entry.value);
+            inputs.scalar[name] = Number.isFinite(n) ? n : 0;
+        }
+        return normalizePresetVariableInfoForStorage({
+            refs: { scalar, vector },
+            inputs,
+            entries
+        });
+    }
+
+    function getPresetOriginFallback() {
+        let sx = 0, sy = 0, sz = 0, count = 0;
+        for (const n of state.root.children || []) {
+            const c = n && n.id ? getNodeSegmentCenter(n.id) : null;
+            if (!c) continue;
+            sx += c.x;
+            sy += c.y;
+            sz += c.z;
+            count += 1;
+        }
+        if (!count) return { x: 0, y: 0, z: 0 };
+        return { x: sx / count, y: sy / count, z: sz / count };
+    }
+
+    function preparePresetChildrenForStorage(children) {
+        const cloned = deepCloneJson(children || []) || [];
+        normalizeNodeTree(cloned);
+        if (cloned.length === 1 && cloned[0] && isBuilderContainerKind(cloned[0].kind)) {
+            return cloned;
+        }
+        const wrapper = makeNode("add_builder", { params: { ox: 0, oy: 0, oz: 0 } });
+        wrapper.children = cloned;
+        return [wrapper];
+    }
+
+    function preparePresetChildrenForInsertion(children) {
+        return preparePresetChildrenForStorage(children);
+    }
+
+    function labelInsertedPresetContainers(children, presetName) {
+        const label = String(presetName || "").trim();
+        if (!label) return;
+        const list = Array.isArray(children) ? children : [];
+        for (const node of list) {
+            if (!node || !isBuilderContainerKind(node.kind)) continue;
+            if (!String(node.label || "").trim()) node.label = label;
+        }
+    }
+
+    function collectPresetSourceChildrenFromIds(ids) {
+        const idSet = new Set(normalizeActionTargetIds(ids));
+        if (!idSet.size) return null;
+        const out = [];
+        const walk = (list) => {
+            for (const node of list || []) {
+                if (!node) continue;
+                if (idSet.has(node.id)) {
+                    const cloned = deepCloneJson(node);
+                    if (cloned) out.push(cloned);
+                    continue;
+                }
+                if (isBuilderContainerKind(node.kind) && Array.isArray(node.children)) {
+                    walk(node.children);
+                }
+            }
+        };
+        walk(state.root.children || []);
+        return out.length ? out : null;
+    }
+
+    function setPresetSaveSourceFromIds(ids) {
+        const children = collectPresetSourceChildrenFromIds(ids);
+        presetSaveSourceChildren = children || null;
+        presetSaveSourceLabel = children ? `${children.length} 张选中卡片` : "全部卡片";
+    }
+
+    function makePresetFromCurrentProject(options = {}) {
+        const sourceChildren = Array.isArray(options.children) ? options.children : (state.root.children || []);
+        const children = preparePresetChildrenForStorage(sourceChildren);
+        const variableInfo = options.variables !== undefined
+            ? normalizePresetVariableInfoForStorage(options.variables)
+            : collectPresetVariableInfo(sourceChildren);
+        const now = Date.now();
+        const preset = {
+            id: options.id || makePresetId(),
+            name: String(options.name || projectName || "未命名预设").trim() || "未命名预设",
+            group: getPresetGroupLabel(options.group),
+            buildInfo: {
+                projectName: projectName || "",
+                kotlinEndMode,
+                createdBy: "pointsbuilder",
+                version: 1
+            },
+            origin: normalizePointValue(options.origin || getPresetOriginFallback()),
+            children,
+            createdAt: now,
+            updatedAt: now
+        };
+        if (variableInfo) preset.variables = variableInfo;
+        return preset;
+    }
+
+    function upsertPreset(preset, overwriteId = "") {
+        const normalized = normalizePresetList([preset])[0];
+        if (!normalized) return null;
+        const id = overwriteId || normalized.id;
+        const idx = presetList.findIndex((it) => (
+            it.id === id ||
+            (it.name === normalized.name && getPresetGroupLabel(it.group) === getPresetGroupLabel(normalized.group))
+        ));
+        if (idx >= 0) {
+            normalized.id = presetList[idx].id;
+            normalized.createdAt = presetList[idx].createdAt || normalized.createdAt;
+            normalized.updatedAt = Date.now();
+            presetList.splice(idx, 1, normalized);
+        } else {
+            presetList.push(normalized);
+        }
+        persistPresetList();
+        return normalized;
+    }
+
+    function getPresetList() {
+        return normalizePresetList(presetList);
+    }
+
+    function saveCurrentAsPreset(options = {}) {
+        const preset = makePresetFromCurrentProject(options);
+        return upsertPreset(preset, options.overwriteId || "");
+    }
+
+    function editLocalVariables(input) {
+        const next = normalizeVariableState(
+            typeof input === "string" ? JSON.parse(String(input || "{}")) : input
+        );
+        historyCapture("edit_variables");
+        state.variables = next;
+        compositionNumericContext.cache.clear();
+        scheduleAutoSave();
+        renderAll();
+        return true;
+    }
+
+    function getLocalVariablesText() {
+        return JSON.stringify(getLocalVariableState(), null, 2);
+    }
+
+    function importPresetPayload(payload, options = {}) {
+        const src = Array.isArray(payload)
+            ? payload
+            : (Array.isArray(payload?.presets) ? payload.presets : [payload]);
+        const normalized = normalizePresetList(src);
+        if (!normalized.length) return 0;
+        for (const preset of normalized) {
+            if (options.overwrite) upsertPreset(preset, preset.id);
+            else {
+                preset.id = makePresetId();
+                let baseName = String(preset.name || "未命名预设").trim() || "未命名预设";
+                let name = baseName;
+                let n = 2;
+                while (presetList.some((it) => (
+                    it.name === name && getPresetGroupLabel(it.group) === getPresetGroupLabel(preset.group)
+                ))) name = `${baseName} ${n++}`;
+                preset.name = name;
+                upsertPreset(preset, "");
+            }
+        }
+        return normalized.length;
+    }
+
+    function applyPresetAtPoint(preset, point, options = {}) {
+        const normalized = normalizePresetList([preset])[0];
+        if (!normalized || !normalized.children.length || !point) return false;
+        const defaultValues = getPresetVariableDefaultValues(normalized.variables);
+        const sourceChildren = normalized.variables
+            ? applyPresetVariableValuesToChildren(deepCloneJson(normalized.children || []) || [], defaultValues)
+            : normalized.children;
+        const nextChildren = preparePresetChildrenForInsertion(sourceChildren);
+        const reassignIds = (node) => {
+            if (!node || typeof node !== "object") return;
+            node.id = uid();
+            if (Array.isArray(node.children)) node.children.forEach(reassignIds);
+        };
+        nextChildren.forEach(reassignIds);
+        normalizeNodeTree(nextChildren);
+        labelInsertedPresetContainers(nextChildren, normalized.name);
+        const anchor = normalizePointValue(point);
+        const origin = normalizePointValue(normalized.origin);
+        const delta = {
+            x: anchor.x - origin.x,
+            y: anchor.y - origin.y,
+            z: anchor.z - origin.z
+        };
+        historyCapture("apply_preset");
+        const oldList = state.root.children;
+        state.root.children = oldList.concat(nextChildren);
+        normalizeNodeTree(state.root);
+        ensureAxisEverywhere();
+        const insertedIds = nextChildren.map((it) => it && it.id).filter(Boolean);
+        for (const id of insertedIds) applyOffsetToTargetId(id, delta);
+        resetCollapseScopes();
+        collapseAllNodes(state.root.children);
+        renderAll();
+        if (options && options.startRotate && insertedIds.length && typeof addRotateForTargetIds === "function") {
+            requestAnimationFrame(() => addRotateForTargetIds(insertedIds));
+        }
+        return { ok: true, insertedIds };
+    }
+
+    let jsZipLoadPromise = null;
+
+    function loadJSZip() {
+        if (globalThis.JSZip) return Promise.resolve(globalThis.JSZip);
+        if (jsZipLoadPromise) return jsZipLoadPromise;
+        jsZipLoadPromise = new Promise((resolve, reject) => {
+            const script = document.createElement("script");
+            script.src = JSZIP_URL;
+            script.async = true;
+            script.onload = () => {
+                if (globalThis.JSZip) resolve(globalThis.JSZip);
+                else reject(new Error("JSZip 未加载"));
+            };
+            script.onerror = () => reject(new Error("JSZip 加载失败"));
+            document.head.appendChild(script);
+        });
+        return jsZipLoadPromise;
+    }
+
+    function downloadBlob(filename, blob) {
+        const a = document.createElement("a");
+        a.href = URL.createObjectURL(blob);
+        a.download = filename || "download.bin";
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        setTimeout(() => URL.revokeObjectURL(a.href), 200);
+    }
+
+    function makePresetFilePayload(rawPreset) {
+        const preset = normalizePresetList([rawPreset])[0];
+        if (!preset) return null;
+        const payload = {
+            type: "pointsbuilder-preset",
+            version: 1,
+            id: preset.id,
+            name: preset.name,
+            group: getPresetGroupLabel(preset.group),
+            buildInfo: preset.buildInfo || {},
+            origin: normalizePointValue(preset.origin),
+            root: {
+                id: "root",
+                kind: "ROOT",
+                children: deepCloneJson(preset.children || []) || []
+            },
+            createdAt: preset.createdAt,
+            updatedAt: preset.updatedAt
+        };
+        if (preset.variables) payload.variables = preset.variables;
+        return payload;
+    }
+
+    function makeUniquePath(path, used) {
+        const parts = String(path || "").split("/");
+        const file = parts.pop() || "preset.json";
+        const dot = file.lastIndexOf(".");
+        const base = dot >= 0 ? file.slice(0, dot) : file;
+        const ext = dot >= 0 ? file.slice(dot) : "";
+        let candidate = parts.concat(file).join("/");
+        let n = 2;
+        while (used.has(candidate)) {
+            candidate = parts.concat(`${base} ${n++}${ext}`).join("/");
+        }
+        used.add(candidate);
+        return candidate;
+    }
+
+    function getPresetExportPath(preset, used) {
+        const group = getPresetGroupLabel(preset.group);
+        const filename = `${sanitizeFileBase(preset.name || "preset") || "preset"}.json`;
+        return makeUniquePath(`${group}/${filename}`, used);
+    }
+
+    async function exportPresetLibraryZip() {
+        const presets = getPresetList();
+        if (!presets.length) throw new Error("还没有可导出的预设");
+        const JSZip = await loadJSZip();
+        const zip = new JSZip();
+        const used = new Set();
+        for (const preset of presets) {
+            const payload = makePresetFilePayload(preset);
+            if (!payload) continue;
+            zip.file(getPresetExportPath(preset, used), JSON.stringify(payload, null, 2));
+        }
+        const blob = await zip.generateAsync({ type: "blob" });
+        if (window.showSaveFilePicker) {
+            const handle = await window.showSaveFilePicker({
+                suggestedName: "preset.zip",
+                types: [{ description: "Preset Zip", accept: { "application/zip": [".zip"] } }]
+            });
+            const writable = await handle.createWritable();
+            await writable.write(blob);
+            await writable.close();
+        } else {
+            downloadBlob("preset.zip", blob);
+        }
+        return presets.length;
+    }
+
+    function getGroupFromImportPath(path) {
+        const parts = String(path || "").replace(/\\/g, "/").split("/").filter(Boolean);
+        parts.pop();
+        return getPresetGroupLabel(parts.join("/"));
+    }
+
+    function collectPresetItemsFromPayload(payload, groupOverride = "") {
+        const src = Array.isArray(payload)
+            ? payload
+            : (Array.isArray(payload?.presets) ? payload.presets : [payload]);
+        const group = normalizePresetGroup(groupOverride);
+        return src
+            .filter((it) => it && typeof it === "object")
+            .map((it) => {
+                const copy = deepCloneJson(it) || Object.assign({}, it);
+                if (group) copy.group = group;
+                return copy;
+            });
+    }
+
+    function importPresetItems(items, options = {}) {
+        const count = importPresetPayload({ presets: items }, options);
+        schedulePresetLibraryRender();
+        return count;
+    }
+
+    async function importPresetZipFile(file, options = {}) {
+        const JSZip = await loadJSZip();
+        const zip = await JSZip.loadAsync(file);
+        const items = [];
+        const entries = Object.values(zip.files || {})
+            .filter((entry) => entry && !entry.dir && /\.json$/i.test(entry.name || ""));
+        for (const entry of entries) {
+            try {
+                const text = await entry.async("string");
+                const payload = JSON.parse(text);
+                items.push(...collectPresetItemsFromPayload(payload, getGroupFromImportPath(entry.name)));
+            } catch (e) {
+                console.warn("skip preset json:", entry.name, e);
+            }
+        }
+        if (!items.length) throw new Error("压缩包里没有可导入的 pointsbuilder JSON");
+        return importPresetItems(items, options);
+    }
+
+    async function importPresetFile(file, options = {}) {
+        if (!file) return 0;
+        const name = String(file.name || "").toLowerCase();
+        if (name.endsWith(".zip")) return importPresetZipFile(file, options);
+        const payload = JSON.parse(await file.text());
+        return importPresetPayload(payload, options);
+    }
+
+    async function collectPresetDirectoryItems(dirHandle, prefix = "") {
+        const items = [];
+        for await (const [name, handle] of dirHandle.entries()) {
+            const path = prefix ? `${prefix}/${name}` : name;
+            if (handle.kind === "directory") {
+                items.push(...await collectPresetDirectoryItems(handle, path));
+                continue;
+            }
+            if (handle.kind !== "file" || !/\.json$/i.test(name)) continue;
+            try {
+                const file = await handle.getFile();
+                const payload = JSON.parse(await file.text());
+                items.push(...collectPresetItemsFromPayload(payload, getGroupFromImportPath(path)));
+            } catch (e) {
+                console.warn("skip preset json:", path, e);
+            }
+        }
+        return items;
+    }
+
+    async function importPresetDirectory(options = {}) {
+        if (!window.showDirectoryPicker) {
+            filePresetJson?.click();
+            return 0;
+        }
+        const dir = await window.showDirectoryPicker({ mode: "read" });
+        const items = await collectPresetDirectoryItems(dir);
+        if (!items.length) throw new Error("文件夹里没有可导入的 pointsbuilder JSON");
+        return importPresetItems(items, options);
+    }
+
+    function setPresetOriginInputs(point) {
+        const p = normalizePointValue(point);
+        if (presetOriginX) presetOriginX.value = String(p.x);
+        if (presetOriginY) presetOriginY.value = String(p.y);
+        if (presetOriginZ) presetOriginZ.value = String(p.z);
+    }
+
+    function readPresetOriginInputs() {
+        const x = Number(presetOriginX?.value);
+        const y = Number(presetOriginY?.value);
+        const z = Number(presetOriginZ?.value);
+        if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) return getPresetOriginFallback();
+        return { x, y, z };
+    }
+
+    function getPresetGroups() {
+        const out = [];
+        const seen = new Set();
+        const addGroup = (raw) => {
+            const group = getPresetGroupLabel(raw);
+            if (!group || seen.has(group)) return;
+            seen.add(group);
+            out.push(group);
+        };
+        const storedGroups = Array.isArray(presetGroups) && presetGroups.length ? presetGroups : [DEFAULT_PRESET_GROUP];
+        addGroup(DEFAULT_PRESET_GROUP);
+        for (const group of storedGroups) addGroup(group);
+        for (const preset of presetList) addGroup(preset.group);
+        const current = getPresetGroupLabel(presetGroupInput?.value || "");
+        if (current) addGroup(current);
+        return out;
+    }
+
+    function splitPresetGroupPath(group) {
+        return getPresetGroupLabel(group).split("/").map((it) => it.trim()).filter(Boolean);
+    }
+
+    function getPresetParentGroup(group) {
+        const parts = splitPresetGroupPath(group);
+        return parts.length > 1 ? parts.slice(0, -1).join("/") : "";
+    }
+
+    function getPresetGroupDepth(group) {
+        return Math.max(0, splitPresetGroupPath(group).length - 1);
+    }
+
+    function getPresetGroupLeaf(group) {
+        const parts = splitPresetGroupPath(group);
+        return parts[parts.length - 1] || getPresetGroupLabel(group);
+    }
+
+    function isPresetGroupHiddenByParent(group) {
+        let parent = getPresetParentGroup(group);
+        while (parent) {
+            if (presetCollapsedGroups.has(parent)) return true;
+            parent = getPresetParentGroup(parent);
+        }
+        return false;
+    }
+
+    function expandPresetGroupsWithParents(groups) {
+        const out = new Set();
+        for (const group of groups || []) {
+            const parts = splitPresetGroupPath(group);
+            if (!parts.length) continue;
+            for (let i = 1; i <= parts.length; i++) out.add(parts.slice(0, i).join("/"));
+        }
+        if (!out.size) out.add(DEFAULT_PRESET_GROUP);
+        return Array.from(out);
+    }
+
+    function sortPresetGroupsForTree(groups) {
+        const source = Array.from(groups || []).map((it) => getPresetGroupLabel(it));
+        const available = new Set(source);
+        const out = [];
+        const seen = new Set();
+        const addGroupWithParents = (group) => {
+            const parts = splitPresetGroupPath(group);
+            if (!parts.length) {
+                if (available.has(DEFAULT_PRESET_GROUP) && !seen.has(DEFAULT_PRESET_GROUP)) {
+                    seen.add(DEFAULT_PRESET_GROUP);
+                    out.push(DEFAULT_PRESET_GROUP);
+                }
+                return;
+            }
+            for (let i = 1; i <= parts.length; i++) {
+                const key = parts.slice(0, i).join("/");
+                if (!available.has(key) || seen.has(key)) continue;
+                seen.add(key);
+                out.push(key);
+            }
+        };
+        for (const group of source) addGroupWithParents(group);
+        return out;
+    }
+
+    function createPresetGroup(rawName = "", parentGroup = "", options = {}) {
+        const parentLabel = getPresetGroupLabel(parentGroup);
+        const parent = isDefaultPresetGroup(parentLabel) ? "" : parentLabel;
+        const raw = getPresetGroupLabel(rawName || `分组 ${getPresetGroups().length}`);
+        const base = parent && !isDefaultPresetGroup(raw) && !raw.includes("/") ? `${parent}/${raw}` : raw;
+        let name = base;
+        let n = 2;
+        const existing = new Set(getPresetGroups());
+        while (existing.has(name)) name = `${base} ${n++}`;
+        presetGroups = dedupePresetGroups(presetGroups.concat(name));
+        persistPresetGroups();
+        updatePresetGroupList();
+        if (options.focusPresetInput !== false && presetGroupInput) {
+            presetGroupInput.value = name;
+            presetGroupInput.focus();
+        }
+        showToast(`已创建分组：${name}`, "success");
+        return name;
+    }
+
+    function createPresetGroupFromLibrary(parentGroup = "") {
+        const parentLabel = getPresetGroupLabel(parentGroup);
+        const parent = isDefaultPresetGroup(parentLabel) ? "" : parentLabel;
+        if (parent) presetCollapsedGroups.delete(parent);
+        const group = createPresetGroup("", parent, { focusPresetInput: false });
+        if (group) beginPresetGroupRename(group);
+        return group;
+    }
+
+    function getPresetGroupDragSource(ev) {
+        const raw = draggingPresetGroup || ev?.dataTransfer?.getData("application/x-pointsbuilder-preset-group") || "";
+        return raw ? getPresetGroupLabel(raw) : "";
+    }
+
+    function getPresetGroupDropPlacement(ev, targetEl) {
+        const rect = targetEl?.getBoundingClientRect?.();
+        if (!rect || !Number.isFinite(rect.top) || !Number.isFinite(rect.height)) return "before";
+        const y = Number(ev?.clientY);
+        if (!Number.isFinite(y)) return "before";
+        const topEdge = rect.top + rect.height * 0.22;
+        const bottomEdge = rect.bottom - rect.height * 0.22;
+        if (y < topEdge) return "before";
+        if (y > bottomEdge) return "after";
+        return "inside";
+    }
+
+    function clearPresetGroupDropState(head) {
+        head?.classList?.remove("group-drop-before", "group-drop-after", "group-drop-inside");
+    }
+
+    function makeUniquePresetChildGroupName(parentGroup, leafName, sourceGroup) {
+        const parent = normalizePresetGroup(parentGroup);
+        const leaf = getPresetGroupLeaf(leafName || sourceGroup);
+        const base = parent ? `${parent}/${leaf}` : leaf;
+        const source = getPresetGroupLabel(sourceGroup);
+        const existing = new Set(getPresetGroups().map((it) => getPresetGroupLabel(it)));
+        let candidate = getPresetGroupLabel(base);
+        let n = 2;
+        while (existing.has(candidate) && candidate !== source) {
+            candidate = getPresetGroupLabel(`${base} ${n++}`);
+        }
+        return candidate;
+    }
+
+    function getPresetSiblingTargetBase(sourceGroup, targetGroup) {
+        const source = getPresetGroupLabel(sourceGroup);
+        const target = getPresetGroupLabel(targetGroup);
+        if (!source || !target) return "";
+        const parent = getPresetParentGroup(target);
+        return makeUniquePresetChildGroupName(parent, getPresetGroupLeaf(source), source);
+    }
+
+    function reparentPresetGroup(sourceGroup, targetGroup) {
+        const source = getPresetGroupLabel(sourceGroup);
+        const target = getPresetGroupLabel(targetGroup);
+        if (!source || !target || source === target || isDefaultPresetGroup(source)) return false;
+        if (target.startsWith(`${source}/`)) return false;
+        const nextBase = makeUniquePresetChildGroupName(target, getPresetGroupLeaf(source), source);
+        if (!nextBase || nextBase === source) return false;
+        const sourcePrefix = `${source}/`;
+        const remapGroup = (raw) => {
+            const group = getPresetGroupLabel(raw);
+            if (group === source) return nextBase;
+            if (group.startsWith(sourcePrefix)) return `${nextBase}${group.slice(source.length)}`;
+            return group;
+        };
+        presetList = presetList.map((preset) => Object.assign({}, preset, {
+            group: remapGroup(preset.group),
+            updatedAt: getPresetGroupLabel(preset.group) === remapGroup(preset.group) ? preset.updatedAt : Date.now()
+        }));
+        presetGroups = dedupePresetGroups(presetGroups.map(remapGroup).concat(target, nextBase));
+        if (presetCollapsedGroups.has(source)) {
+            presetCollapsedGroups.delete(source);
+            presetCollapsedGroups.add(nextBase);
+        }
+        presetCollapsedGroups.delete(target);
+        persistPresetList();
+        return true;
+    }
+
+    function remapPresetGroupSubtree(sourceGroup, nextBase) {
+        const source = getPresetGroupLabel(sourceGroup);
+        const next = getPresetGroupLabel(nextBase);
+        if (!source || !next || source === next || isDefaultPresetGroup(source)) return false;
+        if (next.startsWith(`${source}/`)) return false;
+        const sourcePrefix = `${source}/`;
+        const remapGroup = (raw) => {
+            const group = getPresetGroupLabel(raw);
+            if (group === source) return next;
+            if (group.startsWith(sourcePrefix)) return `${next}${group.slice(source.length)}`;
+            return group;
+        };
+        presetList = presetList.map((preset) => {
+            const prevGroup = getPresetGroupLabel(preset.group);
+            const nextGroup = remapGroup(prevGroup);
+            return Object.assign({}, preset, {
+                group: nextGroup,
+                updatedAt: prevGroup === nextGroup ? preset.updatedAt : Date.now()
+            });
+        });
+        presetGroups = dedupePresetGroups(presetGroups.map(remapGroup).concat(next));
+        if (presetCollapsedGroups.has(source)) {
+            presetCollapsedGroups.delete(source);
+            presetCollapsedGroups.add(next);
+        }
+        return true;
+    }
+
+    function movePresetGroupByDrop(sourceGroup, targetGroup, placement = "before") {
+        const source = getPresetGroupLabel(sourceGroup);
+        const target = getPresetGroupLabel(targetGroup);
+        if (!source || !target || source === target) return false;
+        if (isDefaultPresetGroup(source)) return false;
+        if (target.startsWith(`${source}/`)) return false;
+        if (placement === "inside") return reparentPresetGroup(source, target);
+        const nextBase = getPresetSiblingTargetBase(source, target);
+        if (!nextBase) return false;
+        const changedParent = nextBase !== source;
+        if (changedParent && !remapPresetGroupSubtree(source, nextBase)) return false;
+        const movedSource = changedParent ? nextBase : source;
+        const ordered = sortPresetGroupsForTree(expandPresetGroupsWithParents(getPresetGroups()));
+        const sourcePrefix = `${movedSource}/`;
+        const sourceBlock = ordered.filter((group) => group === movedSource || group.startsWith(sourcePrefix));
+        if (!sourceBlock.length) return false;
+        const sourceSet = new Set(sourceBlock);
+        const rest = ordered.filter((group) => !sourceSet.has(group));
+        let insertIndex = rest.findIndex((group) => group === target);
+        if (insertIndex < 0) return false;
+        if (placement === "after") {
+            const targetPrefix = `${target}/`;
+            while (insertIndex + 1 < rest.length && rest[insertIndex + 1].startsWith(targetPrefix)) {
+                insertIndex++;
+            }
+            insertIndex++;
+        }
+        rest.splice(insertIndex, 0, ...sourceBlock);
+        presetGroups = dedupePresetGroups(rest);
+        persistPresetList();
+        return true;
+    }
+
+    function togglePresetGroupCollapsed(group) {
+        const key = getPresetGroupLabel(group);
+        presetGroupAnimationTarget = key;
+        if (presetCollapsedGroups.has(key)) presetCollapsedGroups.delete(key);
+        else presetCollapsedGroups.add(key);
+        schedulePresetLibraryRender();
+    }
+
+    function updatePresetGroupList() {
+        const host = presetGroupInput && String(presetGroupInput.tagName || "").toUpperCase() === "SELECT"
+            ? presetGroupInput
+            : presetGroupList;
+        if (!host) return;
+        const current = presetGroupInput ? presetGroupInput.value : "";
+        host.innerHTML = "";
+        for (const group of getPresetGroups()) {
+            const option = document.createElement("option");
+            option.value = group;
+            option.textContent = group;
+            host.appendChild(option);
+        }
+        if (presetGroupInput && current && getPresetGroups().includes(current)) presetGroupInput.value = current;
+    }
+
+    function getPresetVariableEntries(info) {
+        const normalized = normalizePresetVariableInfoForStorage(info);
+        if (!normalized) return [];
+        const entries = Array.isArray(normalized.entries) ? normalized.entries.slice() : [];
+        const seen = new Set(entries.map((entry) => `${entry.type}:${entry.name}`));
+        for (const name of normalized.refs.vector || []) {
+            const key = `vector:${name}`;
+            if (!seen.has(key)) entries.push({ type: "vector", name, source: "unknown", label: name });
+        }
+        for (const name of normalized.refs.scalar || []) {
+            const key = `scalar:${name}`;
+            if (!seen.has(key)) entries.push({ type: "scalar", name, source: "unknown", label: name });
+        }
+        return entries.sort((a, b) => {
+            if (a.type !== b.type) return a.type === "vector" ? -1 : 1;
+            return String(a.name).localeCompare(String(b.name));
+        });
+    }
+
+    function getPresetVariableDefaultValues(info) {
+        const normalized = normalizePresetVariableInfoForStorage(info);
+        return normalizePresetVariableValues(normalized?.inputs || {});
+    }
+
+    function clonePresetVariableValues(values) {
+        return normalizePresetVariableValues(values);
+    }
+
+    function mergePresetVariableInputs(freshInfo, previousInfo) {
+        const fresh = normalizePresetVariableInfoForStorage(freshInfo);
+        if (!fresh) return null;
+        const previous = getPresetVariableDefaultValues(previousInfo);
+        const current = getPresetVariableDefaultValues(fresh);
+        const inputs = { scalar: {}, vector: {} };
+        for (const name of fresh.refs.scalar || []) {
+            const prevValue = previous.scalar && Object.prototype.hasOwnProperty.call(previous.scalar, name)
+                ? previous.scalar[name]
+                : current.scalar?.[name];
+            const n = Number(prevValue);
+            inputs.scalar[name] = Number.isFinite(n) ? n : 0;
+        }
+        for (const name of fresh.refs.vector || []) {
+            const prevValue = previous.vector && Object.prototype.hasOwnProperty.call(previous.vector, name)
+                ? previous.vector[name]
+                : current.vector?.[name];
+            inputs.vector[name] = normalizePointValue(prevValue);
+        }
+        return normalizePresetVariableInfoForStorage(Object.assign({}, fresh, { inputs }));
+    }
+
+    function refreshPresetSaveVariableInfoForSource(options = {}) {
+        const sourceChildren = presetSaveSourceChildren || state.root.children || [];
+        const freshInfo = collectPresetVariableInfo(sourceChildren);
+        presetSaveVariableInfo = options.preserveInputs === false
+            ? normalizePresetVariableInfoForStorage(freshInfo)
+            : mergePresetVariableInputs(freshInfo, presetSaveVariableInfo);
+        return presetSaveVariableInfo;
+    }
+
+    function getPresetVariableSourceText(source) {
+        if (source === "external") return "外部变量";
+        if (source === "internal") return "内部变量";
+        return "未识别";
+    }
+
+    function ensurePresetSaveVariablePanel() {
+        if (presetSaveVariablePanelEl && presetSaveVariablePanelEl.isConnected) return presetSaveVariablePanelEl;
+        const panel = presetSaveModal?.querySelector?.(".preset-save-panel") || document.querySelector(".preset-save-panel");
+        if (!panel) return null;
+        const el = document.createElement("div");
+        el.id = "presetSaveVariableDefaults";
+        el.className = "preset-variable-panel hidden";
+        const originPanel = panel.querySelector(".preset-origin-panel");
+        if (originPanel && originPanel.parentNode) originPanel.insertAdjacentElement("afterend", el);
+        else panel.appendChild(el);
+        presetSaveVariablePanelEl = el;
+        return el;
+    }
+
+    function updatePresetVariableValue(values, entry, value) {
+        if (!values || !entry) return;
+        const name = normalizeContextIdentifier(entry.name);
+        if (!name) return;
+        if (entry.type === "vector") {
+            if (!values.vector) values.vector = {};
+            values.vector[name] = normalizePointValue(value);
+        } else {
+            if (!values.scalar) values.scalar = {};
+            const n = Number(value);
+            values.scalar[name] = Number.isFinite(n) ? n : 0;
+        }
+    }
+
+    function renderPresetVariableRows(host, info, values, options = {}) {
+        if (!host) return;
+        const normalized = normalizePresetVariableInfoForStorage(info);
+        const entries = getPresetVariableEntries(normalized);
+        host.innerHTML = "";
+        host.classList.toggle("hidden", !entries.length);
+        if (!entries.length) return;
+
+        const title = document.createElement("div");
+        title.className = "preset-variable-title";
+        title.textContent = options.title || "变量默认值";
+        host.appendChild(title);
+
+        const list = document.createElement("div");
+        list.className = "preset-variable-list";
+        host.appendChild(list);
+
+        for (const entry of entries) {
+            const name = normalizeContextIdentifier(entry.name);
+            if (!name) continue;
+            const row = document.createElement("div");
+            row.className = `preset-variable-row ${entry.type === "vector" ? "vector" : "scalar"}`;
+
+            const label = document.createElement("div");
+            label.className = "preset-variable-label";
+            const labelName = document.createElement("span");
+            labelName.className = "preset-variable-name";
+            labelName.textContent = name;
+            const labelMeta = document.createElement("span");
+            labelMeta.className = "preset-variable-meta";
+            labelMeta.textContent = `${getPresetVariableSourceText(entry.source)} / ${entry.type === "vector" ? "Vec3" : "数值"}`;
+            label.append(labelName, labelMeta);
+            row.appendChild(label);
+
+            if (entry.type === "vector") {
+                const current = normalizePointValue(values?.vector?.[name]);
+                const coords = document.createElement("div");
+                coords.className = "preset-variable-vec-inputs";
+                const inputs = ["x", "y", "z"].map((axis) => {
+                    const input = document.createElement("input");
+                    input.className = "input";
+                    input.type = "number";
+                    input.step = "0.01";
+                    input.placeholder = axis;
+                    input.value = String(current[axis]);
+                    input.addEventListener("input", () => {
+                        const next = normalizePointValue({
+                            x: inputs[0]?.value,
+                            y: inputs[1]?.value,
+                            z: inputs[2]?.value
+                        });
+                        updatePresetVariableValue(values, entry, next);
+                    });
+                    coords.appendChild(input);
+                    return input;
+                });
+                const pickBtn = document.createElement("button");
+                pickBtn.type = "button";
+                pickBtn.className = "btn icon preset-variable-pick";
+                pickBtn.title = `拾取 ${name}`;
+                pickBtn.setAttribute("aria-label", `拾取 ${name}`);
+                pickBtn.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 21s6-5.6 6-11a6 6 0 0 0-12 0c0 5.4 6 11 6 11Z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/><circle cx="12" cy="10" r="2.2" fill="none" stroke="currentColor" stroke-width="1.8"/></svg>';
+                pickBtn.addEventListener("click", () => {
+                    if (typeof options.onPickVector === "function") {
+                        options.onPickVector(entry, (point) => {
+                            const p = normalizePointValue(point);
+                            updatePresetVariableValue(values, entry, p);
+                            inputs[0].value = String(p.x);
+                            inputs[1].value = String(p.y);
+                            inputs[2].value = String(p.z);
+                        });
+                    }
+                });
+                row.append(coords, pickBtn);
+            } else {
+                const input = document.createElement("input");
+                input.className = "input";
+                input.type = "number";
+                input.step = "0.01";
+                input.value = String(Number.isFinite(Number(values?.scalar?.[name])) ? Number(values.scalar[name]) : 0);
+                input.addEventListener("input", () => updatePresetVariableValue(values, entry, input.value));
+                row.appendChild(input);
+            }
+            list.appendChild(row);
+        }
+    }
+
+    function renderPresetSaveVariableDefaults() {
+        const host = ensurePresetSaveVariablePanel();
+        if (!host) return;
+        refreshPresetSaveVariableInfoForSource({ preserveInputs: true });
+        if (!presetSaveVariableInfo) {
+            host.innerHTML = "";
+            host.classList.add("hidden");
+            return;
+        }
+        const values = getPresetVariableDefaultValues(presetSaveVariableInfo);
+        presetSaveVariableInfo.inputs = values;
+        const beginVectorPick = (entry, setValue) => {
+            hidePresetSaveDialog();
+            startPointPick({
+                label: `拾取变量 ${entry.name}`,
+                onPick: (point) => {
+                    showPresetSaveDialog();
+                    setValue(point);
+                    requestAnimationFrame(() => {
+                        renderPresetVariableRows(host, presetSaveVariableInfo, presetSaveVariableInfo.inputs, {
+                            title: "保存时使用的变量默认值",
+                            onPickVector: beginVectorPick
+                        });
+                    });
+                    showToast(`已拾取变量：${entry.name}`, "success");
+                }
+            });
+        };
+        renderPresetVariableRows(host, presetSaveVariableInfo, presetSaveVariableInfo.inputs, {
+            title: "保存时使用的变量默认值",
+            onPickVector: beginVectorPick
+        });
+    }
+
+    function escapeRegExp(text) {
+        return String(text || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    }
+
+    function formatPresetVariableNumber(value) {
+        const n = Number(value);
+        return Number.isFinite(n) ? String(Number(n.toFixed(10))) : "0";
+    }
+
+    function replaceScalarIdentifier(expr, name, value) {
+        const safe = escapeRegExp(name);
+        if (!safe) return expr;
+        const re = new RegExp(`(^|[^A-Za-z0-9_$])(${safe})(?![A-Za-z0-9_$.])`, "g");
+        return String(expr || "").replace(re, `$1${formatPresetVariableNumber(value)}`);
+    }
+
+    function replaceVectorComponent(expr, name, value) {
+        const safe = escapeRegExp(name);
+        if (!safe) return expr;
+        const vec = normalizePointValue(value);
+        const re = new RegExp(`(^|[^A-Za-z0-9_$])${safe}\\s*\\.\\s*([xyz])\\b`, "g");
+        return String(expr || "").replace(re, (_m, lead, axis) => `${lead}${formatPresetVariableNumber(vec[axis])}`);
+    }
+
+    function applyPresetVariableValuesToChildren(children, values) {
+        const variableValues = clonePresetVariableValues(values);
+        const scalarEntries = Object.entries(variableValues.scalar || {});
+        const vectorEntries = Object.entries(variableValues.vector || {});
+        const walk = (node) => {
+            if (!node || typeof node !== "object") return;
+            const p = node.params || {};
+            for (const [key, value] of Object.entries(p)) {
+                const keyText = String(key || "");
+                if (keyText.startsWith("__pb_vec_var_")) {
+                    const ref = normalizeContextIdentifier(value);
+                    const vec = ref ? variableValues.vector?.[ref] : null;
+                    if (vec) {
+                        const prefix = keyText.slice("__pb_vec_var_".length);
+                        p[`__pb_vec_mode_${prefix}`] = "manual";
+                        p[keyText] = "";
+                        p[`${prefix}x`] = formatPresetVariableNumber(vec.x);
+                        p[`${prefix}y`] = formatPresetVariableNumber(vec.y);
+                        p[`${prefix}z`] = formatPresetVariableNumber(vec.z);
+                    }
+                    continue;
+                }
+                if (typeof value !== "string") continue;
+                let next = value;
+                for (const [name, vec] of vectorEntries) next = replaceVectorComponent(next, name, vec);
+                for (const [name, scalar] of scalarEntries) next = replaceScalarIdentifier(next, name, scalar);
+                p[key] = next;
+            }
+            if (Array.isArray(node.children)) node.children.forEach(walk);
+        };
+        (Array.isArray(children) ? children : []).forEach(walk);
+        return children;
+    }
+
+    function clonePresetWithVariableValues(preset, values) {
+        const normalized = normalizePresetList([preset])[0];
+        if (!normalized) return null;
+        const children = deepCloneJson(normalized.children || []) || [];
+        applyPresetVariableValuesToChildren(children, values);
+        return Object.assign({}, normalized, {
+            children,
+            variables: null
+        });
+    }
+
+    function ensurePresetApplyVariableModal() {
+        let mask = document.getElementById("presetVariableMask");
+        let modal = document.getElementById("presetVariableModal");
+        if (mask && modal) return { mask, modal };
+        mask = document.createElement("div");
+        mask.id = "presetVariableMask";
+        mask.className = "modal-mask hidden";
+        modal = document.createElement("div");
+        modal.id = "presetVariableModal";
+        modal.className = "modal hidden preset-variable-modal";
+        modal.setAttribute("role", "dialog");
+        modal.setAttribute("aria-modal", "true");
+        modal.innerHTML = `
+            <div class="modal-head">
+                <div class="modal-title">应用预设变量</div>
+                <button id="btnClosePresetVariables" class="btn icon" type="button" aria-label="关闭">
+                    <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M6 6l12 12M18 6 6 18" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/></svg>
+                </button>
+            </div>
+            <div class="modal-body">
+                <div id="presetVariableHost" class="preset-variable-panel"></div>
+            </div>
+            <div class="modal-foot preset-variable-foot">
+                <button id="btnCancelPresetVariables" class="btn" type="button">取消</button>
+                <span style="flex:1 1 auto;"></span>
+                <button id="btnApplyPresetVariables" class="btn primary" type="button">继续</button>
+            </div>`;
+        document.body.append(mask, modal);
+        return { mask, modal };
+    }
+
+    function openPresetVariableApplyDialog(preset) {
+        const variableInfo = normalizePresetVariableInfoForStorage(preset?.variables);
+        const entries = getPresetVariableEntries(variableInfo);
+        if (!entries.length) return Promise.resolve(getPresetVariableDefaultValues(variableInfo));
+        const { mask, modal } = ensurePresetApplyVariableModal();
+        const host = modal.querySelector("#presetVariableHost");
+        const title = modal.querySelector(".modal-title");
+        if (title) title.textContent = `应用预设变量：${preset?.name || "未命名预设"}`;
+        const values = getPresetVariableDefaultValues(variableInfo);
+
+        return new Promise((resolve) => {
+            let settled = false;
+            const close = (result) => {
+                if (settled) return;
+                settled = true;
+                mask.classList.add("hidden");
+                modal.classList.add("hidden");
+                resolve(result);
+            };
+            const rerender = () => {
+                renderPresetVariableRows(host, variableInfo, values, {
+                    title: "输入本次应用的变量值",
+                    onPickVector: (entry, setValue) => {
+                        mask.classList.add("hidden");
+                        modal.classList.add("hidden");
+                        startPointPick({
+                            label: `拾取变量 ${entry.name}`,
+                            onPick: (point) => {
+                                setValue(point);
+                                mask.classList.remove("hidden");
+                                modal.classList.remove("hidden");
+                                rerender();
+                                showToast(`已拾取变量：${entry.name}`, "success");
+                            }
+                        });
+                    }
+                });
+            };
+            modal.querySelector("#btnClosePresetVariables").onclick = () => close(null);
+            modal.querySelector("#btnCancelPresetVariables").onclick = () => close(null);
+            modal.querySelector("#btnApplyPresetVariables").onclick = () => close(clonePresetVariableValues(values));
+            mask.onclick = () => close(null);
+            rerender();
+            mask.classList.remove("hidden");
+            modal.classList.remove("hidden");
+        });
+    }
+
+    async function resolvePresetForApply(preset) {
+        const normalized = normalizePresetList([preset])[0];
+        if (!normalized) return null;
+        const variableInfo = normalizePresetVariableInfoForStorage(normalized.variables)
+            || collectPresetVariableInfo(normalized.children || []);
+        if (!getPresetVariableEntries(variableInfo).length) return normalized;
+        const presetWithVariables = Object.assign({}, normalized, { variables: variableInfo });
+        const values = await openPresetVariableApplyDialog(presetWithVariables);
+        if (!values) return null;
+        return clonePresetWithVariableValues(presetWithVariables, values);
+    }
+
+    function fillPresetForm(preset = null) {
+        const p = preset ? normalizePresetList([preset])[0] : null;
+        updatePresetGroupList();
+        if (presetNameInput) {
+            presetNameInput.value = p?.name || projectName || `预设${presetList.length + 1}`;
+            presetNameInput.select?.();
+        }
+        if (presetGroupInput) presetGroupInput.value = getPresetGroupLabel(p?.group || presetGroupInput.value || DEFAULT_PRESET_GROUP);
+        setPresetOriginInputs(p?.origin || getPresetOriginFallback());
+        renderPresetSaveVariableDefaults();
+    }
+
+    function showPresetSaveDialog() {
+        if (!presetSaveModal || !presetSaveMask) return false;
+        presetSaveModal.classList.remove("hidden");
+        presetSaveMask.classList.remove("hidden");
+        return true;
+    }
+
+    function hidePresetSaveDialog() {
+        presetSaveModal?.classList.add("hidden");
+        presetSaveMask?.classList.add("hidden");
+    }
+
+    function openPresetPanel(mode = "list", options = {}) {
+        if (mode === "save") {
+            if (Array.isArray(options.children)) {
+                presetSaveSourceChildren = deepCloneJson(options.children) || [];
+                presetSaveSourceLabel = options.label || `${presetSaveSourceChildren.length} 张选中卡片`;
+                presetSaveVariableInfo = null;
+            } else if (Array.isArray(options.sourceIds)) {
+                setPresetSaveSourceFromIds(options.sourceIds);
+                presetSaveVariableInfo = null;
+            } else {
+                presetSaveSourceChildren = null;
+                presetSaveSourceLabel = "全部卡片";
+                presetSaveVariableInfo = null;
+            }
+            if (showPresetSaveDialog()) {
+                requestAnimationFrame(() => {
+                    fillPresetForm();
+                    if (presetNameInput) presetNameInput.focus();
+                });
+                return;
+            }
+        }
+        setRightPanelPage("presets");
+        requestAnimationFrame(() => {
+            if (mode === "save" || (presetNameInput && !presetNameInput.value.trim())) fillPresetForm();
+            if (mode === "save" && presetNameInput) presetNameInput.focus();
+        });
+    }
+
+    function savePresetFromPanel(overwritePreset = null) {
+        if (!presetNameInput) return null;
+        const name = String(presetNameInput.value || projectName || `预设${presetList.length + 1}`).trim() || "未命名预设";
+        const group = getPresetGroupLabel(presetGroupInput?.value || DEFAULT_PRESET_GROUP);
+        const origin = readPresetOriginInputs();
+        const overwrite = overwritePreset || presetList.find((it) => (
+            it.name === name && getPresetGroupLabel(it.group) === group
+        ));
+        const variableInfo = refreshPresetSaveVariableInfoForSource({ preserveInputs: true });
+        const preset = saveCurrentAsPreset({
+            name,
+            group,
+            origin,
+            children: presetSaveSourceChildren || undefined,
+            variables: variableInfo,
+            overwriteId: overwrite ? overwrite.id : ""
+        });
+        if (preset) {
+            presetSaveSourceChildren = null;
+            presetSaveSourceLabel = "";
+            presetSaveVariableInfo = null;
+            fillPresetForm(preset);
+            hidePresetSaveDialog();
+        }
+        return preset;
+    }
+
+    function beginPresetGroupRename(oldGroup) {
+        const from = getPresetGroupLabel(oldGroup);
+        if (isDefaultPresetGroup(from)) return;
+        if (!from) return;
+        presetGroupEditState = { group: from, value: getPresetGroupLeaf(from) };
+        presetItemEditState = null;
+        schedulePresetLibraryRender();
+    }
+
+    function commitPresetGroupRename(oldGroup, rawValue) {
+        const from = getPresetGroupLabel(oldGroup);
+        if (isDefaultPresetGroup(from)) {
+            presetGroupEditState = null;
+            schedulePresetLibraryRender();
+            return;
+        }
+        const rawTo = getPresetGroupLabel(rawValue);
+        const parent = getPresetParentGroup(from);
+        const to = parent && rawTo && !rawTo.includes("/") ? `${parent}/${rawTo}` : rawTo;
+        if (!to || to === from) {
+            presetGroupEditState = null;
+            schedulePresetLibraryRender();
+            return;
+        }
+        const fromPrefix = `${from}/`;
+        presetList = presetList.map((preset) => (
+            getPresetGroupLabel(preset.group) === from || getPresetGroupLabel(preset.group).startsWith(fromPrefix)
+                ? Object.assign({}, preset, { group: `${to}${getPresetGroupLabel(preset.group).slice(from.length)}`, updatedAt: Date.now() })
+                : preset
+        ));
+        presetGroups = dedupePresetGroups(presetGroups.map((group) => (
+            getPresetGroupLabel(group) === from || getPresetGroupLabel(group).startsWith(fromPrefix)
+                ? `${to}${getPresetGroupLabel(group).slice(from.length)}`
+                : group
+        )).concat(to));
+        if (presetCollapsedGroups.has(from)) {
+            presetCollapsedGroups.delete(from);
+            presetCollapsedGroups.add(to);
+        }
+        presetGroupEditState = null;
+        persistPresetList();
+    }
+
+    function beginPresetItemRename(preset) {
+        if (!preset) return;
+        presetItemEditState = { id: preset.id, value: preset.name || "" };
+        presetGroupEditState = null;
+        schedulePresetLibraryRender();
+    }
+
+    function commitPresetItemRename(id, rawValue) {
+        const preset = presetList.find((it) => it.id === id);
+        if (!preset) {
+            presetItemEditState = null;
+            schedulePresetLibraryRender();
+            return;
+        }
+        const nextName = String(rawValue ?? "").trim() || preset.name || "未命名预设";
+        if (nextName === preset.name) {
+            presetItemEditState = null;
+            schedulePresetLibraryRender();
+            return;
+        }
+        presetItemEditState = null;
+        updatePresetMeta(id, { name: nextName });
+    }
+
+    function renamePresetGroup(oldGroup) {
+        beginPresetGroupRename(oldGroup);
+    }
+
+    function deletePresetGroup(oldGroup) {
+        const group = getPresetGroupLabel(oldGroup);
+        if (!group || isDefaultPresetGroup(group)) return false;
+        const groupPrefix = `${group}/`;
+        const count = presetList.filter((preset) => getPresetGroupLabel(preset.group) === group || getPresetGroupLabel(preset.group).startsWith(groupPrefix)).length;
+        if (count && !confirm(`删除分组“${group}”？其中 ${count} 个预设会移动到“${DEFAULT_PRESET_GROUP}”。`)) return false;
+        presetList = presetList.map((preset) => (
+            getPresetGroupLabel(preset.group) === group || getPresetGroupLabel(preset.group).startsWith(groupPrefix)
+                ? Object.assign({}, preset, { group: DEFAULT_PRESET_GROUP, updatedAt: Date.now() })
+                : preset
+        ));
+        presetGroups = dedupePresetGroups(presetGroups.filter((it) => {
+            const label = getPresetGroupLabel(it);
+            return label !== group && !label.startsWith(groupPrefix);
+        }));
+        if (presetGroupInput && getPresetGroupLabel(presetGroupInput.value) === group) {
+            presetGroupInput.value = DEFAULT_PRESET_GROUP;
+        }
+        persistPresetGroups();
+        persistPresetList();
+        showToast(`已删除分组：${group}`, "success");
+        return true;
+    }
+
+    function updatePresetMeta(id, patch) {
+        const idx = presetList.findIndex((it) => it.id === id);
+        if (idx < 0) return null;
+        presetList[idx] = Object.assign({}, presetList[idx], patch || {}, { updatedAt: Date.now() });
+        persistPresetList();
+        return presetList[idx];
+    }
+
+    function deletePresetById(id) {
+        const preset = presetList.find((it) => it.id === id);
+        if (!preset) return false;
+        presetList = presetList.filter((it) => it.id !== id);
+        persistPresetList();
+        return true;
+    }
+
+    async function startPresetPick(preset) {
+        if (!preset || typeof startPointPick !== "function") return;
+        const resolvedPreset = await resolvePresetForApply(preset);
+        if (!resolvedPreset) return;
+        const onPickPreset = (point, options = {}) => {
+            const result = applyPresetAtPoint(resolvedPreset, point, { startRotate: !!options.rotateAfterPick });
+            const ok = !!(result && result.ok !== false);
+            clearPresetPreview();
+            showToast(ok ? `已生成预设：${resolvedPreset.name}` : "生成预设失败", ok ? "success" : "error");
+        };
+        onPickPreset.__presetPreview = resolvedPreset;
+        const initialAnchor = pointPickHoverPoint || lastPickMappedPoint || lastPickBasePoint || null;
+        previewPreset(resolvedPreset, initialAnchor);
+        startPointPick({
+            label: `预设 ${resolvedPreset.name || ""}`.trim(),
+            onPick: onPickPreset
+        });
+    }
+
+    function startPresetPickById(presetId) {
+        const preset = getPresetList().find((it) => it && it.id === presetId);
+        if (!preset) return false;
+        startPresetPick(preset);
+        return true;
+    }
+
+    function applyPresetFromLibrary(preset) {
+        startPresetPick(preset);
+    }
+
+    function setPresetDragLockPlaneActive(next) {
+        const active = next === true;
+        if (presetDragLockPlaneKeyDown === active) return;
+        presetDragLockPlaneKeyDown = active;
+        if (active) {
+            presetDragLockPlanePreviousState = lockPlaneActive;
+            setLockPlaneActive(true);
+        } else if (!presetDragLockPlanePreviousState) {
+            setLockPlaneActive(false);
+        }
+    }
+
+    function clearPresetDragLockPlane() {
+        if (presetDragLockPlaneKeyDown) setPresetDragLockPlaneActive(false);
+        else if (draggingPresetId && lockPlaneActive) setLockPlaneActive(false);
+        presetDragLockPlaneKeyDown = false;
+        presetDragLockPlanePreviousState = false;
+    }
+
+    function movePresetByDrop(sourceId, targetGroup, beforeId = null) {
+        const sourceIndex = presetList.findIndex((it) => it && it.id === sourceId);
+        if (sourceIndex < 0) return false;
+        const source = presetList.splice(sourceIndex, 1)[0];
+        if (!source) return false;
+        source.group = getPresetGroupLabel(targetGroup || source.group);
+        source.updatedAt = Date.now();
+        let insertIndex = presetList.length;
+        if (beforeId) {
+            const idx = presetList.findIndex((it) => it && it.id === beforeId);
+            if (idx >= 0) insertIndex = idx;
+        } else {
+            for (let i = presetList.length - 1; i >= 0; i--) {
+                if (getPresetGroupLabel(presetList[i].group) === source.group) {
+                    insertIndex = i + 1;
+                    break;
+                }
+            }
+        }
+        presetList.splice(insertIndex, 0, source);
+        persistPresetList();
+        return true;
+    }
+
+    function presetFromDragEvent(ev) {
+        if (getPresetGroupDragSource(ev)) return null;
+        const id = draggingPresetId || (ev && ev.dataTransfer && (
+            ev.dataTransfer.getData("application/x-pointsbuilder-preset")
+            || ev.dataTransfer.getData("text/plain")
+        ));
+        return id ? getPresetList().find((it) => it && it.id === id) : null;
+    }
+
+    function showPresetDragPlacementStatus(preset, point) {
+        if (!point) return;
+        const name = String(preset?.name || "未命名预设").trim() || "未命名预设";
+        const label = getPlaneInfo().label;
+        setLinePickStatus(`${label} 拖放预设[${name}]：指针 (${U.fmt(point.x)}, ${U.fmt(point.y)}, ${U.fmt(point.z)})，松开应用`);
+    }
+
+    function clearPresetDragPlacementStatus() {
+        if (linePickMode || pointPickMode || offsetMode || rotateMode) return;
+        hideLinePickStatus();
+    }
+
+    function onPresetCanvasDragOver(ev) {
+        const preset = presetFromDragEvent(ev);
+        if (!preset) return;
+        ev.preventDefault();
+        if (ev.dataTransfer) ev.dataTransfer.dropEffect = "copy";
+        const point = getMappedPointFromEvent(ev);
+        if (point) {
+            hideHoverMarker();
+            showPresetDragPointMarker(point);
+            showPresetDragPlacementStatus(preset, point);
+        } else {
+            hidePresetDragPointMarker();
+            hideHoverMarker();
+            clearPresetDragPlacementStatus();
+        }
+        previewPreset(preset, point);
+    }
+
+    async function onPresetCanvasDrop(ev) {
+        const preset = presetFromDragEvent(ev);
+        if (!preset) return;
+        ev.preventDefault();
+        const point = getMappedPointFromEvent(ev);
+        if (!point) {
+            showToast("没有命中可放置平面", "error");
+            clearPresetPreview();
+            hidePresetDragPointMarker();
+            hideHoverMarker();
+            clearPresetDragPlacementStatus();
+            clearPresetDragLockPlane();
+            return;
+        }
+        const resolvedPreset = await resolvePresetForApply(preset);
+        if (!resolvedPreset) {
+            clearPresetPreview();
+            hidePresetDragPointMarker();
+            clearPresetDragPlacementStatus();
+            clearPresetDragLockPlane();
+            return;
+        }
+        const result = applyPresetAtPoint(resolvedPreset, point, { startRotate: false });
+        const ok = !!(result && result.ok !== false);
+        clearPresetPreview();
+        hidePresetDragPointMarker();
+        hideHoverMarker();
+        clearPresetDragPlacementStatus();
+        clearPresetDragLockPlane();
+        showToast(ok ? `已放置预设：${resolvedPreset.name}` : "放置预设失败", ok ? "success" : "error");
+    }
+
+    function cleanupPresetPointerDrag(options = {}) {
+        const state = presetPointerDragState;
+        presetPointerDragState = null;
+        if (state && state.sourceEl) state.sourceEl.classList.remove("dragging");
+        if (state && state.dragging) presetPointerDragClickSuppressUntil = Date.now() + 220;
+        clearPresetDragLockPlane();
+        draggingPresetId = "";
+        isDraggingCard = false;
+        clearPresetPreview();
+        hidePresetDragPointMarker();
+        hideHoverMarker();
+        clearPresetDragPlacementStatus();
+        if (!options.keepModal && state && state.hideModalOnStart && typeof hideModal === "function") hideModal();
+    }
+
+    function updatePresetPointerDragPreview(ev) {
+        const state = presetPointerDragState;
+        if (!state || !state.preset) return null;
+        const point = getMappedPointFromEvent(ev);
+        if (point) {
+            hideHoverMarker();
+            showPresetDragPointMarker(point);
+            showPresetDragPlacementStatus(state.preset, point);
+        } else {
+            hidePresetDragPointMarker();
+            hideHoverMarker();
+            clearPresetDragPlacementStatus();
+        }
+        previewPreset(state.preset, point);
+        return point;
+    }
+
+    async function finishPresetPointerDrag(ev) {
+        const state = presetPointerDragState;
+        if (!state || !state.preset) return;
+        const point = state.dragging ? updatePresetPointerDragPreview(ev) : null;
+        if (!state.dragging) {
+            cleanupPresetPointerDrag({ keepModal: true });
+            return;
+        }
+        if (!point) {
+            showToast("没有命中可放置平面", "error");
+            cleanupPresetPointerDrag();
+            return;
+        }
+        const preset = state.preset;
+        cleanupPresetPointerDrag();
+        const resolvedPreset = await resolvePresetForApply(preset);
+        if (!resolvedPreset) return;
+        const result = applyPresetAtPoint(resolvedPreset, point, { startRotate: false });
+        const ok = !!(result && result.ok !== false);
+        showToast(ok ? `已放置预设：${resolvedPreset.name}` : "放置预设失败", ok ? "success" : "error");
+    }
+
+    function bindPresetPointerApplyDrag(el, preset, options = {}) {
+        if (!el || !preset || !preset.id) return;
+        el.addEventListener("pointerdown", (ev) => {
+            if (ev.button !== 0) return;
+            const target = ev.target;
+            if (target && target.closest && target.closest("button, input, select, textarea, .preset-item-actions, .preset-inline-input")) return;
+            presetPointerDragState = {
+                preset,
+                sourceEl: el,
+                pointerId: ev.pointerId,
+                startX: ev.clientX,
+                startY: ev.clientY,
+                dragging: false,
+                hideModalOnStart: options.hideModalOnStart === true
+            };
+            try { el.setPointerCapture?.(ev.pointerId); } catch {}
+        });
+        el.addEventListener("pointermove", (ev) => {
+            const state = presetPointerDragState;
+            if (!state || state.sourceEl !== el || state.pointerId !== ev.pointerId) return;
+            const dx = Math.abs(ev.clientX - state.startX);
+            const dy = Math.abs(ev.clientY - state.startY);
+            if (!state.dragging && Math.max(dx, dy) < 5) return;
+            if (!state.dragging) {
+                state.dragging = true;
+                draggingPresetId = preset.id;
+                isDraggingCard = true;
+                el.classList.add("dragging");
+                if (state.hideModalOnStart && typeof hideModal === "function") hideModal();
+            }
+            ev.preventDefault();
+            updatePresetPointerDragPreview(ev);
+        });
+        el.addEventListener("pointerup", (ev) => {
+            const state = presetPointerDragState;
+            if (!state || state.sourceEl !== el || state.pointerId !== ev.pointerId) return;
+            try { el.releasePointerCapture?.(ev.pointerId); } catch {}
+            ev.preventDefault();
+            finishPresetPointerDrag(ev);
+        });
+        el.addEventListener("pointercancel", (ev) => {
+            const state = presetPointerDragState;
+            if (!state || state.sourceEl !== el || state.pointerId !== ev.pointerId) return;
+            cleanupPresetPointerDrag();
+        });
+    }
+
+    function makePresetIconButton(className, iconSvg, title, onClick) {
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = className;
+        btn.innerHTML = iconSvg;
+        btn.title = title;
+        btn.setAttribute("aria-label", title);
+        btn.addEventListener("click", onClick);
+        return btn;
+    }
+
+    function renderPresetLibrary() {
+        if (!presetLibraryList) return;
+        const animatedGroup = presetGroupAnimationTarget;
+        const presets = getPresetList();
+        updatePresetGroupList();
+        const allPresetGroups = expandPresetGroupsWithParents(getPresetGroups());
+        if (presetLibraryStatus) {
+            presetLibraryStatus.textContent = (presets.length || allPresetGroups.length > 1)
+                ? `${presets.length} 个预设，${allPresetGroups.length} 个分组`
+                : "还没有预设，保存当前 PointsBuilder 后会出现在这里";
+        }
+        presetLibraryList.innerHTML = "";
+        const grouped = new Map();
+        for (const preset of presets) {
+            const group = getPresetGroupLabel(preset.group);
+            if (!grouped.has(group)) grouped.set(group, []);
+            grouped.get(group).push(preset);
+        }
+        const groups = sortPresetGroupsForTree(allPresetGroups);
+        for (const group of groups) {
+            if (isPresetGroupHiddenByParent(group)) continue;
+            const groupPresets = grouped.get(group) || [];
+            const section = document.createElement("section");
+            section.className = "preset-group";
+            section.dataset.group = group;
+            section.style.setProperty("--preset-depth", String(getPresetGroupDepth(group)));
+            const groupCollapsed = presetCollapsedGroups.has(group);
+            section.classList.toggle("collapsed", groupCollapsed);
+
+            const head = document.createElement("div");
+            head.className = "card compact-card preset-group-head";
+            head.tabIndex = 0;
+            head.setAttribute("role", "button");
+            const canDragGroup = !isDefaultPresetGroup(group) && !(presetGroupEditState && presetGroupEditState.group === group);
+            head.draggable = canDragGroup;
+            head.setAttribute("aria-expanded", groupCollapsed ? "false" : "true");
+            head.title = "拖动排序；拖到标题中部可变成子分组；单击展开/收起分组";
+            head.addEventListener("dragstart", (ev) => {
+                if (!canDragGroup) {
+                    ev.preventDefault();
+                    return;
+                }
+                draggingPresetGroup = group;
+                suppressPresetGroupToggleUntil = Date.now() + 260;
+                if (ev.dataTransfer) {
+                    ev.dataTransfer.effectAllowed = "move";
+                    ev.dataTransfer.setData("application/x-pointsbuilder-preset-group", group);
+                    ev.dataTransfer.setData("text/plain", group);
+                }
+                head.classList.add("dragging");
+            });
+            head.addEventListener("dragend", () => {
+                draggingPresetGroup = "";
+                suppressPresetGroupToggleUntil = Date.now() + 180;
+                head.classList.remove("dragging");
+                clearPresetGroupDropState(head);
+            });
+            head.addEventListener("dragover", (ev) => {
+                const sourceGroup = getPresetGroupDragSource(ev);
+                if (!sourceGroup || sourceGroup === group || group.startsWith(`${sourceGroup}/`)) return;
+                ev.preventDefault();
+                if (ev.dataTransfer) ev.dataTransfer.dropEffect = "move";
+                const placement = getPresetGroupDropPlacement(ev, head);
+                head.classList.toggle("group-drop-before", placement === "before");
+                head.classList.toggle("group-drop-after", placement === "after");
+                head.classList.toggle("group-drop-inside", placement === "inside");
+            });
+            head.addEventListener("dragleave", () => clearPresetGroupDropState(head));
+            head.addEventListener("drop", (ev) => {
+                const sourceGroup = getPresetGroupDragSource(ev);
+                if (!sourceGroup || sourceGroup === group || group.startsWith(`${sourceGroup}/`)) return;
+                ev.preventDefault();
+                const placement = getPresetGroupDropPlacement(ev, head);
+                clearPresetGroupDropState(head);
+                if (movePresetGroupByDrop(sourceGroup, group, placement)) {
+                    suppressPresetGroupToggleUntil = Date.now() + 220;
+                }
+            });
+            head.addEventListener("click", (ev) => {
+                if (Date.now() < suppressPresetGroupToggleUntil) return;
+                if (ev.target && ev.target.closest && ev.target.closest(".preset-group-actions, .preset-group-title-text, .preset-group-input, .preset-group-handle")) return;
+                togglePresetGroupCollapsed(group);
+            });
+            head.addEventListener("keydown", (ev) => {
+                if (ev.target && ev.target.closest && ev.target.closest("button, input, select, textarea")) return;
+                if (ev.key === "Enter" || ev.key === " ") {
+                    ev.preventDefault();
+                    togglePresetGroupCollapsed(group);
+                }
+            });
+            head.addEventListener("contextmenu", (ev) => {
+                ev.preventDefault();
+                ev.stopPropagation();
+                showActionMenu(ev.clientX, ev.clientY, [
+                    { label: isDefaultPresetGroup(group) ? "新建分组" : "新建子分组", onSelect: () => createPresetGroupFromLibrary(group) },
+                    ...(isDefaultPresetGroup(group) ? [] : [{ label: "重命名分组", onSelect: () => beginPresetGroupRename(group) }]),
+                    ...(isDefaultPresetGroup(group) ? [] : [{ label: "删除分组", danger: true, onSelect: () => deletePresetGroup(group) }])
+                ]);
+            });
+            const collapseBtn = makePresetIconButton(
+                "iconbtn preset-icon-btn preset-group-toggle",
+                '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m8 10 4 4 4-4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+                groupCollapsed ? "展开分组" : "收起分组",
+                (ev) => {
+                    ev.stopPropagation();
+                    togglePresetGroupCollapsed(group);
+                }
+            );
+            collapseBtn.setAttribute("aria-expanded", groupCollapsed ? "false" : "true");
+            const groupHandle = document.createElement("div");
+            groupHandle.className = "handle preset-group-handle";
+            groupHandle.textContent = "≡";
+            groupHandle.title = "拖动分组";
+            groupHandle.setAttribute("aria-hidden", "true");
+            const title = document.createElement("div");
+            title.className = "preset-group-title";
+            const folderIcon = document.createElement("span");
+            folderIcon.className = "preset-folder-icon";
+            folderIcon.setAttribute("aria-hidden", "true");
+            const titleBody = document.createElement("span");
+            titleBody.className = "preset-group-title-text";
+            const isEditingGroup = presetGroupEditState && presetGroupEditState.group === group;
+            if (isEditingGroup) {
+                const input = document.createElement("input");
+                input.className = "preset-inline-input preset-group-input";
+                input.value = presetGroupEditState.value ?? getPresetGroupLeaf(group);
+                input.addEventListener("input", () => { presetGroupEditState.value = input.value; });
+                input.addEventListener("pointerdown", (ev) => ev.stopPropagation());
+                input.addEventListener("click", (ev) => ev.stopPropagation());
+                input.addEventListener("keydown", (ev) => {
+                    if (ev.key === "Enter") {
+                        ev.preventDefault();
+                        commitPresetGroupRename(group, input.value);
+                    } else if (ev.key === "Escape") {
+                        ev.preventDefault();
+                        presetGroupEditState = null;
+                        schedulePresetLibraryRender();
+                    }
+                });
+                input.addEventListener("blur", () => commitPresetGroupRename(group, input.value));
+                titleBody.appendChild(input);
+                requestAnimationFrame(() => {
+                    if (presetGroupEditState && presetGroupEditState.group === group && input.isConnected) {
+                        input.focus();
+                        input.select();
+                    }
+                });
+            } else {
+                titleBody.textContent = getPresetGroupLeaf(group);
+                titleBody.title = "点击修改组名";
+                titleBody.addEventListener("click", (ev) => {
+                    ev.stopPropagation();
+                    beginPresetGroupRename(group);
+                });
+            }
+            title.append(folderIcon, titleBody);
+            const meta = document.createElement("div");
+            meta.className = "preset-group-meta";
+            meta.textContent = `${groupPresets.length} 个`;
+            const groupActions = document.createElement("div");
+            groupActions.className = "preset-group-actions";
+            const addChildGroupTitle = isDefaultPresetGroup(group) ? "新建分组" : "新建子分组";
+            const addChildGroupBtn = makePresetIconButton(
+                "iconbtn preset-icon-btn",
+                '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7.5A2.5 2.5 0 0 1 6.5 5H10l2 2h5.5A2.5 2.5 0 0 1 20 9.5v7A2.5 2.5 0 0 1 17.5 19h-11A2.5 2.5 0 0 1 4 16.5v-9ZM12 10v6m-3-3h6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+                addChildGroupTitle,
+                (ev) => {
+                    ev.stopPropagation();
+                    createPresetGroupFromLibrary(group);
+                }
+            );
+            groupActions.appendChild(addChildGroupBtn);
+            if (!isDefaultPresetGroup(group)) {
+                const deleteGroupBtn = makePresetIconButton(
+                    "iconbtn danger preset-icon-btn",
+                    '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 7h12m-9 0V5.8A1.8 1.8 0 0 1 10.8 4h2.4A1.8 1.8 0 0 1 15 5.8V7m-7 0 .6 12h6.8L16 7M10 11v5m4-5v5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+                    "删除分组",
+                    (ev) => {
+                        ev.stopPropagation();
+                        deletePresetGroup(group);
+                    }
+                );
+                groupActions.appendChild(deleteGroupBtn);
+            }
+            head.append(groupHandle, collapseBtn, title, groupActions);
+            section.appendChild(head);
+
+            const list = document.createElement("div");
+            list.className = "preset-items preset-group-body";
+            list.dataset.group = group;
+            list.addEventListener("dragover", (ev) => {
+                const sourceGroup = getPresetGroupDragSource(ev);
+                if (sourceGroup) {
+                    if (sourceGroup === group || group.startsWith(`${sourceGroup}/`)) return;
+                    ev.preventDefault();
+                    if (ev.dataTransfer) ev.dataTransfer.dropEffect = "move";
+                    list.classList.add("group-drop-inside");
+                    return;
+                }
+                ev.preventDefault();
+                ev.dataTransfer.dropEffect = "move";
+            });
+            list.addEventListener("dragleave", () => {
+                list.classList.remove("group-drop-inside");
+            });
+            list.addEventListener("drop", (ev) => {
+                const sourceGroup = getPresetGroupDragSource(ev);
+                if (sourceGroup) {
+                    if (sourceGroup === group || group.startsWith(`${sourceGroup}/`)) return;
+                    ev.preventDefault();
+                    list.classList.remove("group-drop-inside");
+                    if (movePresetGroupByDrop(sourceGroup, group, "inside")) {
+                        suppressPresetGroupToggleUntil = Date.now() + 220;
+                    }
+                    return;
+                }
+                ev.preventDefault();
+                const sourceId = ev.dataTransfer ? ev.dataTransfer.getData("text/plain") : "";
+                if (!sourceId) return;
+                movePresetByDrop(sourceId, group, null);
+            });
+            const hasChildGroups = groups.some((candidate) => candidate !== group && getPresetParentGroup(candidate) === group);
+            if (!groupPresets.length && !hasChildGroups) {
+                const emptyGroup = document.createElement("div");
+                emptyGroup.className = "preset-empty preset-group-empty";
+                emptyGroup.textContent = "空分组";
+                list.appendChild(emptyGroup);
+            }
+            for (const preset of groupPresets) {
+                const row = document.createElement("article");
+                row.className = "card compact-card preset-item";
+                row.draggable = false;
+                row.dataset.presetId = preset.id;
+        row.addEventListener("dragstart", (ev) => {
+            const handle = ev.target && ev.target.closest ? ev.target.closest(".preset-drag-handle") : null;
+            if (!handle || handle.closest(".preset-item") !== row) {
+                ev.preventDefault();
+                return;
+            }
+            draggingPresetId = preset.id;
+            isDraggingCard = true;
+            ev.dataTransfer.effectAllowed = "copyMove";
+                    ev.dataTransfer.setData("text/plain", preset.id);
+                    ev.dataTransfer.setData("application/x-pointsbuilder-preset", preset.id);
+                    previewPreset(preset);
+                    row.classList.add("dragging");
+                });
+        row.addEventListener("dragend", () => {
+            clearPresetDragLockPlane();
+            draggingPresetId = "";
+            isDraggingCard = false;
+            clearPresetPreview();
+                    hidePresetDragPointMarker();
+                    clearPresetDragPlacementStatus();
+                    row.classList.remove("dragging");
+                });
+                row.addEventListener("dragover", (ev) => {
+                    if (getPresetGroupDragSource(ev)) return;
+                    ev.preventDefault();
+                    row.classList.add("drop-target");
+                    ev.dataTransfer.dropEffect = "move";
+                });
+                row.addEventListener("dragleave", () => {
+                    row.classList.remove("drop-target");
+                });
+                row.addEventListener("drop", (ev) => {
+                    if (getPresetGroupDragSource(ev)) return;
+                    ev.preventDefault();
+                    row.classList.remove("drop-target");
+                    const sourceId = ev.dataTransfer ? ev.dataTransfer.getData("text/plain") : "";
+                    if (!sourceId || sourceId === preset.id) return;
+                    movePresetByDrop(sourceId, group, preset.id);
+                });
+
+                const dragHandle = document.createElement("div");
+                dragHandle.className = "handle preset-drag-handle";
+                dragHandle.textContent = "≡";
+                dragHandle.title = "拖动预设";
+                dragHandle.setAttribute("aria-hidden", "true");
+
+                const info = document.createElement("div");
+                info.className = "preset-item-info";
+                const name = document.createElement("div");
+                name.className = "preset-item-name";
+                const isEditingItem = presetItemEditState && presetItemEditState.id === preset.id;
+                dragHandle.draggable = !isEditingItem;
+                if (isEditingItem) {
+                    const input = document.createElement("input");
+                    input.className = "preset-inline-input preset-item-input";
+                    input.value = presetItemEditState.value ?? (preset.name || "未命名预设");
+                    input.addEventListener("input", () => { presetItemEditState.value = input.value; });
+                    input.addEventListener("keydown", (ev) => {
+                        if (ev.key === "Enter") {
+                            ev.preventDefault();
+                            commitPresetItemRename(preset.id, input.value);
+                        } else if (ev.key === "Escape") {
+                            ev.preventDefault();
+                            presetItemEditState = null;
+                            schedulePresetLibraryRender();
+                        }
+                    });
+                    input.addEventListener("blur", () => commitPresetItemRename(preset.id, input.value));
+                    name.appendChild(input);
+                    requestAnimationFrame(() => {
+                        if (presetItemEditState && presetItemEditState.id === preset.id && input.isConnected) {
+                            input.focus();
+                            input.select();
+                        }
+                    });
+                } else {
+                    const text = document.createElement("span");
+                    text.className = "preset-item-name-text";
+                    text.textContent = preset.name || "未命名预设";
+                    text.title = "点击修改预设名";
+                    text.addEventListener("click", (ev) => {
+                        if (Date.now() < presetPointerDragClickSuppressUntil) return;
+                        ev.stopPropagation();
+                        beginPresetItemRename(preset);
+                    });
+                    name.appendChild(text);
+                }
+                const details = document.createElement("div");
+                details.className = "preset-item-details";
+                const origin = normalizePointValue(preset.origin);
+                const count = Array.isArray(preset.children) ? preset.children.length : 0;
+                const variableCount = getPresetVariableEntries(preset.variables).length;
+                details.textContent = `${count} 张卡片 · ${variableCount ? `${variableCount} 个变量 · ` : ""}原点 ${origin.x}, ${origin.y}, ${origin.z}`;
+                info.append(name, details);
+                if (!isEditingItem) bindPresetPointerApplyDrag(info, preset);
+
+                const actions = document.createElement("div");
+                actions.className = "preset-item-actions";
+                const applyBtn = makePresetIconButton(
+                    "btn icon primary preset-icon-btn",
+                    '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 5h10a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2Zm5 3v8m-4-4h8" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+                    "拾取生成",
+                    () => applyPresetFromLibrary(preset)
+                );
+                const overwriteBtn = makePresetIconButton(
+                    "btn icon preset-icon-btn",
+                    '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 7h10m-10 5h6m-4 9h8a2 2 0 0 0 2-2v-8l-4-4H9a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2Zm4-12v5m-2-2h4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+                    "用当前内容覆盖",
+                    () => {
+                    const saved = saveCurrentAsPreset({
+                        name: preset.name,
+                        group: getPresetGroupLabel(preset.group),
+                        origin: normalizePointValue(preset.origin),
+                        overwriteId: preset.id
+                    });
+                    showToast(saved ? `已覆盖预设：${preset.name}` : "覆盖预设失败", saved ? "success" : "error");
+                    }
+                );
+                const deleteBtn = makePresetIconButton(
+                    "btn icon danger preset-icon-btn",
+                    '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 7h12m-9 0V5.8A1.8 1.8 0 0 1 10.8 4h2.4A1.8 1.8 0 0 1 15 5.8V7m-7 0 .6 12h6.8L16 7M10 11v5m4-5v5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+                    "删除",
+                    () => deletePresetById(preset.id)
+                );
+                actions.append(applyBtn, overwriteBtn, deleteBtn);
+                row.append(dragHandle, info, actions);
+                list.appendChild(row);
+            }
+            section.appendChild(list);
+            const collapsed = presetCollapsedGroups.has(group);
+            const wasCollapsed = presetGroupCollapsedSnapshot.get(group);
+            const shouldAnimate = group === animatedGroup && typeof wasCollapsed === "boolean" && wasCollapsed !== collapsed;
+            if (!shouldAnimate) {
+                list.style.transition = "none";
+                presetLibraryList.appendChild(section);
+                const finalHeight = list.scrollHeight;
+                list.style.maxHeight = collapsed ? "0px" : `${finalHeight}px`;
+                list.style.opacity = collapsed ? "0" : "1";
+                list.style.transform = collapsed ? "translateY(-4px)" : "translateY(0)";
+                requestAnimationFrame(() => {
+                    if (list.isConnected) list.style.transition = "";
+                });
+            } else {
+                presetLibraryList.appendChild(section);
+                const startHeight = list.scrollHeight;
+                if (collapsed) {
+                    list.style.maxHeight = `${startHeight}px`;
+                    list.style.opacity = "1";
+                    list.style.transform = "translateY(0)";
+                    requestAnimationFrame(() => {
+                        list.style.maxHeight = "0px";
+                        list.style.opacity = "0";
+                        list.style.transform = "translateY(-4px)";
+                    });
+                } else {
+                    list.style.maxHeight = "0px";
+                    list.style.opacity = "0";
+                    list.style.transform = "translateY(-4px)";
+                    requestAnimationFrame(() => {
+                        const nextHeight = list.scrollHeight;
+                        list.style.maxHeight = `${nextHeight}px`;
+                        list.style.opacity = "1";
+                        list.style.transform = "translateY(0)";
+                    });
+                }
+            }
+            presetGroupCollapsedSnapshot.set(group, collapsed);
+        }
+        if (animatedGroup && presetGroupAnimationTarget === animatedGroup) presetGroupAnimationTarget = "";
+    }
+
+    function schedulePresetLibraryRender() {
+        if (presetLibraryRenderRaf) return;
+        presetLibraryRenderRaf = requestAnimationFrame(() => {
+            presetLibraryRenderRaf = 0;
+            renderPresetLibrary();
+        });
+    }
+
+    function getPresetImportOptions() {
+        return { overwrite: false };
+    }
+
+    function bindPresetLibraryControls() {
+        if (!rightPresetsPage) return;
+        fillPresetForm();
+        btnClosePresetSave?.addEventListener("click", hidePresetSaveDialog);
+        btnCancelPresetSave?.addEventListener("click", hidePresetSaveDialog);
+        presetSaveMask?.addEventListener("click", hidePresetSaveDialog);
+        btnPresetUseCurrentOrigin?.addEventListener("click", () => setPresetOriginInputs(getPresetOriginFallback()));
+        btnPresetPickOrigin?.addEventListener("click", () => {
+            hidePresetSaveDialog();
+            startPointPick({
+                label: "拾取预设原点",
+                onPick: (point) => {
+                    showPresetSaveDialog();
+                    setPresetOriginInputs(point);
+                    requestAnimationFrame(() => {
+                        setPresetOriginInputs(point);
+                        btnPresetSaveCurrent?.focus();
+                    });
+                    showToast("已拾取预设原点", "success");
+                }
+            });
+        });
+        btnPresetCreateGroup?.addEventListener("click", () => {
+            createPresetGroup("");
+        });
+        btnPresetCreateLibraryGroup?.addEventListener("click", () => {
+            setRightPanelPage("presets");
+            createPresetGroupFromLibrary("");
+        });
+        presetLibraryList?.addEventListener("contextmenu", (ev) => {
+            if (ev.target && ev.target.closest && ev.target.closest(".preset-item, button, input, select")) return;
+            ev.preventDefault();
+            const group = ev.target && ev.target.closest ? ev.target.closest(".preset-group")?.dataset?.group || "" : "";
+            showActionMenu(ev.clientX, ev.clientY, [
+                { label: group ? "新建子分组" : "新建分组", onSelect: () => createPresetGroupFromLibrary(group) },
+                ...(group ? [{ label: "重命名分组", onSelect: () => beginPresetGroupRename(group) }] : [])
+            ]);
+        });
+        btnPresetSaveCurrent?.addEventListener("click", () => {
+            const preset = savePresetFromPanel();
+            showToast(preset ? `已保存预设：${preset.name}` : "保存预设已取消", preset ? "success" : "info");
+        });
+        btnPresetExportZip?.addEventListener("click", async () => {
+            try {
+                const count = await exportPresetLibraryZip();
+                showToast(`已导出 ${count} 个预设`, "success");
+            } catch (e) {
+                showToast(`导出预设失败：${e.message || e}`, "error");
+            }
+        });
+        btnPresetImportFolder?.addEventListener("click", async () => {
+            if (!window.showDirectoryPicker) {
+                showToast("当前浏览器不支持选择文件夹，请导入 zip", "info");
+                filePresetJson?.click();
+                return;
+            }
+            try {
+                const count = await importPresetDirectory(getPresetImportOptions());
+                showToast(`已导入 ${count} 个预设`, "success");
+            } catch (e) {
+                if (e && e.name === "AbortError") {
+                    showToast("取消导入", "info");
+                    return;
+                }
+                showToast(`导入预设失败：${e.message || e}`, "error");
+            }
+        });
+        btnPresetImportZip?.addEventListener("click", () => filePresetJson?.click());
+        renderPresetLibrary();
+    }
+
     const restoredState = normalizeState(loadAutoState());
     if (restoredState) state = restoredState;
+    state.variables = normalizeVariableState(state.variables);
+    presetList = dedupePresetList(loadPresetList().concat(state.presets || []));
+    presetGroups = dedupePresetGroups(loadPresetGroups().concat(presetList.map((it) => it.group)));
+    state.presets = presetList;
 
     let autoSaveTimer = 0;
     let lastSavedStateJson = "";
@@ -1898,9 +4514,11 @@ function initPointsBuilderMain() {
         btnPickLine,
         btnPickTriangle,
         btnPickPoint,
+        btnLocalRotate,
         btnFullscreen,
         btnResetCamera,
         btnLoadJson,
+        btnApplyPreset,
         btnHotkeys,
         btnOpenHotkeys,
         btnCloseHotkeys,
@@ -1916,7 +4534,8 @@ function initPointsBuilderMain() {
         showToast,
         downloadText,
         getSettingsPayload: collectSettingsPayload,
-        applySettingsPayload
+        applySettingsPayload,
+        getPresetList: () => getPresetList()
     });
     ({
         hotkeys,
@@ -2044,9 +4663,9 @@ function initPointsBuilderMain() {
         historyCapture,
         setActiveVecTarget: (target) => { activeVecTarget = target; },
         getParamStep: () => paramStep,
-        enableExprNumbers: () => hasCompositionNumericContext(),
-        getExprSuggestions: () => getCompositionNumericSuggestions(),
-        getVec3VariableOptions: () => getCompositionVec3VariableOptions(),
+        enableExprNumbers: () => getEffectiveNumericSuggestions().length > 0,
+        getExprSuggestions: () => getEffectiveNumericSuggestions(),
+        getVec3VariableOptions: () => getEffectiveVec3VariableOptions(),
         parseExprNumber: (raw) => num(raw)
     });
 
@@ -2880,6 +5499,11 @@ function initPointsBuilderMain() {
     let pointPickPreviewObj = null;
     let pointPickPreviewBuf = null;
     let pointPickPreviewCount = 0;
+    let presetPreviewObj = null;
+    let presetPreviewBuf = null;
+    let presetPreviewCount = 0;
+    let presetDragPointObj = null;
+    let presetDragPointBuf = null;
     let pointPickPreviewRaf = 0;
     let pointPickPreviewPendingPoint = null;
     let pointPickPreviewLastTarget = null;
@@ -2923,6 +5547,7 @@ function initPointsBuilderMain() {
     const OFFSET_PREVIEW_HEX = 0x8a8a8a;
     const LINE_PICK_PREVIEW_HEX = 0x33a1ff;
     const POINT_PICK_PREVIEW_HEX = 0x5dd6ff;
+    const PRESET_PREVIEW_HEX = 0x6ecbff;
     const ROTATE_POINT_HEX = 0x64f59d;
     const defaultPointColor = new THREE.Color(DEFAULT_POINT_HEX);
     const focusPointColor = new THREE.Color(FOCUS_POINT_HEX);
@@ -2933,6 +5558,7 @@ function initPointsBuilderMain() {
     const offsetPreviewColor = new THREE.Color(OFFSET_PREVIEW_HEX);
     const linePickPreviewColor = new THREE.Color(LINE_PICK_PREVIEW_HEX);
     const pointPickPreviewColor = new THREE.Color(POINT_PICK_PREVIEW_HEX);
+    const presetPreviewColor = new THREE.Color(PRESET_PREVIEW_HEX);
     const rotatePointColor = new THREE.Color(ROTATE_POINT_HEX);
 
     let pickMarkers = [];
@@ -2963,6 +5589,9 @@ function initPointsBuilderMain() {
     let pointPickKeepFocusId = null;
     let pointPickHoverPoint = null;
     let pointPickPendingMapped = null;
+    let pointPickCallback = null;
+    let pointPickCallbackLabel = "";
+    let pointPickCallbackRotate = false;
     let pointPickMenuAnchorX = NaN;
     let pointPickMenuAnchorY = NaN;
     let activeVecTarget = null;
@@ -3243,6 +5872,45 @@ function initPointsBuilderMain() {
         hoverMarker.visible = false;
     }
 
+    function ensurePresetDragPointMarker() {
+        if (presetDragPointObj || !scene) return;
+        const geom = new THREE.BufferGeometry();
+        presetDragPointBuf = new Float32Array(3);
+        geom.setAttribute("position", new THREE.BufferAttribute(presetDragPointBuf, 3));
+        const mat = new THREE.PointsMaterial({
+            size: Math.max(pointSize * 1.7, pointSize + 0.18),
+            sizeAttenuation: true,
+            color: pointPickPreviewColor.getHex(),
+            transparent: true,
+            opacity: 0.92,
+            depthWrite: false
+        });
+        presetDragPointObj = new THREE.Points(geom, mat);
+        presetDragPointObj.visible = false;
+        scene.add(presetDragPointObj);
+    }
+
+    function showPresetDragPointMarker(point) {
+        if (!point) {
+            hidePresetDragPointMarker();
+            return;
+        }
+        ensurePresetDragPointMarker();
+        if (!presetDragPointObj || !presetDragPointBuf) return;
+        const p = normalizePointValue(point);
+        presetDragPointBuf[0] = p.x;
+        presetDragPointBuf[1] = p.y;
+        presetDragPointBuf[2] = p.z;
+        const pos = presetDragPointObj.geometry?.getAttribute?.("position");
+        if (pos) pos.needsUpdate = true;
+        presetDragPointObj.geometry?.computeBoundingSphere?.();
+        presetDragPointObj.visible = true;
+    }
+
+    function hidePresetDragPointMarker() {
+        if (presetDragPointObj) presetDragPointObj.visible = false;
+    }
+
     function clampNum(v, min, max) {
         const x = Number(v);
         if (!Number.isFinite(x)) return min;
@@ -3276,6 +5944,10 @@ function initPointsBuilderMain() {
         if (pointPickPreviewObj && pointPickPreviewObj.material) {
             pointPickPreviewObj.material.size = pointSize;
             pointPickPreviewObj.material.needsUpdate = true;
+        }
+        if (presetDragPointObj && presetDragPointObj.material) {
+            presetDragPointObj.material.size = Math.max(pointSize * 1.7, pointSize + 0.18);
+            presetDragPointObj.material.needsUpdate = true;
         }
 
     }
@@ -3564,7 +6236,7 @@ function initPointsBuilderMain() {
     }
 
     function shouldApplyLockPlane() {
-        return !!(linePickMode || pointPickMode || offsetMode || bezierHandleDrag || bezierCreateState);
+        return !!(linePickMode || pointPickMode || offsetMode || draggingPresetId || bezierHandleDrag || bezierCreateState);
     }
 
     function snapValue(v, step) {
@@ -3736,13 +6408,14 @@ function initPointsBuilderMain() {
         return base;
     }
 
-    function updatePickHoverFromMapped(mapped, pointerId = null) {
+    function updatePickHoverFromMapped(mapped, pointerId = null, ev = null) {
         if (!mapped) {
             hideHoverMarker();
             if (linePickMode) hideLinePickPreview();
             if (pointPickMode) {
                 pointPickHoverPoint = null;
                 hidePointPickPreview();
+                if (pointPickCallback && pointPickCallback.__presetPreview) clearPresetPreview();
             }
             if (offsetMode) {
                 offsetHoverPoint = null;
@@ -3758,7 +6431,11 @@ function initPointsBuilderMain() {
         } else if (pointPickMode) {
             setHoverMarkerColor(0xffcc33);
             pointPickHoverPoint = mapped;
-            queuePointPickPreview(mapped);
+            if (pointPickCallback && pointPickCallback.__presetPreview) {
+                previewPreset(pointPickCallback.__presetPreview, mapped);
+            } else {
+                queuePointPickPreview(mapped);
+            }
         } else if (offsetMode) {
             setHoverMarkerColor(offsetPointColor.getHex());
             offsetHoverPoint = mapped;
@@ -3766,7 +6443,7 @@ function initPointsBuilderMain() {
         } else if (rotateMode) {
             setHoverMarkerColor(rotatePointColor.getHex());
             if (rotateDragPointerId !== null && (pointerId === null || pointerId === rotateDragPointerId)) {
-                updateRotateFromMappedPoint(mapped);
+                updateRotateFromMappedPoint(mapped, ev);
             }
         }
         showHoverMarker(mapped);
@@ -3989,6 +6666,15 @@ function initPointsBuilderMain() {
             });
         }
         renderer.domElement.addEventListener("contextmenu", onCanvasContextMenu);
+        renderer.domElement.addEventListener("dragover", onPresetCanvasDragOver);
+        renderer.domElement.addEventListener("drop", onPresetCanvasDrop);
+        renderer.domElement.addEventListener("dragleave", () => {
+            clearPresetPreview();
+            hidePresetDragPointMarker();
+            hideHoverMarker();
+            clearPresetDragPlacementStatus();
+            clearPresetDragLockPlane();
+        });
         if (inpPointSize) {
             inpPointSize.value = String(pointSize);
             inpPointSize.addEventListener("input", () => {
@@ -4566,6 +7252,7 @@ function initPointsBuilderMain() {
         // ✅ 根据当前聚焦的卡片，重新着色
         updateFocusColors();
         updateOffsetPreview(offsetHoverPoint);
+        updatePresetPreviewSize();
         updateBezierGuidePreview();
 
         // 不自动重置镜头：由用户手动点击“重置镜头”
@@ -4908,6 +7595,82 @@ function initPointsBuilderMain() {
         cancelPointPickPreviewRaf();
         resetPointPickPreviewFrameState();
         if (pointPickPreviewObj) pointPickPreviewObj.visible = false;
+    }
+
+    function ensurePresetPreviewObj() {
+        if (presetPreviewObj || !scene) return;
+        const geom = new THREE.BufferGeometry();
+        const mat = new THREE.PointsMaterial({
+            size: Math.max(pointSize * 1.25, pointSize + 0.08),
+            sizeAttenuation: true,
+            color: presetPreviewColor.getHex(),
+            transparent: true,
+            opacity: 0.72,
+            depthWrite: false
+        });
+        presetPreviewObj = new THREE.Points(geom, mat);
+        presetPreviewObj.visible = false;
+        scene.add(presetPreviewObj);
+    }
+
+    function updatePresetPreviewSize() {
+        if (!presetPreviewObj || !presetPreviewObj.material) return;
+        presetPreviewObj.material.size = Math.max(pointSize * 1.25, pointSize + 0.08);
+        presetPreviewObj.material.needsUpdate = true;
+    }
+
+    function clearPresetPreview() {
+        if (presetPreviewObj) presetPreviewObj.visible = false;
+    }
+
+    function previewPreset(preset, anchorPoint = null) {
+        if (!preset || !scene) return;
+        const normalized = normalizePresetList([preset])[0];
+        if (!normalized || !normalized.children.length) {
+            clearPresetPreview();
+            return;
+        }
+        let previewPoints = null;
+        try {
+            const defaultValues = getPresetVariableDefaultValues(normalized.variables);
+            const sourceChildren = normalized.variables
+                ? applyPresetVariableValuesToChildren(deepCloneJson(normalized.children || []) || [], defaultValues)
+                : normalized.children;
+            const children = preparePresetChildrenForInsertion(sourceChildren);
+            const res = evalBuilderWithMeta(children, U.v(0, 1, 0));
+            previewPoints = res && Array.isArray(res.points) ? res.points : null;
+        } catch {
+            previewPoints = null;
+        }
+        if (!previewPoints || !previewPoints.length) {
+            clearPresetPreview();
+            return;
+        }
+        ensurePresetPreviewObj();
+        if (!presetPreviewObj) return;
+        const geom = presetPreviewObj.geometry;
+        const count = previewPoints.length;
+        if (!presetPreviewBuf || presetPreviewCount !== count) {
+            presetPreviewBuf = new Float32Array(count * 3);
+            presetPreviewCount = count;
+            geom.setAttribute("position", new THREE.BufferAttribute(presetPreviewBuf, 3));
+        }
+        let o = 0;
+        const anchor = anchorPoint ? normalizePointValue(anchorPoint) : null;
+        const origin = normalizePointValue(normalized.origin);
+        const dx = anchor ? anchor.x - origin.x : 0;
+        const dy = anchor ? anchor.y - origin.y : 0;
+        const dz = anchor ? anchor.z - origin.z : 0;
+        for (const p of previewPoints) {
+            presetPreviewBuf[o++] = (Number(p?.x) || 0) + dx;
+            presetPreviewBuf[o++] = (Number(p?.y) || 0) + dy;
+            presetPreviewBuf[o++] = (Number(p?.z) || 0) + dz;
+        }
+        const posAttr = geom.getAttribute("position");
+        if (posAttr) posAttr.needsUpdate = true;
+        geom.computeBoundingSphere();
+        updatePresetPreviewSize();
+        presetPreviewObj.visible = true;
     }
 
     function updatePointPickPreview(targetPoint) {
@@ -6075,9 +8838,73 @@ function collectOwnerIdsInViewBox(rect) {
     return collectViewBoxSelection(rect).ownerIds;
 }
 
+function isPreviewSelectableGroupChild(node) {
+    if (!node || !node.id) return false;
+    if (String(node.kind || "").startsWith("apply_")) return false;
+    return nodePointSegments instanceof Map && nodePointSegments.has(node.id);
+}
+
+function expandPreviewSelectionWithCompleteGroups(ids) {
+    const selected = new Set((Array.isArray(ids) ? ids : []).filter(Boolean));
+    if (!selected.size) return [];
+    let changed = true;
+    while (changed) {
+        changed = false;
+        const visit = (list) => {
+            const arr = Array.isArray(list) ? list : [];
+            for (const node of arr) {
+                if (!node || !node.id) continue;
+                if (isBuilderContainerKind(node.kind) && Array.isArray(node.children)) {
+                    const required = node.children
+                        .filter(isPreviewSelectableGroupChild)
+                        .map((child) => child.id);
+                    if (required.length && required.every((id) => selected.has(id)) && !selected.has(node.id)) {
+                        selected.add(node.id);
+                        changed = true;
+                    }
+                    visit(node.children);
+                }
+            }
+        };
+        visit(state?.root?.children || []);
+    }
+    const pruneDescendants = (list, ancestorSelected = false) => {
+        const arr = Array.isArray(list) ? list : [];
+        for (const node of arr) {
+            if (!node || !node.id) continue;
+            const selectedHere = selected.has(node.id);
+            if (ancestorSelected) selected.delete(node.id);
+            if (Array.isArray(node.children)) {
+                pruneDescendants(node.children, ancestorSelected || selectedHere);
+            }
+        }
+    };
+    pruneDescendants(state?.root?.children || []);
+    return Array.from(selected);
+}
+
+function buildPreviewSelectionIds(ids, additive = false) {
+    const base = [];
+    if (additive && typeof getCardSelectionIds === "function") {
+        const current = getCardSelectionIds();
+        if (current && current.size) base.push(...Array.from(current).filter(Boolean));
+    }
+    base.push(...(Array.isArray(ids) ? ids.filter(Boolean) : []));
+    return expandPreviewSelectionWithCompleteGroups(base);
+}
+
+function getPreviewSelectionFocusId(ids) {
+    const list = Array.isArray(ids) ? ids : [];
+    for (const id of list) {
+        const ctx = findNodeContextById(id);
+        if (ctx && ctx.node && isBuilderContainerKind(ctx.node.kind)) return id;
+    }
+    return list.find(Boolean) || null;
+}
+
 function applyViewBoxSelection(ownerIds, options = {}) {
-    const ids = Array.isArray(ownerIds) ? ownerIds.filter(Boolean) : [];
     const replace = !options.additive;
+    const ids = buildPreviewSelectionIds(ownerIds, !!options.additive);
     const pointIndicesByOwner = options.pointIndicesByOwner instanceof Map ? options.pointIndicesByOwner : new Map();
     const previewPointIndicesByOwner = options.previewPointIndicesByOwner instanceof Map ? options.previewPointIndicesByOwner : new Map();
     blurActiveElementForCanvas();
@@ -6101,8 +8928,8 @@ function applyViewBoxSelection(ownerIds, options = {}) {
         if (replace && focusedNodeId) setFocusedNode(null, true);
         return;
     }
-    const focusId = ids[0];
-    focusCardById(focusId, true, false, true);
+    const focusId = getPreviewSelectionFocusId(ids);
+    focusCardById(focusId, true, false, false);
 }
 
 function finishViewBoxSelection(ev) {
@@ -6495,6 +9322,15 @@ function ensureRotateHistoryCaptured(reason = "rotate_drag") {
     rotateHistoryCaptured = true;
 }
 
+function normalizeLocalRotateAnchor(anchor) {
+    const a = anchor || {};
+    return {
+        x: num(a.x),
+        y: num(a.y),
+        z: num(a.z)
+    };
+}
+
 function materializeRotateBinding(binding) {
     if (!binding || binding.type !== "deferred_wrapper") return binding;
     const sourceIds = normalizeOffsetTargetIds(Array.isArray(binding.sourceIds) ? binding.sourceIds : []);
@@ -6510,18 +9346,58 @@ function materializeRotateBinding(binding) {
             az: axis.z
         }
     });
-    if (sourceIds.length > 1) {
-        const rows = [];
-        for (const id of sourceIds) {
-            const ctx = findNodeContextById(id);
-            if (!ctx || !ctx.node || !Array.isArray(ctx.parentList)) return null;
-            rows.push({ id, ctx });
+
+    const rows = [];
+    for (const id of sourceIds) {
+        const ctx = findNodeContextById(id);
+        if (!ctx || !ctx.node || !Array.isArray(ctx.parentList)) return null;
+        rows.push({ id, ctx });
+    }
+    const firstList = rows[0].ctx.parentList;
+    for (const row of rows) {
+        if (row.ctx.parentList !== firstList) return null;
+    }
+    const orderedRows = rows.slice().sort((a, b) => a.ctx.index - b.ctx.index);
+
+    if (binding.localRotate) {
+        const anchor = normalizeLocalRotateAnchor(binding.anchor);
+        const inner = makeNode("add_builder", {
+            params: { ox: -anchor.x, oy: -anchor.y, oz: -anchor.z }
+        });
+        inner.children = orderedRows.map((row) => row.ctx.node);
+
+        const parentNode = orderedRows[0].ctx.parentNode || null;
+        const canReuseParentGroup = !!(
+            parentNode &&
+            parentNode.kind === "add_builder" &&
+            Array.isArray(parentNode.children) &&
+            parentNode.children === firstList &&
+            orderedRows.length === firstList.length &&
+            orderedRows.every((row, index) => row.ctx.index === index)
+        );
+
+        if (canReuseParentGroup) {
+            const p = parentNode.params || (parentNode.params = {});
+            p.ox = num(p.ox) + anchor.x;
+            p.oy = num(p.oy) + anchor.y;
+            p.oz = num(p.oz) + anchor.z;
+            parentNode.children = [inner, rotateNode];
+            binding.wrapperId = parentNode.id;
+            binding.innerWrapperId = inner.id;
+        } else {
+            const outer = makeNode("add_builder", {
+                params: { ox: anchor.x, oy: anchor.y, oz: anchor.z }
+            });
+            outer.children = [inner, rotateNode];
+            const removeRows = orderedRows.slice().sort((a, b) => b.ctx.index - a.ctx.index);
+            for (const row of removeRows) {
+                firstList.splice(row.ctx.index, 1);
+            }
+            firstList.splice(orderedRows[0].ctx.index, 0, outer);
+            binding.wrapperId = outer.id;
+            binding.innerWrapperId = inner.id;
         }
-        const firstList = rows[0].ctx.parentList;
-        for (const row of rows) {
-            if (row.ctx.parentList !== firstList) return null;
-        }
-        const orderedRows = rows.slice().sort((a, b) => a.ctx.index - b.ctx.index);
+    } else {
         const wrapper = makeNode("add_builder", { params: { ox: 0, oy: 0, oz: 0 } });
         wrapper.children = orderedRows.map((row) => row.ctx.node);
         const removeRows = orderedRows.slice().sort((a, b) => b.ctx.index - a.ctx.index);
@@ -6530,13 +9406,6 @@ function materializeRotateBinding(binding) {
         }
         wrapper.children.push(rotateNode);
         firstList.splice(orderedRows[0].ctx.index, 0, wrapper);
-        binding.wrapperId = wrapper.id;
-    } else {
-        const ctx = findNodeContextById(sourceIds[0]);
-        if (!ctx || !ctx.node || !Array.isArray(ctx.parentList)) return null;
-        const wrapper = makeNode("add_builder", { params: { ox: 0, oy: 0, oz: 0 } });
-        wrapper.children = [ctx.node, rotateNode];
-        ctx.parentList.splice(ctx.index, 1, wrapper);
         binding.wrapperId = wrapper.id;
     }
     binding.type = "param";
@@ -6671,6 +9540,104 @@ function addRotateForTargetIds(ids) {
         initialDeg: 0
     };
     startRotateMode([], { bindings: [binding], sourceIds: [row.id], center: centerSeed, axis: axisSeed, initialDeg: 0 });
+}
+
+function prepareLocalRotateTargets(ids, opts = {}) {
+    const validBase = normalizeActionTargetIds(ids);
+    const valid = normalizeOffsetTargetIds(validBase);
+    if (!valid.length) {
+        if (!opts.silent) showToast("请先选择要本地旋转的卡片", "error");
+        return null;
+    }
+
+    const usableRows = [];
+    for (const id of valid) {
+        const ctx = findNodeContextById(id);
+        if (!ctx || !ctx.node || !Array.isArray(ctx.parentList)) continue;
+        const center = getNodeSegmentCenter(id);
+        if (!center) continue;
+        usableRows.push({ id, ctx });
+    }
+    if (!usableRows.length) {
+        if (!opts.silent) showToast("所选卡片没有可旋转的点", "error");
+        return null;
+    }
+
+    const firstList = usableRows[0].ctx.parentList;
+    if (!Array.isArray(firstList)) {
+        if (!opts.silent) showToast("本地旋转失败：目标列表无效", "error");
+        return null;
+    }
+    for (const row of usableRows) {
+        if (row.ctx.parentList !== firstList) {
+            if (!opts.silent) showToast("本地旋转不能选择两个不同组内的卡片", "error");
+            return null;
+        }
+    }
+
+    const orderedRows = usableRows.slice().sort((a, b) => a.ctx.index - b.ctx.index);
+    const orderedIds = orderedRows.map((r) => r.id);
+    return {
+        rows: orderedRows,
+        ids: orderedIds,
+        firstList,
+        parentNode: orderedRows[0].ctx.parentNode || null,
+        insertIndex: orderedRows[0].ctx.index
+    };
+}
+
+function startLocalRotateForTargetIds(ids) {
+    const prepared = prepareLocalRotateTargets(ids);
+    if (!prepared) return false;
+
+    if (typeof setCardSelectionIds === "function") {
+        setCardSelectionIds(prepared.ids, { replace: true, focus: false, syncWithParamSync: false });
+    }
+    focusCardById(prepared.ids[0], false, false, true);
+
+    const onPickAnchor = (anchorWorld) => {
+        const latest = prepareLocalRotateTargets(prepared.ids);
+        if (!latest) return;
+        const worldAnchor = {
+            x: num(anchorWorld?.x),
+            y: num(anchorWorld?.y),
+            z: num(anchorWorld?.z)
+        };
+        const localAnchor = mapWorldPointToInsertLocalPoint(
+            worldAnchor,
+            latest.firstList,
+            latest.insertIndex,
+            latest.parentNode || null
+        ) || worldAnchor;
+        const axisSeed = normalizeAxisForRotate(resolveAxisForNodeId(latest.ids[0]));
+        const binding = {
+            type: "deferred_wrapper",
+            sourceIds: latest.ids,
+            axis: axisSeed,
+            initialDeg: 0,
+            localRotate: true,
+            anchor: localAnchor
+        };
+        if (typeof setCardSelectionIds === "function") {
+            setCardSelectionIds(latest.ids, { replace: true, focus: false, syncWithParamSync: false });
+        }
+        focusCardById(latest.ids[0], false, false, true);
+        startRotateMode([], {
+            bindings: [binding],
+            sourceIds: latest.ids,
+            center: worldAnchor,
+            axis: axisSeed,
+            initialDeg: 0
+        });
+    };
+    onPickAnchor.__localRotateAnchor = true;
+
+    const ok = startPointPick({
+        label: "本地旋转锚点",
+        onPick: onPickAnchor
+    });
+    if (ok) showToast("请选择本地旋转锚点", "info");
+    return !!ok;
 }
 
 function deleteTargetIds(ids) {
@@ -6898,6 +9865,14 @@ function openActionMenuForBlankNoSelection(ev) {
             label: "添加全局偏移",
             onSelect: () => addQuickOffsetTo(state.root.children)
         },
+        {
+            label: "保存为预设",
+            onSelect: () => {
+                presetSaveSourceChildren = null;
+                presetSaveSourceLabel = "全部卡片";
+                openPresetPanel("save");
+            }
+        },
     ];
     return showActionMenu(ev.clientX, ev.clientY, items);
 }
@@ -6922,13 +9897,17 @@ function openActionMenuForTargets(ev, targetIds, options = {}) {
         label: ids.length > 1 ? "创建组并移入选中卡片" : "创建组并移入此卡片",
         onSelect: () => wrapTargetIdsInGroup(ids, "add_builder")
     });
+    items.push({
+        label: "保存为预设",
+        onSelect: () => openPresetPanel("save", { sourceIds: ids })
+    });
     if (ids.length === 1) {
         const ctxNode = findNodeContextById(ids[0]);
         if (ctxNode && Array.isArray(ctxNode.parentList)) {
             const label = ctxNode.parentNode ? "子Builder" : "主Builder";
             if (ctxNode.node && isBuilderContainerKind(ctxNode.node.kind) && typeof navigateCardScope === "function") {
                 items.push({
-                    label: "进入内层",
+                    label: "进入组",
                     onSelect: () => navigateCardScope(ctxNode.node.id)
                 });
             }
@@ -6965,6 +9944,10 @@ function openActionMenuForTargets(ev, targetIds, options = {}) {
     items.push({
         label: "添加旋转",
         onSelect: () => addRotateForTargetIds(ids)
+    });
+    items.push({
+        label: "本地旋转",
+        onSelect: () => startLocalRotateForTargetIds(ids)
     });
     items.push({
         label: "删除",
@@ -7068,8 +10051,9 @@ function onCanvasClick(ev) {
         const ownerId = pointHit.ownerId;
         if (ownerId) {
             const additive = !!(ev && (ev.ctrlKey || ev.shiftKey));
+            const selectionIds = buildPreviewSelectionIds([ownerId], additive);
             if (typeof setCardSelectionIds === "function") {
-                setCardSelectionIds([ownerId], {
+                setCardSelectionIds(selectionIds, {
                     replace: !additive,
                     focus: false,
                     reveal: false,
@@ -7080,7 +10064,7 @@ function onCanvasClick(ev) {
             if (paramSync && paramSync.open && ctx && ctx.node) {
                 toggleSyncTarget(ctx.node);
             }
-            focusCardById(ownerId, true, true, true);
+            focusCardById(ownerId, true, true, false);
             return;
         }
     }
@@ -7168,7 +10152,10 @@ function onCanvasDblClick(ev) {
         const axisText = formatRotateAxisForStatus(rotateAxis);
         const groupTip = (Array.isArray(rotateSourceIds) && rotateSourceIds.length > 1) ? `（${rotateSourceIds.length}项）` : "";
         const manualTip = rotateManualInput ? `，输入中：${rotateManualInput}` : "";
-        return `${info} 旋转模式${groupTip}：当前 ${U.fmt(rotateCurrentDeg)}°，轴 ${axisText}${manualTip}；长按左键拖动，或输入数值后 Enter 确认`;
+        const modeText = (Array.isArray(rotateBindings) && rotateBindings.some((binding) => binding && binding.localRotate))
+            ? "本地旋转模式"
+            : "旋转模式";
+        return `${info} ${modeText}${groupTip}：当前 ${U.fmt(rotateCurrentDeg)}°，轴 ${axisText}${manualTip}；长按左键拖动，按住 Shift 吸附 ${U.fmt(rotateSnapDeg)}°，或输入数值后 Enter 确认`;
     }
 
     function refreshRotateStatus() {
@@ -7197,6 +10184,14 @@ function onCanvasDblClick(ev) {
 
     function buildPointPickStatus() {
         const info = getPlaneInfo().label;
+        if (typeof pointPickCallback === "function") {
+            const label = String(pointPickCallbackLabel || "预设原点").trim() || "预设原点";
+            if (pointPickCallback.__localRotateAnchor) {
+                return `${info} 点拾取[${label}]：左键确定锚点，右键取消`;
+            }
+            const rotateHint = pointPickCallbackRotate ? "，确认后自动进入旋转" : "，按旋转快捷键可在确认后旋转";
+            return `${info} 点拾取[${label}]：左键确定，右键取消${rotateHint}`;
+        }
         const label = pointPickTargetLabel(pointPickTarget);
         if (label) return `${info} 点拾取[${label}]：左键确定，右键取消`;
         return `${info} 点拾取：请先选择目标坐标组，再左键确定，右键取消`;
@@ -7213,6 +10208,20 @@ function onCanvasDblClick(ev) {
         if (pointPickMode && pointPickTarget && pointPickHoverPoint) queuePointPickPreview(pointPickHoverPoint);
         else if (!pointPickTarget) hidePointPickPreview();
         refreshPointPickStatus();
+    }
+
+    function setPointPickCallbackRotate(enabled) {
+        pointPickCallbackRotate = !!enabled;
+        if (pointPickMode && typeof pointPickCallback === "function") refreshPointPickStatus();
+        return pointPickCallbackRotate;
+    }
+
+    function togglePointPickCallbackRotate() {
+        if (!pointPickMode || typeof pointPickCallback !== "function") return false;
+        pointPickCallbackRotate = !pointPickCallbackRotate;
+        refreshPointPickStatus();
+        showToast(pointPickCallbackRotate ? "预设确认后将自动旋转" : "预设确认后不自动旋转", "info");
+        return true;
     }
 
     function collectVecTargetsFromRoot(rootEl) {
@@ -7773,7 +10782,7 @@ function collectSyntheticVecTargetsForNode(node) {
         hideLinePickStatus();
     }
 
-    function startPointPick() {
+    function startPointPick(options = {}) {
         hideActionMenu();
         hidePointPickPreview();
         pointPickHoverPoint = null;
@@ -7783,6 +10792,24 @@ function collectSyntheticVecTargetsForNode(node) {
         setLockPlaneActive(false);
         lastPickBasePoint = null;
         lastPickMappedPoint = null;
+        if (typeof options.onPick === "function") {
+            _rClickT = 0;
+            pointPickPendingMapped = null;
+            pointPickTarget = null;
+            pointPickCallback = options.onPick;
+            pointPickCallbackLabel = String(options.label || "预设原点").trim();
+            pointPickCallbackRotate = false;
+            pointPickKeepFocusId = focusedNodeId;
+            pointPickMode = true;
+            setPointPickStatus(buildPointPickStatus());
+            ensureHoverMarker();
+            setHoverMarkerColor(pointPickPreviewColor.getHex());
+            hoverMarker.visible = false;
+            updateFocusColors();
+            return true;
+        }
+        pointPickCallback = null;
+        pointPickCallbackLabel = "";
         const selectedSet = (typeof getCardSelectionIds === "function") ? getCardSelectionIds() : null;
         const selectedIds = normalizeActionTargetIds(selectedSet ? Array.from(selectedSet) : []);
         const selectedCount = selectedIds.length;
@@ -7924,11 +10951,15 @@ function collectSyntheticVecTargetsForNode(node) {
         setLockPlaneActive(false);
         hideHoverMarker();
         hidePointPickPreview();
+        clearPresetPreview();
         pointPickMode = false;
         pointPickTarget = null;
         pointPickKeepFocusId = null;
         pointPickHoverPoint = null;
         pointPickPendingMapped = null;
+        pointPickCallback = null;
+        pointPickCallbackLabel = "";
+        pointPickCallbackRotate = false;
         _rClickT = 0;
         hideLinePickStatus();
     }
@@ -8297,11 +11328,15 @@ function collectSyntheticVecTargetsForNode(node) {
         return changed;
     }
 
-    function updateRotateFromMappedPoint(mapped) {
+    function updateRotateFromMappedPoint(mapped, ev = null) {
         if (!rotateMode || !rotateDragStartPoint || !mapped || !rotateCenter || !rotateAxis) return;
         const deltaDeg = signedAngleDegAroundAxis(rotateDragStartPoint, mapped, rotateCenter, rotateAxis);
         if (!Number.isFinite(deltaDeg)) return;
-        const nextDeg = rotateDragStartDeg + deltaDeg;
+        let nextDeg = rotateDragStartDeg + deltaDeg;
+        if (ev && ev.shiftKey) {
+            const step = normalizeRotateSnapDeg(rotateSnapDeg);
+            nextDeg = Math.round(nextDeg / step) * step;
+        }
         if (setRotateDegForTargets(nextDeg)) rotateDragChanged = true;
     }
 
@@ -8548,11 +11583,11 @@ function collectSyntheticVecTargetsForNode(node) {
             }
         }
         if (mapped) {
-            updatePickHoverFromMapped(mapped, ev.pointerId);
+            updatePickHoverFromMapped(mapped, ev.pointerId, ev);
             lastPickBasePoint = mapped ? {x: mapped.x, y: mapped.y, z: mapped.z} : null;
             lastPickMappedPoint = mapped ? {x: mapped.x, y: mapped.y, z: mapped.z} : null;
         } else {
-            updatePickHoverFromMapped(null, ev.pointerId);
+            updatePickHoverFromMapped(null, ev.pointerId, ev);
             lastPickBasePoint = null;
             lastPickMappedPoint = null;
         }
@@ -8701,6 +11736,15 @@ function collectSyntheticVecTargetsForNode(node) {
         const mapped = getMappedPointFromEvent(ev);
         if (!mapped) return;
         if (pointPickMode) {
+            if (typeof pointPickCallback === "function") {
+                const cb = pointPickCallback;
+                const payload = { x: mapped.x, y: mapped.y, z: mapped.z };
+                const callbackOptions = { rotateAfterPick: !!pointPickCallbackRotate };
+                stopPointPick();
+                try { cb(payload, callbackOptions); } catch (e) { console.warn("point pick callback failed:", e); }
+                setTimeout(() => hideLinePickStatus(), 900);
+                return;
+            }
             let target = pointPickTarget;
             if (target && target.inputs && target.inputs.x && !target.inputs.x.isConnected) {
                 setPointPickTarget(null);
@@ -8849,7 +11893,7 @@ function collectSyntheticVecTargetsForNode(node) {
         settingsMask,
         modal,
         modalMask,
-        btnCloseModal,
+        btnCloseModal, 
         btnCancelModal,
         cardPicker,
         cardSearch,
@@ -8858,6 +11902,27 @@ function collectSyntheticVecTargetsForNode(node) {
         hotkeyToHuman,
         openHotkeysModal,
         beginHotkeyCapture,
+        getPresetList: () => getPresetList(),
+        startPresetPick,
+        previewPreset,
+        clearPresetPreview,
+        bindPresetPointerApplyDrag,
+        shouldSuppressPresetClick: () => Date.now() < presetPointerDragClickSuppressUntil,
+        beginPresetDragFromPicker: (preset) => {
+            const id = preset && preset.id ? preset.id : "";
+            if (!id) return;
+            draggingPresetId = id;
+            isDraggingCard = true;
+        },
+        endPresetDragFromPicker: () => {
+            clearPresetDragLockPlane();
+            draggingPresetId = "";
+            isDraggingCard = false;
+            clearPresetPreview();
+            hidePresetDragPointMarker();
+            hideHoverMarker();
+            clearPresetDragPlacementStatus();
+        },
         getState: () => state,
         makeNode,
         historyCapture,
@@ -8877,6 +11942,7 @@ function collectSyntheticVecTargetsForNode(node) {
         showModal,
         hideModal,
         openModal,
+        openPresetPicker,
         getInsertContextFromFocus,
         addKindInContext
     } = pickerModule;
@@ -8950,11 +12016,11 @@ function collectSyntheticVecTargetsForNode(node) {
         findNodePathById,
           getLinePickMode: () => linePickMode,
           getPointPickMode: () => pointPickMode,
+          getAutoSelectCompleteGroups: () => autoSelectCompleteGroups,
           setDraggingState: (v) => { isDraggingCard = !!v; },
           onCardSelectionChange: () => {
               updateFocusColors();
-              setRightPanelPage("params");
-              scheduleParamEditorRender();
+              if (rightPanelPage === "params") scheduleParamEditorRender();
           },
           syncCardCollapseUI,
           isCollapseAllActive,
@@ -9030,6 +12096,7 @@ function collectSyntheticVecTargetsForNode(node) {
         stopRotateMode,
         getOffsetMode: () => offsetMode,
         stopOffsetMode,
+        openPresetPicker,
         hkModal,
         hideHotkeysModal,
         settingsModal,
@@ -9046,7 +12113,11 @@ function collectSyntheticVecTargetsForNode(node) {
         isArrowKey,
         shouldIgnoreArrowPan,
         panKeyState,
-        shouldIgnorePlainHotkeys,
+        shouldIgnorePlainHotkeys: () => {
+            if (!shouldIgnorePlainHotkeys || !shouldIgnorePlainHotkeys()) return false;
+            return true;
+        },
+        isPresetDragActive: () => !!draggingPresetId,
         cardSearch,
         normalizeHotkey,
         deleteSelectedCards,
@@ -9075,6 +12146,9 @@ function collectSyntheticVecTargetsForNode(node) {
         startDottedLinePick,
         startTrianglePick,
         startPointPick,
+        startLocalRotateForTargetIds,
+        togglePointPickCallbackRotate,
+        startPresetPickById,
         startBezierCreate,
         setSnapPlane,
         setMirrorPlane,
@@ -9110,6 +12184,7 @@ function collectSyntheticVecTargetsForNode(node) {
         fileJson && fileJson.click();
     }
 
+    bindPresetLibraryControls();
     bindRightPanelTabs();
 
     initTopbarAndBoot({
@@ -9122,6 +12197,7 @@ function collectSyntheticVecTargetsForNode(node) {
         inpProjectName,
         inpParamStep,
         inpSnapStep,
+        inpRotateSnapDeg,
         inpSnapParticleRange,
         inpOffsetPreviewLimit,
         btnHotkeys,
@@ -9135,11 +12211,18 @@ function collectSyntheticVecTargetsForNode(node) {
         btnPickLine,
         btnPickTriangle,
         btnPickPoint,
+        btnLocalRotate,
         btnFullscreen,
+        btnSavePreset,
+        btnApplyPreset,
+        btnExportPresets,
+        btnImportPresets,
+        btnEditVariables,
         btnSaveJson,
         btnLoadJson,
         fileJson,
         fileBuilderJson,
+        filePresetJson,
         btnReset,
         elCardsRoot,
         chkRealtimeKotlin,
@@ -9152,6 +12235,18 @@ function collectSyntheticVecTargetsForNode(node) {
         openModal,
         addQuickOffsetTo,
         clearEmptyBuilderCards,
+        saveCurrentAsPreset,
+        getPresetList,
+        getCardSelectionIds: () => (typeof getCardSelectionIds === "function" ? getCardSelectionIds() : null),
+        importPresetPayload,
+        applyPresetAtPoint,
+        openPresetPanel,
+        exportPresetLibraryZip,
+        importPresetDirectory,
+        importPresetFile,
+        getPresetImportOptions,
+        editLocalVariables,
+        getLocalVariablesText,
         getState: () => state,
         getFocusedNodeId: () => focusedNodeId,
         findNodeContextById,
@@ -9165,6 +12260,7 @@ function collectSyntheticVecTargetsForNode(node) {
         startLinePick,
         startTrianglePick,
         startPointPick,
+        startLocalRotateForTargetIds,
         toggleFullscreen,
         flushKotlinOut,
         emitKotlin,
@@ -9192,6 +12288,11 @@ function collectSyntheticVecTargetsForNode(node) {
             set value(v) { snapStep = v; }
         },
         setSnapStep,
+        rotateSnapDegRef: {
+            get value() { return rotateSnapDeg; },
+            set value(v) { rotateSnapDeg = normalizeRotateSnapDeg(v); }
+        },
+        setRotateSnapDeg,
         particleSnapRangeRef: {
             get value() { return particleSnapRange; },
             set value(v) { particleSnapRange = v; }

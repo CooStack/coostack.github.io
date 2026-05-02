@@ -1012,6 +1012,7 @@ export function initCardSystem(ctx = {}) {
     const setBuilderJsonTargetNode = ctx.setBuilderJsonTargetNode || (() => {});
     const getLinePickMode = ctx.getLinePickMode || (() => false);
     const getPointPickMode = ctx.getPointPickMode || (() => false);
+    const getAutoSelectCompleteGroups = ctx.getAutoSelectCompleteGroups || (() => false);
     const makeUid = ctx.uid || (() => (Math.random().toString(16).slice(2) + Date.now().toString(16)).slice(0, 16));
     const renderCardParamsInline = ctx.renderCardParamsInline !== false;
 
@@ -1310,20 +1311,6 @@ export function initCardSystem(ctx = {}) {
 
         wrap.appendChild(info);
 
-        const actions = document.createElement("div");
-        actions.className = "pb-builder-entry-actions";
-
-        const enterBtn = document.createElement("button");
-        enterBtn.type = "button";
-        enterBtn.className = `btn small ${activeScopeBuilderId === node?.id ? "" : "primary"}`.trim();
-        enterBtn.textContent = activeScopeBuilderId === node?.id ? "当前正在此层编辑" : "进入此层编辑";
-        enterBtn.addEventListener("click", () => {
-            setFocusedNode(node?.id || null, false);
-            navigateCardScope(node?.id || null);
-        });
-        actions.appendChild(enterBtn);
-
-        wrap.appendChild(actions);
         return wrap;
     }
 
@@ -1627,6 +1614,53 @@ export function initCardSystem(ctx = {}) {
         return selectedNodeIds;
     }
 
+    function getPreferredSelectedNodeId(ids) {
+        const list = Array.isArray(ids) ? ids : [];
+        for (const id of list) {
+            const ctx = findNodeContextById(id);
+            if (ctx && ctx.node && isBuilderContainerKind(ctx.node.kind)) return id;
+        }
+        return list.find(Boolean) || null;
+    }
+
+    function expandSelectedNodeIdsWithCompleteGroups(ids) {
+        const selected = new Set((Array.isArray(ids) ? ids : []).filter(Boolean));
+        if (!selected.size) return [];
+        const state = getState();
+        let changed = true;
+        while (changed) {
+            changed = false;
+            const visit = (list) => {
+                const arr = Array.isArray(list) ? list : [];
+                for (const node of arr) {
+                    if (!node || !node.id) continue;
+                    if (isBuilderContainerKind(node.kind) && Array.isArray(node.children)) {
+                        const required = node.children.map((child) => child && child.id).filter(Boolean);
+                        if (required.length && required.every((id) => selected.has(id)) && !selected.has(node.id)) {
+                            selected.add(node.id);
+                            changed = true;
+                        }
+                        visit(node.children);
+                    }
+                }
+            };
+            visit(state?.root?.children || []);
+        }
+        const pruneDescendants = (list, ancestorSelected = false) => {
+            const arr = Array.isArray(list) ? list : [];
+            for (const node of arr) {
+                if (!node || !node.id) continue;
+                const selectedHere = selected.has(node.id);
+                if (ancestorSelected) selected.delete(node.id);
+                if (Array.isArray(node.children)) {
+                    pruneDescendants(node.children, ancestorSelected || selectedHere);
+                }
+            }
+        };
+        pruneDescendants(state?.root?.children || []);
+        return Array.from(selected);
+    }
+
     function setSelectedNodeIds(ids, options = {}) {
         const replace = options.replace !== false;
         const focus = !!options.focus;
@@ -1658,8 +1692,17 @@ export function initCardSystem(ctx = {}) {
             selectedNodeIds.clear();
         }
 
+        if (getAutoSelectCompleteGroups()) {
+            const normalizedIds = expandSelectedNodeIdsWithCompleteGroups(Array.from(selectedNodeIds));
+            if (normalizedIds.length !== selectedNodeIds.size || normalizedIds.some((id) => !selectedNodeIds.has(id))) {
+                changed = true;
+                selectedNodeIds.clear();
+                for (const id of normalizedIds) selectedNodeIds.add(id);
+            }
+        }
+
         if (updateAnchor) {
-            selectionAnchorNodeId = options.anchorId || valid[0] || null;
+            selectionAnchorNodeId = options.anchorId || getPreferredSelectedNodeId(Array.from(selectedNodeIds)) || valid[0] || null;
         }
 
         if (allowSync) {
@@ -1668,7 +1711,7 @@ export function initCardSystem(ctx = {}) {
         }
 
         if (focus) {
-            const focusId = options.focusId || valid[0] || null;
+            const focusId = options.focusId || getPreferredSelectedNodeId(Array.from(selectedNodeIds)) || null;
             setFocusedNode(focusId, recordHistory);
         }
         if (changed || focus) {
@@ -2020,7 +2063,10 @@ export function initCardSystem(ctx = {}) {
         const isNestedDropTarget = (target) => {
             if (!target || !target.closest) return false;
             const zone = target.closest(".subcards, .dropzone, .builder-drop-surface");
-            return !!zone && cardEl.contains(zone);
+            if (!zone || !cardEl.contains(zone)) return false;
+            if (!zone.classList?.contains("builder-drop-surface")) return true;
+            const ownerWrap = zone.closest(".pb-tree-node");
+            return !!ownerWrap && ownerWrap !== cardEl.parentElement;
         };
         const canDropIntoCardBody = (target) => {
             if (!target || !target.closest) return true;
@@ -2682,36 +2728,105 @@ export function initCardSystem(ctx = {}) {
         handle.className = "handle";
         handle.textContent = "≡";
 
-        const ttext = document.createElement("div");
-        ttext.className = "title-text";
-        ttext.textContent = def ? def.title : node.kind;
+        const getCardTitleText = () => node.label || (def ? def.title : node.kind);
+        const titleText = document.createElement("span");
+        titleText.className = "title-text card-title-label";
+        titleText.textContent = getCardTitleText();
+        titleText.title = "点击修改卡片名";
+        const isCardTitleEditBlockedTarget = (target) => {
+            return !!(target && target.closest && target.closest(".handle, .badge2, .tree-toggle-btn, button, input, select, textarea"));
+        };
+        const beginCardTitleEdit = (ev = null) => {
+            ev?.stopPropagation?.();
+            if (titleText.dataset.editing === "1") return;
+            titleText.dataset.editing = "1";
+            const input = document.createElement("input");
+            input.className = "title-text card-title-input";
+            input.value = node.label || "";
+            input.placeholder = def ? def.title : node.kind;
+            input.title = "回车确认，Esc 取消";
+            let done = false;
+            const finish = (commit = true) => {
+                if (done) return;
+                done = true;
+                if (commit) {
+                    const next = String(input.value || "").trim();
+                    node.label = next || "";
+                    if (typeof historyCapture === "function") historyCapture("rename_card");
+                    if (typeof rebuildPreviewAndKotlin === "function") rebuildPreviewAndKotlin();
+                }
+                titleText.dataset.editing = "";
+                titleText.textContent = getCardTitleText();
+                if (input.parentNode) input.replaceWith(titleText);
+            };
+            input.addEventListener("pointerdown", (e) => e.stopPropagation());
+            input.addEventListener("click", (e) => e.stopPropagation());
+            input.addEventListener("keydown", (e) => {
+                if (e.key === "Enter") {
+                    e.preventDefault();
+                    finish(true);
+                } else if (e.key === "Escape") {
+                    e.preventDefault();
+                    finish(false);
+                }
+            });
+            input.addEventListener("blur", () => finish(true), { once: true });
+            titleText.replaceWith(input);
+            requestAnimationFrame(() => {
+                input.focus();
+                input.select();
+            });
+        };
+        titleText.addEventListener("pointerdown", (ev) => {
+            ev.preventDefault();
+            ev.stopPropagation();
+            beginCardTitleEdit(ev);
+        }, true);
+        titleText.addEventListener("click", beginCardTitleEdit);
+        title.title = "点击修改卡片名";
+        title.addEventListener("pointerdown", (ev) => {
+            if (isCardTitleEditBlockedTarget(ev.target)) return;
+            ev.preventDefault();
+            ev.stopPropagation();
+            beginCardTitleEdit(ev);
+        }, true);
+        title.addEventListener("click", (ev) => {
+            if (isCardTitleEditBlockedTarget(ev.target)) return;
+            beginCardTitleEdit(ev);
+        });
 
         const badge = document.createElement("div");
         badge.className = "badge2";
         badge.textContent = node.kind;
 
-        title.appendChild(handle);
-        title.appendChild(ttext);
-        title.appendChild(badge);
-
-        const actions = document.createElement("div");
-        actions.className = "card-actions";
-
         if (!renderCardParamsInline && isBuilderContainerKind(node.kind)) {
             const treeCollapsed = node.treeCollapsed === true;
-            const treeToggleBtn = iconBtn(treeCollapsed ? "▸" : "▾", (e) => {
+            const treeToggleBtn = iconBtn(treeCollapsed ? ">" : "⌄", (e) => {
                 e.stopPropagation();
                 historyCapture("toggle_tree_collapse");
-                node.treeCollapsed = !treeCollapsed;
-                renderAll();
+                node.treeCollapsed = !(node.treeCollapsed === true);
+                const nextCollapsed = node.treeCollapsed === true;
+                const children = card.parentElement ? card.parentElement.querySelector(":scope > .pb-tree-children") : null;
+                if (children) children.classList.toggle("collapsed", nextCollapsed);
+                treeToggleBtn.textContent = nextCollapsed ? ">" : "⌄";
+                treeToggleBtn.dataset.tip = nextCollapsed ? "展开子卡片" : "折叠子卡片";
+                treeToggleBtn.setAttribute("aria-label", treeToggleBtn.dataset.tip);
+                treeToggleBtn.title = treeToggleBtn.dataset.tip;
             });
             treeToggleBtn.classList.add("tree-toggle-btn");
             treeToggleBtn.dataset.keepMainAction = "1";
             treeToggleBtn.dataset.tip = treeCollapsed ? "展开子卡片" : "折叠子卡片";
             treeToggleBtn.setAttribute("aria-label", treeToggleBtn.dataset.tip);
             treeToggleBtn.title = treeToggleBtn.dataset.tip;
-            actions.appendChild(treeToggleBtn);
+            title.appendChild(treeToggleBtn);
         }
+
+        title.appendChild(handle);
+        title.appendChild(titleText);
+        title.appendChild(badge);
+
+        const actions = document.createElement("div");
+        actions.className = "card-actions";
 
         if (renderCardParamsInline) {
             let collapsePrev = null;
@@ -2758,17 +2873,6 @@ export function initCardSystem(ctx = {}) {
             });
             addBtn.title = "在下方新增";
             actions.appendChild(addBtn);
-
-            if (isBuilderContainerKind(node.kind)) {
-                const enterBtn = iconBtn("⤢", (e) => {
-                    e.stopPropagation();
-                    setFocusedNode(node.id, false);
-                    navigateCardScope(node.id);
-                });
-                enterBtn.dataset.keepMainAction = "1";
-                enterBtn.title = `进入 ${getBuilderScopeType(node)}`;
-                actions.appendChild(enterBtn);
-            }
 
             const toTopBtn = iconBtn("⇡", () => {
                 if (useFilterSwap) {
@@ -2979,6 +3083,11 @@ export function initCardSystem(ctx = {}) {
             if (e.target && e.target.isContentEditable) return;
             if (e.target && e.target.closest && e.target.closest(".card-actions")) return;
             setFocusedNode(node.id);
+            if (isBuilderContainerKind(node.kind)) {
+                historyCapture("toggle_tree_collapse");
+                node.treeCollapsed = node.treeCollapsed !== true;
+                renderAll();
+            }
         });
         card.addEventListener("focusin", (e) => {
             // ✅ focusin 会冒泡：子卡片获得焦点时，父卡片不应抢走高亮
@@ -3055,19 +3164,18 @@ export function initCardSystem(ctx = {}) {
         if (node && isBuilderContainerKind(node.kind)) {
             if (!Array.isArray(node.children)) node.children = [];
             const childrenVisible = renderCardParamsInline ? !node.collapsed : node.treeCollapsed !== true;
-            if (childrenVisible) {
-                const children = document.createElement("div");
-                children.className = "pb-tree-children builder-drop-surface";
-                if (!node.children.length) children.classList.add("empty");
-                setupListDropZone(children, () => node.children, () => node);
+            const children = document.createElement("div");
+            children.className = "pb-tree-children builder-drop-surface";
+            if (!childrenVisible) children.classList.add("collapsed");
+            if (!node.children.length) children.classList.add("empty");
+            setupListDropZone(children, () => node.children, () => node);
 
-                const entries = getVisibleEntries(node.children, node.id)
-                    || node.children.map((child, index) => ({ node: child, index }));
-                for (const it of entries) {
-                    children.appendChild(renderNodeTree(it.node, node.children, it.index, "子Builder", node, depth + 1));
-                }
-                wrap.appendChild(children);
+            const entries = getVisibleEntries(node.children, node.id)
+                || node.children.map((child, index) => ({ node: child, index }));
+            for (const it of entries) {
+                children.appendChild(renderNodeTree(it.node, node.children, it.index, "子Builder", node, depth + 1));
             }
+            wrap.appendChild(children);
         }
 
         return wrap;
@@ -3764,9 +3872,54 @@ export function initCardSystem(ctx = {}) {
 
                     const title = document.createElement("div");
                     title.className = "subblock-title";
-                    const titleText = document.createElement("div");
-                    titleText.className = "subblock-title-text";
-                    titleText.textContent = "旋转嵌套组子卡片";
+                    const getSubblockTitle = () => node.label || (node.kind === "add_builder" ? "添加组" : "旋转嵌套组");
+                    const titleText = document.createElement("span");
+                    titleText.className = "subblock-title-text subblock-title-label";
+                    titleText.textContent = getSubblockTitle();
+                    titleText.title = "点击修改组名";
+                    const beginSubblockTitleEdit = (ev) => {
+                        ev.stopPropagation();
+                        if (titleText.dataset.editing === "1") return;
+                        titleText.dataset.editing = "1";
+                        const titleInput = document.createElement("input");
+                        titleInput.className = "subblock-title-input";
+                        titleInput.value = node.label || "";
+                        titleInput.placeholder = getSubblockTitle();
+                        titleInput.title = "回车确认，Esc 取消";
+                        let done = false;
+                        const finish = (commit = true) => {
+                            if (done) return;
+                            done = true;
+                            if (commit) {
+                                node.label = String(titleInput.value || "").trim();
+                                if (typeof historyCapture === "function") historyCapture("rename_builder_group");
+                                if (typeof rebuildPreviewAndKotlin === "function") rebuildPreviewAndKotlin();
+                            }
+                            titleText.dataset.editing = "";
+                            titleText.textContent = getSubblockTitle();
+                            if (titleInput.parentNode) titleInput.replaceWith(titleText);
+                        };
+                        titleInput.addEventListener("pointerdown", (e) => e.stopPropagation());
+                        titleInput.addEventListener("click", (e) => e.stopPropagation());
+                        titleInput.addEventListener("keydown", (e) => {
+                            if (e.key === "Enter") {
+                                e.preventDefault();
+                                finish(true);
+                            } else if (e.key === "Escape") {
+                                e.preventDefault();
+                                finish(false);
+                            }
+                        });
+                        titleInput.addEventListener("blur", () => finish(true), { once: true });
+                        titleText.replaceWith(titleInput);
+                        requestAnimationFrame(() => {
+                            titleInput.focus();
+                            titleInput.select();
+                        });
+                    };
+                    title.title = "点击修改组名";
+                    title.addEventListener("pointerdown", (ev) => ev.stopPropagation());
+                    title.addEventListener("click", beginSubblockTitleEdit);
                     title.appendChild(titleText);
 
                     const actions = document.createElement("div");
@@ -3897,7 +4050,55 @@ export function initCardSystem(ctx = {}) {
 
                     const title = document.createElement("div");
                     title.className = "subblock-title";
-                    title.textContent = "子 PointsBuilder（addBuilder）";
+                    const getSubblockTitle = () => node.label || "子 PointsBuilder（addBuilder）";
+                    const titleText = document.createElement("span");
+                    titleText.className = "subblock-title-text subblock-title-label";
+                    titleText.textContent = getSubblockTitle();
+                    titleText.title = "点击修改组名";
+                    const beginSubblockTitleEdit = (ev) => {
+                        ev.stopPropagation();
+                        if (titleText.dataset.editing === "1") return;
+                        titleText.dataset.editing = "1";
+                        const titleInput = document.createElement("input");
+                        titleInput.className = "subblock-title-input";
+                        titleInput.value = node.label || "";
+                        titleInput.placeholder = getSubblockTitle();
+                        titleInput.title = "回车确认，Esc 取消";
+                        let done = false;
+                        const finish = (commit = true) => {
+                            if (done) return;
+                            done = true;
+                            if (commit) {
+                                node.label = String(titleInput.value || "").trim();
+                                if (typeof historyCapture === "function") historyCapture("rename_builder_group");
+                                if (typeof rebuildPreviewAndKotlin === "function") rebuildPreviewAndKotlin();
+                            }
+                            titleText.dataset.editing = "";
+                            titleText.textContent = getSubblockTitle();
+                            if (titleInput.parentNode) titleInput.replaceWith(titleText);
+                        };
+                        titleInput.addEventListener("pointerdown", (e) => e.stopPropagation());
+                        titleInput.addEventListener("click", (e) => e.stopPropagation());
+                        titleInput.addEventListener("keydown", (e) => {
+                            if (e.key === "Enter") {
+                                e.preventDefault();
+                                finish(true);
+                            } else if (e.key === "Escape") {
+                                e.preventDefault();
+                                finish(false);
+                            }
+                        });
+                        titleInput.addEventListener("blur", () => finish(true), { once: true });
+                        titleText.replaceWith(titleInput);
+                        requestAnimationFrame(() => {
+                            titleInput.focus();
+                            titleInput.select();
+                        });
+                    };
+                    title.title = "点击修改组名";
+                    title.addEventListener("pointerdown", (ev) => ev.stopPropagation());
+                    title.addEventListener("click", beginSubblockTitleEdit);
+                    title.appendChild(titleText);
 
                     const actions = document.createElement("div");
                     actions.className = "mini";

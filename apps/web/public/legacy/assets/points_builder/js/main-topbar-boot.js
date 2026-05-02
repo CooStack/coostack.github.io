@@ -9,6 +9,7 @@ export function initTopbarAndBoot(ctx = {}) {
         inpProjectName,
         inpParamStep,
         inpSnapStep,
+        inpRotateSnapDeg,
         inpSnapParticleRange,
         inpOffsetPreviewLimit,
         btnHotkeys,
@@ -22,11 +23,18 @@ export function initTopbarAndBoot(ctx = {}) {
         btnPickLine,
         btnPickTriangle,
         btnPickPoint,
+        btnLocalRotate,
         btnFullscreen,
+        btnSavePreset,
+        btnApplyPreset,
+        btnExportPresets,
+        btnImportPresets,
+        btnEditVariables,
         btnSaveJson,
         btnLoadJson,
         fileJson,
         fileBuilderJson,
+        filePresetJson,
         btnReset,
         elCardsRoot,
         chkRealtimeKotlin,
@@ -39,6 +47,18 @@ export function initTopbarAndBoot(ctx = {}) {
         openModal,
         addQuickOffsetTo,
         clearEmptyBuilderCards,
+        saveCurrentAsPreset,
+        getPresetList,
+        getCardSelectionIds,
+        importPresetPayload,
+        applyPresetAtPoint,
+        openPresetPanel,
+        exportPresetLibraryZip,
+        importPresetDirectory,
+        importPresetFile,
+        getPresetImportOptions,
+        editLocalVariables,
+        getLocalVariablesText,
         getState,
         getFocusedNodeId,
         findNodeContextById,
@@ -52,6 +72,7 @@ export function initTopbarAndBoot(ctx = {}) {
         startLinePick,
         startTrianglePick,
         startPointPick,
+        startLocalRotateForTargetIds,
         toggleFullscreen,
         flushKotlinOut,
         emitKotlin,
@@ -73,6 +94,8 @@ export function initTopbarAndBoot(ctx = {}) {
         saveSettingsToStorage,
         snapStepRef,
         setSnapStep,
+        rotateSnapDegRef,
+        setRotateSnapDeg,
         particleSnapRangeRef,
         setParticleSnapRange,
         offsetPreviewLimitRef,
@@ -113,9 +136,346 @@ export function initTopbarAndBoot(ctx = {}) {
         setBuilderJsonTargetNode,
         getBuilderJsonTargetNode
     } = ctx;
+    const CLOSE_ICON_SVG = '<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M6 6l12 12M18 6 6 18" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/></svg>';
 
     function doExportKotlin() {
         flushKotlinOut();
+    }
+
+    function formatPointInput(point) {
+        const p = point && typeof point === "object" ? point : { x: 0, y: 0, z: 0 };
+        const x = Number.isFinite(Number(p.x)) ? Number(p.x) : 0;
+        const y = Number.isFinite(Number(p.y)) ? Number(p.y) : 0;
+        const z = Number.isFinite(Number(p.z)) ? Number(p.z) : 0;
+        return `${x}, ${y}, ${z}`;
+    }
+
+    function parsePointInput(raw) {
+        const parts = String(raw || "").split(/[,，\s]+/).map((it) => Number(it)).filter((it) => Number.isFinite(it));
+        if (parts.length < 3) return null;
+        return { x: parts[0], y: parts[1], z: parts[2] };
+    }
+
+    function choosePreset(message = "选择预设序号") {
+        const list = (typeof getPresetList === "function") ? getPresetList() : [];
+        if (!list.length) {
+            showToast("还没有预设", "error");
+            return null;
+        }
+        const lines = list.map((p, i) => `${i + 1}. ${p.name || "未命名预设"}`);
+        const raw = prompt(`${message}：\n${lines.join("\n")}`, "1");
+        if (raw === null) return null;
+        const idx = Number(raw) - 1;
+        if (!Number.isInteger(idx) || idx < 0 || idx >= list.length) {
+            showToast("预设序号无效", "error");
+            return null;
+        }
+        return list[idx];
+    }
+
+    function getSelectedPresetSourceOptions() {
+        if (typeof getCardSelectionIds !== "function") return {};
+        const selected = getCardSelectionIds();
+        const ids = selected && typeof selected[Symbol.iterator] === "function"
+            ? Array.from(selected).map((id) => String(id || "").trim()).filter(Boolean)
+            : [];
+        return ids.length ? { sourceIds: ids } : {};
+    }
+
+    function ensureVariablesModal() {
+        let mask = document.getElementById("variablesMask");
+        let modal = document.getElementById("variablesModal");
+        if (mask && modal) return { mask, modal };
+        mask = document.createElement("div");
+        mask.id = "variablesMask";
+        mask.className = "modal-mask hidden";
+        modal = document.createElement("div");
+        modal.id = "variablesModal";
+        modal.className = "modal hidden";
+        modal.setAttribute("role", "dialog");
+        modal.setAttribute("aria-modal", "true");
+        modal.innerHTML = `
+            <div class="modal-head">
+                <div class="modal-title">变量设置</div>
+                <button id="btnCloseVariables" class="btn icon" type="button" aria-label="关闭">${CLOSE_ICON_SVG}</button>
+            </div>
+            <div class="modal-body">
+                <div class="variables-layout">
+                    <div class="settings-panel variables-panel-list">
+                        <div class="settings-panel-title">变量列表</div>
+                        <div class="variables-toolbar">
+                            <button id="btnAddScalarVariable" class="btn" type="button">添加数值</button>
+                            <button id="btnAddVectorVariable" class="btn" type="button">添加 Vec3</button>
+                        </div>
+                        <div id="variableList" class="variables-list variable-list"></div>
+                    </div>
+                    <div class="settings-panel variables-panel-editor">
+                        <div class="settings-panel-title">变量编辑</div>
+                        <div id="variableEditor" class="variables-editor"></div>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-foot">
+                <button id="btnCancelVariables" class="btn" type="button">取消</button>
+                <button id="btnSaveVariables" class="btn primary" type="button">保存</button>
+            </div>`;
+        document.body.appendChild(mask);
+        document.body.appendChild(modal);
+        return { mask, modal };
+    }
+
+    function parseVariableStateFromText(text) {
+        try {
+            const obj = JSON.parse(String(text || "{}"));
+            if (Array.isArray(obj.items)) return obj.items;
+            const items = [];
+            if (obj && typeof obj.scalar === "object") {
+                for (const [name, value] of Object.entries(obj.scalar)) {
+                    items.push({ id: makeVariableId(), type: "scalar", name, value: Number(value) });
+                }
+            }
+            if (obj && typeof obj.vector === "object") {
+                for (const [name, value] of Object.entries(obj.vector)) {
+                    items.push({ id: makeVariableId(), type: "vector", name, value: value && typeof value === "object" ? value : {} });
+                }
+            }
+            return items;
+        } catch {
+            return [];
+        }
+    }
+
+    function makeVariableId() {
+        return `var_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+    }
+
+    function normalizeVariableName(raw) {
+        return String(raw || "").trim().replace(/[^\w$]/g, "_").replace(/^([^A-Za-z_$])/, "_$1");
+    }
+
+    function createVariableDraft(type = "scalar", preset = {}) {
+        const nextType = type === "vector" ? "vector" : "scalar";
+        return {
+            id: preset.id || makeVariableId(),
+            type: nextType,
+            name: String(preset.name || "").trim(),
+            value: nextType === "vector"
+                ? {
+                    x: Number.isFinite(Number(preset.value?.x)) ? Number(preset.value.x) : 0,
+                    y: Number.isFinite(Number(preset.value?.y)) ? Number(preset.value.y) : 0,
+                    z: Number.isFinite(Number(preset.value?.z)) ? Number(preset.value.z) : 0
+                }
+                : (Number.isFinite(Number(preset.value)) ? Number(preset.value) : 0)
+        };
+    }
+
+    function normalizeVariableDraft(items) {
+        return (Array.isArray(items) ? items : []).map((item) => createVariableDraft(item?.type || "scalar", item));
+    }
+
+    function collectVariablesFromDraft(items) {
+        const scalar = {};
+        const vector = {};
+        for (const item of Array.isArray(items) ? items : []) {
+            const name = normalizeVariableName(item?.name);
+            if (!name) continue;
+            if (String(item?.type || "scalar") === "vector") {
+                const v = item.value && typeof item.value === "object" ? item.value : {};
+                const x = Number(v.x);
+                const y = Number(v.y);
+                const z = Number(v.z);
+                vector[name] = {
+                    x: Number.isFinite(x) ? x : 0,
+                    y: Number.isFinite(y) ? y : 0,
+                    z: Number.isFinite(z) ? z : 0
+                };
+            } else {
+                const n = Number(item?.value);
+                scalar[name] = Number.isFinite(n) ? n : 0;
+            }
+        }
+        return { scalar, vector };
+    }
+
+    function openVariablesModal() {
+        if (typeof editLocalVariables !== "function" || typeof getLocalVariablesText !== "function") return;
+        const { mask, modal } = ensureVariablesModal();
+        const listEl = modal.querySelector("#variableList");
+        const editorEl = modal.querySelector("#variableEditor");
+        const state = normalizeVariableDraft(parseVariableStateFromText(getLocalVariablesText()));
+        let activeId = state[0]?.id || null;
+
+        function setActive(id) {
+            activeId = id || null;
+            render();
+        }
+
+        function upsertItem(item) {
+            const idx = state.findIndex((it) => it.id === item.id);
+            if (idx >= 0) state[idx] = item;
+            else state.push(item);
+        }
+
+        function removeItem(id) {
+            const idx = state.findIndex((it) => it.id === id);
+            if (idx < 0) return;
+            state.splice(idx, 1);
+            if (activeId === id) activeId = state[idx]?.id || state[idx - 1]?.id || state[0]?.id || null;
+            render();
+        }
+
+        function renderList() {
+            if (!listEl) return;
+            listEl.innerHTML = "";
+            if (!state.length) {
+                const empty = document.createElement("div");
+                empty.className = "variables-empty";
+                empty.textContent = "暂无变量";
+                listEl.appendChild(empty);
+                return;
+            }
+            for (const item of state) {
+                const row = document.createElement("button");
+                row.type = "button";
+                row.className = `variable-list-item${item.id === activeId ? " active" : ""}`;
+                row.innerHTML = `
+                    <span class="variable-list-name"></span>
+                    <span class="variable-list-meta"></span>
+                    <span class="variable-list-handle">≡</span>`;
+                row.querySelector(".variable-list-name").textContent = item.name || "未命名变量";
+                row.querySelector(".variable-list-meta").textContent = item.type === "vector" ? "Vec3" : "数值";
+                row.addEventListener("click", () => setActive(item.id));
+                listEl.appendChild(row);
+            }
+        }
+
+        function renderEditor() {
+            if (!editorEl) return;
+            editorEl.innerHTML = "";
+            const item = state.find((it) => it.id === activeId) || null;
+            if (!item) {
+                const empty = document.createElement("div");
+                empty.className = "variables-editor-empty";
+                empty.textContent = state.length ? "选择左侧变量进行编辑" : "先添加变量";
+                editorEl.appendChild(empty);
+                return;
+            }
+
+            const typeLabel = item.type === "vector" ? "Vec3" : "数值";
+            const nameRow = document.createElement("label");
+            nameRow.className = "variable-field";
+            nameRow.innerHTML = `<span>名称</span><input class="input" type="text" />`;
+            const nameInput = nameRow.querySelector("input");
+            nameInput.value = item.name || "";
+            nameInput.addEventListener("input", () => {
+                item.name = nameInput.value;
+                renderList();
+            });
+
+            const typeRow = document.createElement("label");
+            typeRow.className = "variable-field";
+            typeRow.innerHTML = `<span>类型</span><select class="input"><option value="scalar">数值</option><option value="vector">Vec3</option></select>`;
+            const typeSelect = typeRow.querySelector("select");
+            typeSelect.value = item.type;
+            typeSelect.addEventListener("change", () => {
+                const nextType = typeSelect.value === "vector" ? "vector" : "scalar";
+                item.type = nextType;
+                if (nextType === "vector") {
+                    item.value = {
+                        x: Number.isFinite(Number(item.value?.x)) ? Number(item.value.x) : 0,
+                        y: Number.isFinite(Number(item.value?.y)) ? Number(item.value.y) : 0,
+                        z: Number.isFinite(Number(item.value?.z)) ? Number(item.value.z) : 0
+                    };
+                } else {
+                    const current = item.value && typeof item.value === "object" ? item.value : { x: 0, y: 0, z: 0 };
+                    item.value = Number.isFinite(Number(current.x)) ? Number(current.x) : 0;
+                }
+                render();
+            });
+
+            const valueBox = document.createElement("div");
+            valueBox.className = item.type === "vector" ? "variable-value-box" : "variable-value-box scalar";
+            if (item.type === "vector") {
+                valueBox.innerHTML = `
+                    <label class="variable-field compact"><span>x</span><input class="input" type="number" step="0.01"/></label>
+                    <label class="variable-field compact"><span>y</span><input class="input" type="number" step="0.01"/></label>
+                    <label class="variable-field compact"><span>z</span><input class="input" type="number" step="0.01"/></label>`;
+                const [xInput, yInput, zInput] = valueBox.querySelectorAll("input");
+                xInput.value = Number.isFinite(Number(item.value?.x)) ? Number(item.value.x) : 0;
+                yInput.value = Number.isFinite(Number(item.value?.y)) ? Number(item.value.y) : 0;
+                zInput.value = Number.isFinite(Number(item.value?.z)) ? Number(item.value.z) : 0;
+                const sync = () => {
+                    item.value = {
+                        x: Number.isFinite(Number(xInput.value)) ? Number(xInput.value) : 0,
+                        y: Number.isFinite(Number(yInput.value)) ? Number(yInput.value) : 0,
+                        z: Number.isFinite(Number(zInput.value)) ? Number(zInput.value) : 0
+                    };
+                    renderList();
+                };
+                xInput.addEventListener("input", sync);
+                yInput.addEventListener("input", sync);
+                zInput.addEventListener("input", sync);
+            } else {
+                valueBox.innerHTML = `<label class="variable-field"><span>数值</span><input class="input" type="number" step="0.01"/></label>`;
+                const valueInput = valueBox.querySelector("input");
+                valueInput.value = Number.isFinite(Number(item.value)) ? Number(item.value) : 0;
+                valueInput.addEventListener("input", () => {
+                    item.value = Number.isFinite(Number(valueInput.value)) ? Number(valueInput.value) : 0;
+                    renderList();
+                });
+            }
+
+            const removeBtn = document.createElement("button");
+            removeBtn.type = "button";
+            removeBtn.className = "btn danger";
+            removeBtn.textContent = "删除";
+            removeBtn.addEventListener("click", () => removeItem(item.id));
+
+            const meta = document.createElement("div");
+            meta.className = "variables-editor-meta";
+            meta.textContent = typeLabel;
+
+            editorEl.append(meta, nameRow, typeRow, valueBox, removeBtn);
+            upsertItem(item);
+            renderList();
+        }
+
+        function render() {
+            renderList();
+            renderEditor();
+        }
+
+        const close = () => {
+            mask.classList.add("hidden");
+            modal.classList.add("hidden");
+        };
+        modal.querySelector("#btnCloseVariables").onclick = close;
+        modal.querySelector("#btnCancelVariables").onclick = close;
+        mask.onclick = close;
+        modal.querySelector("#btnAddScalarVariable").onclick = () => {
+            const next = createVariableDraft("scalar");
+            state.push(next);
+            activeId = next.id;
+            render();
+        };
+        modal.querySelector("#btnAddVectorVariable").onclick = () => {
+            const next = createVariableDraft("vector");
+            state.push(next);
+            activeId = next.id;
+            render();
+        };
+        modal.querySelector("#btnSaveVariables").onclick = () => {
+            try {
+                editLocalVariables(collectVariablesFromDraft(state));
+                showToast("变量已保存", "success");
+                close();
+            } catch (e) {
+                showToast(`变量保存失败：${e.message || e}`, "error");
+            }
+        };
+        render();
+        mask.classList.remove("hidden");
+        modal.classList.remove("hidden");
     }
 
     function doCopyKotlin() {
@@ -187,6 +547,20 @@ export function initTopbarAndBoot(ctx = {}) {
         });
         inpSnapStep.addEventListener("blur", () => {
             setSnapStep(inpSnapStep.value);
+        });
+    }
+
+    if (inpRotateSnapDeg) {
+        if (inpRotateSnapDeg.value === "") inpRotateSnapDeg.value = String(rotateSnapDegRef.value);
+        setRotateSnapDeg(inpRotateSnapDeg.value, { skipSave: true });
+        inpRotateSnapDeg.addEventListener("input", () => {
+            const n = parseFloat(inpRotateSnapDeg.value);
+            if (!Number.isFinite(n) || n <= 0) return;
+            rotateSnapDegRef.value = n;
+            saveSettingsToStorage();
+        });
+        inpRotateSnapDeg.addEventListener("blur", () => {
+            setRotateSnapDeg(inpRotateSnapDeg.value);
         });
     }
 
@@ -358,7 +732,136 @@ export function initTopbarAndBoot(ctx = {}) {
         }
     });
 
+    btnLocalRotate?.addEventListener("click", () => {
+        const selectedIds = [];
+        if (typeof getCardSelectionIds === "function") {
+            const sel = getCardSelectionIds();
+            if (sel && sel.size) selectedIds.push(...Array.from(sel).filter(Boolean));
+        }
+        if (!selectedIds.length) {
+            const focusedId = typeof getFocusedNodeId === "function" ? getFocusedNodeId() : null;
+            if (focusedId) selectedIds.push(focusedId);
+        }
+        if (typeof startLocalRotateForTargetIds === "function") {
+            startLocalRotateForTargetIds(selectedIds);
+        }
+    });
+
     btnFullscreen?.addEventListener("click", toggleFullscreen);
+
+    btnEditVariables?.addEventListener("click", () => {
+        openVariablesModal();
+    });
+
+    btnSavePreset?.addEventListener("click", () => {
+        if (typeof openPresetPanel === "function") {
+            openPresetPanel("save", getSelectedPresetSourceOptions());
+            return;
+        }
+        if (typeof saveCurrentAsPreset !== "function") return;
+        const existing = (typeof getPresetList === "function") ? getPresetList() : [];
+        const defaultName = getProjectName() || `预设${existing.length + 1}`;
+        const name = prompt("预设名字", defaultName);
+        if (name === null) return;
+        const originRaw = prompt("保存原点 x,y,z", "0, 0, 0");
+        if (originRaw === null) return;
+        const origin = parsePointInput(originRaw);
+        if (!origin) {
+            showToast("保存失败：原点格式应为 x,y,z", "error");
+            return;
+        }
+        const overwrite = existing.find((it) => it.name === name);
+        if (overwrite && !confirm(`已存在预设“${name}”，是否覆盖？`)) return;
+        const preset = saveCurrentAsPreset({ name, origin, overwriteId: overwrite ? overwrite.id : "" });
+        if (!preset) {
+            showToast("保存预设失败", "error");
+            return;
+        }
+        showToast(`已保存预设：${preset.name}`, "success");
+    });
+
+    btnApplyPreset?.addEventListener("click", () => {
+        if (typeof openPresetPanel === "function") {
+            openPresetPanel("apply");
+            return;
+        }
+        if (typeof applyPresetAtPoint !== "function" || typeof startPointPick !== "function") return;
+        const preset = choosePreset("选择要生成的预设序号");
+        if (!preset) return;
+        startPointPick({
+            label: `预设 ${preset.name || ""}`.trim(),
+            onPick: (point) => {
+                const ok = applyPresetAtPoint(preset, point);
+                showToast(ok ? `已生成预设：${preset.name}` : "生成预设失败", ok ? "success" : "error");
+            }
+        });
+    });
+
+    btnExportPresets?.addEventListener("click", async () => {
+        if (typeof exportPresetLibraryZip === "function") {
+            try {
+                const count = await exportPresetLibraryZip();
+                showToast(`已导出 ${count} 个预设`, "success");
+            } catch (e) {
+                if (e && e.name === "AbortError") {
+                    showToast("取消导出", "info");
+                    return;
+                }
+                showToast(`导出预设失败：${e.message || e}`, "error");
+            }
+            return;
+        }
+        const presets = (typeof getPresetList === "function") ? getPresetList() : [];
+        if (!presets.length) {
+            showToast("还没有可导出的预设", "error");
+            return;
+        }
+        const payload = {
+            type: "pointsbuilder-presets",
+            version: 1,
+            presets
+        };
+        downloadText(makeExportFileName("json", "pointsbuilder-presets"), JSON.stringify(payload, null, 2), "application/json");
+        showToast("预设导出成功", "success");
+    });
+
+    btnImportPresets?.addEventListener("click", async () => {
+        if (typeof importPresetDirectory === "function" && window.showDirectoryPicker) {
+            try {
+                const options = (typeof getPresetImportOptions === "function")
+                    ? getPresetImportOptions()
+                    : { overwrite: confirm("导入预设：确定=覆盖同名/同ID预设，取消=作为新预设导入") };
+                const count = await importPresetDirectory(options);
+                showToast(`已导入 ${count} 个预设`, "success");
+            } catch (e) {
+                if (e && e.name === "AbortError") {
+                    showToast("取消导入", "info");
+                    return;
+                }
+                showToast(`导入预设失败：${e.message || e}`, "error");
+            }
+            return;
+        }
+        filePresetJson?.click();
+    });
+    filePresetJson?.addEventListener("change", async () => {
+        const f = filePresetJson.files && filePresetJson.files[0];
+        if (!f) return;
+        try {
+            const options = (typeof getPresetImportOptions === "function")
+                ? getPresetImportOptions()
+                : { overwrite: confirm("导入预设：确定=覆盖同名/同ID预设，取消=作为新预设导入") };
+            const count = (typeof importPresetFile === "function")
+                ? await importPresetFile(f, options)
+                : importPresetPayload(JSON.parse(await f.text()), options);
+            if (!count) throw new Error("no presets");
+            showToast(`已导入 ${count} 个预设`, "success");
+        } catch (e) {
+            showToast(`导入预设失败：${e.message || e}`, "error");
+        } finally {
+            filePresetJson.value = "";
+        }
+    });
 
     btnSaveJson?.addEventListener("click", async () => {
         const text = JSON.stringify(getState(), null, 2);

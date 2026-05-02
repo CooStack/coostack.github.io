@@ -10,6 +10,16 @@ installStoragePrefixPatch({
   prefix: String(window.__PB_STORAGE_PREFIX || ""),
   guardProperty: "__cpbPatched",
   keyPattern: /^pb_/,
+  sharedKeys: [
+    "pb_settings_v1",
+    "pb_presets_v1",
+    "pb_preset_groups_v1",
+    "pb_kotlin_end_v1",
+    "pb_hotkeys_v2",
+    "pb_layout_v1",
+    "pb_root_filter_v2",
+    "pb_theme_v2",
+  ],
 });
 
 initStandaloneOrEmbeddedReturn({

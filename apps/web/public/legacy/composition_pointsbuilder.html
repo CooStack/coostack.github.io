@@ -4,7 +4,7 @@
     <meta charset="utf-8"/>
     <meta name="viewport" content="width=device-width,initial-scale=1"/>
     <title>CompositionBuilder - PointsBuilder 编辑器</title>
-    <link rel="stylesheet" href="./assets/points_builder/css/style.css?v=20260429_12"/>
+    <link rel="stylesheet" href="./assets/points_builder/css/style.css?v=20260502_11"/>
     <script src="./assets/src/js/compat/spa-router-bridge.js"></script>
     <style>
         body.composition-no-kotlin #btnRightKotlinTab,
@@ -20,7 +20,7 @@
             <a id="btnBackComposition" class="btn" href="javascript:void(0)">返回 CompositionBuilder</a>
             <div class="brand">
                 <div class="brand-title">PointsBuilder 可视化构建器</div>
-                <div class="brand-sub">卡片编辑 / Three.js 预览 / 独立存储前缀</div>
+                <div class="brand-sub">卡片编辑 / Three.js 预览 / 共享预设与设置</div>
             </div>
         </div>
 
@@ -37,8 +37,19 @@
 
             <button id="btnSaveJson" class="btn">导出 JSON</button>
             <button id="btnLoadJson" class="btn">导入 JSON</button>
+            <div class="topbar-menu">
+                <button class="btn topbar-menu-trigger" type="button">预设 ▾</button>
+                <div class="topbar-submenu">
+                    <button id="btnSavePreset" class="btn" type="button">保存预设</button>
+                    <button id="btnApplyPreset" class="btn" type="button">应用预设</button>
+                    <button id="btnExportPresets" class="btn" type="button">导出预设</button>
+                    <button id="btnImportPresets" class="btn" type="button">导入预设</button>
+                </div>
+            </div>
+            <button id="btnEditVariables" class="btn">变量</button>
             <input id="fileJson" type="file" accept="application/json" hidden/>
             <input id="fileBuilderJson" type="file" accept="application/json" hidden/>
+            <input id="filePresetJson" type="file" accept=".zip,.json,application/zip,application/json" hidden/>
             <button id="btnReset" class="btn danger">重置</button>
             <div class="proj-name">
                 <span>项目名</span>
@@ -122,6 +133,8 @@
                 <div class="right-tabs" role="tablist" aria-label="右侧面板">
                     <button id="btnRightParamsTab" class="right-tab active" type="button" role="tab"
                             aria-selected="true" aria-controls="rightParamsPage">参数</button>
+                    <button id="btnRightPresetsTab" class="right-tab" type="button" role="tab"
+                            aria-selected="false" aria-controls="rightPresetsPage">预设</button>
                     <button id="btnRightKotlinTab" class="right-tab" type="button" role="tab"
                             aria-selected="false" aria-controls="rightKotlinPage">Kotlin</button>
                 </div>
@@ -131,6 +144,17 @@
                 <div id="paramEditorStatus" class="param-editor-status">选择左侧卡片后编辑参数</div>
                 <div id="paramEditorSyncHint" class="param-editor-sync-hint hidden"></div>
                 <div id="paramEditorHost" class="param-editor-host"></div>
+            </section>
+            <section id="rightPresetsPage" class="right-page right-presets-page" role="tabpanel"
+                     aria-labelledby="btnRightPresetsTab">
+                <div class="preset-library-head">
+                    <div id="presetLibraryStatus" class="preset-library-status"></div>
+                    <button id="btnPresetCreateLibraryGroup" class="btn icon preset-library-add-group-btn" type="button"
+                            title="新建分组" aria-label="新建分组">
+                        <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M4 7.5A2.5 2.5 0 0 1 6.5 5H10l2 2h5.5A2.5 2.5 0 0 1 20 9.5v7A2.5 2.5 0 0 1 17.5 19h-11A2.5 2.5 0 0 1 4 16.5v-9ZM12 10v6m-3-3h6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                    </button>
+                </div>
+                <div id="presetLibraryList" class="preset-library-list"></div>
             </section>
             <section id="rightKotlinPage" class="right-page right-kotlin-page" role="tabpanel"
                      aria-labelledby="btnRightKotlinTab">
@@ -158,14 +182,74 @@
         <button id="btnToggleKotlin" class="kotlin-toggle" title="折叠右侧面板">></button>
     </main>
 
+    <div id="presetSaveMask" class="modal-mask hidden"></div>
+    <div id="presetSaveModal" class="modal preset-save-modal hidden" role="dialog" aria-modal="true">
+        <div class="modal-head">
+            <div class="modal-title">保存预设</div>
+            <button id="btnClosePresetSave" class="btn icon" aria-label="关闭">
+                <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M6 6l12 12M18 6 6 18" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/></svg>
+            </button>
+        </div>
+        <div class="modal-body preset-save-modal-body">
+            <div class="preset-save-panel">
+                <div class="preset-save-grid">
+                    <label class="preset-field">
+                        <span>名字</span>
+                        <input id="presetNameInput" class="input" placeholder="未命名预设"/>
+                    </label>
+                    <label class="preset-field">
+                        <span>分组</span>
+                        <div class="preset-group-control">
+                            <select id="presetGroupInput" class="input"></select>
+                            <button id="btnPresetCreateGroup" class="btn icon preset-create-group-btn" type="button" title="新建分组" aria-label="新建分组">
+                                <svg viewBox="0 0 24 24" aria-hidden="true">
+                                    <path d="M3.5 7.5h6.2l1.8 2h9v8.2a2.3 2.3 0 0 1-2.3 2.3H5.8a2.3 2.3 0 0 1-2.3-2.3Z"/>
+                                    <path d="M3.5 7.5V6.2A2.2 2.2 0 0 1 5.7 4h4.4l1.7 1.8h5.9A2.3 2.3 0 0 1 20 8.1v1.4"/>
+                                    <path d="M12 13v5m-2.5-2.5h5"/>
+                                </svg>
+                            </button>
+                        </div>
+                    </label>
+                </div>
+                <div class="preset-origin-panel">
+                    <div class="preset-origin-label">保存原点</div>
+                    <input id="presetOriginX" class="input" type="number" step="0.01" placeholder="x"/>
+                    <input id="presetOriginY" class="input" type="number" step="0.01" placeholder="y"/>
+                    <input id="presetOriginZ" class="input" type="number" step="0.01" placeholder="z"/>
+                    <button id="btnPresetUseCurrentOrigin" class="btn icon preset-origin-icon-btn" type="button" title="使用当前中心" aria-label="使用当前中心">
+                        <svg viewBox="0 0 24 24" aria-hidden="true">
+                            <circle cx="12" cy="12" r="6"/>
+                            <path d="M12 3v3m0 12v3M3 12h3m12 0h3"/>
+                        </svg>
+                    </button>
+                    <button id="btnPresetPickOrigin" class="btn icon preset-origin-icon-btn" type="button" title="拾取保存原点" aria-label="拾取保存原点">
+                        <svg viewBox="0 0 24 24" aria-hidden="true">
+                            <path d="M12 21s6-5.6 6-11a6 6 0 0 0-12 0c0 5.4 6 11 6 11Z"/>
+                            <circle cx="12" cy="10" r="2.2"/>
+                        </svg>
+                    </button>
+                </div>
+            </div>
+        </div>
+        <div class="modal-foot preset-save-modal-foot">
+            <button id="btnCancelPresetSave" class="btn" type="button">取消</button>
+            <span style="flex:1 1 auto;"></span>
+            <button id="btnPresetSaveCurrent" class="btn primary" type="button">保存</button>
+        </div>
+    </div>
+
     <div id="modalMask" class="modal-mask hidden"></div>
     <div id="modal" class="modal hidden" role="dialog" aria-modal="true">
         <div class="modal-head">
             <div class="modal-title">添加元素</div>
             <input id="cardSearch" class="input" placeholder="搜索元素：addCircle / rotateTo / Fourier ..."/>
-            <button id="btnCloseModal" class="btn icon">✕</button>
+            <button id="btnCloseModal" class="btn icon" aria-label="关闭"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M6 6l12 12M18 6 6 18" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/></svg></button>
         </div>
         <div class="modal-body">
+            <div id="modalModeTabs" class="modal-tabs" role="tablist" aria-label="添加模式">
+                <button id="btnModalCardsTab" class="modal-tab active" type="button" role="tab" aria-selected="true">添加卡片</button>
+                <button id="btnModalPresetsTab" class="modal-tab" type="button" role="tab" aria-selected="false">添加预设</button>
+            </div>
             <div id="cardPicker" class="picker"></div>
         </div>
         <div class="modal-foot">
@@ -178,7 +262,7 @@
     <div id="settingsModal" class="modal hidden" role="dialog" aria-modal="true">
         <div class="modal-head">
             <div class="modal-title">设置</div>
-            <button id="btnCloseSettings" class="btn icon">✕</button>
+            <button id="btnCloseSettings" class="btn icon" aria-label="关闭"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M6 6l12 12M18 6 6 18" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/></svg></button>
         </div>
         <div class="modal-body">
             <div class="settings-layout">
@@ -244,6 +328,10 @@
                                 <input id="chkPointPickPreview" type="checkbox" checked/>
                                 <span>点拾取效果预览</span>
                             </label>
+                            <label class="chk settings-toggle">
+                                <input id="chkAutoSelectCompleteGroups" type="checkbox"/>
+                                <span>全选组内卡片时自动选择组</span>
+                            </label>
                         </div>
                     </div>
                 </div>
@@ -286,7 +374,7 @@
         <div class="modal-head">
             <div class="modal-title">快捷键设置</div>
             <input id="hkSearch" class="input" placeholder="搜索快捷键：撤销 / 添加元素 / addCircle ..."/>
-            <button id="btnCloseHotkeys" class="btn icon">✕</button>
+            <button id="btnCloseHotkeys" class="btn icon" aria-label="关闭"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M6 6l12 12M18 6 6 18" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/></svg></button>
         </div>
         <div class="modal-body">
             <div id="hkHint" style="margin:0 0 10px; opacity:.8; font-size:12px;">点击“设置”后按下你想要的按键（Esc
@@ -311,6 +399,6 @@
       }
     }
 </script>
-<script type="module" src="./assets/src/js/pages/composition-pointsbuilder.page.js?v=20260429_14"></script>
+<script type="module" src="./assets/src/js/pages/composition-pointsbuilder.page.js?v=20260502_15"></script>
 </body>
 </html>

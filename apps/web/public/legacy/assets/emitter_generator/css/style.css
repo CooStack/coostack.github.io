@@ -421,6 +421,19 @@
         overflow: auto;
         scrollbar-gutter: stable;
       }
+      .inspector-page {
+        flex: 1 1 auto;
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
+      }
+      .inspector-card {
+        flex: 1 1 auto;
+        min-height: 0;
+      }
+      .inspector-empty {
+        padding: 14px;
+      }
       .resizer {
         width: 6px;
         border-radius: 999px;
@@ -978,12 +991,17 @@
         background: color-mix(in srgb, var(--panel) 78%, transparent);
         border-radius: 18px;
         overflow: hidden;
+        cursor: pointer;
         box-shadow: 0 10px 26px color-mix(in srgb, #000 22%, transparent),
           inset 0 1px 0 rgba(255, 255, 255, 0.06);
         backdrop-filter: blur(12px) saturate(1.15);
       }
       .cmdQueueCard.active {
         border-color: color-mix(in srgb, var(--accent) 42%, var(--line2));
+        background: color-mix(in srgb, var(--accent) 10%, var(--panel) 74%);
+      }
+      .cmdQueueCard.active .cmdQueueHead {
+        background: color-mix(in srgb, var(--accent) 13%, var(--panel-head) 72%);
       }
       .cmdQueueHead {
         display: grid;
@@ -1095,6 +1113,7 @@
         background: color-mix(in srgb, var(--panel) 78%, transparent);
         border-radius: 18px;
         overflow: hidden;
+        cursor: pointer;
         box-shadow: 0 10px 26px color-mix(in srgb, #000 22%, transparent),
           inset 0 1px 0 rgba(255, 255, 255, 0.06);
         backdrop-filter: blur(12px) saturate(1.15);
@@ -1111,6 +1130,75 @@
         padding: 10px;
         border-bottom: 1px solid var(--line);
         background: color-mix(in srgb, var(--panel-head) 55%, transparent);
+      }
+      .panel.left .emitCard .emitBody {
+        display: none;
+      }
+      .panel.left .emitCard {
+        border-radius: 12px;
+        background: color-mix(in srgb, var(--panel-soft) 68%, transparent);
+        box-shadow: none;
+        backdrop-filter: none;
+      }
+      .panel.left .emitCard:hover {
+        border-color: color-mix(in srgb, var(--accent) 28%, var(--line2));
+        background: color-mix(in srgb, var(--panel-head) 70%, transparent);
+        box-shadow: none;
+      }
+      .panel.left .emitCard.active {
+        border-color: color-mix(in srgb, var(--accent) 42%, var(--line2));
+        background: color-mix(in srgb, var(--accent) 10%, var(--panel-soft) 78%);
+      }
+      .panel.left .emitCard .emitHead {
+        grid-template-columns: 30px minmax(0, 1fr) auto;
+        gap: 8px;
+        padding: 8px 10px;
+        border-bottom: none;
+        background: transparent;
+      }
+      .panel.left .emitCard .dragHandle {
+        width: 28px;
+        height: 28px;
+        border-radius: 8px;
+      }
+      .panel.left .emitCard .iconBtn {
+        border-radius: 8px;
+        padding: 4px 7px;
+      }
+      .panel.left .emitCard .emitTitle {
+        min-width: 0;
+      }
+      .panel.left .emitCard .emitTitle .sub {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .inspector-card > .emitInspectorCard {
+        border: none;
+        background: transparent;
+        box-shadow: none;
+        backdrop-filter: none;
+        cursor: default;
+      }
+      .inspector-card > .emitInspectorCard .dragHandle {
+        display: none;
+      }
+      .inspector-card > .emitInspectorCard .emitHead {
+        grid-template-columns: 1fr auto;
+      }
+      .inspector-card > .emitInspectorCard .emitBody {
+        max-height: none;
+        overflow: visible;
+      }
+      .queueInspectorValue {
+        min-height: 40px;
+        padding: 10px 14px;
+        border: 1px solid var(--line2);
+        border-radius: 12px;
+        background: color-mix(in srgb, var(--input-bg) 84%, transparent);
+        display: flex;
+        align-items: center;
+        color: color-mix(in srgb, var(--text) 94%, transparent);
       }
       .emitTitle {
         font-weight: 900;

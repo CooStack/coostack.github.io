@@ -341,7 +341,7 @@ export function createDoTickRuntimeScope(varsStore, tickValue = 0) {
 export function buildDoTickCompletions(rawBehaviorOrVars) {
     const varNames = resolveEmitterVarNames(rawBehaviorOrVars);
     const base = [
-        { label: "if (...) { ... }", insertText: "if ($0) {\\n    \\n}", detail: "条件分支", priority: 240 },
+        { label: "if (...) { ... }", insertText: "if ($0) {\n    \n}", detail: "条件分支", priority: 240 },
         { label: "setVar(name, value)", insertText: "setVar(\"$0\", 0)", detail: "设置变量", priority: 260 },
         { label: "addVar(name, value)", insertText: "addVar(\"$0\", 1)", detail: "变量加法", priority: 255 },
         { label: "subVar(name, value)", insertText: "subVar(\"$0\", 1)", detail: "变量减法", priority: 255 },

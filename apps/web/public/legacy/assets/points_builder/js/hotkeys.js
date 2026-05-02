@@ -11,9 +11,11 @@ export function initHotkeysSystem(ctx) {
         btnPickLine,
         btnPickTriangle,
         btnPickPoint,
+        btnLocalRotate,
         btnFullscreen,
         btnResetCamera,
         btnLoadJson,
+        btnApplyPreset,
         btnHotkeys,
         btnOpenHotkeys,
         btnCloseHotkeys,
@@ -29,22 +31,24 @@ export function initHotkeysSystem(ctx) {
         showToast,
         downloadText,
         getSettingsPayload,
-        applySettingsPayload
+        applySettingsPayload,
+        getPresetList
     } = ctx || {};
 
     const HOTKEY_STORAGE_KEY = "pb_hotkeys_v2";
 
     const DEFAULT_HOTKEYS = {
-        version: 9,
+        version: 11,
         actions: {
             openPicker: "KeyN",
+            openPresetPicker: "Shift+KeyP",
             pickLineXZ: "KeyQ",
             pickDottedLineXZ: "Shift+KeyQ",
             pickTriangle: "KeyT",
             pickPoint: "KeyE",
             pickBezierStartEnd: "KeyW",
             openMeasureTool: "KeyM",
-            toggleFullscreen: "KeyF",
+            toggleFullscreen: "Shift+KeyF",
             resetCamera: "Shift+KeyR",
             importJson: "Shift+KeyN",
             toggleSettings: "KeyH",
@@ -64,11 +68,13 @@ export function initHotkeysSystem(ctx) {
             mirrorCopy: "Mod+Shift+KeyD",
             triggerFocusedMove: "KeyV",
             triggerFocusedRotate: "KeyR",
+            triggerFocusedLocalRotate: "KeyF",
             undo: "Mod+KeyZ",
             redo: "Mod+Shift+KeyZ",
             deleteFocused: "Backspace",
         },
         kinds: {},
+        presets: {},
     };
 
     function normalizeHotkey(hk) {
@@ -155,6 +161,7 @@ export function initHotkeysSystem(ctx) {
                     version: DEFAULT_HOTKEYS.version,
                     actions: Object.assign({}, DEFAULT_HOTKEYS.actions),
                     kinds: {},
+                    presets: {},
                 };
                 if (obj && typeof obj === "object") {
                     if (obj.actions && typeof obj.actions === "object") {
@@ -163,10 +170,14 @@ export function initHotkeysSystem(ctx) {
                     if (obj.kinds && typeof obj.kinds === "object") {
                         out.kinds = Object.assign({}, obj.kinds);
                     }
+                    if (obj.presets && typeof obj.presets === "object") {
+                        out.presets = Object.assign({}, obj.presets);
+                    }
                 }
                 // normalize
                 for (const k of Object.keys(out.actions)) out.actions[k] = normalizeHotkey(out.actions[k]);
                 for (const k of Object.keys(out.kinds)) out.kinds[k] = normalizeHotkey(out.kinds[k]);
+                for (const k of Object.keys(out.presets)) out.presets[k] = normalizeHotkey(out.presets[k]);
 
                 // v3 migration: preserve custom keys, only move old defaults.
                 if (!Number.isFinite(storedVersion) || storedVersion < 3) {
@@ -184,6 +195,9 @@ export function initHotkeysSystem(ctx) {
                 if (!Number.isFinite(storedVersion) || storedVersion < 6) {
                     out.actions.toggleSnapQuick = "";
                 }
+                // v11 migration: F is now reserved for local rotate.
+                if (out.actions.toggleFullscreen === "KeyF") out.actions.toggleFullscreen = "Shift+KeyF";
+                if (!out.actions.triggerFocusedLocalRotate) out.actions.triggerFocusedLocalRotate = "KeyF";
                 return out;
             }
         } catch (e) {
@@ -204,9 +218,11 @@ export function initHotkeysSystem(ctx) {
         if (btnPickLine) btnPickLine.title = `快捷键：${hotkeyToHuman(hotkeys.actions.pickLineXZ || "") || "未设置"}`;
         if (btnPickTriangle) btnPickTriangle.title = `快捷键：${hotkeyToHuman(hotkeys.actions.pickTriangle || "") || "未设置"}`;
         if (btnPickPoint) btnPickPoint.title = `快捷键：${hotkeyToHuman(hotkeys.actions.pickPoint || "") || "未设置"}`;
+        if (btnLocalRotate) btnLocalRotate.title = `本地旋转；快捷键：${hotkeyToHuman(hotkeys.actions.triggerFocusedLocalRotate || "") || "未设置"}`;
         if (btnFullscreen) btnFullscreen.title = `快捷键：${hotkeyToHuman(hotkeys.actions.toggleFullscreen || "") || "未设置"}`;
         if (btnResetCamera) btnResetCamera.title = `快捷键：${hotkeyToHuman(hotkeys.actions.resetCamera || "") || "未设置"}`;
         if (btnLoadJson) btnLoadJson.title = `快捷键：${hotkeyToHuman(hotkeys.actions.importJson || "") || "未设置"}`;
+        if (btnApplyPreset) btnApplyPreset.title = `快捷键：${hotkeyToHuman(hotkeys.actions.openPresetPicker || "") || "未设置"}`;
         if (btnHotkeys) btnHotkeys.title = `快捷键：${hotkeyToHuman(hotkeys.actions.toggleSettings || "") || "未设置"}`;
     }
 
@@ -223,6 +239,7 @@ export function initHotkeysSystem(ctx) {
         hotkeys.version = DEFAULT_HOTKEYS.version;
         hotkeys.actions = Object.assign({}, DEFAULT_HOTKEYS.actions);
         hotkeys.kinds = {};
+        hotkeys.presets = {};
         saveHotkeys();
         renderHotkeysList();
     }
@@ -240,19 +257,24 @@ export function initHotkeysSystem(ctx) {
             if (except && except.type === "kind" && except.id === kind) continue;
             if (normalizeHotkey(v) === hk) delete hotkeys.kinds[kind];
         }
+        for (const [presetId, v] of Object.entries(hotkeys.presets || {})) {
+            if (except && except.type === "preset" && except.id === presetId) continue;
+            if (normalizeHotkey(v) === hk) delete hotkeys.presets[presetId];
+        }
     }
 
     let hotkeyCapture = null; // {type:"action"|"kind", id:"...", title:"..."}
 
     const HOTKEY_ACTION_DEFS = [
         {id: "openPicker", title: "打开「添加元素」", desc: "默认 N"},
+        {id: "openPresetPicker", title: "打开「添加预设」", desc: "默认 Shift+P"},
         {id: "pickLineXZ", title: "进入 XZ 拾取直线", desc: "默认 Q"},
         {id: "pickDottedLineXZ", title: "进入 XZ 拾取虚线直线", desc: "默认 Shift+Q"},
         {id: "pickTriangle", title: "进入 XZ 拾取三角形", desc: "默认 T"},
         {id: "pickPoint", title: "点拾取（填充当前输入）", desc: "默认 E"},
         {id: "pickBezierStartEnd", title: "进入 Bezier 创建流", desc: "默认 W"},
         {id: "openMeasureTool", title: "打开预览测距", desc: "默认 M"},
-        {id: "toggleFullscreen", title: "预览全屏 / 退出全屏", desc: "默认 F"},
+        {id: "toggleFullscreen", title: "预览全屏 / 退出全屏", desc: "默认 Shift+F"},
         {id: "resetCamera", title: "重置镜头", desc: "默认 Shift + R"},
         {id: "importJson", title: "导入 JSON", desc: "默认 Ctrl/Cmd+O"},
         {id: "toggleSettings", title: "打开/隐藏 设置", desc: "默认 H"},
@@ -271,6 +293,7 @@ export function initHotkeysSystem(ctx) {
         {id: "mirrorCopy", title: "镜像复制（直线/三角形/Bezier/Offset）", desc: "默认 Ctrl/Cmd + Shift + M"},
         {id: "triggerFocusedMove", title: "触发聚焦卡片移动", desc: "默认 V"},
         {id: "triggerFocusedRotate", title: "触发聚焦卡片旋转", desc: "默认 R"},
+        {id: "triggerFocusedLocalRotate", title: "触发聚焦卡片本地旋转", desc: "默认 F"},
         {id: "deleteFocused", title: "删除当前聚焦卡片", desc: "默认 Backspace"},
         {id: "undo", title: "撤销", desc: "默认 Ctrl/Cmd + Z"},
         {id: "redo", title: "恢复", desc: "默认 Ctrl/Cmd + Shift + Z"},
@@ -347,6 +370,10 @@ export function initHotkeysSystem(ctx) {
         } else if (target.type === "kind") {
             if (!hk) delete hotkeys.kinds[target.id];
             else hotkeys.kinds[target.id] = hk;
+        } else if (target.type === "preset") {
+            if (!hotkeys.presets || typeof hotkeys.presets !== "object") hotkeys.presets = {};
+            if (!hk) delete hotkeys.presets[target.id];
+            else hotkeys.presets[target.id] = hk;
         }
         saveHotkeys();
         renderHotkeysList();
@@ -434,6 +461,19 @@ export function initHotkeysSystem(ctx) {
             s2.appendChild(makeRow({title, desc, type: "kind", id: it.kind, hk}));
         }
         hkList.appendChild(s2);
+
+        const s3 = section("预设（拾取生成）");
+        const presets = typeof getPresetList === "function" ? getPresetList() : [];
+        for (const preset of presets) {
+            if (!preset || !preset.id) continue;
+            const hk = (hotkeys.presets || {})[preset.id] || "";
+            const title = preset.name || "未命名预设";
+            const desc = preset.group ? `分组：${preset.group}` : "默认分组";
+            const text = (title + " " + desc + " " + hotkeyToHuman(hk)).toLowerCase();
+            if (f && !text.includes(f)) continue;
+            s3.appendChild(makeRow({ title, desc, type: "preset", id: preset.id, hk }));
+        }
+        hkList.appendChild(s3);
     }
 
     function handleHotkeyCaptureKeydown(e) {
@@ -501,9 +541,11 @@ export function initHotkeysSystem(ctx) {
             if (hkObj) {
                 if (!hkObj.actions || typeof hkObj.actions !== "object") hkObj.actions = {};
                 if (!hkObj.kinds || typeof hkObj.kinds !== "object") hkObj.kinds = {};
+                if (!hkObj.presets || typeof hkObj.presets !== "object") hkObj.presets = {};
                 hotkeys.version = DEFAULT_HOTKEYS.version;
                 hotkeys.actions = Object.assign({}, DEFAULT_HOTKEYS.actions, hkObj.actions);
                 hotkeys.kinds = Object.assign({}, hkObj.kinds);
+                hotkeys.presets = Object.assign({}, hkObj.presets);
                 saveHotkeys();
                 renderHotkeysList();
             }

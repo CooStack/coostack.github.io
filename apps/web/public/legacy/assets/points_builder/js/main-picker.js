@@ -24,10 +24,22 @@ export function createPickerModule(ctx = {}) {
         getFocusedNodeId,
         getCardSelectionIds,
         getCurrentCardScopeContext,
-        setSuppressFocusHistory
+        setSuppressFocusHistory,
+        getPresetList,
+        startPresetPick,
+        previewPreset,
+        clearPresetPreview,
+        beginPresetDragFromPicker,
+        endPresetDragFromPicker,
+        bindPresetPointerApplyDrag,
+        shouldSuppressPresetClick
     } = ctx;
 
     let addTarget = { list: null, insertIndex: null, ownerLabel: "主Builder", ownerNodeId: null, keepFocusId: null };
+    let pickerMode = "cards";
+    const modalTitle = modal ? modal.querySelector(".modal-title") : null;
+    const btnModalCardsTab = document.getElementById("btnModalCardsTab");
+    const btnModalPresetsTab = document.getElementById("btnModalPresetsTab");
 
     function showSettingsModal() {
         if (!settingsModal || !settingsMask) return;
@@ -43,7 +55,22 @@ export function createPickerModule(ctx = {}) {
         settingsMask.classList.remove("under");
     }
 
-    function showModal() {
+    function setPickerMode(mode = "cards", options = {}) {
+        pickerMode = mode === "presets" ? "presets" : "cards";
+        btnModalCardsTab?.classList.toggle("active", pickerMode === "cards");
+        btnModalCardsTab?.setAttribute("aria-selected", pickerMode === "cards" ? "true" : "false");
+        btnModalPresetsTab?.classList.toggle("active", pickerMode === "presets");
+        btnModalPresetsTab?.setAttribute("aria-selected", pickerMode === "presets" ? "true" : "false");
+        if (modalTitle) modalTitle.textContent = pickerMode === "presets" ? "添加预设" : "添加元素";
+        if (cardSearch) {
+            cardSearch.placeholder = pickerMode === "presets"
+                ? "搜索预设：名字 / 分组"
+                : "搜索元素：addCircle / rotateTo / Fourier ...";
+        }
+        if (!options.skipRender) renderPicker(cardSearch ? cardSearch.value : "");
+    }
+
+    function showModal(mode = "cards") {
         if (!modal || !modalMask) return;
         // 任何时候打开「添加卡片」都必须是可交互的（不能遗留 under）
         modal.classList.remove("under");
@@ -52,9 +79,11 @@ export function createPickerModule(ctx = {}) {
         modalMask.classList.remove("hidden");
         if (cardSearch) {
             cardSearch.value = "";
+            setPickerMode(mode, { skipRender: true });
             renderPicker("");
             cardSearch.focus();
         } else {
+            setPickerMode(mode, { skipRender: true });
             renderPicker("");
         }
     }
@@ -68,7 +97,7 @@ export function createPickerModule(ctx = {}) {
         modalMask.classList.remove("under");
     }
 
-    function openModal(targetList, insertIndex = null, ownerLabel = "主Builder", ownerNodeId = null) {
+    function openModal(targetList, insertIndex = null, ownerLabel = "主Builder", ownerNodeId = null, options = {}) {
         // 记录插入目标 + 需要保持的焦点
         addTarget = {
             list: targetList || null,
@@ -77,7 +106,12 @@ export function createPickerModule(ctx = {}) {
             ownerNodeId: ownerNodeId || null,
             keepFocusId: ownerNodeId || null,
         };
-        showModal();
+        const mode = options && options.mode === "presets" ? "presets" : "cards";
+        showModal(mode);
+    }
+
+    function openPresetPicker() {
+        openModal(null, null, "主Builder", null, { mode: "presets" });
     }
 
     function toCompactSearchText(text) {
@@ -117,11 +151,111 @@ export function createPickerModule(ctx = {}) {
         return last * 10 + gap;
     }
 
+    function renderPresetPicker(filterText) {
+        if (!cardPicker) return;
+        const hotkeys = typeof getHotkeys === "function" ? getHotkeys() : null;
+        const presets = (typeof getPresetList === "function" ? getPresetList() : []) || [];
+        const f = String(filterText || "").trim().toLowerCase();
+        cardPicker.innerHTML = "";
+        cardPicker.classList.add("preset-picker");
+        cardPicker.classList.remove("card-picker");
+        if (typeof clearPresetPreview === "function") clearPresetPreview();
+
+        const shown = presets.filter((preset) => {
+            if (!f) return true;
+            return `${preset.name || ""} ${preset.group || ""}`.toLowerCase().includes(f);
+        });
+        if (!shown.length) {
+            const empty = document.createElement("div");
+            empty.className = "pickitem preset-pick-empty";
+            empty.textContent = presets.length ? "没有匹配的预设" : "还没有预设";
+            cardPicker.appendChild(empty);
+            return;
+        }
+
+        for (const preset of shown) {
+            const div = document.createElement("div");
+            div.className = "pickitem preset-pickitem preset-item";
+            div.dataset.presetId = preset.id || "";
+            const dragHandle = document.createElement("div");
+            dragHandle.className = "handle preset-drag-handle";
+            dragHandle.textContent = "≡";
+            dragHandle.title = "拖动预设";
+            dragHandle.setAttribute("aria-hidden", "true");
+            const info = document.createElement("div");
+            info.className = "preset-item-info";
+            const t = document.createElement("div");
+            t.className = "t preset-item-name";
+            t.textContent = preset.name || "未命名预设";
+            const d = document.createElement("div");
+            d.className = "d preset-item-details";
+            const group = String(preset.group || "默认分组");
+            const count = Array.isArray(preset.children) ? preset.children.length : 0;
+            d.textContent = `${group} / ${count} 张卡片`;
+            info.appendChild(t);
+            info.appendChild(d);
+            div.appendChild(dragHandle);
+            div.appendChild(info);
+
+            const hk = hotkeys && hotkeys.presets ? (hotkeys.presets[preset.id] || "") : "";
+            if (hk) {
+                const bad = document.createElement("div");
+                bad.className = "hkbad";
+                bad.textContent = hotkeyToHuman ? hotkeyToHuman(hk) : hk;
+                div.appendChild(bad);
+            }
+
+            if (typeof bindPresetPointerApplyDrag === "function") {
+                bindPresetPointerApplyDrag(div, preset, { hideModalOnStart: true });
+            }
+
+            const setBtn = document.createElement("button");
+            setBtn.className = "sethk btn icon preset-icon-btn";
+            setBtn.textContent = "⌨";
+            setBtn.title = "设置该预设的快捷键";
+            setBtn.addEventListener("click", (ev) => {
+                ev.stopPropagation();
+                if (typeof openHotkeysModal === "function") openHotkeysModal();
+                if (typeof beginHotkeyCapture === "function") {
+                    beginHotkeyCapture({ type: "preset", id: preset.id, title: preset.name || "未命名预设" });
+                }
+            });
+            div.appendChild(setBtn);
+
+            div.addEventListener("mouseenter", () => {
+                if (typeof previewPreset === "function") previewPreset(preset);
+            });
+            div.addEventListener("focusin", () => {
+                if (typeof previewPreset === "function") previewPreset(preset);
+            });
+            div.addEventListener("mouseleave", () => {
+                if (typeof clearPresetPreview === "function") clearPresetPreview();
+            });
+            div.addEventListener("focusout", () => {
+                if (typeof clearPresetPreview === "function") clearPresetPreview();
+            });
+            div.addEventListener("click", () => {
+                if (typeof shouldSuppressPresetClick === "function" && shouldSuppressPresetClick()) return;
+                if (typeof clearPresetPreview === "function") clearPresetPreview();
+                hideModal();
+                if (typeof startPresetPick === "function") startPresetPick(preset);
+            });
+            cardPicker.appendChild(div);
+        }
+    }
+
     function renderPicker(filterText) {
         if (!cardPicker) return;
+        if (pickerMode === "presets") {
+            renderPresetPicker(filterText);
+            return;
+        }
+        if (typeof clearPresetPreview === "function") clearPresetPreview();
         const f = (filterText || "").trim().toLowerCase();
         const fCompact = toCompactSearchText(filterText);
         cardPicker.innerHTML = "";
+        cardPicker.classList.add("card-picker");
+        cardPicker.classList.remove("preset-picker");
         const entries = Object.entries(KIND || {}).map(([kind, def], order) => ({ kind, def, order }));
 
         const shown = [];
@@ -350,6 +484,16 @@ export function createPickerModule(ctx = {}) {
     btnCancelModal?.addEventListener("click", hideModal);
     modalMask?.addEventListener("click", hideModal);
     cardSearch?.addEventListener("input", () => renderPicker(cardSearch.value));
+    btnModalCardsTab?.addEventListener("click", () => {
+        if (cardSearch) cardSearch.value = "";
+        setPickerMode("cards");
+        cardSearch?.focus();
+    });
+    btnModalPresetsTab?.addEventListener("click", () => {
+        if (cardSearch) cardSearch.value = "";
+        setPickerMode("presets");
+        cardSearch?.focus();
+    });
 
     return {
         showSettingsModal,
@@ -357,6 +501,7 @@ export function createPickerModule(ctx = {}) {
         showModal,
         hideModal,
         openModal,
+        openPresetPicker,
         getInsertContextFromFocus,
         addKindInContext
     };

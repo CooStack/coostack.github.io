@@ -1,8 +1,9 @@
 import { addDomReadyListener, postMessageSafe } from "./events.js";
 import { safeStorageSet } from "./storage.js";
 
-export function installStoragePrefixPatch({ prefix, guardProperty, keyPattern = /^pb_/ }) {
+export function installStoragePrefixPatch({ prefix, guardProperty, keyPattern = /^pb_/, sharedKeys = [] }) {
   const safePrefix = String(prefix || "");
+  const sharedKeySet = new Set((Array.isArray(sharedKeys) ? sharedKeys : []).map((key) => String(key)));
   const proto = Storage.prototype;
   if (proto[guardProperty]) return;
 
@@ -12,6 +13,7 @@ export function installStoragePrefixPatch({ prefix, guardProperty, keyPattern = 
 
   function mapKey(key) {
     const raw = String(key ?? "");
+    if (sharedKeySet.has(raw)) return raw;
     return keyPattern.test(raw) ? `${safePrefix}${raw}` : raw;
   }
 
