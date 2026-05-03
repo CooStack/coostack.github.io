@@ -1,6 +1,6 @@
 import * as THREE from "three";
 import {OrbitControls} from "three/addons/controls/OrbitControls.js";
-import { createCardInputs, initCardSystem } from "./cards.js?v=20260503_3";
+import { createCardInputs, initCardSystem } from "./cards.js?v=20260503_5";
 import { initFilterSystem } from "./filters.js?v=20260429_7";
 import { initHotkeysSystem } from "./hotkeys.js?v=20260321_7";
 import { createKindDefs } from "./kinds.js?v=20260429_8";
@@ -681,7 +681,10 @@ function initPointsBuilderMain() {
         }
 
         if (typeof renderParamsEditors === "function") {
-            renderParamsEditors(paramEditorHost, source, nodes.length > 1 ? "参数同步" : "卡片编辑", { paramsOnly: true });
+            renderParamsEditors(paramEditorHost, source, nodes.length > 1 ? "参数同步" : "卡片编辑", {
+                paramsOnly: true,
+                includeFourierTerms: nodes.length === 1 && firstKind === "add_fourier_series"
+            });
         }
         applyParamStepToInputs();
 
@@ -1178,10 +1181,6 @@ function initPointsBuilderMain() {
             return Number.isFinite(n) ? n : 0;
         }
         const map = getEffectiveNumericMap();
-        if (Object.keys(map).length <= 1) {
-            const x = Number(expr);
-            return Number.isFinite(x) ? x : 0;
-        }
         const key = `${compositionNumericContext.version}|${getLocalVariableCacheKey()}|${expr}`;
         if (compositionNumericContext.cache.has(key)) return compositionNumericContext.cache.get(key);
         const value = evaluateExpressionWithMap(expr, map);
@@ -2033,6 +2032,17 @@ function initPointsBuilderMain() {
         }
     }
 
+    function hasMeaningfulVecComponentValue(value) {
+        if (value === undefined || value === null) return false;
+        return String(value).trim() !== "";
+    }
+
+    function assignLegacyVecComponentIfMissing(p, key, value) {
+        if (!hasMeaningfulVecComponentValue(value)) return;
+        if (hasMeaningfulVecComponentValue(p[key])) return;
+        p[key] = value;
+    }
+
     function syncLegacyVecParamsFromObject(p, prefix, objKey = null) {
         if (!p || typeof p !== "object") return;
         const raw = p[objKey || prefix];
@@ -2041,15 +2051,15 @@ function initPointsBuilderMain() {
         const py = `${prefix}y`;
         const pz = `${prefix}z`;
         if (Array.isArray(raw)) {
-            if (raw[0] !== undefined) p[px] = raw[0];
-            if (raw[1] !== undefined) p[py] = raw[1];
-            if (raw[2] !== undefined) p[pz] = raw[2];
+            assignLegacyVecComponentIfMissing(p, px, raw[0]);
+            assignLegacyVecComponentIfMissing(p, py, raw[1]);
+            assignLegacyVecComponentIfMissing(p, pz, raw[2]);
             return;
         }
         if (typeof raw === "object") {
-            if (raw.x !== undefined) p[px] = raw.x;
-            if (raw.y !== undefined) p[py] = raw.y;
-            if (raw.z !== undefined) p[pz] = raw.z;
+            assignLegacyVecComponentIfMissing(p, px, raw.x);
+            assignLegacyVecComponentIfMissing(p, py, raw.y);
+            assignLegacyVecComponentIfMissing(p, pz, raw.z);
         }
     }
 
@@ -2555,6 +2565,11 @@ function initPointsBuilderMain() {
                     vectorRefs.add(base);
                     matched = true;
                 }
+                continue;
+            }
+            if (catalog?.vector?.has(base)) {
+                vectorRefs.add(base);
+                matched = true;
                 continue;
             }
             if (catalog?.scalar?.has(base)) {
@@ -3478,7 +3493,8 @@ function initPointsBuilderMain() {
         } else {
             if (!values.scalar) values.scalar = {};
             const n = Number(value);
-            values.scalar[name] = Number.isFinite(n) ? n : 0;
+            if (!Number.isFinite(n)) return;
+            values.scalar[name] = n;
         }
     }
 
@@ -3523,7 +3539,8 @@ function initPointsBuilderMain() {
                 const inputs = ["x", "y", "z"].map((axis) => {
                     const input = document.createElement("input");
                     input.className = "input";
-                    input.type = "number";
+                    input.type = "text";
+                    input.inputMode = "decimal";
                     input.step = "0.01";
                     input.placeholder = axis;
                     input.value = String(current[axis]);
@@ -3559,7 +3576,8 @@ function initPointsBuilderMain() {
             } else {
                 const input = document.createElement("input");
                 input.className = "input";
-                input.type = "number";
+                input.type = "text";
+                input.inputMode = "decimal";
                 input.step = "0.01";
                 input.value = String(Number.isFinite(Number(values?.scalar?.[name])) ? Number(values.scalar[name]) : 0);
                 input.addEventListener("input", () => updatePresetVariableValue(values, entry, input.value));
@@ -3631,12 +3649,35 @@ function initPointsBuilderMain() {
         );
     }
 
+    function canFoldPresetNumericExpression(expr) {
+        const text = stripNumericSuffix(transpileKotlinThisQualifierToJs(String(expr || "").trim()));
+        if (!text) return false;
+        if (isNumericLiteral(text)) return true;
+        const tokenRe = /[A-Za-z_$][A-Za-z0-9_$]*(?:\s*\.\s*[A-Za-z_$][A-Za-z0-9_$]*)?/g;
+        let match;
+        while ((match = tokenRe.exec(text))) {
+            const token = String(match[0] || "").replace(/\s+/g, "");
+            const base = normalizeContextIdentifier(token.split(".")[0]);
+            if (!base) continue;
+            if (base === "PI" || base === "Math") continue;
+            return false;
+        }
+        return /[+\-*/()%]/.test(text) || /\bMath\s*\./.test(text);
+    }
+
+    function foldPresetNumericExpression(expr) {
+        if (!canFoldPresetNumericExpression(expr)) return expr;
+        const n = evaluateExpressionWithMap(expr, { PI: Math.PI });
+        return Number.isFinite(n) ? formatPresetVariableNumber(n) : expr;
+    }
+
     function applyPresetVariableValueToParam(value, scalarEntries, vectorEntries) {
         if (typeof value === "string") {
-            let next = stripNumericSuffix(transpileKotlinThisQualifierToJs(value));
+            const before = stripNumericSuffix(transpileKotlinThisQualifierToJs(value));
+            let next = before;
             for (const [name, vec] of vectorEntries) next = replaceVectorComponent(next, name, vec);
             for (const [name, scalar] of scalarEntries) next = replaceScalarIdentifier(next, name, scalar);
-            return next;
+            return next !== before ? foldPresetNumericExpression(next) : next;
         }
         if (Array.isArray(value)) {
             return value.map((item) => applyPresetVariableValueToParam(item, scalarEntries, vectorEntries));
@@ -3649,6 +3690,63 @@ function initPointsBuilderMain() {
             return out;
         }
         return value;
+    }
+
+    function applyPresetScalarParamKeyValue(params, key, value, variableValues) {
+        const name = normalizeContextIdentifier(key);
+        if (!name || !Object.prototype.hasOwnProperty.call(variableValues.scalar || {}, name)) return false;
+        const raw = stripNumericSuffix(transpileKotlinThisQualifierToJs(String(value ?? "").trim()));
+        if (raw && raw !== name) return false;
+        params[key] = formatPresetVariableNumber(variableValues.scalar[name]);
+        return true;
+    }
+
+    function getVectorAliasPrefixForNode(node, key) {
+        const keyText = String(key || "").trim();
+        if (!keyText) return "";
+        switch (node?.kind) {
+            case "add_bezier_4":
+                if (keyText === "start") return "s";
+                if (keyText === "end") return "e";
+                if (keyText === "startHandle") return "sh";
+                if (keyText === "endHandle") return "eh";
+                break;
+            case "add_bezier_curve":
+                if (keyText === "target" || keyText === "end") return "e";
+                if (keyText === "startHandle") return "sh";
+                if (keyText === "endHandle") return "eh";
+                break;
+            case "add_bezier":
+            case "add_broken_line":
+                if (keyText === "p1" || keyText === "p2" || keyText === "p3") return keyText;
+                break;
+            default:
+                break;
+        }
+        return "";
+    }
+
+    function applyPresetVectorAliasValue(node, params, key, value, variableValues) {
+        if (typeof value !== "string") return false;
+        const ref = normalizeContextIdentifier(value);
+        if (!ref) return false;
+        const vec = variableValues.vector?.[ref];
+        if (!vec) return false;
+        const next = {
+            x: formatPresetVariableNumber(vec.x),
+            y: formatPresetVariableNumber(vec.y),
+            z: formatPresetVariableNumber(vec.z)
+        };
+        const prefix = getVectorAliasPrefixForNode(node, key);
+        if (prefix) {
+            params[`__pb_vec_mode_${prefix}`] = "manual";
+            params[`__pb_vec_var_${prefix}`] = "";
+            params[`${prefix}x`] = next.x;
+            params[`${prefix}y`] = next.y;
+            params[`${prefix}z`] = next.z;
+        }
+        params[key] = next;
+        return true;
     }
 
     function applyPresetVariableValuesToChildren(children, values) {
@@ -3673,6 +3771,8 @@ function initPointsBuilderMain() {
                     }
                     continue;
                 }
+                if (applyPresetScalarParamKeyValue(p, key, value, variableValues)) continue;
+                if (applyPresetVectorAliasValue(node, p, key, value, variableValues)) continue;
                 p[key] = applyPresetVariableValueToParam(value, scalarEntries, vectorEntries);
             }
             syncPresetLegacyParamAliases(node);

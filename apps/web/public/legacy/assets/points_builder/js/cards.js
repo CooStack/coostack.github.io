@@ -524,23 +524,21 @@ export function createCardInputs(ctx) {
     function inputNum(value, onInput) {
         const i = document.createElement("input");
         i.className = "input";
-        const exprMode = exprModeEnabled();
-        i.type = exprMode ? "text" : "number";
-        if (exprMode) i.inputMode = "decimal";
+        const exprMode = true;
+        const suggestMode = exprModeEnabled();
+        i.type = "text";
+        i.inputMode = "decimal";
         const step = (typeof getParamStep === "function") ? getParamStep() : null;
-        if (!exprMode) i.step = Number.isFinite(step) ? String(step) : "any";
         const initialValue = (value === null || value === undefined || (typeof value === "string" && value.trim() === ""))
             ? 0
             : value;
         i.value = String(initialValue);
-        if (exprMode) {
-            i.placeholder = i.placeholder || "支持变量/表达式";
-            i.autocomplete = "off";
-            i.spellcheck = false;
-        }
+        i.placeholder = i.placeholder || "支持变量/表达式";
+        i.autocomplete = "off";
+        i.spellcheck = false;
         armHistoryOnFocus && armHistoryOnFocus(i, "edit");
         i.addEventListener("keydown", (e) => {
-            if (exprMode) {
+            if (suggestMode) {
                 const suggestOpen = !!exprSuggestEl
                     && !exprSuggestEl.classList.contains("hidden")
                     && exprSuggestInput === i;
@@ -575,9 +573,7 @@ export function createCardInputs(ctx) {
             if (!Number.isFinite(liveStep) || liveStep <= 0) return;
             e.preventDefault();
             const curStr = i.value;
-            const cur = exprMode
-                ? (typeof parseExprNumber === "function" ? parseExprNumber(curStr) : (num ? num(curStr) : Number(curStr)))
-                : parseFloat(curStr);
+            const cur = typeof parseExprNumber === "function" ? parseExprNumber(curStr) : (num ? num(curStr) : Number(curStr));
             const base = Number.isFinite(cur) ? cur : 0;
             const next = base + (e.key === "ArrowUp" ? liveStep : -liveStep);
             const precision = Math.max(countDecimalsFromString(curStr), countDecimalsFromString(liveStep));
@@ -586,14 +582,10 @@ export function createCardInputs(ctx) {
             i.dispatchEvent(new Event("input", { bubbles: true }));
         });
         i.addEventListener("input", () => {
-            if (exprMode) {
-                onInput(String(i.value ?? ""));
-                openExprSuggestion(i, false);
-                return;
-            }
-            onInput(num ? num(i.value) : Number(i.value));
+            onInput(String(i.value ?? ""));
+            if (suggestMode) openExprSuggestion(i, false);
         });
-        if (exprMode) {
+        if (suggestMode) {
             i.addEventListener("focus", () => openExprSuggestion(i, false));
             i.addEventListener("blur", () => setTimeout(() => {
                 if (exprSuggestInput === i) closeExprSuggestion();
@@ -4185,7 +4177,8 @@ export function initCardSystem(ctx = {}) {
                     rebuildPreviewAndKotlin();
                 })));
                 body.appendChild(row("offset", makeVec3Editor(p, "o", rebuildPreviewAndKotlin, "offset")));
-                if (!opts.paramsOnly && !node.folded) {
+                const showTerms = (!opts.paramsOnly || opts.includeFourierTerms) && !node.folded;
+                if (showTerms) {
                     const sub = document.createElement("div");
                     sub.className = "subcards";
                     if (!Array.isArray(node.terms)) node.terms = [];
