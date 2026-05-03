@@ -4188,7 +4188,8 @@ export function initCardSystem(ctx = {}) {
                 if (!opts.paramsOnly && !node.folded) {
                     const sub = document.createElement("div");
                     sub.className = "subcards";
-                    const list = node.terms || [];
+                    if (!Array.isArray(node.terms)) node.terms = [];
+                    const list = node.terms;
                     for (let i = 0; i < list.length; i++) {
                         sub.appendChild(renderFourierTermCard(node, i));
                     }
@@ -4199,7 +4200,7 @@ export function initCardSystem(ctx = {}) {
                     btn.textContent = "添加 term";
                     btn.addEventListener("click", () => {
                         historyCapture("add_fourier_term");
-                        node.terms.push({id: makeUid(), r: 1, w: 1, startAngle: 0, startAngleUnit: "deg", collapsed: false, bodyHeight: null});
+                        list.push({id: makeUid(), r: 1, w: 1, startAngle: 0, startAngleUnit: "deg", collapsed: false, bodyHeight: null});
                         renderAll();
                     });
                     body.appendChild(btn);

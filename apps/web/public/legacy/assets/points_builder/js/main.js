@@ -1,6 +1,6 @@
 import * as THREE from "three";
 import {OrbitControls} from "three/addons/controls/OrbitControls.js";
-import { createCardInputs, initCardSystem } from "./cards.js?v=20260503_2";
+import { createCardInputs, initCardSystem } from "./cards.js?v=20260503_3";
 import { initFilterSystem } from "./filters.js?v=20260429_7";
 import { initHotkeysSystem } from "./hotkeys.js?v=20260321_7";
 import { createKindDefs } from "./kinds.js?v=20260429_8";
@@ -2175,6 +2175,25 @@ function initPointsBuilderMain() {
         }
     }
 
+    function normalizeFourierTerms(node) {
+        if (!node || node.kind !== "add_fourier_series") return;
+        if (!Array.isArray(node.terms)) {
+            node.terms = [];
+            return;
+        }
+        const terms = node.terms.filter((t) => t && typeof t === "object");
+        node.terms.splice(0, node.terms.length, ...terms);
+        for (const t of node.terms) {
+            if (!t.id) t.id = uid();
+            if (t.r === undefined) t.r = 1;
+            if (t.w === undefined) t.w = 1;
+            if (t.startAngle === undefined) t.startAngle = 0;
+            if (!t.startAngleUnit) t.startAngleUnit = "deg";
+            if (t.collapsed === undefined) t.collapsed = false;
+            if (t.bodyHeight === undefined) t.bodyHeight = null;
+        }
+    }
+
     function normalizeNodeTree(node) {
         if (!node) return;
         if (Array.isArray(node)) {
@@ -2182,6 +2201,7 @@ function initPointsBuilderMain() {
             return;
         }
         normalizeNodeParams(node);
+        normalizeFourierTerms(node);
         if (Array.isArray(node.children)) {
             for (const c of node.children) normalizeNodeTree(c);
         }
@@ -2808,9 +2828,10 @@ function initPointsBuilderMain() {
     }
 
     function applyPresetAtPoint(preset, point, options = {}) {
+        const variablesResolved = !!preset?.__pbVariablesResolved;
         const normalized = normalizePresetList([preset])[0];
         if (!normalized || !normalized.children.length || !point) return false;
-        const variableInfo = getPresetEffectiveVariableInfo(normalized);
+        const variableInfo = variablesResolved ? null : getPresetEffectiveVariableInfo(normalized);
         const defaultValues = getPresetVariableDefaultValues(variableInfo);
         const sourceChildren = variableInfo
             ? applyPresetVariableValuesToChildren(deepCloneJson(normalized.children || []) || [], defaultValues)
@@ -2819,6 +2840,11 @@ function initPointsBuilderMain() {
         const reassignIds = (node) => {
             if (!node || typeof node !== "object") return;
             node.id = uid();
+            if (Array.isArray(node.terms)) {
+                for (const term of node.terms) {
+                    if (term && typeof term === "object") term.id = uid();
+                }
+            }
             if (Array.isArray(node.children)) node.children.forEach(reassignIds);
         };
         nextChildren.forEach(reassignIds);
@@ -3663,7 +3689,8 @@ function initPointsBuilderMain() {
         applyPresetVariableValuesToChildren(children, values);
         return Object.assign({}, normalized, {
             children,
-            variables: null
+            variables: null,
+            __pbVariablesResolved: true
         });
     }
 
@@ -12483,6 +12510,7 @@ function collectSyntheticVecTargetsForNode(node) {
         getCardSelectionIds: () => (typeof getCardSelectionIds === "function" ? getCardSelectionIds() : null),
         importPresetPayload,
         applyPresetAtPoint,
+        resolvePresetForApply,
         openPresetPanel,
         exportPresetLibraryZip,
         importPresetDirectory,

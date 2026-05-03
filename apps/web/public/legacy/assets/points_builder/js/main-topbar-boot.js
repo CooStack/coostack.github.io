@@ -52,6 +52,7 @@ export function initTopbarAndBoot(ctx = {}) {
         getCardSelectionIds,
         importPresetPayload,
         applyPresetAtPoint,
+        resolvePresetForApply,
         openPresetPanel,
         exportPresetLibraryZip,
         importPresetDirectory,
@@ -780,7 +781,7 @@ export function initTopbarAndBoot(ctx = {}) {
         showToast(`已保存预设：${preset.name}`, "success");
     });
 
-    btnApplyPreset?.addEventListener("click", () => {
+    btnApplyPreset?.addEventListener("click", async () => {
         if (typeof openPresetPanel === "function") {
             openPresetPanel("apply");
             return;
@@ -788,11 +789,15 @@ export function initTopbarAndBoot(ctx = {}) {
         if (typeof applyPresetAtPoint !== "function" || typeof startPointPick !== "function") return;
         const preset = choosePreset("选择要生成的预设序号");
         if (!preset) return;
+        const resolvedPreset = (typeof resolvePresetForApply === "function")
+            ? await resolvePresetForApply(preset)
+            : preset;
+        if (!resolvedPreset) return;
         startPointPick({
-            label: `预设 ${preset.name || ""}`.trim(),
+            label: `预设 ${resolvedPreset.name || ""}`.trim(),
             onPick: (point) => {
-                const ok = applyPresetAtPoint(preset, point);
-                showToast(ok ? `已生成预设：${preset.name}` : "生成预设失败", ok ? "success" : "error");
+                const ok = applyPresetAtPoint(resolvedPreset, point);
+                showToast(ok ? `已生成预设：${resolvedPreset.name}` : "生成预设失败", ok ? "success" : "error");
             }
         });
     });
