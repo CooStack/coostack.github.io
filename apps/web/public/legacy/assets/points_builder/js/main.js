@@ -1,6 +1,6 @@
 import * as THREE from "three";
 import {OrbitControls} from "three/addons/controls/OrbitControls.js";
-import { createCardInputs, initCardSystem } from "./cards.js?v=20260502_10";
+import { createCardInputs, initCardSystem } from "./cards.js?v=20260503_2";
 import { initFilterSystem } from "./filters.js?v=20260429_7";
 import { initHotkeysSystem } from "./hotkeys.js?v=20260321_7";
 import { createKindDefs } from "./kinds.js?v=20260429_8";
@@ -2033,6 +2033,52 @@ function initPointsBuilderMain() {
         }
     }
 
+    function syncLegacyVecParamsFromObject(p, prefix, objKey = null) {
+        if (!p || typeof p !== "object") return;
+        const raw = p[objKey || prefix];
+        if (!raw) return;
+        const px = `${prefix}x`;
+        const py = `${prefix}y`;
+        const pz = `${prefix}z`;
+        if (Array.isArray(raw)) {
+            if (raw[0] !== undefined) p[px] = raw[0];
+            if (raw[1] !== undefined) p[py] = raw[1];
+            if (raw[2] !== undefined) p[pz] = raw[2];
+            return;
+        }
+        if (typeof raw === "object") {
+            if (raw.x !== undefined) p[px] = raw.x;
+            if (raw.y !== undefined) p[py] = raw.y;
+            if (raw.z !== undefined) p[pz] = raw.z;
+        }
+    }
+
+    function syncPresetLegacyParamAliases(node) {
+        if (!node || !node.params || typeof node.params !== "object") return;
+        const p = node.params;
+        switch (node.kind) {
+            case "add_bezier_4":
+                syncLegacyVecParamsFromObject(p, "s", "start");
+                syncLegacyVecParamsFromObject(p, "e", "end");
+                syncLegacyVecParamsFromObject(p, "sh", "startHandle");
+                syncLegacyVecParamsFromObject(p, "eh", "endHandle");
+                if (p.count === undefined && p.counts !== undefined) p.count = p.counts;
+                break;
+            case "add_bezier_curve":
+                syncLegacyVecParamsFromObject(p, "e", "target");
+                syncLegacyVecParamsFromObject(p, "sh", "startHandle");
+                syncLegacyVecParamsFromObject(p, "eh", "endHandle");
+                if (p.count === undefined && p.counts !== undefined) p.count = p.counts;
+                break;
+            case "add_bezier":
+                syncLegacyVecParamsFromObject(p, "p1");
+                syncLegacyVecParamsFromObject(p, "p2");
+                syncLegacyVecParamsFromObject(p, "p3");
+                if (p.count === undefined && p.counts !== undefined) p.count = p.counts;
+                break;
+        }
+    }
+
     function normalizeNodeParams(node) {
         if (!node || !node.kind) return;
         if (!node.params || typeof node.params !== "object") node.params = {};
@@ -2368,6 +2414,15 @@ function initPointsBuilderMain() {
         "sin", "cos", "tan", "asin", "acos", "atan", "atan2", "sqrt", "abs",
         "min", "max", "pow", "floor", "ceil", "round", "random", "clamp"
     ]);
+    const PRESET_VARIABLE_KNOWN_PARAM_NAMES = new Set([
+        "age", "tick", "time", "index", "i", "count", "progress", "angle", "radian", "radius",
+        "x", "y", "z", "dx", "dy", "dz", "ox", "oy", "oz", "step", "speed", "scale"
+    ]);
+    const PRESET_VARIABLE_VECTOR_PARAM_NAMES = new Set([
+        "start", "end", "target", "origin", "offset", "point", "center", "from", "to",
+        "p1", "p2", "p3", "p4", "startHandle", "endHandle", "handle", "axis"
+    ]);
+    const PRESET_VARIABLE_VECTOR_COMPONENT_NAMES = new Set(["x", "y", "z", "0", "1", "2"]);
 
     function getVariableCatalog() {
         const scalar = new Map();
@@ -2440,6 +2495,8 @@ function initPointsBuilderMain() {
         if (!expr || isNumericLiteral(expr)) return;
         const tokenRe = /[A-Za-z_$][A-Za-z0-9_$]*(?:\s*\.\s*[A-Za-z_$][A-Za-z0-9_$]*)?/g;
         let match;
+        let plainCount = 0;
+        const plainTokens = new Set();
         while ((match = tokenRe.exec(expr))) {
             const token = String(match[0] || "").replace(/\s+/g, "");
             if (!token) continue;
@@ -2451,6 +2508,11 @@ function initPointsBuilderMain() {
                 if (prop === "x" || prop === "y" || prop === "z") vectorRefs.add(base);
                 continue;
             }
+            plainCount += 1;
+            plainTokens.add(base);
+        }
+        for (const base of plainTokens) {
+            if (plainCount > 1 && PRESET_VARIABLE_KNOWN_PARAM_NAMES.has(base)) continue;
             scalarRefs.add(base);
         }
     }
@@ -2480,26 +2542,55 @@ function initPointsBuilderMain() {
                 matched = true;
             }
         }
-        if (!matched) {
-            const plain = normalizeContextIdentifier(expr);
-            if (plain && !PRESET_VARIABLE_IGNORE_NAMES.has(plain)) {
-                scalarRefs.add(plain);
-                matched = true;
-            }
-        }
         return matched;
     }
 
-    function isPresetVariableParamCandidate(node, key, value) {
+    function collectPresetVariableRefsFromValue(node, key, value, catalog, scalarRefs, vectorRefs) {
+        if (typeof value === "string") {
+            if (isPresetVariableParamCandidate(node, key, value, catalog)) {
+                collectVariableRefsFromExpression(value, scalarRefs, vectorRefs);
+                return;
+            }
+            collectKnownVariableRefsFromValue(value, catalog, scalarRefs, vectorRefs);
+            return;
+        }
+        if (Array.isArray(value)) {
+            value.forEach((item, index) => collectPresetVariableRefsFromValue(node, `${key}.${index}`, item, catalog, scalarRefs, vectorRefs));
+            return;
+        }
+        if (value && typeof value === "object") {
+            for (const [childKey, childValue] of Object.entries(value)) {
+                collectPresetVariableRefsFromValue(node, key ? `${key}.${childKey}` : childKey, childValue, catalog, scalarRefs, vectorRefs);
+            }
+        }
+    }
+
+    function isPresetVariableNumericParamKey(node, key) {
+        const keyText = String(key || "");
+        if (!keyText || keyText.startsWith("__pb_")) return false;
+        const defParams = KIND?.[node?.kind]?.defaultParams || {};
+        if (Object.prototype.hasOwnProperty.call(defParams, keyText) && typeof defParams[keyText] === "number") return true;
+        const parts = keyText.split(".").map((it) => String(it || "").trim()).filter(Boolean);
+        const leaf = parts[parts.length - 1] || "";
+        if (!leaf) return false;
+        if (parts.length === 1) {
+            if (Object.prototype.hasOwnProperty.call(defParams, leaf) && typeof defParams[leaf] === "number") return true;
+            return PRESET_VARIABLE_KNOWN_PARAM_NAMES.has(leaf);
+        }
+        const parent = parts[parts.length - 2] || "";
+        return PRESET_VARIABLE_VECTOR_PARAM_NAMES.has(parent)
+            && PRESET_VARIABLE_VECTOR_COMPONENT_NAMES.has(leaf);
+    }
+
+    function isPresetVariableParamCandidate(node, key, value, catalog = null) {
         const keyText = String(key || "");
         if (keyText.startsWith("__pb_")) return false;
         if (typeof value !== "string") return false;
         const expr = stripNumericSuffix(transpileKotlinThisQualifierToJs(String(value || "").trim()));
         if (!expr || isNumericLiteral(expr)) return false;
-        const defParams = KIND?.[node?.kind]?.defaultParams || {};
-        if (Object.prototype.hasOwnProperty.call(defParams, keyText) && typeof defParams[keyText] === "number") return true;
+        if (isPresetVariableNumericParamKey(node, keyText)) return true;
         if (/[A-Za-z_$][A-Za-z0-9_$]*\s*\.\s*[xyz]\b/.test(expr)) return true;
-        if (isIdentifier(expr)) return true;
+        if (isIdentifier(expr) && catalog?.scalar?.has(normalizeContextIdentifier(expr))) return true;
         return /[+\-*/()%]/.test(expr);
     }
 
@@ -2517,11 +2608,7 @@ function initPointsBuilderMain() {
                     if (ref) vectorRefs.add(ref);
                     continue;
                 }
-                if (isPresetVariableParamCandidate(node, keyText, value)) {
-                    collectVariableRefsFromExpression(value, scalarRefs, vectorRefs);
-                } else if (typeof value === "string") {
-                    collectKnownVariableRefsFromValue(value, catalog, scalarRefs, vectorRefs);
-                }
+                collectPresetVariableRefsFromValue(node, keyText, value, catalog, scalarRefs, vectorRefs);
             }
             if (Array.isArray(node.children)) node.children.forEach(walk);
         };
@@ -2723,8 +2810,9 @@ function initPointsBuilderMain() {
     function applyPresetAtPoint(preset, point, options = {}) {
         const normalized = normalizePresetList([preset])[0];
         if (!normalized || !normalized.children.length || !point) return false;
-        const defaultValues = getPresetVariableDefaultValues(normalized.variables);
-        const sourceChildren = normalized.variables
+        const variableInfo = getPresetEffectiveVariableInfo(normalized);
+        const defaultValues = getPresetVariableDefaultValues(variableInfo);
+        const sourceChildren = variableInfo
             ? applyPresetVariableValuesToChildren(deepCloneJson(normalized.children || []) || [], defaultValues)
             : normalized.children;
         const nextChildren = preparePresetChildrenForInsertion(sourceChildren);
@@ -3242,6 +3330,58 @@ function initPointsBuilderMain() {
         });
     }
 
+    function mergePresetVariableInfo(...infos) {
+        const refs = { scalar: new Set(), vector: new Set() };
+        const inputs = { scalar: {}, vector: {} };
+        const entriesByKey = new Map();
+        const hasInput = (type, name) => Object.prototype.hasOwnProperty.call(inputs[type], name);
+        for (const raw of infos) {
+            const info = normalizePresetVariableInfoForStorage(raw);
+            if (!info) continue;
+            for (const entry of getPresetVariableEntries(info)) {
+                const name = normalizeContextIdentifier(entry?.name);
+                if (!name) continue;
+                const type = entry?.type === "vector" ? "vector" : "scalar";
+                refs[type].add(name);
+                const key = `${type}:${name}`;
+                if (!entriesByKey.has(key)) entriesByKey.set(key, Object.assign({}, entry, { type, name }));
+            }
+            for (const name of info.refs?.vector || []) {
+                const clean = normalizeContextIdentifier(name);
+                if (!clean) continue;
+                refs.vector.add(clean);
+                if (!hasInput("vector", clean)) inputs.vector[clean] = normalizePointValue(info.inputs?.vector?.[clean]);
+            }
+            for (const name of info.refs?.scalar || []) {
+                const clean = normalizeContextIdentifier(name);
+                if (!clean) continue;
+                refs.scalar.add(clean);
+                if (!hasInput("scalar", clean)) {
+                    const n = Number(info.inputs?.scalar?.[clean]);
+                    inputs.scalar[clean] = Number.isFinite(n) ? n : 0;
+                }
+            }
+        }
+        for (const name of refs.vector) refs.scalar.delete(name);
+        if (!refs.scalar.size && !refs.vector.size) return null;
+        return normalizePresetVariableInfoForStorage({
+            refs: {
+                scalar: Array.from(refs.scalar),
+                vector: Array.from(refs.vector)
+            },
+            inputs,
+            entries: Array.from(entriesByKey.values())
+        });
+    }
+
+    function getPresetEffectiveVariableInfo(preset) {
+        if (!preset || typeof preset !== "object") return null;
+        return mergePresetVariableInfo(
+            preset.variables,
+            collectPresetVariableInfo(preset.children || [])
+        );
+    }
+
     function getPresetVariableDefaultValues(info) {
         const normalized = normalizePresetVariableInfoForStorage(info);
         return normalizePresetVariableValues(normalized?.inputs || {});
@@ -3454,11 +3594,35 @@ function initPointsBuilderMain() {
     }
 
     function replaceVectorComponent(expr, name, value) {
-        const safe = escapeRegExp(name);
-        if (!safe) return expr;
+        const cleanName = normalizeContextIdentifier(name);
+        if (!cleanName) return expr;
         const vec = normalizePointValue(value);
-        const re = new RegExp(`(^|[^A-Za-z0-9_$])${safe}\\s*\\.\\s*([xyz])\\b`, "g");
-        return String(expr || "").replace(re, (_m, lead, axis) => `${lead}${formatPresetVariableNumber(vec[axis])}`);
+        return String(expr || "").replace(
+            /\b([A-Za-z_$][A-Za-z0-9_$]*)\s*\.\s*([xyz])\b/g,
+            (match, base, axis) => normalizeContextIdentifier(base) === cleanName
+                ? formatPresetVariableNumber(vec[axis])
+                : match
+        );
+    }
+
+    function applyPresetVariableValueToParam(value, scalarEntries, vectorEntries) {
+        if (typeof value === "string") {
+            let next = stripNumericSuffix(transpileKotlinThisQualifierToJs(value));
+            for (const [name, vec] of vectorEntries) next = replaceVectorComponent(next, name, vec);
+            for (const [name, scalar] of scalarEntries) next = replaceScalarIdentifier(next, name, scalar);
+            return next;
+        }
+        if (Array.isArray(value)) {
+            return value.map((item) => applyPresetVariableValueToParam(item, scalarEntries, vectorEntries));
+        }
+        if (value && typeof value === "object") {
+            const out = {};
+            for (const [childKey, childValue] of Object.entries(value)) {
+                out[childKey] = applyPresetVariableValueToParam(childValue, scalarEntries, vectorEntries);
+            }
+            return out;
+        }
+        return value;
     }
 
     function applyPresetVariableValuesToChildren(children, values) {
@@ -3483,12 +3647,9 @@ function initPointsBuilderMain() {
                     }
                     continue;
                 }
-                if (typeof value !== "string") continue;
-                let next = value;
-                for (const [name, vec] of vectorEntries) next = replaceVectorComponent(next, name, vec);
-                for (const [name, scalar] of scalarEntries) next = replaceScalarIdentifier(next, name, scalar);
-                p[key] = next;
+                p[key] = applyPresetVariableValueToParam(value, scalarEntries, vectorEntries);
             }
+            syncPresetLegacyParamAliases(node);
             if (Array.isArray(node.children)) node.children.forEach(walk);
         };
         (Array.isArray(children) ? children : []).forEach(walk);
@@ -3526,7 +3687,7 @@ function initPointsBuilderMain() {
                 </button>
             </div>
             <div class="modal-body">
-                <div id="presetVariableHost" class="preset-variable-panel"></div>
+                <div id="presetVariableHost" class="preset-variable-panel hidden"></div>
             </div>
             <div class="modal-foot preset-variable-foot">
                 <button id="btnCancelPresetVariables" class="btn" type="button">取消</button>
@@ -3588,8 +3749,7 @@ function initPointsBuilderMain() {
     async function resolvePresetForApply(preset) {
         const normalized = normalizePresetList([preset])[0];
         if (!normalized) return null;
-        const variableInfo = normalizePresetVariableInfoForStorage(normalized.variables)
-            || collectPresetVariableInfo(normalized.children || []);
+        const variableInfo = getPresetEffectiveVariableInfo(normalized);
         if (!getPresetVariableEntries(variableInfo).length) return normalized;
         const presetWithVariables = Object.assign({}, normalized, { variables: variableInfo });
         const values = await openPresetVariableApplyDialog(presetWithVariables);
@@ -4383,7 +4543,7 @@ function initPointsBuilderMain() {
                 details.className = "preset-item-details";
                 const origin = normalizePointValue(preset.origin);
                 const count = Array.isArray(preset.children) ? preset.children.length : 0;
-                const variableCount = getPresetVariableEntries(preset.variables).length;
+                const variableCount = getPresetVariableEntries(getPresetEffectiveVariableInfo(preset)).length;
                 details.textContent = `${count} 张卡片 · ${variableCount ? `${variableCount} 个变量 · ` : ""}原点 ${origin.x}, ${origin.y}, ${origin.z}`;
                 info.append(name, details);
                 if (!isEditingItem) bindPresetPointerApplyDrag(info, preset);
@@ -7701,8 +7861,9 @@ function initPointsBuilderMain() {
         }
         let previewPoints = null;
         try {
-            const defaultValues = getPresetVariableDefaultValues(normalized.variables);
-            const sourceChildren = normalized.variables
+            const variableInfo = getPresetEffectiveVariableInfo(normalized);
+            const defaultValues = getPresetVariableDefaultValues(variableInfo);
+            const sourceChildren = variableInfo
                 ? applyPresetVariableValuesToChildren(deepCloneJson(normalized.children || []) || [], defaultValues)
                 : normalized.children;
             const children = preparePresetChildrenForInsertion(sourceChildren);
@@ -12255,6 +12416,19 @@ function collectSyntheticVecTargetsForNode(node) {
 
     bindPresetLibraryControls();
     bindRightPanelTabs();
+
+    if (new URLSearchParams(window.location.search || "").get("pb_debug") === "1") {
+        globalThis.__pointsBuilderDebug = Object.freeze({
+            getState: () => state,
+            getPresetList: () => getPresetList(),
+            applyPresetAtPoint,
+            saveCurrentAsPreset,
+            importPresetPayload,
+            normalizePresetList,
+            getPresetEffectiveVariableInfo,
+            clonePresetWithVariableValues
+        });
+    }
 
     initTopbarAndBoot({
         btnExportKotlin,

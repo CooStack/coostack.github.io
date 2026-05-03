@@ -601,14 +601,22 @@ function createDefaultBuilderState() {
 function normalizeBuilderState(raw) {
     const base = createDefaultBuilderState();
     if (!raw || typeof raw !== "object") return base;
+    const cloneExtras = (src, next) => {
+        if (!src || typeof src !== "object") return next;
+        if (src.variables !== undefined) next.variables = deepClone(src.variables);
+        if (src.presets !== undefined) next.presets = deepClone(src.presets);
+        if (src.settings !== undefined) next.settings = deepClone(src.settings);
+        if (src.hotkeys !== undefined) next.hotkeys = deepClone(src.hotkeys);
+        return next;
+    };
     if (raw.root && Array.isArray(raw.root.children)) {
-        return { root: { id: "root", kind: "ROOT", children: deepClone(raw.root.children) } };
+        return cloneExtras(raw, { root: { id: "root", kind: "ROOT", children: deepClone(raw.root.children) } });
     }
     if (raw.state && raw.state.root && Array.isArray(raw.state.root.children)) {
-        return { root: { id: "root", kind: "ROOT", children: deepClone(raw.state.root.children) } };
+        return cloneExtras(raw.state, { root: { id: "root", kind: "ROOT", children: deepClone(raw.state.root.children) } });
     }
     if (Array.isArray(raw.children)) {
-        return { root: { id: "root", kind: "ROOT", children: deepClone(raw.children) } };
+        return cloneExtras(raw, { root: { id: "root", kind: "ROOT", children: deepClone(raw.children) } });
     }
     if (Array.isArray(raw)) {
         return { root: { id: "root", kind: "ROOT", children: deepClone(raw) } };
