@@ -1,6 +1,6 @@
 import * as THREE from "three";
 import {OrbitControls} from "three/addons/controls/OrbitControls.js";
-import { createCardInputs, initCardSystem } from "./cards.js?v=20260503_5";
+import { createCardInputs, initCardSystem } from "./cards.js?v=20260503_14";
 import { initFilterSystem } from "./filters.js?v=20260429_7";
 import { initHotkeysSystem } from "./hotkeys.js?v=20260321_7";
 import { createKindDefs } from "./kinds.js?v=20260429_8";

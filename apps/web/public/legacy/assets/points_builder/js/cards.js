@@ -4180,9 +4180,10 @@ export function initCardSystem(ctx = {}) {
                 const showTerms = (!opts.paramsOnly || opts.includeFourierTerms) && !node.folded;
                 if (showTerms) {
                     const sub = document.createElement("div");
-                    sub.className = "subcards fourier-terms";
                     if (!Array.isArray(node.terms)) node.terms = [];
                     const list = node.terms;
+                    const denseTerms = list.length >= 3;
+                    sub.className = `subcards fourier-terms${denseTerms ? " dense" : ""}`;
                     for (let i = 0; i < list.length; i++) {
                         sub.appendChild(renderFourierTermCard(node, i));
                     }
