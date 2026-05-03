@@ -3754,6 +3754,17 @@ body.resizing-subblock-y * {
     padding-right: 4px;
 }
 
+.param-editor-host .subcards.fourier-terms{
+    flex: 1 1 auto;
+    min-height: 0 !important;
+    max-height: none;
+    overflow-y: auto !important;
+}
+
+.param-editor-host .subcards.fourier-terms + .btn.small{
+    flex: 0 0 auto;
+}
+
 /* 4) 子卡片滚动条样式（可选） */
 .subcards::-webkit-scrollbar{ width: 10px; }
 .subcards::-webkit-scrollbar-track{

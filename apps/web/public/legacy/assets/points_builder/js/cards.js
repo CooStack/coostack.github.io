@@ -4180,7 +4180,7 @@ export function initCardSystem(ctx = {}) {
                 const showTerms = (!opts.paramsOnly || opts.includeFourierTerms) && !node.folded;
                 if (showTerms) {
                     const sub = document.createElement("div");
-                    sub.className = "subcards";
+                    sub.className = "subcards fourier-terms";
                     if (!Array.isArray(node.terms)) node.terms = [];
                     const list = node.terms;
                     for (let i = 0; i < list.length; i++) {
