@@ -1354,6 +1354,36 @@ export function initCardSystem(ctx = {}) {
         return wrap;
     }
 
+    function getNodeDisplayName(node) {
+        if (!node) return "";
+        const raw = String(node.label || "").trim();
+        if (raw) return raw;
+        const def = KIND[node.kind];
+        return (def && def.title) || getBuilderScopeType(node) || node.kind || "";
+    }
+
+    function formatNodePathLabel(nodeId) {
+        const path = findNodePathById(nodeId);
+        if (!Array.isArray(path) || !path.length) return "";
+        return path
+            .map((step) => getNodeDisplayName(step && step.node))
+            .filter(Boolean)
+            .join(" > ");
+    }
+
+    function beginRenameNode(nodeId, ev = null) {
+        const id = String(nodeId || "").trim();
+        if (!id || !elCardsRoot) return false;
+        const card = elCardsRoot.querySelector(`.card[data-id="${id}"]`);
+        if (!card) return false;
+        const fn = card.__pbBeginRename;
+        if (typeof fn !== "function") return false;
+        ev?.preventDefault?.();
+        ev?.stopPropagation?.();
+        fn(ev);
+        return true;
+    }
+
     function iconBtn(text, onClick, danger = false) {
         const b = document.createElement("button");
         b.type = "button";
@@ -2759,10 +2789,7 @@ export function initCardSystem(ctx = {}) {
         const titleText = document.createElement("span");
         titleText.className = "title-text card-title-label";
         titleText.textContent = getCardTitleText();
-        titleText.title = "点击修改卡片名";
-        const isCardTitleEditBlockedTarget = (target) => {
-            return !!(target && target.closest && target.closest(".handle, .badge2, .tree-toggle-btn, button, input, select, textarea"));
-        };
+        titleText.title = "右键重命名，或选中后按 F2";
         const beginCardTitleEdit = (ev = null) => {
             ev?.stopPropagation?.();
             if (titleText.dataset.editing === "1") return;
@@ -2804,23 +2831,8 @@ export function initCardSystem(ctx = {}) {
                 input.select();
             });
         };
-        titleText.addEventListener("pointerdown", (ev) => {
-            ev.preventDefault();
-            ev.stopPropagation();
-            beginCardTitleEdit(ev);
-        }, true);
-        titleText.addEventListener("click", beginCardTitleEdit);
-        title.title = "点击修改卡片名";
-        title.addEventListener("pointerdown", (ev) => {
-            if (isCardTitleEditBlockedTarget(ev.target)) return;
-            ev.preventDefault();
-            ev.stopPropagation();
-            beginCardTitleEdit(ev);
-        }, true);
-        title.addEventListener("click", (ev) => {
-            if (isCardTitleEditBlockedTarget(ev.target)) return;
-            beginCardTitleEdit(ev);
-        });
+        card.__pbBeginRename = beginCardTitleEdit;
+        title.title = "右键重命名，或选中后按 F2";
 
         const badge = document.createElement("div");
         badge.className = "badge2";
@@ -3328,9 +3340,9 @@ export function initCardSystem(ctx = {}) {
                     const titleText = document.createElement("span");
                     titleText.className = "subblock-title-text subblock-title-label";
                     titleText.textContent = getSubblockTitle();
-                    titleText.title = "点击修改组名";
+                    titleText.title = "右键重命名，或选中后按 F2";
                     const beginSubblockTitleEdit = (ev) => {
-                        ev.stopPropagation();
+                        ev?.stopPropagation?.();
                         if (titleText.dataset.editing === "1") return;
                         titleText.dataset.editing = "1";
                         const titleInput = document.createElement("input");
@@ -3369,9 +3381,9 @@ export function initCardSystem(ctx = {}) {
                             titleInput.select();
                         });
                     };
-                    title.title = "点击修改组名";
+                    card.__pbBeginRename = beginSubblockTitleEdit;
+                    title.title = "右键重命名，或选中后按 F2";
                     title.addEventListener("pointerdown", (ev) => ev.stopPropagation());
-                    title.addEventListener("click", beginSubblockTitleEdit);
                     title.appendChild(titleText);
 
                     const actions = document.createElement("div");
@@ -4084,9 +4096,9 @@ export function initCardSystem(ctx = {}) {
                     const titleText = document.createElement("span");
                     titleText.className = "subblock-title-text subblock-title-label";
                     titleText.textContent = getSubblockTitle();
-                    titleText.title = "点击修改组名";
+                    titleText.title = "右键重命名，或选中后按 F2";
                     const beginSubblockTitleEdit = (ev) => {
-                        ev.stopPropagation();
+                        ev?.stopPropagation?.();
                         if (titleText.dataset.editing === "1") return;
                         titleText.dataset.editing = "1";
                         const titleInput = document.createElement("input");
@@ -4125,9 +4137,9 @@ export function initCardSystem(ctx = {}) {
                             titleInput.select();
                         });
                     };
-                    title.title = "点击修改组名";
+                    card.__pbBeginRename = beginSubblockTitleEdit;
+                    title.title = "右键重命名，或选中后按 F2";
                     title.addEventListener("pointerdown", (ev) => ev.stopPropagation());
-                    title.addEventListener("click", beginSubblockTitleEdit);
                     title.appendChild(titleText);
 
                     const actions = document.createElement("div");
@@ -4262,9 +4274,9 @@ export function initCardSystem(ctx = {}) {
                     const titleText = document.createElement("span");
                     titleText.className = "subblock-title-text subblock-title-label";
                     titleText.textContent = getSubblockTitle();
-                    titleText.title = "点击修改组名";
+                    titleText.title = "右键重命名，或选中后按 F2";
                     const beginSubblockTitleEdit = (ev) => {
-                        ev.stopPropagation();
+                        ev?.stopPropagation?.();
                         if (titleText.dataset.editing === "1") return;
                         titleText.dataset.editing = "1";
                         const titleInput = document.createElement("input");
@@ -4303,9 +4315,9 @@ export function initCardSystem(ctx = {}) {
                             titleInput.select();
                         });
                     };
-                    title.title = "点击修改组名";
+                    card.__pbBeginRename = beginSubblockTitleEdit;
+                    title.title = "右键重命名，或选中后按 F2";
                     title.addEventListener("pointerdown", (ev) => ev.stopPropagation());
-                    title.addEventListener("click", beginSubblockTitleEdit);
                     title.appendChild(titleText);
 
                     const actions = document.createElement("div");
@@ -4445,6 +4457,8 @@ export function initCardSystem(ctx = {}) {
         navigateCardScope,
         revealCardScopeById,
         getCurrentCardScopeContext,
+        formatNodePathLabel,
+        beginRenameNode,
         getSelectedNodeIds,
         setSelectedNodeIds,
         clearSelectedNodeIds

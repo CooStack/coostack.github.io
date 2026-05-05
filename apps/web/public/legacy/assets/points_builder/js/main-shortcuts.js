@@ -54,6 +54,9 @@ export function initGlobalShortcuts(ctx = {}) {
         startLocalRotateForTargetIds,
         togglePointPickCallbackRotate,
         startPresetPickById,
+        beginPresetItemRenameById,
+        beginPresetGroupRename,
+        isDefaultPresetGroup,
         startBezierCreate,
         setSnapPlane,
         setMirrorPlane,
@@ -62,6 +65,7 @@ export function initGlobalShortcuts(ctx = {}) {
         getFocusedNodeId,
         getCardSelectionIds,
         focusCardById,
+        beginRenameNode,
         addRotateForTargetIds,
         startOffsetMode,
         addKindInContext,
@@ -100,6 +104,36 @@ export function initGlobalShortcuts(ctx = {}) {
         const isMac = /Mac|iPhone|iPad|iPod/i.test(navigator.platform);
         const mod = isMac ? e.metaKey : e.ctrlKey;
         const key = (e.key || "").toLowerCase();
+        if (e.key === "F2" && !e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey) {
+            const target = e.target;
+            const tag = target && target.tagName ? String(target.tagName).toUpperCase() : "";
+            if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || target?.isContentEditable) return;
+            const presetItem = target && target.closest ? target.closest(".preset-item[data-preset-id]") : null;
+            if (presetItem && typeof beginPresetItemRenameById === "function") {
+                e.preventDefault();
+                if (beginPresetItemRenameById(presetItem.dataset.presetId || "")) return;
+            }
+            const presetGroup = target && target.closest ? target.closest(".preset-group-head") : null;
+            if (presetGroup && typeof beginPresetGroupRename === "function") {
+                const group = presetGroup.closest(".preset-group")?.dataset?.group || "";
+                if (group && !(typeof isDefaultPresetGroup === "function" && isDefaultPresetGroup(group))) {
+                    e.preventDefault();
+                    beginPresetGroupRename(group);
+                    return;
+                }
+            }
+            let targetId = (typeof getFocusedNodeId === "function") ? getFocusedNodeId() : null;
+            if (!targetId && typeof getCardSelectionIds === "function") {
+                const sel = getCardSelectionIds();
+                if (sel && sel.size) targetId = Array.from(sel)[0] || null;
+            }
+            if (targetId && typeof beginRenameNode === "function") {
+                e.preventDefault();
+                if (typeof focusCardById === "function") focusCardById(targetId, false, false, true);
+                beginRenameNode(targetId);
+            }
+            return;
+        }
         if (mod && key === "n" && !e.shiftKey && !e.altKey) {
             e.preventDefault();
             return;

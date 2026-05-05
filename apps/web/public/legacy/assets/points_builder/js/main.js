@@ -905,6 +905,9 @@ function initPointsBuilderMain() {
     function getParamEditorTargetIds() {
         const selectedSet = (typeof getCardSelectionIds === "function") ? getCardSelectionIds() : null;
         const selectedIds = selectedSet ? normalizeActionTargetIds(Array.from(selectedSet)) : [];
+        if (focusedNodeId && selectedIds.includes(focusedNodeId)) {
+            return [focusedNodeId].concat(selectedIds.filter((id) => id !== focusedNodeId));
+        }
         if (selectedIds.length) return selectedIds;
         if (focusedNodeId) return normalizeActionTargetIds([focusedNodeId]);
         return [];
@@ -1001,9 +1004,10 @@ function initPointsBuilderMain() {
 
         const kindDef = (KIND && KIND[firstKind]) || {};
         const title = kindDef.title || firstKind || "未命名卡片";
+        const sourceTitle = (typeof formatNodePathLabel === "function" ? formatNodePathLabel(first.id) : "") || title;
         const source = first;
         if (nodes.length > 1) {
-            paramEditorStatus.textContent = `正在编辑：${title}（${nodes.length} 张）`;
+            paramEditorStatus.textContent = `正在编辑：${sourceTitle}（${nodes.length} 张）`;
             setParamEditorSyncHint(`参数同步已启用：${nodes.length} 张同类型卡片会使用同一套参数`);
             paramEditorSyncState = {
                 ids: ids.slice(),
@@ -1015,7 +1019,7 @@ function initPointsBuilderMain() {
                 paramEditorSyncState.snapshots.set(node.id, clonePlain(node.params || {}));
             }
         } else {
-            paramEditorStatus.textContent = `正在编辑：${title}`;
+            paramEditorStatus.textContent = `正在编辑：${sourceTitle}`;
         }
 
         if (typeof renderParamsEditors === "function") {
@@ -2035,7 +2039,7 @@ function initPointsBuilderMain() {
 
     let getFilterScope, saveRootFilter, isFilterActive, filterAllows, getVisibleEntries, getVisibleIndices, swapInList, findVisibleSwapIndex, cleanupFilterMenus;
       let renderCards, renderParamsEditors, layoutActionOverflow, initCollapseAllControls, setupListDropZone, addQuickOffsetTo, navigateCardScope;
-      let revealCardScopeById, getCurrentCardScopeContext;
+      let revealCardScopeById, getCurrentCardScopeContext, formatNodePathLabel, beginRenameNode;
       let createFilterControls, createParamSyncControls, renderSyncMenu, bindParamSyncListeners, isSyncSelectableEvent, toggleSyncTarget, setSyncTargetsByIds, setSyncEnabled, paramSync;
       let getCardSelectionIds, setCardSelectionIds, clearCardSelectionIds;
       let hotkeys, hotkeyToHuman, hotkeyMatchEvent, normalizeHotkey, shouldIgnorePlainHotkeys;
@@ -5002,6 +5006,13 @@ function initPointsBuilderMain() {
         schedulePresetLibraryRender();
     }
 
+    function beginPresetItemRenameById(id) {
+        const preset = presetList.find((it) => it && it.id === id);
+        if (!preset) return false;
+        beginPresetItemRename(preset);
+        return true;
+    }
+
     function commitPresetItemRename(id, rawValue) {
         const preset = presetList.find((it) => it.id === id);
         if (!preset) {
@@ -5413,6 +5424,13 @@ function initPointsBuilderMain() {
             });
             head.addEventListener("keydown", (ev) => {
                 if (ev.target && ev.target.closest && ev.target.closest("button, input, select, textarea")) return;
+                if (ev.key === "F2") {
+                    if (!isDefaultPresetGroup(group)) {
+                        ev.preventDefault();
+                        beginPresetGroupRename(group);
+                    }
+                    return;
+                }
                 if (ev.key === "Enter" || ev.key === " ") {
                     ev.preventDefault();
                     togglePresetGroupCollapsed(group);
@@ -5477,11 +5495,7 @@ function initPointsBuilderMain() {
                 });
             } else {
                 titleBody.textContent = getPresetGroupLeaf(group);
-                titleBody.title = "点击修改组名";
-                titleBody.addEventListener("click", (ev) => {
-                    ev.stopPropagation();
-                    beginPresetGroupRename(group);
-                });
+                titleBody.title = "右键重命名，或聚焦后按 F2";
             }
             title.append(folderIcon, titleBody);
             const meta = document.createElement("div");
@@ -5560,7 +5574,26 @@ function initPointsBuilderMain() {
                 const row = document.createElement("article");
                 row.className = "card compact-card preset-item";
                 row.draggable = false;
+                row.tabIndex = 0;
                 row.dataset.presetId = preset.id;
+                row.addEventListener("keydown", (ev) => {
+                    if (ev.key !== "F2") return;
+                    if (ev.target && ev.target.closest && ev.target.closest("button, input, select, textarea")) return;
+                    ev.preventDefault();
+                    beginPresetItemRename(preset);
+                });
+                row.addEventListener("contextmenu", (ev) => {
+                    ev.preventDefault();
+                    ev.stopPropagation();
+                    showActionMenu(ev.clientX, ev.clientY, [
+                        { label: "重命名", onSelect: () => beginPresetItemRename(preset) },
+                        { label: "拾取生成", onSelect: () => applyPresetFromLibrary(preset) },
+                        { label: "覆盖保存", onSelect: () => {
+                            if (!openPresetOverwriteDialog(preset)) showToast("打开预设编辑失败", "error");
+                        } },
+                        { label: "删除", danger: true, onSelect: () => deletePresetById(preset.id) }
+                    ]);
+                });
         row.addEventListener("dragstart", (ev) => {
             const handle = ev.target && ev.target.closest ? ev.target.closest(".preset-drag-handle") : null;
             if (!handle || handle.closest(".preset-item") !== row) {
@@ -5641,12 +5674,7 @@ function initPointsBuilderMain() {
                     const text = document.createElement("span");
                     text.className = "preset-item-name-text";
                     text.textContent = preset.name || "未命名预设";
-                    text.title = "点击修改预设名";
-                    text.addEventListener("click", (ev) => {
-                        if (Date.now() < presetPointerDragClickSuppressUntil) return;
-                        ev.stopPropagation();
-                        beginPresetItemRename(preset);
-                    });
+                    text.title = "右键重命名，或聚焦后按 F2";
                     name.appendChild(text);
                 }
                 const details = document.createElement("div");
@@ -11381,6 +11409,12 @@ function openActionMenuForBlankNoSelection(ev) {
         sourceKind: isSingleGroup ? singleCtxNode.node.kind : null
     });
     if (groupEntry && Array.isArray(groupEntry.children) && groupEntry.children.length) items.push(groupEntry);
+    if (ids.length === 1 && typeof beginRenameNode === "function") {
+        items.push({
+            label: "重命名",
+            onSelect: () => beginRenameNode(ids[0])
+        });
+    }
     items.push({
         label: "保存为预设",
         onSelect: () => openPresetPanel("save", { sourceIds: ids })
@@ -13554,6 +13588,8 @@ function collectSyntheticVecTargetsForNode(node) {
         navigateCardScope,
         revealCardScopeById,
         getCurrentCardScopeContext,
+        formatNodePathLabel,
+        beginRenameNode,
         getSelectedNodeIds: getCardSelectionIds,
         setSelectedNodeIds: setCardSelectionIds,
         clearSelectedNodeIds: clearCardSelectionIds
@@ -13666,6 +13702,9 @@ function collectSyntheticVecTargetsForNode(node) {
         startLocalRotateForTargetIds,
         togglePointPickCallbackRotate,
         startPresetPickById,
+        beginPresetItemRenameById,
+        beginPresetGroupRename,
+        isDefaultPresetGroup,
         startBezierCreate,
         setSnapPlane,
         setMirrorPlane,
@@ -13674,6 +13713,7 @@ function collectSyntheticVecTargetsForNode(node) {
         getFocusedNodeId: () => focusedNodeId,
         getCardSelectionIds: () => (typeof getCardSelectionIds === "function" ? getCardSelectionIds() : null),
         focusCardById,
+        beginRenameNode,
         addRotateForTargetIds,
         startOffsetMode,
         addKindInContext,
