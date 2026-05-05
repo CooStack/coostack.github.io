@@ -4,7 +4,7 @@
     <meta charset="utf-8"/>
     <meta name="viewport" content="width=device-width,initial-scale=1"/>
     <title>CompositionBuilder - PointsBuilder 编辑器</title>
-    <link rel="stylesheet" href="./assets/points_builder/css/style.css?v=20260503_14"/>
+    <link rel="stylesheet" href="./assets/points_builder/css/style.css?v=20260505_1"/>
     <script src="./assets/src/js/compat/spa-router-bridge.js"></script>
     <style>
         body.composition-no-kotlin #btnRightKotlinTab,
@@ -43,6 +43,7 @@
                 <div class="topbar-submenu">
                     <button id="btnSavePreset" class="btn" type="button">保存预设</button>
                     <button id="btnApplyPreset" class="btn" type="button">应用预设</button>
+                    <button id="btnOpenPresetRingToolMenu" class="btn" type="button">环形放置</button>
                     <button id="btnExportPresets" class="btn" type="button">导出预设</button>
                     <button id="btnImportPresets" class="btn" type="button">导入预设</button>
                 </div>
@@ -150,10 +151,55 @@
                      aria-labelledby="btnRightPresetsTab">
                 <div class="preset-library-head">
                     <div id="presetLibraryStatus" class="preset-library-status"></div>
+                    <button id="btnOpenPresetRingTool" class="btn preset-ring-open-btn" type="button"
+                            title="环形放置预设">环形</button>
                     <button id="btnPresetCreateLibraryGroup" class="btn icon preset-library-add-group-btn" type="button"
                             title="新建分组" aria-label="新建分组">
                         <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M4 7.5A2.5 2.5 0 0 1 6.5 5H10l2 2h5.5A2.5 2.5 0 0 1 20 9.5v7A2.5 2.5 0 0 1 17.5 19h-11A2.5 2.5 0 0 1 4 16.5v-9ZM12 10v6m-3-3h6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
                     </button>
+                </div>
+                <div id="presetRingTool" class="preset-ring-tool hidden">
+                    <div class="preset-ring-head">
+                        <div>
+                            <div class="preset-ring-title">环形放置</div>
+                            <div id="presetRingStatus" class="preset-ring-status">圆点模式</div>
+                        </div>
+                        <button id="btnPresetRingClose" class="btn icon" type="button" aria-label="收起">
+                            <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M6 6l12 12M18 6 6 18" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/></svg>
+                        </button>
+                    </div>
+                    <div class="preset-ring-grid">
+                        <label><span>数量</span><input id="presetRingCount" class="input" type="number" min="1" step="1" value="12"/></label>
+                        <label><span>半径</span><input id="presetRingRadius" class="input" type="number" step="0.1" value="3"/></label>
+                        <label><span>起角</span><input id="presetRingStartDeg" class="input" type="number" step="1" value="0"/></label>
+                        <label><span>总组</span><input id="presetRingGroupLabel" class="input" value="环形预设组"/></label>
+                    </div>
+                    <div class="preset-ring-vector">
+                        <span>圆心</span>
+                        <input id="presetRingOriginX" class="input" type="number" step="0.1" value="0"/>
+                        <input id="presetRingOriginY" class="input" type="number" step="0.1" value="0"/>
+                        <input id="presetRingOriginZ" class="input" type="number" step="0.1" value="0"/>
+                        <button id="btnPresetRingPickOrigin" class="btn" type="button">拾取</button>
+                    </div>
+                    <div class="preset-ring-vector">
+                        <span>基准轴</span>
+                        <input id="presetRingAxisX" class="input" type="number" step="0.1" value="0"/>
+                        <input id="presetRingAxisY" class="input" type="number" step="0.1" value="0"/>
+                        <input id="presetRingAxisZ" class="input" type="number" step="0.1" value="1"/>
+                        <label class="chk preset-ring-inline"><input id="presetRingFaceCenter" type="checkbox" checked/><span>朝向圆心</span></label>
+                    </div>
+                    <div class="preset-ring-vector">
+                        <span>偏移</span>
+                        <input id="presetRingOffsetX" class="input" type="number" step="0.1" value="0"/>
+                        <input id="presetRingOffsetY" class="input" type="number" step="0.1" value="0"/>
+                        <input id="presetRingOffsetZ" class="input" type="number" step="0.1" value="0"/>
+                        <label class="chk preset-ring-inline"><input id="presetRingReverse" type="checkbox"/><span>反向</span></label>
+                    </div>
+                    <div id="presetRingSlots" class="preset-ring-slots"></div>
+                    <div class="preset-ring-actions">
+                        <button id="btnPresetRingSyncSlots" class="btn" type="button">同步槽位</button>
+                        <button id="btnPresetRingApply" class="btn primary" type="button">应用</button>
+                    </div>
                 </div>
                 <div id="presetLibraryList" class="preset-library-list"></div>
             </section>
@@ -405,6 +451,6 @@
       }
     }
 </script>
-<script type="module" src="./assets/src/js/pages/composition-pointsbuilder.page.js?v=20260503_14"></script>
+<script type="module" src="./assets/src/js/pages/composition-pointsbuilder.page.js?v=20260505_1"></script>
 </body>
 </html>

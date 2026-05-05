@@ -7,6 +7,7 @@ export function initGlobalShortcuts(ctx = {}) {
         getOffsetMode,
         stopOffsetMode,
         openPresetPicker,
+        openPresetRingTool,
         hkModal,
         hideHotkeysModal,
         settingsModal,
@@ -252,6 +253,15 @@ export function initGlobalShortcuts(ctx = {}) {
             if (settingsModal && !settingsModal.classList.contains("hidden") && typeof hideSettingsModal === "function") hideSettingsModal();
             if (modal && !modal.classList.contains("hidden") && typeof hideModal === "function") hideModal();
             if (typeof openPresetPicker === "function") openPresetPicker();
+            return;
+        }
+
+        if (hotkeyMatchEvent(e, hotkeys.actions.openPresetRingTool)) {
+            e.preventDefault();
+            if (hkModal && !hkModal.classList.contains("hidden") && typeof hideHotkeysModal === "function") hideHotkeysModal();
+            if (settingsModal && !settingsModal.classList.contains("hidden") && typeof hideSettingsModal === "function") hideSettingsModal();
+            if (modal && !modal.classList.contains("hidden") && typeof hideModal === "function") hideModal();
+            if (typeof openPresetRingTool === "function") openPresetRingTool();
             return;
         }
 

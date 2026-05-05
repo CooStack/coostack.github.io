@@ -27,6 +27,7 @@ export function initTopbarAndBoot(ctx = {}) {
         btnFullscreen,
         btnSavePreset,
         btnApplyPreset,
+        btnOpenPresetRingToolMenu,
         btnExportPresets,
         btnImportPresets,
         btnEditVariables,
@@ -54,6 +55,7 @@ export function initTopbarAndBoot(ctx = {}) {
         applyPresetAtPoint,
         resolvePresetForApply,
         openPresetPanel,
+        openPresetRingTool,
         exportPresetLibraryZip,
         importPresetDirectory,
         importPresetFile,
@@ -800,6 +802,10 @@ export function initTopbarAndBoot(ctx = {}) {
                 showToast(ok ? `已生成预设：${resolvedPreset.name}` : "生成预设失败", ok ? "success" : "error");
             }
         });
+    });
+
+    btnOpenPresetRingToolMenu?.addEventListener("click", () => {
+        if (typeof openPresetRingTool === "function") openPresetRingTool();
     });
 
     btnExportPresets?.addEventListener("click", async () => {

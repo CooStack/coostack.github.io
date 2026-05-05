@@ -12,6 +12,7 @@ export function initHotkeysSystem(ctx) {
         btnPickTriangle,
         btnPickPoint,
         btnLocalRotate,
+        btnOpenPresetRingTool,
         btnFullscreen,
         btnResetCamera,
         btnLoadJson,
@@ -38,10 +39,11 @@ export function initHotkeysSystem(ctx) {
     const HOTKEY_STORAGE_KEY = "pb_hotkeys_v2";
 
     const DEFAULT_HOTKEYS = {
-        version: 12,
+        version: 13,
         actions: {
             openPicker: "KeyN",
             openPresetPicker: "Shift+KeyP",
+            openPresetRingTool: "Shift+KeyH",
             pickLineXZ: "KeyQ",
             pickDottedLineXZ: "Shift+KeyQ",
             pickTriangle: "KeyT",
@@ -198,6 +200,8 @@ export function initHotkeysSystem(ctx) {
                 // v12 migration: fullscreen defaults to G.
                 if (out.actions.toggleFullscreen === "KeyF" || out.actions.toggleFullscreen === "Shift+KeyF") out.actions.toggleFullscreen = "KeyG";
                 if (!out.actions.triggerFocusedLocalRotate) out.actions.triggerFocusedLocalRotate = "KeyF";
+                // v13 migration: ring preset placement defaults to Shift+H.
+                if (!out.actions.openPresetRingTool) out.actions.openPresetRingTool = "Shift+KeyH";
                 return out;
             }
         } catch (e) {
@@ -219,6 +223,7 @@ export function initHotkeysSystem(ctx) {
         if (btnPickTriangle) btnPickTriangle.title = `快捷键：${hotkeyToHuman(hotkeys.actions.pickTriangle || "") || "未设置"}`;
         if (btnPickPoint) btnPickPoint.title = `快捷键：${hotkeyToHuman(hotkeys.actions.pickPoint || "") || "未设置"}`;
         if (btnLocalRotate) btnLocalRotate.title = `本地旋转；快捷键：${hotkeyToHuman(hotkeys.actions.triggerFocusedLocalRotate || "") || "未设置"}`;
+        if (btnOpenPresetRingTool) btnOpenPresetRingTool.title = `环形放置；快捷键：${hotkeyToHuman(hotkeys.actions.openPresetRingTool || "") || "未设置"}`;
         if (btnFullscreen) btnFullscreen.title = `快捷键：${hotkeyToHuman(hotkeys.actions.toggleFullscreen || "") || "未设置"}`;
         if (btnResetCamera) btnResetCamera.title = `快捷键：${hotkeyToHuman(hotkeys.actions.resetCamera || "") || "未设置"}`;
         if (btnLoadJson) btnLoadJson.title = `快捷键：${hotkeyToHuman(hotkeys.actions.importJson || "") || "未设置"}`;
@@ -268,6 +273,7 @@ export function initHotkeysSystem(ctx) {
     const HOTKEY_ACTION_DEFS = [
         {id: "openPicker", title: "打开「添加元素」", desc: "默认 N"},
         {id: "openPresetPicker", title: "打开「添加预设」", desc: "默认 Shift+P"},
+        {id: "openPresetRingTool", title: "打开「环形放置」", desc: "默认 Shift+H"},
         {id: "pickLineXZ", title: "进入 XZ 拾取直线", desc: "默认 Q"},
         {id: "pickDottedLineXZ", title: "进入 XZ 拾取虚线直线", desc: "默认 Shift+Q"},
         {id: "pickTriangle", title: "进入 XZ 拾取三角形", desc: "默认 T"},

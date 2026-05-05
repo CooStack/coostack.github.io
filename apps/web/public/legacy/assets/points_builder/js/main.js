@@ -2,15 +2,15 @@ import * as THREE from "three";
 import {OrbitControls} from "three/addons/controls/OrbitControls.js";
 import { createCardInputs, initCardSystem } from "./cards.js?v=20260503_14";
 import { initFilterSystem } from "./filters.js?v=20260429_7";
-import { initHotkeysSystem } from "./hotkeys.js?v=20260321_7";
+import { initHotkeysSystem } from "./hotkeys.js?v=20260505_1";
 import { createKindDefs } from "./kinds.js?v=20260429_8";
 import { createBuilderTools } from "./builder.js?v=20260429_9";
 import { initLayoutSystem } from "./layout.js?v=20260429_1";
 import { createNodeHelpers } from "./nodes.js?v=20260316_1";
 import { toggleFullscreen } from "./viewer.js";
 import { createPickerModule } from "./main-picker.js?v=20260502_4";
-import { initGlobalShortcuts } from "./main-shortcuts.js?v=20260321_4";
-import { initTopbarAndBoot } from "./main-topbar-boot.js?v=20260502_4";
+import { initGlobalShortcuts } from "./main-shortcuts.js?v=20260505_1";
+import { initTopbarAndBoot } from "./main-topbar-boot.js?v=20260505_1";
 import { createPreviewDistanceTool } from "../../src/js/shared/preview-distance-tool.js";
 import {
     sanitizeFileBase,
@@ -135,11 +135,35 @@ function initPointsBuilderMain() {
     const btnPresetImportZip = document.getElementById("btnPresetImportZip");
     const presetLibraryStatus = document.getElementById("presetLibraryStatus");
     const presetLibraryList = document.getElementById("presetLibraryList");
+    const btnOpenPresetRingTool = document.getElementById("btnOpenPresetRingTool");
+    const presetRingTool = document.getElementById("presetRingTool");
+    const presetRingStatus = document.getElementById("presetRingStatus");
+    const btnPresetRingClose = document.getElementById("btnPresetRingClose");
+    const presetRingCount = document.getElementById("presetRingCount");
+    const presetRingRadius = document.getElementById("presetRingRadius");
+    const presetRingStartDeg = document.getElementById("presetRingStartDeg");
+    const presetRingGroupLabel = document.getElementById("presetRingGroupLabel");
+    const presetRingOriginX = document.getElementById("presetRingOriginX");
+    const presetRingOriginY = document.getElementById("presetRingOriginY");
+    const presetRingOriginZ = document.getElementById("presetRingOriginZ");
+    const btnPresetRingPickOrigin = document.getElementById("btnPresetRingPickOrigin");
+    const presetRingAxisX = document.getElementById("presetRingAxisX");
+    const presetRingAxisY = document.getElementById("presetRingAxisY");
+    const presetRingAxisZ = document.getElementById("presetRingAxisZ");
+    const presetRingFaceCenter = document.getElementById("presetRingFaceCenter");
+    const presetRingOffsetX = document.getElementById("presetRingOffsetX");
+    const presetRingOffsetY = document.getElementById("presetRingOffsetY");
+    const presetRingOffsetZ = document.getElementById("presetRingOffsetZ");
+    const presetRingReverse = document.getElementById("presetRingReverse");
+    const presetRingSlots = document.getElementById("presetRingSlots");
+    const btnPresetRingSyncSlots = document.getElementById("btnPresetRingSyncSlots");
+    const btnPresetRingApply = document.getElementById("btnPresetRingApply");
 
     const btnSaveJson = document.getElementById("btnSaveJson");
     const btnLoadJson = document.getElementById("btnLoadJson");
     const btnSavePreset = document.getElementById("btnSavePreset");
     const btnApplyPreset = document.getElementById("btnApplyPreset");
+    const btnOpenPresetRingToolMenu = document.getElementById("btnOpenPresetRingToolMenu");
     const btnExportPresets = document.getElementById("btnExportPresets");
     const btnImportPresets = document.getElementById("btnImportPresets");
     const btnEditVariables = document.getElementById("btnEditVariables");
@@ -250,6 +274,7 @@ function initPointsBuilderMain() {
     let presetDragLockPlaneKeyDown = false;
     let presetDragLockPlanePreviousState = false;
     let suppressPresetGroupToggleUntil = 0;
+    let presetRingSlotPresetIds = [];
 
     // -------------------------
     // helpers
@@ -2888,6 +2913,254 @@ function initPointsBuilderMain() {
         return { ok: true, insertedIds };
     }
 
+    function numFromInput(el, fallback = 0) {
+        const n = Number(el && el.value);
+        return Number.isFinite(n) ? n : fallback;
+    }
+
+    function intFromInput(el, fallback = 1) {
+        const n = Math.trunc(numFromInput(el, fallback));
+        return Number.isFinite(n) ? n : fallback;
+    }
+
+    function readPresetRingPoint(xEl, yEl, zEl) {
+        return {
+            x: numFromInput(xEl, 0),
+            y: numFromInput(yEl, 0),
+            z: numFromInput(zEl, 0)
+        };
+    }
+
+    function setPresetRingPoint(xEl, yEl, zEl, point) {
+        const p = normalizePointValue(point);
+        if (xEl) xEl.value = String(p.x);
+        if (yEl) yEl.value = String(p.y);
+        if (zEl) zEl.value = String(p.z);
+    }
+
+    function getPresetRingCount() {
+        return Math.max(1, intFromInput(presetRingCount, 12));
+    }
+
+    function getPresetRingPresetOptions() {
+        return getPresetList().map((preset) => ({
+            id: preset.id,
+            label: `${preset.group ? `${preset.group} / ` : ""}${preset.name || "未命名预设"}`
+        }));
+    }
+
+    function updatePresetRingStatus() {
+        if (!presetRingStatus) return;
+        const selected = getPresetRingSelectedIds().filter(Boolean).length;
+        const count = getPresetRingCount();
+        presetRingStatus.textContent = `圆点模式：${selected}/${count} 个槽位已选择`;
+    }
+
+    function renderPresetRingSlots() {
+        if (!presetRingSlots) return;
+        const count = getPresetRingCount();
+        const previous = Array.from(presetRingSlots.querySelectorAll(".preset-ring-slot-select")).map((el) => el.value || "");
+        for (let i = 0; i < previous.length; i++) presetRingSlotPresetIds[i] = previous[i];
+        presetRingSlotPresetIds.length = count;
+        const options = getPresetRingPresetOptions();
+        presetRingSlots.replaceChildren();
+        for (let i = 0; i < count; i++) {
+            const row = document.createElement("label");
+            row.className = "preset-ring-slot";
+            const label = document.createElement("span");
+            label.textContent = String(i + 1).padStart(2, "0");
+            const select = document.createElement("select");
+            select.className = "input preset-ring-slot-select";
+            select.dataset.slotIndex = String(i);
+            const empty = document.createElement("option");
+            empty.value = "";
+            empty.textContent = "选择预设";
+            select.appendChild(empty);
+            for (const option of options) {
+                const opt = document.createElement("option");
+                opt.value = option.id;
+                opt.textContent = option.label;
+                select.appendChild(opt);
+            }
+            select.value = presetRingSlotPresetIds[i] || "";
+            select.addEventListener("change", () => {
+                presetRingSlotPresetIds[i] = select.value || "";
+                updatePresetRingStatus();
+            });
+            row.append(label, select);
+            presetRingSlots.appendChild(row);
+        }
+        updatePresetRingStatus();
+    }
+
+    function getPresetRingSelectedIds() {
+        if (!presetRingSlots) return presetRingSlotPresetIds.slice(0, getPresetRingCount());
+        const ids = Array.from(presetRingSlots.querySelectorAll(".preset-ring-slot-select")).map((el) => el.value || "");
+        presetRingSlotPresetIds = ids.slice(0, getPresetRingCount());
+        return presetRingSlotPresetIds.slice();
+    }
+
+    function openPresetRingTool() {
+        if (!presetRingTool) return false;
+        setRightPanelPage("presets");
+        presetRingTool.classList.remove("hidden");
+        renderPresetRingSlots();
+        requestAnimationFrame(() => {
+            presetRingCount?.focus?.();
+            presetRingTool.scrollIntoView?.({ block: "nearest" });
+        });
+        return true;
+    }
+
+    function closePresetRingTool() {
+        presetRingTool?.classList.add("hidden");
+    }
+
+    function makePresetChildrenForResolvedApply(preset) {
+        const normalized = normalizePresetList([preset])[0];
+        if (!normalized || !normalized.children.length) return null;
+        const nextChildren = preparePresetChildrenForInsertion(normalized.children);
+        normalizeNodeTree(nextChildren);
+        labelInsertedPresetContainers(nextChildren, normalized.name);
+        return { normalized, children: nextChildren };
+    }
+
+    async function resolvePresetForRingSlot(preset, index) {
+        const normalized = normalizePresetList([preset])[0];
+        if (!normalized) return null;
+        const variableInfo = getPresetEffectiveVariableInfo(normalized);
+        if (!getPresetVariableEntries(variableInfo).length) return normalized;
+        const withVars = Object.assign({}, normalized, { variables: variableInfo });
+        const values = await openPresetVariableApplyDialog(Object.assign({}, withVars, {
+            name: `${normalized.name || "未命名预设"} #${index + 1}`
+        }));
+        if (!values) return null;
+        return clonePresetWithVariableValues(withVars, values);
+    }
+
+    function makePresetRingSlotNode(resolvedPreset, index, options) {
+        const prepared = makePresetChildrenForResolvedApply(resolvedPreset);
+        if (!prepared) return null;
+        const count = Math.max(1, options.count || 1);
+        const angle = (Number(options.startDeg) || 0) + index * 360 / count;
+        const rad = angle * Math.PI / 180;
+        const radius = Number(options.radius) || 0;
+        const origin = normalizePointValue(options.origin);
+        const offset = normalizePointValue(options.offset);
+        const circlePoint = {
+            x: origin.x + Math.cos(rad) * radius,
+            y: origin.y,
+            z: origin.z + Math.sin(rad) * radius
+        };
+        const slotPoint = {
+            x: circlePoint.x + offset.x,
+            y: circlePoint.y + offset.y,
+            z: circlePoint.z + offset.z
+        };
+        const slot = makeNode("add_builder", {
+            label: `${prepared.normalized.name || "预设"} #${index + 1}`,
+            params: { ox: slotPoint.x, oy: slotPoint.y, oz: slotPoint.z }
+        });
+        const presetOrigin = normalizePointValue(prepared.normalized.origin);
+        slot.children = prepared.children;
+        slot.children.push(makeNode("points_on_each_offset", {
+            params: {
+                offX: -presetOrigin.x,
+                offY: -presetOrigin.y,
+                offZ: -presetOrigin.z,
+                kotlinMode: "direct3"
+            }
+        }));
+        if (options.faceCenter) {
+            const target = {
+                x: origin.x - circlePoint.x,
+                y: origin.y - circlePoint.y,
+                z: origin.z - circlePoint.z
+            };
+            if (options.reverse) {
+                target.x *= -1;
+                target.y *= -1;
+                target.z *= -1;
+            }
+            const axis = normalizePointValue(options.axis, { x: 0, y: 0, z: 1 });
+            slot.children.push(makeNode("axis", { params: { x: axis.x, y: axis.y, z: axis.z } }));
+            slot.children.push(makeNode("rotate_to", {
+                params: {
+                    mode: "toVec",
+                    tox: target.x,
+                    toy: target.y,
+                    toz: target.z,
+                    ox: 0,
+                    oy: 0,
+                    oz: 0,
+                    ex: 0,
+                    ey: 0,
+                    ez: 1
+                }
+            }));
+        }
+        return slot;
+    }
+
+    async function applyPresetRingTool() {
+        if (!presetRingTool) return false;
+        const count = getPresetRingCount();
+        const presetIds = getPresetRingSelectedIds();
+        const presetsById = new Map(getPresetList().map((preset) => [preset.id, preset]));
+        const missingIndex = presetIds.findIndex((id) => !id || !presetsById.has(id));
+        if (missingIndex >= 0) {
+            showToast(`环形放置失败：第 ${missingIndex + 1} 个槽位未选择预设`, "error");
+            return false;
+        }
+        const options = {
+            count,
+            radius: numFromInput(presetRingRadius, 3),
+            startDeg: numFromInput(presetRingStartDeg, 0),
+            origin: readPresetRingPoint(presetRingOriginX, presetRingOriginY, presetRingOriginZ),
+            axis: readPresetRingPoint(presetRingAxisX, presetRingAxisY, presetRingAxisZ),
+            offset: readPresetRingPoint(presetRingOffsetX, presetRingOffsetY, presetRingOffsetZ),
+            faceCenter: !!presetRingFaceCenter?.checked,
+            reverse: !!presetRingReverse?.checked
+        };
+        const group = makeNode("add_builder", {
+            label: String(presetRingGroupLabel?.value || "").trim() || "环形预设组",
+            params: { ox: 0, oy: 0, oz: 0 }
+        });
+        for (let i = 0; i < count; i++) {
+            const preset = presetsById.get(presetIds[i]);
+            const resolved = await resolvePresetForRingSlot(preset, i);
+            if (!resolved) {
+                showToast("环形放置已取消", "info");
+                return false;
+            }
+            const slot = makePresetRingSlotNode(resolved, i, options);
+            if (slot) group.children.push(slot);
+        }
+        if (!group.children.length) {
+            showToast("环形放置失败：没有可生成的预设", "error");
+            return false;
+        }
+        historyCapture("apply_preset_ring");
+        normalizeNodeTree(group);
+        state.root.children.push(group);
+        normalizeNodeTree(state.root);
+        ensureAxisEverywhere();
+        resetCollapseScopes();
+        collapseAllNodes(state.root.children);
+        renderAll();
+        if (typeof setCardSelectionIds === "function") setCardSelectionIds([group.id], { replace: true, focus: true });
+        setFocusedNode(group.id, false);
+        requestAnimationFrame(() => {
+            const el = elCardsRoot?.querySelector?.(`.card[data-id="${group.id}"]`);
+            if (el) {
+                try { el.scrollIntoView({ block: "nearest" }); } catch {}
+                try { el.focus(); } catch {}
+            }
+        });
+        showToast(`已生成环形预设组：${group.children.length} 个实例`, "success");
+        return true;
+    }
+
     let jsZipLoadPromise = null;
 
     function loadJSZip() {
@@ -4749,6 +5022,7 @@ function initPointsBuilderMain() {
         presetLibraryRenderRaf = requestAnimationFrame(() => {
             presetLibraryRenderRaf = 0;
             renderPresetLibrary();
+            if (presetRingTool && !presetRingTool.classList.contains("hidden")) renderPresetRingSlots();
         });
     }
 
@@ -4784,6 +5058,30 @@ function initPointsBuilderMain() {
         btnPresetCreateLibraryGroup?.addEventListener("click", () => {
             setRightPanelPage("presets");
             createPresetGroupFromLibrary("");
+        });
+        btnOpenPresetRingTool?.addEventListener("click", openPresetRingTool);
+        btnPresetRingClose?.addEventListener("click", closePresetRingTool);
+        btnPresetRingSyncSlots?.addEventListener("click", renderPresetRingSlots);
+        btnPresetRingApply?.addEventListener("click", () => {
+            applyPresetRingTool().catch((e) => {
+                console.error("applyPresetRingTool failed:", e);
+                showToast(`环形放置失败：${e.message || e}`, "error");
+            });
+        });
+        presetRingCount?.addEventListener("input", renderPresetRingSlots);
+        presetRingCount?.addEventListener("change", renderPresetRingSlots);
+        btnPresetRingPickOrigin?.addEventListener("click", () => {
+            if (!presetRingTool) return;
+            presetRingTool.classList.add("hidden");
+            startPointPick({
+                label: "拾取环形圆心",
+                onPick: (point) => {
+                    setPresetRingPoint(presetRingOriginX, presetRingOriginY, presetRingOriginZ, point);
+                    presetRingTool.classList.remove("hidden");
+                    updatePresetRingStatus();
+                    showToast("已拾取环形圆心", "success");
+                }
+            });
         });
         presetLibraryList?.addEventListener("contextmenu", (ev) => {
             if (ev.target && ev.target.closest && ev.target.closest(".preset-item, button, input, select")) return;
@@ -4871,6 +5169,7 @@ function initPointsBuilderMain() {
         btnPickTriangle,
         btnPickPoint,
         btnLocalRotate,
+        btnOpenPresetRingTool,
         btnFullscreen,
         btnResetCamera,
         btnLoadJson,
@@ -12454,6 +12753,7 @@ function collectSyntheticVecTargetsForNode(node) {
         getOffsetMode: () => offsetMode,
         stopOffsetMode,
         openPresetPicker,
+        openPresetRingTool,
         hkModal,
         hideHotkeysModal,
         settingsModal,
@@ -12585,6 +12885,7 @@ function collectSyntheticVecTargetsForNode(node) {
         btnFullscreen,
         btnSavePreset,
         btnApplyPreset,
+        btnOpenPresetRingToolMenu,
         btnExportPresets,
         btnImportPresets,
         btnEditVariables,
@@ -12612,6 +12913,7 @@ function collectSyntheticVecTargetsForNode(node) {
         applyPresetAtPoint,
         resolvePresetForApply,
         openPresetPanel,
+        openPresetRingTool,
         exportPresetLibraryZip,
         importPresetDirectory,
         importPresetFile,
