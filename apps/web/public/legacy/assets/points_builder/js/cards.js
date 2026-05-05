@@ -566,28 +566,22 @@ export function createCardInputs(ctx) {
                     openExprSuggestion(i, true);
                     return;
                 }
-                if (!modalNavigation) {
-                    if (suggestOpen && e.key === "ArrowDown") {
-                        e.preventDefault();
-                        moveExprSuggestion(1);
-                        return;
-                    }
-                    if (suggestOpen && e.key === "ArrowUp") {
-                        e.preventDefault();
-                        moveExprSuggestion(-1);
-                        return;
-                    }
-                    if (suggestOpen && (e.key === "Enter" || e.key === "Tab")) {
-                        e.preventDefault();
-                        acceptExprSuggestion(exprSuggestActive);
-                        return;
-                    }
-                    if (suggestOpen && e.key === "Escape") {
-                        e.preventDefault();
-                        closeExprSuggestion();
-                        return;
-                    }
-                } else if (suggestOpen && e.key === "Escape") {
+                if (suggestOpen && e.key === "ArrowDown") {
+                    e.preventDefault();
+                    moveExprSuggestion(1);
+                    return;
+                }
+                if (suggestOpen && e.key === "ArrowUp") {
+                    e.preventDefault();
+                    moveExprSuggestion(-1);
+                    return;
+                }
+                if (suggestOpen && (e.key === "Enter" || e.key === "Tab")) {
+                    e.preventDefault();
+                    acceptExprSuggestion(exprSuggestActive);
+                    return;
+                }
+                if (suggestOpen && e.key === "Escape") {
                     e.preventDefault();
                     closeExprSuggestion();
                     return;
