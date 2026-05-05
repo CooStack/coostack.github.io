@@ -10,6 +10,10 @@ export function createCardInputs(ctx) {
         getVec3VariableOptions,
         parseExprNumber
     } = ctx || {};
+    const startPointPickForVecTarget = (...args) => {
+        const fn = ctx && ctx.startPointPickForVecTarget;
+        return (typeof fn === "function") ? fn(...args) : false;
+    };
 
     function countDecimalsFromString(value) {
         const text = String(value ?? "").trim().toLowerCase();
@@ -761,7 +765,7 @@ function select(options, value, onChange) {
         const manualRow = document.createElement("div");
         manualRow.className = "mini";
         manualRow.style.display = "grid";
-        manualRow.style.gridTemplateColumns = "repeat(3, minmax(0, 1fr))";
+        manualRow.style.gridTemplateColumns = "repeat(3, minmax(0, 1fr)) auto";
         manualRow.style.width = "100%";
         manualRow.style.gap = "6px";
         const ix = inputNum(p[xKey], v => {
@@ -781,6 +785,32 @@ function select(options, value, onChange) {
         manualRow.appendChild(ix);
         manualRow.appendChild(iy);
         manualRow.appendChild(iz);
+        const target = {
+            obj: p,
+            keys: {x: xKey, y: yKey, z: zKey},
+            inputs: {x: ix, y: iy, z: iz},
+            label: label || prefix || "vec3",
+            onChange
+        };
+        const pickBtn = document.createElement("button");
+        pickBtn.type = "button";
+        pickBtn.className = "iconbtn vec3-pick-btn no-drag";
+        pickBtn.title = "拾取坐标";
+        pickBtn.setAttribute("aria-label", "拾取坐标");
+        pickBtn.textContent = "⌖";
+        pickBtn.addEventListener("pointerdown", (ev) => {
+            ev.preventDefault();
+            ev.stopPropagation();
+        });
+        pickBtn.addEventListener("click", (ev) => {
+            ev.preventDefault();
+            ev.stopPropagation();
+            p[modeKey] = "manual";
+            refreshModeView();
+            if (typeof setActiveVecTarget === "function") setActiveVecTarget(target);
+            startPointPickForVecTarget(target);
+        });
+        manualRow.appendChild(pickBtn);
         box.appendChild(varRow);
         box.appendChild(manualRow);
 
@@ -802,13 +832,6 @@ function select(options, value, onChange) {
             iy.setAttribute("data-tip", `${tipBase}（Y）`);
             iz.setAttribute("data-tip", `${tipBase}（Z）`);
         }
-        const target = {
-            obj: p,
-            keys: {x: xKey, y: yKey, z: zKey},
-            inputs: {x: ix, y: iy, z: iz},
-            label: label || prefix || "vec3",
-            onChange
-        };
         ix.__vecTarget = target;
         iy.__vecTarget = target;
         iz.__vecTarget = target;

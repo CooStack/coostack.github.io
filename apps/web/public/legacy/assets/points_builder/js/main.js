@@ -322,7 +322,6 @@ function initPointsBuilderMain() {
             ev.preventDefault();
             ev.stopPropagation();
         });
-        wrap.addEventListener("pointerdown", (ev) => ev.stopPropagation(), true);
         document.body.appendChild(wrap);
         actionMenuEl = wrap;
         actionMenuListEl = list;
@@ -331,6 +330,15 @@ function initPointsBuilderMain() {
 
     function hideActionMenu() {
         if (!actionMenuEl) return;
+        if (actionMenuEl.__pbSubmenu) {
+            actionMenuEl.__pbSubmenu.remove();
+            actionMenuEl.__pbSubmenu = null;
+        }
+        if (actionMenuEl.__pbSubmenuAnchor) {
+            actionMenuEl.__pbSubmenuAnchor.classList.remove("active");
+            actionMenuEl.__pbSubmenuAnchor.setAttribute("aria-expanded", "false");
+            actionMenuEl.__pbSubmenuAnchor = null;
+        }
         actionMenuEl.classList.add("hidden");
     }
 
@@ -464,21 +472,55 @@ function initPointsBuilderMain() {
         const wrap = ensureActionMenuEl();
         const host = actionMenuListEl;
         if (!wrap || !host) return false;
-        const renderItems = (menuItems, parentItems = null) => {
-            host.innerHTML = "";
-            if (parentItems) {
-                const back = document.createElement("button");
-                back.type = "button";
-                back.className = "pb-context-menu-item muted";
-                back.textContent = "返回";
-                back.addEventListener("click", (ev) => {
+        const removeSubmenu = () => {
+            if (wrap.__pbSubmenuAnchor) {
+                wrap.__pbSubmenuAnchor.classList.remove("active");
+                wrap.__pbSubmenuAnchor.setAttribute("aria-expanded", "false");
+                wrap.__pbSubmenuAnchor = null;
+            }
+            if (wrap.__pbSubmenu) {
+                wrap.__pbSubmenu.remove();
+                wrap.__pbSubmenu = null;
+            }
+        };
+        const renderSubmenu = (submenuItems, anchorBtn) => {
+            removeSubmenu();
+            const sub = document.createElement("div");
+            sub.className = "pb-context-menu pb-context-submenu";
+            const subHost = document.createElement("div");
+            subHost.className = "pb-context-menu-list";
+            sub.appendChild(subHost);
+            for (const child of submenuItems || []) {
+                if (!child || !child.label || typeof child.onSelect !== "function") continue;
+                const btn = document.createElement("button");
+                btn.type = "button";
+                btn.className = `pb-context-menu-item${child.danger ? " danger" : ""}`;
+                btn.textContent = child.label;
+                btn.addEventListener("click", (ev) => {
                     ev.preventDefault();
                     ev.stopPropagation();
-                    renderItems(parentItems, null);
-                    positionFloatingPanel(wrap, clientX, clientY);
+                    hideActionMenu();
+                    child.onSelect();
                 });
-                host.appendChild(back);
+                subHost.appendChild(btn);
             }
+            if (!subHost.children.length) return false;
+            sub.addEventListener("contextmenu", (ev) => {
+                ev.preventDefault();
+                ev.stopPropagation();
+            });
+            document.body.appendChild(sub);
+            wrap.__pbSubmenu = sub;
+            wrap.__pbSubmenuAnchor = anchorBtn;
+            anchorBtn.classList.add("active");
+            anchorBtn.setAttribute("aria-expanded", "true");
+            const rect = anchorBtn.getBoundingClientRect();
+            positionFloatingPanel(sub, rect.right + 6, rect.top);
+            return true;
+        };
+        const renderItems = (menuItems) => {
+            removeSubmenu();
+            host.innerHTML = "";
             for (const item of menuItems) {
                 if (!item || !item.label) continue;
                 const hasChildren = Array.isArray(item.children) && item.children.length;
@@ -487,12 +529,28 @@ function initPointsBuilderMain() {
                 btn.type = "button";
                 btn.className = `pb-context-menu-item${item.danger ? " danger" : ""}${hasChildren ? " has-children" : ""}`;
                 btn.textContent = hasChildren ? `${item.label} ›` : item.label;
+                const openChildren = () => {
+                    if (!hasChildren) return false;
+                    return renderSubmenu(item.children, btn);
+                };
+                if (hasChildren) {
+                    btn.setAttribute("aria-haspopup", "menu");
+                    btn.setAttribute("aria-expanded", "false");
+                    btn.__pbOpenChildren = openChildren;
+                    btn.addEventListener("pointerenter", openChildren);
+                    btn.addEventListener("mouseover", openChildren);
+                    btn.addEventListener("focus", openChildren);
+                    btn.addEventListener("pointerdown", (ev) => {
+                        ev.preventDefault();
+                        ev.stopPropagation();
+                        openChildren();
+                    });
+                }
                 btn.addEventListener("click", (ev) => {
                     ev.preventDefault();
                     ev.stopPropagation();
                     if (hasChildren) {
-                        renderItems(item.children, menuItems);
-                        positionFloatingPanel(wrap, clientX, clientY);
+                        openChildren();
                         return;
                     }
                     hideActionMenu();
@@ -508,6 +566,260 @@ function initPointsBuilderMain() {
         }
         wrap.classList.remove("hidden");
         positionFloatingPanel(wrap, clientX, clientY);
+        requestAnimationFrame(() => {
+            if (!actionMenuEl || actionMenuEl.classList.contains("hidden")) return;
+            const hoveredChildEntry = host.querySelector(".pb-context-menu-item.has-children:hover");
+            if (hoveredChildEntry && typeof hoveredChildEntry.__pbOpenChildren === "function") {
+                hoveredChildEntry.__pbOpenChildren();
+            }
+        });
+        return true;
+    }
+
+    function createGroupTypeMenuItems(ids, sourceKind, options = {}) {
+        const validIds = normalizeActionTargetIds(ids);
+        if (!validIds.length) return [];
+        const mode = options.mode || "create";
+        const isSingle = validIds.length === 1;
+        const sourceNode = options.sourceNode || (isSingle ? (findNodeContextById(validIds[0]) || {}).node || null : null);
+        const makeCreate = (kind, label) => ({
+            label,
+            onSelect: () => wrapTargetIdsInGroup(validIds, kind)
+        });
+        const makeConvert = (kind, label, extra = {}) => ({
+            label,
+            onSelect: () => convertSingleGroupNode(sourceNode, kind, extra)
+        });
+
+        if (mode === "create") {
+            return [
+                makeCreate("add_builder", "普通组"),
+                makeCreate("clear_as_mask", "蒙版组"),
+                makeCreate("add_with", "旋转嵌套组")
+            ];
+        }
+
+        const items = [
+            makeConvert("add_builder", "普通组"),
+            makeConvert("clear_as_mask", "蒙版组"),
+            makeConvert("add_with", "旋转嵌套组")
+        ];
+        if (sourceNode && sourceNode.kind === "add_with") {
+            items.push(makeConvert("add_builder", "旋转嵌套后的普通组", { expanded: true }));
+            items.push(makeConvert("clear_as_mask", "旋转嵌套后的蒙版组", { expanded: true }));
+        }
+        return items;
+    }
+
+    function buildGroupActionMenuEntry(ids, options = {}) {
+        const validIds = normalizeActionTargetIds(ids);
+        if (!validIds.length) return null;
+        const mode = options.mode || "create";
+        const label = mode === "convert" ? "转换" : "创建组";
+        return {
+            label,
+            children: createGroupTypeMenuItems(validIds, options.sourceKind, Object.assign({}, options, { mode }))
+        };
+    }
+
+    function copyGroupPresentation(sourceNode, targetNode) {
+        if (!sourceNode || !targetNode) return;
+        if (sourceNode.label !== undefined) targetNode.label = sourceNode.label;
+        if (sourceNode.folded !== undefined) targetNode.folded = !!sourceNode.folded;
+        if (sourceNode.collapsed !== undefined) targetNode.collapsed = !!sourceNode.collapsed;
+        if (sourceNode.bodyHeight !== undefined) targetNode.bodyHeight = sourceNode.bodyHeight;
+        if (sourceNode.subWidth !== undefined) targetNode.subWidth = sourceNode.subWidth;
+        if (sourceNode.subHeight !== undefined) targetNode.subHeight = sourceNode.subHeight;
+        if (Array.isArray(sourceNode.terms)) targetNode.terms = clonePlain(sourceNode.terms);
+    }
+
+    function copyCompatibleGroupParams(sourceNode, replacement) {
+        if (!sourceNode || !replacement) return;
+        const src = sourceNode.params || {};
+        const dst = replacement.params || (replacement.params = {});
+        if (replacement.kind === "add_builder") {
+            dst.ox = Number(src.ox) || 0;
+            dst.oy = Number(src.oy) || 0;
+            dst.oz = Number(src.oz) || 0;
+        } else if (replacement.kind === "clear_as_mask") {
+            dst.maskRange = Number(src.maskRange) || dst.maskRange || 1;
+        } else if (replacement.kind === "add_with") {
+            dst.r = Number(src.r) || dst.r;
+            dst.c = Number(src.c) || dst.c;
+            dst.rotateToCenter = src.rotateToCenter !== undefined ? !!src.rotateToCenter : !!dst.rotateToCenter;
+            dst.rotateReverse = !!src.rotateReverse;
+            dst.rotateOffsetEnabled = !!src.rotateOffsetEnabled;
+            dst.rox = Number(src.rox) || 0;
+            dst.roy = Number(src.roy) || 0;
+            dst.roz = Number(src.roz) || 0;
+            dst.ox = Number(src.ox) || 0;
+            dst.oy = Number(src.oy) || 0;
+            dst.oz = Number(src.oz) || 0;
+            dst.previewBeforeOffsetEnabled = !!src.previewBeforeOffsetEnabled;
+        }
+    }
+
+    function makeUprightTwistDeg(axis, toPoint, upRef = U.v(0, 1, 0)) {
+        const forward = U.norm(axis || U.v(0, 1, 0));
+        const target = U.norm(toPoint || U.v(0, 1, 0));
+        if (U.len(forward) <= 1e-9 || U.len(target) <= 1e-9) return 0;
+        const buildBasis = (dir) => {
+            let r = U.cross(upRef, dir);
+            if (U.len(r) <= 1e-9) {
+                const altUp = Math.abs(upRef.y) > 0.9 ? U.v(1, 0, 0) : U.v(0, 1, 0);
+                r = U.cross(altUp, dir);
+            }
+            if (U.len(r) <= 1e-9) return null;
+            r = U.norm(r);
+            const u = U.norm(U.cross(dir, r));
+            return { r, u, f: dir };
+        };
+        const from = buildBasis(forward);
+        const to = buildBasis(target);
+        if (!from || !to) return 0;
+        const q = new THREE.Quaternion();
+        q.setFromUnitVectors(
+            new THREE.Vector3(from.f.x, from.f.y, from.f.z),
+            new THREE.Vector3(target.x, target.y, target.z)
+        );
+        const uAligned = new THREE.Vector3(from.u.x, from.u.y, from.u.z).applyQuaternion(q).normalize();
+        const targetU = new THREE.Vector3(to.u.x, to.u.y, to.u.z).normalize();
+        const forwardVec = new THREE.Vector3(target.x, target.y, target.z).normalize();
+        const cross = new THREE.Vector3().crossVectors(uAligned, targetU);
+        const sin = forwardVec.dot(cross);
+        const cos = uAligned.dot(targetU);
+        return Math.atan2(sin, cos) * 180 / Math.PI;
+    }
+
+    function makeRotateNodesForAddWith(base, params, childAxis) {
+        const p = params || {};
+        const targetPoint = p.rotateOffsetEnabled
+            ? U.v(Number(p.rox) || 0, Number(p.roy) || 0, Number(p.roz) || 0)
+            : U.v(0, 0, 0);
+        const b = U.v(Number(base?.x) || 0, Number(base?.y) || 0, Number(base?.z) || 0);
+        const rotateTarget = p.rotateReverse ? U.add(targetPoint, b) : U.sub(targetPoint, b);
+        const axis = childAxis || U.v(0, 1, 0);
+        const twistDeg = makeUprightTwistDeg(axis, rotateTarget);
+        return [
+            makeNode("rotate_to", {
+                params: {
+                    mode: "originEnd",
+                    ox: 0,
+                    oy: 0,
+                    oz: 0,
+                    ex: Number(rotateTarget.x) || 0,
+                    ey: Number(rotateTarget.y) || 0,
+                    ez: Number(rotateTarget.z) || 0
+                }
+            }),
+            makeNode("rotate_as_axis", {
+                params: {
+                    deg: twistDeg,
+                    degUnit: "deg",
+                    useCustomAxis: true,
+                    ax: Number(rotateTarget.x) || 0,
+                    ay: Number(rotateTarget.y) || 0,
+                    az: Number(rotateTarget.z) || 0
+                }
+            })
+        ];
+    }
+
+    function buildExpandedAddWithGroup(node, targetKind) {
+        const outer = makeNode(targetKind || "add_builder");
+        copyGroupPresentation(node, outer);
+        const p = node && node.params ? node.params : {};
+        const count = Math.max(0, Math.trunc(Number(p.c)));
+        const radius = Number(p.r);
+        const rotateToCenter = !!p.rotateToCenter;
+        const rotateReverse = !!p.rotateReverse;
+        const rotateOffsetEnabled = !!p.rotateOffsetEnabled;
+        const offset = {
+            x: Number(p.ox) || 0,
+            y: Number(p.oy) || 0,
+            z: Number(p.oz) || 0
+        };
+        const rotateOffset = {
+            x: Number(p.rox) || 0,
+            y: Number(p.roy) || 0,
+            z: Number(p.roz) || 0
+        };
+        const verts = (typeof U !== "undefined" && U && typeof U.getPolygonInCircleVertices === "function")
+            ? (U.getPolygonInCircleVertices(count, radius) || [])
+            : [];
+        const childAxis = (() => {
+            try {
+                const child = evalBuilderWithMeta(node.children || [], U.v(0, 1, 0));
+                return child?.axis || U.v(0, 1, 0);
+            } catch {
+                return U.v(0, 1, 0);
+            }
+        })();
+        outer.children = [];
+        for (const base of verts) {
+            const inner = makeNode("add_builder", {
+                params: {
+                    ox: (Number(base?.x) || 0) + offset.x,
+                    oy: (Number(base?.y) || 0) + offset.y,
+                    oz: (Number(base?.z) || 0) + offset.z
+                }
+            });
+            inner.children = cloneNodeListDeep(node.children || []);
+            if (rotateToCenter) {
+                inner.children.push(...makeRotateNodesForAddWith(base, {
+                    rotateOffsetEnabled,
+                    rotateReverse,
+                    rox: rotateOffset.x,
+                    roy: rotateOffset.y,
+                    roz: rotateOffset.z
+                }, childAxis));
+            }
+            outer.children.push(inner);
+        }
+        return outer;
+    }
+
+    function convertSingleGroupNode(sourceNode, targetKind, options = {}) {
+        if (!sourceNode || !sourceNode.kind) return false;
+        if (!isBuilderContainerKind(sourceNode.kind)) return false;
+        const ctx = findNodeContextById(sourceNode.id);
+        if (!ctx || !ctx.node || !Array.isArray(ctx.parentList)) return false;
+        const parentList = ctx.parentList;
+        const at = ctx.index;
+        if (!Number.isInteger(at) || at < 0 || at >= parentList.length) return false;
+
+        let replacement = null;
+        const isExpandedAddWith = sourceNode.kind === "add_with" && !!options.expanded && (targetKind === "add_builder" || targetKind === "clear_as_mask");
+        if (isExpandedAddWith) {
+            replacement = buildExpandedAddWithGroup(sourceNode, targetKind);
+        } else {
+            replacement = makeNode(targetKind);
+            copyGroupPresentation(sourceNode, replacement);
+            replacement.children = cloneNodeListDeep(sourceNode.children || []);
+            copyCompatibleGroupParams(sourceNode, replacement);
+        }
+
+        historyCapture(`convert_group_${sourceNode.kind}_to_${targetKind}${options.expanded ? "_expanded" : ""}`);
+        parentList.splice(at, 1, replacement);
+        ensureAxisEverywhere();
+        if (typeof setCardSelectionIds === "function") {
+            setCardSelectionIds([replacement.id], { replace: true, focus: false, syncWithParamSync: false });
+        }
+        setFocusedNode(replacement.id, false);
+        renderAll();
+        requestAnimationFrame(() => {
+            const el = elCardsRoot?.querySelector?.(`.card[data-id="${replacement.id}"]`);
+            if (el) {
+                try { el.focus(); } catch {}
+                try { el.scrollIntoView({ block: "nearest" }); } catch {}
+            }
+        });
+        const label = targetKind === "add_builder"
+            ? (options.expanded ? "旋转嵌套后的普通组" : "普通组")
+            : targetKind === "clear_as_mask"
+                ? (options.expanded ? "旋转嵌套后的蒙版组" : "蒙版组")
+                : "旋转嵌套组";
+        showToast(`已转换为${label}`, "success");
         return true;
     }
 
@@ -517,6 +829,7 @@ function initPointsBuilderMain() {
         document.addEventListener("pointerdown", (ev) => {
             if (!actionMenuEl || actionMenuEl.classList.contains("hidden")) return;
             if (actionMenuEl.contains(ev.target)) return;
+            if (actionMenuEl.__pbSubmenu && actionMenuEl.__pbSubmenu.contains(ev.target)) return;
             hideActionMenu();
         }, true);
         document.addEventListener("pointerdown", (ev) => {
@@ -5414,7 +5727,8 @@ function initPointsBuilderMain() {
         enableExprNumbers: () => getEffectiveNumericSuggestions().length > 0,
         getExprSuggestions: () => getEffectiveNumericSuggestions(),
         getVec3VariableOptions: () => getEffectiveVec3VariableOptions(),
-        parseExprNumber: (raw) => num(raw)
+        parseExprNumber: (raw) => num(raw),
+        startPointPickForVecTarget
     });
 
     // 用户要求：左侧卡片允许“全部删除”（不再强制至少保留 axis）。
@@ -10717,11 +11031,11 @@ function openActionMenuForBlankNoSelection(ev) {
     return showActionMenu(ev.clientX, ev.clientY, items);
 }
 
-function openActionMenuForTargets(ev, targetIds, options = {}) {
-    if (!ev || !isActionMenuAllowed()) {
-        hideActionMenu();
-        hideQuickSyncPanel();
-        return false;
+    function openActionMenuForTargets(ev, targetIds, options = {}) {
+        if (!ev || !isActionMenuAllowed()) {
+            hideActionMenu();
+            hideQuickSyncPanel();
+            return false;
     }
     const ids = normalizeActionTargetIds(targetIds);
     if (!ids.length) {
@@ -10733,24 +11047,23 @@ function openActionMenuForTargets(ev, targetIds, options = {}) {
     const allowQuickSync = !!options.allowQuickSync;
     const sameKind = areActionTargetsSameKind(ids);
     const items = [];
-    items.push({
-        label: ids.length > 1 ? "创建组并移入选中卡片" : "创建组并移入此卡片",
-        onSelect: () => wrapTargetIdsInGroup(ids, "add_builder")
+    let singleCtxNode = null;
+    if (ids.length === 1) {
+        singleCtxNode = findNodeContextById(ids[0]);
+    }
+    const isSingleGroup = !!(singleCtxNode && singleCtxNode.node && isBuilderContainerKind(singleCtxNode.node.kind));
+    const groupEntry = buildGroupActionMenuEntry(ids, {
+        mode: isSingleGroup ? "convert" : "create",
+        sourceNode: isSingleGroup ? singleCtxNode.node : null,
+        sourceKind: isSingleGroup ? singleCtxNode.node.kind : null
     });
-    items.push({
-        label: ids.length > 1 ? "添加并移动到旋转嵌套组" : "添加并移动到旋转嵌套组",
-        onSelect: () => wrapTargetIdsInGroup(ids, "add_with")
-    });
-    items.push({
-        label: ids.length > 1 ? "添加并移动到遮罩组" : "添加并移动到遮罩组",
-        onSelect: () => wrapTargetIdsInGroup(ids, "clear_as_mask")
-    });
+    if (groupEntry && Array.isArray(groupEntry.children) && groupEntry.children.length) items.push(groupEntry);
     items.push({
         label: "保存为预设",
         onSelect: () => openPresetPanel("save", { sourceIds: ids })
     });
     if (ids.length === 1) {
-        const ctxNode = findNodeContextById(ids[0]);
+        const ctxNode = singleCtxNode || findNodeContextById(ids[0]);
         if (ctxNode && Array.isArray(ctxNode.parentList)) {
             const label = ctxNode.parentNode ? "子Builder" : "主Builder";
             if (ctxNode.node && isBuilderContainerKind(ctxNode.node.kind) && typeof navigateCardScope === "function") {
@@ -10849,11 +11162,11 @@ function onCanvasContextMenu(ev) {
         targetIds = getActionTargetIds();
     }
     openActionMenuForTargets(ev, targetIds, { allowQuickSync: true });
-}
+    }
 
-function onCardsContextMenu(ev) {
-    if (!ev) return;
-    ev.preventDefault();
+    function onCardsContextMenu(ev) {
+        if (!ev) return;
+        ev.preventDefault();
     if (shouldSuppressActionMenuByGesture(ev)) {
         hideActionMenu();
         return;
@@ -11064,6 +11377,13 @@ function onCanvasDblClick(ev) {
         if (pointPickMode && pointPickTarget && pointPickHoverPoint) queuePointPickPreview(pointPickHoverPoint);
         else if (!pointPickTarget) hidePointPickPreview();
         refreshPointPickStatus();
+    }
+
+    function startPointPickForVecTarget(target) {
+        if (!target || !target.obj || !target.keys) return false;
+        setPointPickTarget(target);
+        activeVecTarget = target;
+        return startPointPick({ target });
     }
 
     function setPointPickCallbackRotate(enabled) {
@@ -11666,6 +11986,19 @@ function collectSyntheticVecTargetsForNode(node) {
         }
         pointPickCallback = null;
         pointPickCallbackLabel = "";
+        if (options.target && options.target.obj && options.target.keys) {
+            _rClickT = 0;
+            pointPickPendingMapped = null;
+            pointPickKeepFocusId = focusedNodeId;
+            pointPickMode = true;
+            setPointPickTarget(options.target);
+            ensureHoverMarker();
+            setHoverMarkerColor(pointPickPreviewColor.getHex());
+            hoverMarker.visible = false;
+            updateFocusColors();
+            refreshPointPickStatus();
+            return true;
+        }
         const selectedSet = (typeof getCardSelectionIds === "function") ? getCardSelectionIds() : null;
         const selectedIds = normalizeActionTargetIds(selectedSet ? Array.from(selectedSet) : []);
         const selectedCount = selectedIds.length;
@@ -12841,6 +13174,7 @@ function collectSyntheticVecTargetsForNode(node) {
         stopLinePick,
         startLinePick,
         stopPointPick,
+        startPointPickForVecTarget,
         startOffsetMode,
         clearEmptyBuilderCards,
         uid,

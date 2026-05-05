@@ -1066,6 +1066,11 @@ body {
     display: none;
 }
 
+.pb-context-submenu {
+    min-width: 170px;
+    z-index: 100280;
+}
+
 .pb-context-menu-list {
     display: flex;
     flex-direction: column;
@@ -1086,7 +1091,8 @@ body {
     transition: background .12s ease, border-color .12s ease;
 }
 
-.pb-context-menu-item:hover {
+.pb-context-menu-item:hover,
+.pb-context-menu-item.active {
     background: rgba(255, 255, 255, .08);
     border-color: rgba(255, 255, 255, .18);
 }
@@ -2905,6 +2911,15 @@ body.resizing-panels .panel.right {
 
 .iconbtn.danger:hover {
     background: rgba(255, 78, 78, .14)
+}
+
+.vec3-pick-btn {
+    width: 32px;
+    height: 32px;
+    align-self: stretch;
+    border-radius: 8px;
+    font-size: 15px;
+    line-height: 1;
 }
 
 .plane-select {
