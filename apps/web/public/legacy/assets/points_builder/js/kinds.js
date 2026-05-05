@@ -141,15 +141,83 @@ export function createKindDefs(ctx) {
         }
     }
 
+    function pushMaskPreviewPoints(ctx, points, options = {}) {
+        const list = points || [];
+        if (!list.length) return;
+        if (!Array.isArray(ctx.maskPreviewPoints)) ctx.maskPreviewPoints = [];
+        const off = options.offset || { x: 0, y: 0, z: 0 };
+        for (const point of list) {
+            ctx.maskPreviewPoints.push({
+                ...point,
+                x: num(point?.x) + num(off.x),
+                y: num(point?.y) + num(off.y),
+                z: num(point?.z) + num(off.z),
+                radius: options.radius === undefined ? num(point?.radius) : num(options.radius),
+                maskKind: options.maskKind || point?.maskKind || "point",
+                nodeId: options.nodeId || point?.nodeId || null,
+                previewType: options.previewType || point?.previewType || "mask_line"
+            });
+        }
+    }
+
+    function pushMaskPreviewLineSegment(ctx, a, b, options = {}) {
+        pushMaskPreviewPoints(ctx, [a, b], {
+            ...options,
+            previewType: "mask_line"
+        });
+    }
+
+    function getCirclePoint(origin, radius, angle, plane) {
+        const c = Math.cos(angle) * radius;
+        const s = Math.sin(angle) * radius;
+        if (plane === "XY") return { x: origin.x + c, y: origin.y + s, z: origin.z };
+        if (plane === "ZY") return { x: origin.x, y: origin.y + c, z: origin.z + s };
+        return { x: origin.x + c, y: origin.y, z: origin.z + s };
+    }
+
+    function pushMaskPreviewCircleSegments(ctx, origin, radius, options = {}) {
+        const r = num(radius);
+        if (!(r > 0) || Number.isNaN(r)) return;
+        const center = U.v(num(origin?.x), num(origin?.y), num(origin?.z));
+        const segments = Math.max(12, int(options.segments || 72));
+        const plane = options.plane || "XZ";
+        for (let i = 0; i < segments; i += 2) {
+            const a = getCirclePoint(center, r, (i / segments) * Math.PI * 2, plane);
+            const b = getCirclePoint(center, r, ((i + 1) / segments) * Math.PI * 2, plane);
+            pushMaskPreviewLineSegment(ctx, a, b, {
+                radius: r,
+                maskKind: options.maskKind || "round_xz",
+                nodeId: options.nodeId || null
+            });
+        }
+    }
+
+    function pushMaskPreviewSphereSegments(ctx, origin, radius, options = {}) {
+        const r = num(radius);
+        if (!(r > 0) || Number.isNaN(r)) return;
+        const opts = {
+            radius: r,
+            nodeId: options.nodeId || null,
+            maskKind: options.maskKind || "ball",
+            segments: options.segments || 48
+        };
+        pushMaskPreviewCircleSegments(ctx, origin, r, { ...opts, plane: "XZ" });
+        pushMaskPreviewCircleSegments(ctx, origin, r, { ...opts, plane: "XY" });
+        pushMaskPreviewCircleSegments(ctx, origin, r, { ...opts, plane: "ZY" });
+    }
+
     function mapAllPointSets(ctx, mapper) {
         if (Array.isArray(ctx.points)) ctx.points = ctx.points.map(mapper);
         if (Array.isArray(ctx.previewPoints) && ctx.previewPoints.length) {
             ctx.previewPoints = ctx.previewPoints.map(mapper);
         }
+        if (Array.isArray(ctx.maskPreviewPoints) && ctx.maskPreviewPoints.length) {
+            ctx.maskPreviewPoints = ctx.maskPreviewPoints.map((point) => ({ ...point, ...mapper(point) }));
+        }
     }
 
     function mutateAllPointSets(ctx, mutator) {
-        for (const list of [ctx.points, ctx.previewPoints]) {
+        for (const list of [ctx.points, ctx.previewPoints, ctx.maskPreviewPoints]) {
             if (!Array.isArray(list) || !list.length) continue;
             mutator(list);
         }
@@ -158,7 +226,215 @@ export function createKindDefs(ctx) {
     function clearAllPointSets(ctx) {
         ctx.points = [];
         if (Array.isArray(ctx.previewPoints)) ctx.previewPoints = [];
+        if (Array.isArray(ctx.maskPreviewPoints)) ctx.maskPreviewPoints = [];
     }
+
+    function maskGridKey(point, inverseCellSize) {
+        const x = Math.floor((Number(point?.x) || 0) * inverseCellSize);
+        const y = Math.floor((Number(point?.y) || 0) * inverseCellSize);
+        const z = Math.floor((Number(point?.z) || 0) * inverseCellSize);
+        return `${x}:${y}:${z}`;
+    }
+
+    function applyMaskInPlace(points, maskRange) {
+        if (!Array.isArray(points) || !points.length || !(maskRange > 0) || Number.isNaN(maskRange)) return;
+        const originalSize = points.length;
+        const alive = new Array(originalSize).fill(true);
+        const buckets = new Map();
+        const inverseCellSize = 1.0 / maskRange;
+        const rangeSq = maskRange * maskRange;
+
+        for (let i = 0; i < originalSize; i++) {
+            const point = points[i];
+            if (!point) continue;
+            const px = Number(point.x) || 0;
+            const py = Number(point.y) || 0;
+            const pz = Number(point.z) || 0;
+            const cellX = Math.floor(px * inverseCellSize);
+            const cellY = Math.floor(py * inverseCellSize);
+            const cellZ = Math.floor(pz * inverseCellSize);
+
+            for (let dx = -1; dx <= 1; dx++) {
+                for (let dy = -1; dy <= 1; dy++) {
+                    for (let dz = -1; dz <= 1; dz++) {
+                        const bucket = buckets.get(`${cellX + dx}:${cellY + dy}:${cellZ + dz}`);
+                        if (!bucket || !bucket.length) continue;
+                        for (const index of bucket) {
+                            if (!alive[index]) continue;
+                            const other = points[index];
+                            if (!other) continue;
+                            const ox = Number(other.x) || 0;
+                            const oy = Number(other.y) || 0;
+                            const oz = Number(other.z) || 0;
+                            const ddx = px - ox;
+                            const ddy = py - oy;
+                            const ddz = pz - oz;
+                            if (ddx * ddx + ddy * ddy + ddz * ddz < rangeSq) {
+                                alive[index] = false;
+                            }
+                        }
+                    }
+                }
+            }
+
+            alive[i] = true;
+            const key = maskGridKey(point, inverseCellSize);
+            const bucket = buckets.get(key);
+            if (bucket) {
+                bucket.push(i);
+            } else {
+                buckets.set(key, [i]);
+            }
+        }
+
+        let write = 0;
+        for (let read = 0; read < originalSize; read++) {
+            if (alive[read]) {
+                points[write++] = points[read];
+            }
+        }
+        if (write < originalSize) {
+            points.length = write;
+        }
+    }
+
+    function applyMaskFromSourceInPlace(targetPoints, sourcePoints, maskRange) {
+        if (!Array.isArray(targetPoints) || !targetPoints.length) return;
+        if (!Array.isArray(sourcePoints) || !sourcePoints.length) return;
+        if (!(maskRange > 0) || Number.isNaN(maskRange)) return;
+        const originalSize = targetPoints.length;
+        const alive = new Array(originalSize).fill(true);
+        const buckets = new Map();
+        const inverseCellSize = 1.0 / maskRange;
+        const rangeSq = maskRange * maskRange;
+
+        for (let i = 0; i < originalSize; i++) {
+            const point = targetPoints[i];
+            if (!point) continue;
+            const key = maskGridKey(point, inverseCellSize);
+            const bucket = buckets.get(key);
+            if (bucket) bucket.push(i);
+            else buckets.set(key, [i]);
+        }
+
+        for (const maskPoint of sourcePoints) {
+            if (!maskPoint) continue;
+            const px = Number(maskPoint.x) || 0;
+            const py = Number(maskPoint.y) || 0;
+            const pz = Number(maskPoint.z) || 0;
+            const cellX = Math.floor(px * inverseCellSize);
+            const cellY = Math.floor(py * inverseCellSize);
+            const cellZ = Math.floor(pz * inverseCellSize);
+            for (let dx = -1; dx <= 1; dx++) {
+                for (let dy = -1; dy <= 1; dy++) {
+                    for (let dz = -1; dz <= 1; dz++) {
+                        const bucket = buckets.get(`${cellX + dx}:${cellY + dy}:${cellZ + dz}`);
+                        if (!bucket || !bucket.length) continue;
+                        for (const index of bucket) {
+                            if (!alive[index]) continue;
+                            const other = targetPoints[index];
+                            if (!other) continue;
+                            const ox = Number(other.x) || 0;
+                            const oy = Number(other.y) || 0;
+                            const oz = Number(other.z) || 0;
+                            const ddx = px - ox;
+                            const ddy = py - oy;
+                            const ddz = pz - oz;
+                            if (ddx * ddx + ddy * ddy + ddz * ddz < rangeSq) {
+                                alive[index] = false;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        let write = 0;
+        for (let read = 0; read < originalSize; read++) {
+            if (alive[read]) {
+                targetPoints[write++] = targetPoints[read];
+            }
+        }
+        if (write < originalSize) {
+            targetPoints.length = write;
+        }
+    }
+
+    function clearMaskPointSets(ctx, maskRange) {
+        applyMaskInPlace(ctx.points, maskRange);
+        if (Array.isArray(ctx.previewPoints) && ctx.previewPoints.length) {
+            applyMaskInPlace(ctx.previewPoints, maskRange);
+        }
+    }
+
+    function clearMaskPointSetsFromSource(ctx, sourcePoints, maskRange) {
+        applyMaskFromSourceInPlace(ctx.points, sourcePoints, maskRange);
+        if (Array.isArray(ctx.previewPoints) && ctx.previewPoints.length) {
+            applyMaskFromSourceInPlace(ctx.previewPoints, sourcePoints, maskRange);
+        }
+    }
+
+    function clearBallMaskPointSets(ctx, origin, radius) {
+        if (!(radius > 0) || Number.isNaN(radius)) return;
+        const ox = Number(origin?.x) || 0;
+        const oy = Number(origin?.y) || 0;
+        const oz = Number(origin?.z) || 0;
+        const radiusSq = radius * radius;
+
+        const apply = (points) => {
+            if (!Array.isArray(points) || !points.length) return;
+            let write = 0;
+            for (let read = 0; read < points.length; read++) {
+                const point = points[read];
+                if (!point) continue;
+                const dx = (Number(point.x) || 0) - ox;
+                const dy = (Number(point.y) || 0) - oy;
+                const dz = (Number(point.z) || 0) - oz;
+                if (dx * dx + dy * dy + dz * dz > radiusSq) {
+                    points[write++] = point;
+                }
+            }
+            points.length = write;
+        };
+
+        apply(ctx.points);
+        if (Array.isArray(ctx.previewPoints) && ctx.previewPoints.length) {
+            apply(ctx.previewPoints);
+        }
+    }
+
+    function clearRoundXZMaskPointSets(ctx, origin, radius, yAxisRange) {
+        if (!(radius > 0) || Number.isNaN(radius)) return;
+        const ox = Number(origin?.x) || 0;
+        const oy = Number(origin?.y) || 0;
+        const oz = Number(origin?.z) || 0;
+        const radiusSq = radius * radius;
+        const yRange = num(yAxisRange);
+        const limitY = yRange > 0;
+
+        const apply = (points) => {
+            if (!Array.isArray(points) || !points.length) return;
+            let write = 0;
+            for (let read = 0; read < points.length; read++) {
+                const point = points[read];
+                if (!point) continue;
+                const dx = (Number(point.x) || 0) - ox;
+                const dz = (Number(point.z) || 0) - oz;
+                const inRound = dx * dx + dz * dz < radiusSq;
+                const inY = !limitY || Math.abs((Number(point.y) || 0) - oy) <= yRange;
+                if (!(inRound && inY)) {
+                    points[write++] = point;
+                }
+            }
+            points.length = write;
+        };
+
+        apply(ctx.points);
+        if (Array.isArray(ctx.previewPoints) && ctx.previewPoints.length) {
+            apply(ctx.previewPoints);
+        }
+    }
+
     // -------------------------
     // KIND
     // -------------------------
@@ -232,7 +508,7 @@ export function createKindDefs(ctx) {
 
                 // 使用四元数旋转所有点
                 const v = new THREE.Vector3();
-                for (const list of [ctx.points, ctx.previewPoints]) {
+                for (const list of [ctx.points, ctx.previewPoints, ctx.maskPreviewPoints]) {
                     if (!Array.isArray(list) || !list.length) continue;
                     for (let i = 0; i < list.length; i++) {
                         const p = list[i];
@@ -258,7 +534,12 @@ export function createKindDefs(ctx) {
             apply(ctx, node) {
                 const f = num(node.params.factor);
                 if (f <= 0) return;
-                mapAllPointSets(ctx, (point) => U.mul(point, f));
+                mapAllPointSets(ctx, (point) => {
+                    const out = U.mul(point, f);
+                    if (point && point.radius !== undefined) out.radius = num(point.radius) * Math.abs(f);
+                    if (point && point.yAxisRange !== undefined) out.yAxisRange = num(point.yAxisRange) * Math.abs(f);
+                    return out;
+                });
             },
             kotlin(node) {
                 return `.scale(${U.fmt(num(node.params.factor))})`;
@@ -885,33 +1166,45 @@ export function createKindDefs(ctx) {
                 const verts = U.getPolygonInCircleVertices(c, r);
 
                 if (node.params.previewBeforeOffsetEnabled) {
-                    const previewCtx = { points: [], axis: U.v(0, 1, 0), previewPoints: [] };
+                    const previewCtx = { points: [], axis: U.v(0, 1, 0), previewPoints: [], maskPreviewPoints: [] };
                     for (const ch of (node.children || [])) {
                         const def = KIND[ch.kind];
                         if (def && def.apply) def.apply(previewCtx, ch);
                     }
                     pushPreviewPoints(ctx, previewCtx.points || [], offset);
+                    pushMaskPreviewPoints(ctx, previewCtx.maskPreviewPoints || [], { offset });
                 }
 
                 for (const it of verts) {
-                    const childCtx = {points: [], axis: U.v(0, 1, 0)};
+                    const childCtx = {points: [], axis: U.v(0, 1, 0), previewPoints: [], maskPreviewPoints: []};
                     for (const ch of (node.children || [])) {
                         const def = KIND[ch.kind];
                         if (def && def.apply) def.apply(childCtx, ch);
                     }
 
                     const pts = (childCtx.points || []).map(p => U.clone(p));
+                    const maskPts = (childCtx.maskPreviewPoints || []).map(p => ({ ...p }));
                     const base = it;
                     if (rotateToCenter) {
                         const targetPoint = rotateOffsetEnabled ? U.v(rox, roy, roz) : U.v(0, 0, 0);
                         const rotateTarget = rotateReverse ? U.add(targetPoint, it) : U.sub(targetPoint, it);
                         rotatePointsToPointUpright(pts, rotateTarget, childCtx.axis);
+                        rotatePointsToPointUpright(maskPts, rotateTarget, childCtx.axis);
                     }
                     for (const p of pts) {
                         ctx.points.push({
                             x: p.x + base.x + offset.x,
                             y: p.y + base.y + offset.y,
                             z: p.z + base.z + offset.z
+                        });
+                    }
+                    for (const p of maskPts) {
+                        if (!Array.isArray(ctx.maskPreviewPoints)) ctx.maskPreviewPoints = [];
+                        ctx.maskPreviewPoints.push({
+                            ...p,
+                            x: num(p.x) + base.x + offset.x,
+                            y: num(p.y) + base.y + offset.y,
+                            z: num(p.z) + base.z + offset.z
                         });
                     }
                 }
@@ -969,7 +1262,7 @@ export function createKindDefs(ctx) {
                 const ox = num(node.params.ox);
                 const oy = num(node.params.oy);
                 const oz = num(node.params.oz);
-                const childCtx = {points: [], axis: U.v(0, 1, 0)};
+                const childCtx = {points: [], axis: U.v(0, 1, 0), previewPoints: [], maskPreviewPoints: []};
                 for (const ch of (node.children || [])) {
                     const def = KIND[ch.kind];
                     if (def && def.apply) def.apply(childCtx, ch);
@@ -977,6 +1270,9 @@ export function createKindDefs(ctx) {
                 for (const p of (childCtx.points || [])) {
                     ctx.points.push({x: p.x + ox, y: p.y + oy, z: p.z + oz});
                 }
+                pushMaskPreviewPoints(ctx, childCtx.maskPreviewPoints || [], {
+                    offset: { x: ox, y: oy, z: oz }
+                });
             },
             kotlin(node, emitCtx, indent, emitNodesKotlinLines) {
                 const lines = [];
@@ -1023,6 +1319,98 @@ export function createKindDefs(ctx) {
                 }
                 lines.push(`${indent}  )`);
                 return lines;
+            }
+        },
+
+        clear_as_mask: {
+            title: "clearAsMask(遮罩组)",
+            desc: "子组正常生成点，然后用这些点遮罩清理此前点",
+            defaultParams: {maskRange: 1.0},
+            apply(ctx, node) {
+                if (!Array.isArray(ctx.points)) ctx.points = [];
+                const childCtx = { points: [], axis: U.v(0, 1, 0), previewPoints: [] };
+                for (const ch of (node.children || [])) {
+                    const def = KIND[ch.kind];
+                    if (def && def.apply) def.apply(childCtx, ch);
+                }
+                if (childCtx.points.length) {
+                    clearMaskPointSetsFromSource(ctx, childCtx.points, num(node.params.maskRange));
+                    for (const p of childCtx.points) {
+                        pushMaskPreviewCircleSegments(ctx, p, num(node.params.maskRange), {
+                            nodeId: node.id,
+                            maskKind: "point_mask",
+                            segments: 24
+                        });
+                    }
+                }
+                for (const p of (childCtx.points || [])) {
+                    ctx.points.push({ x: p.x, y: p.y, z: p.z });
+                }
+                if (Array.isArray(childCtx.previewPoints) && childCtx.previewPoints.length) {
+                    if (!Array.isArray(ctx.previewPoints)) ctx.previewPoints = [];
+                    for (const p of childCtx.previewPoints) {
+                        ctx.previewPoints.push({ ...p });
+                    }
+                }
+            },
+            kotlin(node, emitCtx, indent, emitNodesKotlinLines) {
+                const lines = [];
+                lines.push(`${indent}.clearAsMaskAndJoin(`);
+                lines.push(`${indent}  PointsBuilder()`);
+                const childLines = emitNodesKotlinLines(node.children || [], indent + "    ", emitCtx);
+                lines.push(...childLines);
+                lines.push(`${indent}  , ${U.fmt(num(node.params.maskRange))}`);
+                lines.push(`${indent})`);
+                return lines;
+            }
+        },
+
+        clear_as_ball_mask: {
+            title: "clearAsBallMask(球形遮罩)",
+            desc: "按球形范围清除当前组内此前生成的点",
+            defaultParams: {ox: 0, oy: 0, oz: 0, radius: 1.0},
+            apply(ctx, node) {
+                const origin = U.v(num(node.params.ox), num(node.params.oy), num(node.params.oz));
+                const radius = num(node.params.radius);
+                clearBallMaskPointSets(
+                    ctx,
+                    origin,
+                    radius
+                );
+                pushMaskPreviewSphereSegments(ctx, origin, radius, {
+                    nodeId: node.id,
+                    maskKind: "ball_mask"
+                });
+            },
+            kotlin(node) {
+                return `.clearAsBallMask(${relExpr(node.params.ox, node.params.oy, node.params.oz)}, ${U.fmt(num(node.params.radius))})`;
+            }
+        },
+
+        clear_as_round_xz_mask: {
+            title: "clearAsRoundXZMask(圆面遮罩)",
+            desc: "按 XZ 圆面范围清除当前组内此前生成的点，可用 yAxisRange 限制高度范围",
+            defaultParams: {ox: 0, oy: 0, oz: 0, radius: 1.0, yAxisRange: -1.0},
+            apply(ctx, node) {
+                const origin = U.v(num(node.params.ox), num(node.params.oy), num(node.params.oz));
+                const radius = num(node.params.radius);
+                clearRoundXZMaskPointSets(
+                    ctx,
+                    origin,
+                    radius,
+                    num(node.params.yAxisRange)
+                );
+                pushMaskPreviewCircleSegments(ctx, origin, radius, {
+                    nodeId: node.id,
+                    maskKind: "round_xz_mask",
+                    segments: 72
+                });
+            },
+            kotlin(node) {
+                const origin = relExpr(node.params.ox, node.params.oy, node.params.oz);
+                const radius = U.fmt(num(node.params.radius));
+                const yAxisRange = U.fmt(num(node.params.yAxisRange));
+                return `.clearAsRoundXZMask(${origin}, ${radius}, ${yAxisRange})`;
             }
         },
 

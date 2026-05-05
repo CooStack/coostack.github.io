@@ -169,6 +169,18 @@ export function createCardInputs(ctx) {
                 count: "环面采样点数量。",
                 discrete: "离散间距。"
             },
+            clear_as_mask: {
+                maskRange: "点遮罩距离，新点会清理范围内此前生成的旧点。"
+            },
+            clear_as_ball_mask: {
+                origin: "球形遮罩中心，只影响当前组内此前生成的点。",
+                radius: "球形遮罩半径。"
+            },
+            clear_as_round_xz_mask: {
+                origin: "圆面遮罩中心，按 XZ 平面距离判断。",
+                radius: "圆面遮罩半径。",
+                yAxisRange: "Y 轴限制范围；小于等于 0 时不限制高度。"
+            },
             add_rect: {
                 w: "矩形宽度。",
                 h: "矩形高度。",
@@ -1166,6 +1178,7 @@ export function initCardSystem(ctx = {}) {
         if (!node || !node.kind) return "builder";
         if (node.kind === "add_with") return "旋转嵌套组";
         if (node.kind === "with_builder") return "withBuilder";
+        if (node.kind === "clear_as_mask") return "遮罩组";
         if (node.kind === "add_builder") return "添加组";
         return node.kind;
     }
@@ -1555,6 +1568,7 @@ export function initCardSystem(ctx = {}) {
         };
         appendCleanupBtn("add_builder", panelToolSvgIcon("builder"), "清空空的添加组", "没有可清理的空添加组卡片", "添加组");
         appendCleanupBtn("add_with", panelToolSvgIcon("with"), "清空空的旋转嵌套组", "没有可清理的空旋转嵌套组卡片", "旋转嵌套组");
+        appendCleanupBtn("clear_as_mask", panelToolSvgIcon("builder"), "清空空的遮罩组", "没有可清理的空遮罩组卡片", "遮罩组");
 
         scopeFilterHost = document.createElement("div");
         scopeFilterHost.dataset.pbScopeFilter = "1";
@@ -3245,6 +3259,187 @@ export function initCardSystem(ctx = {}) {
 
             case "add_point":
                 body.appendChild(row("point", makeVec3Editor(p, "", rebuildPreviewAndKotlin, "point")));
+                break;
+
+            case "clear_as_mask": {
+                body.appendChild(row("maskRange", inputNum(p.maskRange, v => {
+                    p.maskRange = v;
+                    rebuildPreviewAndKotlin();
+                })));
+                {
+                    const note = document.createElement("div");
+                    note.className = "pb-builder-entry";
+                    note.style.margin = "6px 0 10px";
+                    note.style.opacity = ".82";
+                    note.textContent = "组内子卡片正常生成点，这些点会遮罩清理它之前的点";
+                    body.appendChild(note);
+                }
+                if (!opts.paramsOnly) body.appendChild(renderBuilderScopeEntry(node));
+                if (opts.paramsOnly) break;
+                if (!node.folded) {
+                    const block = document.createElement("div");
+                    block.className = "subblock";
+                    block.classList.add("builder-drop-surface");
+                    if (Number.isFinite(node.subWidth)) {
+                        const w = Math.max(240, node.subWidth);
+                        node.subWidth = w;
+                        block.style.width = `${w}px`;
+                    }
+                    setupListDropZone(block, () => node.children, () => node);
+
+                    const head = document.createElement("div");
+                    head.className = "subblock-head";
+
+                    const title = document.createElement("div");
+                    title.className = "subblock-title";
+                    const getSubblockTitle = () => node.label || "遮罩组";
+                    const titleText = document.createElement("span");
+                    titleText.className = "subblock-title-text subblock-title-label";
+                    titleText.textContent = getSubblockTitle();
+                    titleText.title = "点击修改组名";
+                    const beginSubblockTitleEdit = (ev) => {
+                        ev.stopPropagation();
+                        if (titleText.dataset.editing === "1") return;
+                        titleText.dataset.editing = "1";
+                        const titleInput = document.createElement("input");
+                        titleInput.className = "subblock-title-input";
+                        titleInput.value = node.label || "";
+                        titleInput.placeholder = getSubblockTitle();
+                        titleInput.title = "回车确认，Esc 取消";
+                        let done = false;
+                        const finish = (commit = true) => {
+                            if (done) return;
+                            done = true;
+                            if (commit) {
+                                node.label = String(titleInput.value || "").trim();
+                                if (typeof historyCapture === "function") historyCapture("rename_builder_group");
+                                if (typeof rebuildPreviewAndKotlin === "function") rebuildPreviewAndKotlin();
+                            }
+                            titleText.dataset.editing = "";
+                            titleText.textContent = getSubblockTitle();
+                            if (titleInput.parentNode) titleInput.replaceWith(titleText);
+                        };
+                        titleInput.addEventListener("pointerdown", (e) => e.stopPropagation());
+                        titleInput.addEventListener("click", (e) => e.stopPropagation());
+                        titleInput.addEventListener("keydown", (e) => {
+                            if (e.key === "Enter") {
+                                e.preventDefault();
+                                finish(true);
+                            } else if (e.key === "Escape") {
+                                e.preventDefault();
+                                finish(false);
+                            }
+                        });
+                        titleInput.addEventListener("blur", () => finish(true), { once: true });
+                        titleText.replaceWith(titleInput);
+                        requestAnimationFrame(() => {
+                            titleInput.focus();
+                            titleInput.select();
+                        });
+                    };
+                    title.title = "点击修改组名";
+                    title.addEventListener("pointerdown", (ev) => ev.stopPropagation());
+                    title.addEventListener("click", beginSubblockTitleEdit);
+                    title.appendChild(titleText);
+
+                    const actions = document.createElement("div");
+                    actions.className = "mini";
+
+                    const exportBtn = document.createElement("button");
+                    exportBtn.className = "btn small";
+                    exportBtn.textContent = "导出JSON";
+                    exportBtn.title = "导出当前子 Builder 的 JSON";
+                    exportBtn.addEventListener("click", () => {
+                        const out = {root: {id: "root", kind: "ROOT", children: deepClone(node.children || [])}};
+                        downloadText("clearAsMaskBuilder.json", JSON.stringify(out, null, 2), "application/json");
+                    });
+
+                    const importBtn = document.createElement("button");
+                    importBtn.className = "btn small";
+                    importBtn.textContent = "导入JSON";
+                    importBtn.title = "导入后将覆盖当前子 Builder 内容";
+                    importBtn.addEventListener("click", () => {
+                        if (!fileBuilderJson) return;
+                        setBuilderJsonTargetNode(node);
+                        fileBuilderJson.click();
+                    });
+                    const ioHint = document.createElement("span");
+                    ioHint.style.fontSize = "11px";
+                    ioHint.style.opacity = ".72";
+                    ioHint.textContent = "提示：先点击该卡片，再点“添加卡片”可在此卡片内新增";
+                    ioHint.title = "点击卡片后再点击添加卡片，即可在当前子 Builder 内添加卡片";
+
+                    actions.appendChild(exportBtn);
+                    actions.appendChild(importBtn);
+                    actions.appendChild(ioHint);
+
+                    head.appendChild(title);
+                    head.appendChild(actions);
+
+                    const sub = document.createElement("div");
+                    sub.className = "subcards";
+                    if (Number.isFinite(node.subHeight)) {
+                        const h = Math.max(120, node.subHeight);
+                        node.subHeight = h;
+                        sub.style.height = `${h}px`;
+                        sub.style.maxHeight = `${h}px`;
+                    }
+                    setupListDropZone(sub, () => node.children, () => node);
+
+                    const list = node.children || [];
+                    const entries = getVisibleEntries(list, node.id) || list.map((node, index) => ({ node, index }));
+                    for (const it of entries) {
+                        sub.appendChild(renderNodeCard(it.node, list, it.index, "子Builder", node));
+                    }
+
+                    block.appendChild(head);
+                    block.appendChild(sub);
+
+                    const zone = document.createElement("div");
+                    zone.className = "dropzone";
+                    zone.textContent = "拖到这里 → 放进 遮罩组 子列表（可拖回主列表）";
+                    bindSubDropZone(zone, node.children, node);
+                    block.appendChild(zone);
+
+                    const heightResizer = document.createElement("div");
+                    heightResizer.className = "subblock-resizer-y";
+                    bindSubblockHeightResizer(heightResizer, sub, node);
+                    block.appendChild(heightResizer);
+
+                    const widthResizer = document.createElement("div");
+                    widthResizer.className = "subblock-resizer";
+                    bindSubblockWidthResizer(widthResizer, block, node);
+                    block.appendChild(widthResizer);
+
+                    body.appendChild(block);
+                } else if (!opts.paramsOnly) {
+                    const zone = document.createElement("div");
+                    zone.className = "dropzone";
+                    zone.textContent = "拖到这里 → 放进 遮罩组 子列表";
+                    bindSubDropZone(zone, node.children, node);
+                    body.appendChild(zone);
+                }
+                break;
+            }
+
+            case "clear_as_ball_mask":
+                body.appendChild(row("origin", makeVec3Editor(p, "o", rebuildPreviewAndKotlin, "origin")));
+                body.appendChild(row("radius", inputNum(p.radius, v => {
+                    p.radius = v;
+                    rebuildPreviewAndKotlin();
+                })));
+                break;
+
+            case "clear_as_round_xz_mask":
+                body.appendChild(row("origin", makeVec3Editor(p, "o", rebuildPreviewAndKotlin, "origin")));
+                body.appendChild(row("radius", inputNum(p.radius, v => {
+                    p.radius = v;
+                    rebuildPreviewAndKotlin();
+                })));
+                body.appendChild(row("yAxisRange", inputNum(p.yAxisRange, v => {
+                    p.yAxisRange = v;
+                    rebuildPreviewAndKotlin();
+                })));
                 break;
 
             case "add_circle":

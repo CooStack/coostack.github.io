@@ -7,7 +7,7 @@ export function isVectorLiteralType(typeName) {
 export function normalizeVectorCtor(rawCtor) {
     const ctor = String(rawCtor || "").trim();
     return VECTOR_LITERAL_TYPES.includes(ctor) ? ctor : "RelativeLocation";
-}
+}   
 
 export function formatNumberCompact(value, digits = 6) {
     const n = Number(value);

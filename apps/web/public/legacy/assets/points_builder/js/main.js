@@ -2132,6 +2132,7 @@ function initPointsBuilderMain() {
             "add_fourier_series"
         ]);
         if (node.kind === "with_builder") node.kind = "add_builder";
+        if (node.kind === "clear_as_mask" && !Array.isArray(node.children)) node.children = [];
         if (offsetKinds.has(node.kind)) {
             if (node.params.ox === undefined) node.params.ox = 0;
             if (node.params.oy === undefined) node.params.oy = 0;
@@ -2949,6 +2950,81 @@ function initPointsBuilderMain() {
         }));
     }
 
+    function getPresetRingSlotPlacement(options, index) {
+        const count = Math.max(1, options.count || 1);
+        const angle = (Number(options.startDeg) || 0) + index * 360 / count;
+        const rad = angle * Math.PI / 180;
+        const radius = Number(options.radius) || 0;
+        const origin = normalizePointValue(options.origin);
+        const offset = normalizePointValue(options.offset);
+        const circlePoint = {
+            x: origin.x + Math.cos(rad) * radius,
+            y: origin.y,
+            z: origin.z + Math.sin(rad) * radius
+        };
+        const slotPoint = {
+            x: circlePoint.x + offset.x,
+            y: circlePoint.y + offset.y,
+            z: circlePoint.z + offset.z
+        };
+        return { count, angle, rad, radius, origin, offset, circlePoint, slotPoint };
+    }
+
+    function renderPresetRingPreview() {
+        if (!presetRingTool || presetRingTool.classList.contains("hidden")) return false;
+        const count = getPresetRingCount();
+        const presetIds = getPresetRingSelectedIds();
+        const presetsById = new Map(getPresetList().map((preset) => [preset.id, preset]));
+        const options = {
+            count,
+            radius: numFromInput(presetRingRadius, 3),
+            startDeg: numFromInput(presetRingStartDeg, 0),
+            origin: readPresetRingPoint(presetRingOriginX, presetRingOriginY, presetRingOriginZ),
+            axis: readPresetRingPoint(presetRingAxisX, presetRingAxisY, presetRingAxisZ),
+            offset: readPresetRingPoint(presetRingOffsetX, presetRingOffsetY, presetRingOffsetZ),
+            faceCenter: !!presetRingFaceCenter?.checked,
+            reverse: !!presetRingReverse?.checked
+        };
+        const previewPoints = [];
+        for (let i = 0; i < count; i++) {
+            const placement = getPresetRingSlotPlacement(options, i);
+            const presetId = presetIds[i] || "";
+            const preset = presetId ? presetsById.get(presetId) : null;
+            if (!preset) {
+                previewPoints.push(placement.slotPoint);
+                continue;
+            }
+            const resolved = resolvePresetForPreviewDefaults(preset);
+            const slot = resolved ? makePresetRingSlotNode(resolved, i, options) : null;
+            if (!slot) {
+                previewPoints.push(placement.slotPoint);
+                continue;
+            }
+            try {
+                const res = evalBuilderWithMeta([slot], U.v(0, 1, 0));
+                const points = res && Array.isArray(res.points) ? res.points : [];
+                if (!points.length) {
+                    previewPoints.push(placement.slotPoint);
+                    continue;
+                }
+                for (const p of points) {
+                    previewPoints.push({
+                        x: Number(p?.x) || 0,
+                        y: Number(p?.y) || 0,
+                        z: Number(p?.z) || 0
+                    });
+                }
+            } catch {
+                previewPoints.push(placement.slotPoint);
+            }
+        }
+        if (!previewPoints.length) {
+            clearPresetPreview();
+            return false;
+        }
+        return renderPresetPreviewPoints(previewPoints);
+    }
+
     function updatePresetRingStatus() {
         if (!presetRingStatus) return;
         const selected = getPresetRingSelectedIds().filter(Boolean).length;
@@ -2986,11 +3062,13 @@ function initPointsBuilderMain() {
             select.addEventListener("change", () => {
                 presetRingSlotPresetIds[i] = select.value || "";
                 updatePresetRingStatus();
+                renderPresetRingPreview();
             });
             row.append(label, select);
             presetRingSlots.appendChild(row);
         }
         updatePresetRingStatus();
+        renderPresetRingPreview();
     }
 
     function getPresetRingSelectedIds() {
@@ -3014,6 +3092,7 @@ function initPointsBuilderMain() {
 
     function closePresetRingTool() {
         presetRingTool?.classList.add("hidden");
+        clearPresetPreview();
     }
 
     function makePresetChildrenForResolvedApply(preset) {
@@ -3023,6 +3102,15 @@ function initPointsBuilderMain() {
         normalizeNodeTree(nextChildren);
         labelInsertedPresetContainers(nextChildren, normalized.name);
         return { normalized, children: nextChildren };
+    }
+
+    function resolvePresetForPreviewDefaults(preset) {
+        const normalized = normalizePresetList([preset])[0];
+        if (!normalized) return null;
+        const variableInfo = getPresetEffectiveVariableInfo(normalized);
+        if (!getPresetVariableEntries(variableInfo).length) return normalized;
+        const withVars = Object.assign({}, normalized, { variables: variableInfo });
+        return clonePresetWithVariableValues(withVars, getPresetVariableDefaultValues(variableInfo));
     }
 
     async function resolvePresetForRingSlot(preset, index) {
@@ -3041,22 +3129,8 @@ function initPointsBuilderMain() {
     function makePresetRingSlotNode(resolvedPreset, index, options) {
         const prepared = makePresetChildrenForResolvedApply(resolvedPreset);
         if (!prepared) return null;
-        const count = Math.max(1, options.count || 1);
-        const angle = (Number(options.startDeg) || 0) + index * 360 / count;
-        const rad = angle * Math.PI / 180;
-        const radius = Number(options.radius) || 0;
-        const origin = normalizePointValue(options.origin);
-        const offset = normalizePointValue(options.offset);
-        const circlePoint = {
-            x: origin.x + Math.cos(rad) * radius,
-            y: origin.y,
-            z: origin.z + Math.sin(rad) * radius
-        };
-        const slotPoint = {
-            x: circlePoint.x + offset.x,
-            y: circlePoint.y + offset.y,
-            z: circlePoint.z + offset.z
-        };
+        const placement = getPresetRingSlotPlacement(options, index);
+        const { count, origin, circlePoint, slotPoint } = placement;
         const slot = makeNode("add_builder", {
             label: `${prepared.normalized.name || "预设"} #${index + 1}`,
             params: { ox: slotPoint.x, oy: slotPoint.y, oz: slotPoint.z }
@@ -5070,6 +5144,24 @@ function initPointsBuilderMain() {
         });
         presetRingCount?.addEventListener("input", renderPresetRingSlots);
         presetRingCount?.addEventListener("change", renderPresetRingSlots);
+        [
+            presetRingRadius,
+            presetRingStartDeg,
+            presetRingOriginX,
+            presetRingOriginY,
+            presetRingOriginZ,
+            presetRingAxisX,
+            presetRingAxisY,
+            presetRingAxisZ,
+            presetRingOffsetX,
+            presetRingOffsetY,
+            presetRingOffsetZ,
+            presetRingFaceCenter,
+            presetRingReverse
+        ].forEach((el) => {
+            el?.addEventListener("input", renderPresetRingPreview);
+            el?.addEventListener("change", renderPresetRingPreview);
+        });
         btnPresetRingPickOrigin?.addEventListener("click", () => {
             if (!presetRingTool) return;
             presetRingTool.classList.add("hidden");
@@ -5079,6 +5171,7 @@ function initPointsBuilderMain() {
                     setPresetRingPoint(presetRingOriginX, presetRingOriginY, presetRingOriginZ, point);
                     presetRingTool.classList.remove("hidden");
                     updatePresetRingStatus();
+                    renderPresetRingPreview();
                     showToast("已拾取环形圆心", "success");
                 }
             });
@@ -5335,7 +5428,7 @@ function initPointsBuilderMain() {
     }
 
     function isBuilderContainerKind(kind) {
-        return kind === "add_builder" || kind === "with_builder" || kind === "add_with";
+        return kind === "add_builder" || kind === "with_builder" || kind === "add_with" || kind === "clear_as_mask";
     }
 
     function forEachNode(list, fn) {
@@ -5755,6 +5848,9 @@ function initPointsBuilderMain() {
         if (targetKind === "add_builder") {
             return node.kind === "add_builder" || node.kind === "with_builder";
         }
+        if (targetKind === "clear_as_mask") {
+            return node.kind === "clear_as_mask";
+        }
         return node.kind === targetKind;
     }
 
@@ -6157,6 +6253,9 @@ function initPointsBuilderMain() {
     let presetPreviewObj = null;
     let presetPreviewBuf = null;
     let presetPreviewCount = 0;
+    let maskPreviewLineObj = null;
+    let maskPreviewLineBuf = null;
+    let maskPreviewLineCount = 0;
     let presetDragPointObj = null;
     let presetDragPointBuf = null;
     let pointPickPreviewRaf = 0;
@@ -6182,6 +6281,7 @@ function initPointsBuilderMain() {
     let lastPoints = [];      // ✅ 当前预览点，用于“吸附到最近点”
     let lastAddWithPreviewPoints = [];
     let lastGeometryCenterPoints = [];
+    let lastMaskPreviewPoints = [];
     let lastPickBasePoint = null;
     let lastPickMappedPoint = null;
     let lockPlaneActive = false;
@@ -6203,6 +6303,7 @@ function initPointsBuilderMain() {
     const LINE_PICK_PREVIEW_HEX = 0x33a1ff;
     const POINT_PICK_PREVIEW_HEX = 0x5dd6ff;
     const PRESET_PREVIEW_HEX = 0x6ecbff;
+    const MASK_PREVIEW_HEX = 0x80d8ff;
     const ROTATE_POINT_HEX = 0x64f59d;
     const defaultPointColor = new THREE.Color(DEFAULT_POINT_HEX);
     const focusPointColor = new THREE.Color(FOCUS_POINT_HEX);
@@ -6214,6 +6315,7 @@ function initPointsBuilderMain() {
     const linePickPreviewColor = new THREE.Color(LINE_PICK_PREVIEW_HEX);
     const pointPickPreviewColor = new THREE.Color(POINT_PICK_PREVIEW_HEX);
     const presetPreviewColor = new THREE.Color(PRESET_PREVIEW_HEX);
+    const maskPreviewColor = new THREE.Color(MASK_PREVIEW_HEX);
     const rotatePointColor = new THREE.Color(ROTATE_POINT_HEX);
 
     let pickMarkers = [];
@@ -7847,7 +7949,63 @@ function initPointsBuilderMain() {
         geometryCenterObj.visible = true;
     }
 
-    function setPoints(points, addWithPreviewPoints = [], geometryCenterPoints = []) {
+    function ensureMaskPreviewObj() {
+        if (maskPreviewLineObj || !scene) return;
+        const geom = new THREE.BufferGeometry();
+        const mat = new THREE.LineBasicMaterial({
+            color: maskPreviewColor.getHex(),
+            transparent: true,
+            opacity: 0.22,
+            depthWrite: false
+        });
+        maskPreviewLineObj = new THREE.LineSegments(geom, mat);
+        maskPreviewLineObj.visible = false;
+        scene.add(maskPreviewLineObj);
+    }
+
+    function hideMaskPreview() {
+        if (maskPreviewLineObj) maskPreviewLineObj.visible = false;
+    }
+
+    function setMaskPreviewPoints(points) {
+        const list = Array.isArray(points) ? points : [];
+        lastMaskPreviewPoints = list.map((point) => ({
+            ...point,
+            x: num(point?.x),
+            y: num(point?.y),
+            z: num(point?.z),
+            radius: num(point?.radius),
+            maskKind: point?.maskKind || "mask",
+            previewType: point?.previewType || "mask_line",
+            nodeId: point?.nodeId || null
+        }));
+        const count = Math.trunc(lastMaskPreviewPoints.length / 2) * 2;
+        if (count <= 0) {
+            hideMaskPreview();
+            return;
+        }
+        ensureMaskPreviewObj();
+        if (!maskPreviewLineObj) return;
+        const geom = maskPreviewLineObj.geometry;
+        if (!maskPreviewLineBuf || maskPreviewLineCount !== count) {
+            maskPreviewLineBuf = new Float32Array(count * 3);
+            maskPreviewLineCount = count;
+            geom.setAttribute("position", new THREE.BufferAttribute(maskPreviewLineBuf, 3));
+        }
+        let o = 0;
+        for (let i = 0; i < count; i++) {
+            const point = lastMaskPreviewPoints[i];
+            maskPreviewLineBuf[o++] = point.x;
+            maskPreviewLineBuf[o++] = point.y;
+            maskPreviewLineBuf[o++] = point.z;
+        }
+        const posAttr = geom.getAttribute("position");
+        if (posAttr) posAttr.needsUpdate = true;
+        geom.computeBoundingSphere();
+        maskPreviewLineObj.visible = true;
+    }
+
+    function setPoints(points, addWithPreviewPoints = [], geometryCenterPoints = [], maskPreviewPoints = []) {
         statusPoints.textContent = `点数：${points.length}`;
 
         if (pointsObj) {
@@ -7862,6 +8020,7 @@ function initPointsBuilderMain() {
             defaultColorBuf = null;
             setAddWithPreviewPoints(addWithPreviewPoints);
             setGeometryCenterPoints(geometryCenterPoints);
+            setMaskPreviewPoints(maskPreviewPoints);
             hideOffsetPreview();
             hideLinePickPreview();
             hidePointPickPreview();
@@ -7904,6 +8063,7 @@ function initPointsBuilderMain() {
 
         setAddWithPreviewPoints(addWithPreviewPoints);
         setGeometryCenterPoints(geometryCenterPoints);
+        setMaskPreviewPoints(maskPreviewPoints);
         // ✅ 根据当前聚焦的卡片，重新着色
         updateFocusColors();
         updateOffsetPreview(offsetHoverPoint);
@@ -8278,14 +8438,10 @@ function initPointsBuilderMain() {
         if (presetPreviewObj) presetPreviewObj.visible = false;
     }
 
-    function previewPreset(preset, anchorPoint = null) {
-        if (!preset || !scene) return;
+    function collectPresetPreviewPoints(preset) {
+        if (!preset) return null;
         const normalized = normalizePresetList([preset])[0];
-        if (!normalized || !normalized.children.length) {
-            clearPresetPreview();
-            return;
-        }
-        let previewPoints = null;
+        if (!normalized || !normalized.children.length) return null;
         try {
             const variableInfo = getPresetEffectiveVariableInfo(normalized);
             const defaultValues = getPresetVariableDefaultValues(variableInfo);
@@ -8294,18 +8450,23 @@ function initPointsBuilderMain() {
                 : normalized.children;
             const children = preparePresetChildrenForInsertion(sourceChildren);
             const res = evalBuilderWithMeta(children, U.v(0, 1, 0));
-            previewPoints = res && Array.isArray(res.points) ? res.points : null;
+            const points = res && Array.isArray(res.points) ? res.points : null;
+            if (!points || !points.length) return null;
+            return { normalized, points };
         } catch {
-            previewPoints = null;
+            return null;
         }
-        if (!previewPoints || !previewPoints.length) {
+    }
+
+    function renderPresetPreviewPoints(points, anchorPoint = null, originPoint = null) {
+        if (!points || !points.length || !scene) {
             clearPresetPreview();
-            return;
+            return false;
         }
         ensurePresetPreviewObj();
-        if (!presetPreviewObj) return;
+        if (!presetPreviewObj) return false;
         const geom = presetPreviewObj.geometry;
-        const count = previewPoints.length;
+        const count = points.length;
         if (!presetPreviewBuf || presetPreviewCount !== count) {
             presetPreviewBuf = new Float32Array(count * 3);
             presetPreviewCount = count;
@@ -8313,11 +8474,11 @@ function initPointsBuilderMain() {
         }
         let o = 0;
         const anchor = anchorPoint ? normalizePointValue(anchorPoint) : null;
-        const origin = normalizePointValue(normalized.origin);
+        const origin = originPoint ? normalizePointValue(originPoint) : { x: 0, y: 0, z: 0 };
         const dx = anchor ? anchor.x - origin.x : 0;
         const dy = anchor ? anchor.y - origin.y : 0;
         const dz = anchor ? anchor.z - origin.z : 0;
-        for (const p of previewPoints) {
+        for (const p of points) {
             presetPreviewBuf[o++] = (Number(p?.x) || 0) + dx;
             presetPreviewBuf[o++] = (Number(p?.y) || 0) + dy;
             presetPreviewBuf[o++] = (Number(p?.z) || 0) + dz;
@@ -8327,6 +8488,17 @@ function initPointsBuilderMain() {
         geom.computeBoundingSphere();
         updatePresetPreviewSize();
         presetPreviewObj.visible = true;
+        return true;
+    }
+
+    function previewPreset(preset, anchorPoint = null) {
+        if (!preset || !scene) return;
+        const collected = collectPresetPreviewPoints(preset);
+        if (!collected) {
+            clearPresetPreview();
+            return;
+        }
+        renderPresetPreviewPoints(collected.points, anchorPoint, collected.normalized.origin);
     }
 
     function updatePointPickPreview(targetPoint) {
@@ -10492,6 +10664,18 @@ function openActionMenuForBlankNoSelection(ev) {
             onSelect: () => addShortcutKindInContext("add_with", getBlankInsertContext)
         },
         {
+            label: "添加遮罩组",
+            onSelect: () => addShortcutKindInContext("clear_as_mask", getBlankInsertContext)
+        },
+        {
+            label: "添加圆遮罩",
+            onSelect: () => addShortcutKindInContext("clear_as_round_xz_mask", getBlankInsertContext)
+        },
+        {
+            label: "添加球遮罩",
+            onSelect: () => addShortcutKindInContext("clear_as_ball_mask", getBlankInsertContext)
+        },
+        {
             label: "添加卡片",
             onSelect: () => {
                 const ctx = getBlankInsertContext();
@@ -10554,6 +10738,14 @@ function openActionMenuForTargets(ev, targetIds, options = {}) {
         onSelect: () => wrapTargetIdsInGroup(ids, "add_builder")
     });
     items.push({
+        label: ids.length > 1 ? "添加并移动到旋转嵌套组" : "添加并移动到旋转嵌套组",
+        onSelect: () => wrapTargetIdsInGroup(ids, "add_with")
+    });
+    items.push({
+        label: ids.length > 1 ? "添加并移动到遮罩组" : "添加并移动到遮罩组",
+        onSelect: () => wrapTargetIdsInGroup(ids, "clear_as_mask")
+    });
+    items.push({
         label: "保存为预设",
         onSelect: () => openPresetPanel("save", { sourceIds: ids })
     });
@@ -10575,15 +10767,23 @@ function openActionMenuForTargets(ev, targetIds, options = {}) {
                 label: "向下插入卡片",
                 onSelect: () => openModal(ctxNode.parentList, ctxNode.index + 1, label)
             });
-            const getAfterContext = () => ({
-                list: ctxNode.parentList,
-                insertIndex: ctxNode.index + 1,
-                label,
-                ownerNode: null
+            items.push({
+                label: "添加圆遮罩",
+                onSelect: () => addShortcutKindInContext("clear_as_round_xz_mask", () => ({
+                    list: ctxNode.parentList,
+                    insertIndex: ctxNode.index + 1,
+                    label,
+                    ownerNode: null
+                }))
             });
             items.push({
-                label: "下方添加旋转嵌套组",
-                onSelect: () => addShortcutKindInContext("add_with", getAfterContext)
+                label: "添加球遮罩",
+                onSelect: () => addShortcutKindInContext("clear_as_ball_mask", () => ({
+                    list: ctxNode.parentList,
+                    insertIndex: ctxNode.index + 1,
+                    label,
+                    ownerNode: null
+                }))
             });
         }
     }
@@ -12520,7 +12720,7 @@ function collectSyntheticVecTargetsForNode(node) {
             nodePointSegments = res.segments;
             pointOwnerByIndex = buildPointOwnerByIndex(res.points.length, res.segments);
             const geometryCenters = collectGeometryCenterPreviewPoints();
-            setPoints(res.points, res.previewPoints || [], geometryCenters);
+            setPoints(res.points, res.previewPoints || [], geometryCenters, res.maskPreviewPoints || []);
             // setPoints 内部会根据 focusedNodeId 重新上色
             kotlinDirty = true;
             if (realtimeKotlin) scheduleKotlinOut();
