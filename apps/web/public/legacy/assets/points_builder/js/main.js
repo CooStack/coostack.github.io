@@ -2560,6 +2560,109 @@ function initPointsBuilderMain() {
         }
     }
 
+    function makeFreshNodeId(usedIds) {
+        let next = "";
+        do {
+            next = uid();
+        } while (!next || usedIds.has(next));
+        usedIds.add(next);
+        return next;
+    }
+
+    function reassignNodeIdsDeep(target, usedIds = null) {
+        const seen = usedIds instanceof Set ? usedIds : new Set();
+        let changed = 0;
+        const visitNode = (node) => {
+            if (!node || typeof node !== "object") return;
+            node.id = makeFreshNodeId(seen);
+            changed++;
+            if (Array.isArray(node.terms)) {
+                for (const term of node.terms) {
+                    if (!term || typeof term !== "object") continue;
+                    term.id = makeFreshNodeId(seen);
+                    changed++;
+                }
+            }
+            if (Array.isArray(node.children)) {
+                for (const child of node.children) visitNode(child);
+            }
+        };
+        if (Array.isArray(target)) {
+            for (const node of target) visitNode(node);
+        } else {
+            visitNode(target);
+        }
+        return changed;
+    }
+
+    function collectNodeIds(target = state.root) {
+        const ids = new Set();
+        const visitNode = (node) => {
+            if (!node || typeof node !== "object") return;
+            if (node.id) ids.add(String(node.id));
+            if (Array.isArray(node.terms)) {
+                for (const term of node.terms) {
+                    if (term && term.id) ids.add(String(term.id));
+                }
+            }
+            if (Array.isArray(node.children)) {
+                for (const child of node.children) visitNode(child);
+            }
+        };
+        if (Array.isArray(target)) {
+            for (const node of target) visitNode(node);
+        } else if (target && typeof target === "object") {
+            if (target.kind === "ROOT") {
+                if (target.id) ids.add(String(target.id));
+                if (Array.isArray(target.children)) {
+                    for (const child of target.children) visitNode(child);
+                }
+            } else {
+                visitNode(target);
+            }
+        }
+        return ids;
+    }
+
+    function ensureUniqueNodeIds(target = state.root) {
+        const seen = new Set();
+        let repaired = 0;
+        const reserveId = (obj, fallback = "") => {
+            if (!obj || typeof obj !== "object") return;
+            const raw = String(obj.id || fallback || "").trim();
+            if (raw && !seen.has(raw)) {
+                obj.id = raw;
+                seen.add(raw);
+                return;
+            }
+            obj.id = makeFreshNodeId(seen);
+            repaired++;
+        };
+        const visitNode = (node) => {
+            if (!node || typeof node !== "object") return;
+            reserveId(node);
+            if (Array.isArray(node.terms)) {
+                for (const term of node.terms) reserveId(term);
+            }
+            if (Array.isArray(node.children)) {
+                for (const child of node.children) visitNode(child);
+            }
+        };
+        if (Array.isArray(target)) {
+            for (const node of target) visitNode(node);
+        } else if (target && typeof target === "object") {
+            if (target.kind === "ROOT") {
+                reserveId(target, "root");
+                if (Array.isArray(target.children)) {
+                    for (const child of target.children) visitNode(child);
+                }
+            } else {
+                visitNode(target);
+            }
+        }
+        return repaired;
+    }
+
     function normalizeState(obj) {
         if (!obj || typeof obj !== "object") return null;
         if (!obj.root || typeof obj.root !== "object") return null;
@@ -2569,6 +2672,7 @@ function initPointsBuilderMain() {
         obj.presets = normalizePresetList(obj.presets);
         obj.variables = normalizeVariableState(obj.variables);
         normalizeNodeTree(obj.root);
+        ensureUniqueNodeIds(obj.root);
         return obj;
     }
 
@@ -3049,7 +3153,10 @@ function initPointsBuilderMain() {
     }
 
     function preparePresetChildrenForInsertion(children) {
-        return preparePresetChildrenForStorage(children);
+        const prepared = preparePresetChildrenForStorage(children);
+        const usedIds = collectNodeIds(state.root);
+        reassignNodeIdsDeep(prepared, usedIds);
+        return prepared;
     }
 
     function labelInsertedPresetContainers(children, presetName) {
@@ -3201,17 +3308,6 @@ function initPointsBuilderMain() {
             ? applyPresetVariableValuesToChildren(deepCloneJson(normalized.children || []) || [], defaultValues)
             : normalized.children;
         const nextChildren = preparePresetChildrenForInsertion(sourceChildren);
-        const reassignIds = (node) => {
-            if (!node || typeof node !== "object") return;
-            node.id = uid();
-            if (Array.isArray(node.terms)) {
-                for (const term of node.terms) {
-                    if (term && typeof term === "object") term.id = uid();
-                }
-            }
-            if (Array.isArray(node.children)) node.children.forEach(reassignIds);
-        };
-        nextChildren.forEach(reassignIds);
         normalizeNodeTree(nextChildren);
         labelInsertedPresetContainers(nextChildren, normalized.name);
         const anchor = normalizePointValue(point);
@@ -3496,6 +3592,8 @@ function initPointsBuilderMain() {
                 }
             }));
         }
+        const usedIds = options && options.usedIds instanceof Set ? options.usedIds : collectNodeIds(state.root);
+        reassignNodeIdsDeep(slot, usedIds);
         return slot;
     }
 
@@ -3519,10 +3617,12 @@ function initPointsBuilderMain() {
             faceCenter: !!presetRingFaceCenter?.checked,
             reverse: !!presetRingReverse?.checked
         };
+        options.usedIds = collectNodeIds(state.root);
         const group = makeNode("add_builder", {
             label: String(presetRingGroupLabel?.value || "").trim() || "环形预设组",
             params: { ox: 0, oy: 0, oz: 0 }
         });
+        if (options.usedIds instanceof Set) group.id = makeFreshNodeId(options.usedIds);
         for (let i = 0; i < count; i++) {
             const preset = presetsById.get(presetIds[i]);
             const resolved = await resolvePresetForRingSlot(preset, i);
@@ -6019,6 +6119,7 @@ function initPointsBuilderMain() {
         } catch {}
         try {
             state = deepClone(snap.state);
+            normalizeState(state);
             focusedNodeId = snap.focusedNodeId || null;
         } finally {
             isRestoringHistory = false;
@@ -13419,6 +13520,7 @@ function collectSyntheticVecTargetsForNode(node) {
     }
 
     function renderAll() {
+        ensureUniqueNodeIds(state.root);
         // 保持选中卡片：用于高亮 & 插入规则（addBuilder 内新增等）
         applyCollapseAllStates();
         renderCards();
