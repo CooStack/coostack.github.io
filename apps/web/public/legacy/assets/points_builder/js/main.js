@@ -2614,6 +2614,14 @@ function initPointsBuilderMain() {
         return getPresetGroupLabel(group) === DEFAULT_PRESET_GROUP;
     }
 
+    function normalizePresetScalarVariableValue(value, fallback = 0) {
+        if (value && typeof value === "object") return fallback;
+        const text = stripNumericSuffix(transpileKotlinThisQualifierToJs(String(value ?? "").trim()));
+        if (!text) return fallback;
+        const n = Number(text);
+        return Number.isFinite(n) && isNumericLiteral(text) ? n : text;
+    }
+
     function normalizePresetVariableValues(raw) {
         const src = raw && typeof raw === "object" ? raw : {};
         const scalar = {};
@@ -2622,8 +2630,7 @@ function initPointsBuilderMain() {
         for (const [key, value] of Object.entries(scalarSrc)) {
             const name = normalizeContextIdentifier(key);
             if (!name) continue;
-            const n = Number(value);
-            scalar[name] = Number.isFinite(n) ? n : 0;
+            scalar[name] = normalizePresetScalarVariableValue(value);
         }
         const vectorSrc = src.vector && typeof src.vector === "object" ? src.vector : {};
         for (const [key, value] of Object.entries(vectorSrc)) {
@@ -2674,8 +2681,7 @@ function initPointsBuilderMain() {
         if (!scalarRefs.length && !vectorRefs.length) return null;
         const inputs = { scalar: {}, vector: {} };
         for (const name of scalarRefs) {
-            const n = Number(rawInputs.scalar?.[name]);
-            inputs.scalar[name] = Number.isFinite(n) ? n : 0;
+            inputs.scalar[name] = normalizePresetScalarVariableValue(rawInputs.scalar?.[name]);
         }
         for (const name of vectorRefs) {
             inputs.vector[name] = normalizePointValue(rawInputs.vector?.[name]);
@@ -4102,8 +4108,7 @@ function initPointsBuilderMain() {
             const prevValue = previous.scalar && Object.prototype.hasOwnProperty.call(previous.scalar, name)
                 ? previous.scalar[name]
                 : current.scalar?.[name];
-            const n = Number(prevValue);
-            inputs.scalar[name] = Number.isFinite(n) ? n : 0;
+            inputs.scalar[name] = normalizePresetScalarVariableValue(prevValue);
         }
         for (const name of fresh.refs.vector || []) {
             const prevValue = previous.vector && Object.prototype.hasOwnProperty.call(previous.vector, name)
@@ -4152,10 +4157,67 @@ function initPointsBuilderMain() {
             values.vector[name] = normalizePointValue(value);
         } else {
             if (!values.scalar) values.scalar = {};
-            const n = Number(value);
-            if (!Number.isFinite(n)) return;
-            values.scalar[name] = n;
+            values.scalar[name] = normalizePresetScalarVariableValue(value, "");
         }
+    }
+
+    function getPresetVariableInputNavControls(host) {
+        if (!host) return [];
+        return Array.from(host.querySelectorAll("input.input"))
+            .filter((el) => el instanceof HTMLInputElement && !el.disabled && !el.hidden && el.offsetParent !== null);
+    }
+
+    function handlePresetVariableInputNavigation(key, input, options = {}) {
+        const host = options.host || null;
+        const controls = getPresetVariableInputNavControls(host);
+        if (!controls.length) return;
+        const current = input instanceof HTMLInputElement ? input : document.activeElement;
+        const idx = Math.max(0, controls.indexOf(current));
+        const lastIndex = controls.length - 1;
+        const focusAt = (index) => {
+            const target = controls[Math.max(0, Math.min(lastIndex, index))];
+            if (!target) return;
+            target.focus();
+            target.select?.();
+        };
+        if (key === "ArrowUp") {
+            focusAt(idx <= 0 ? 0 : idx - 1);
+            return;
+        }
+        if (key === "ArrowDown") {
+            focusAt(idx >= lastIndex ? lastIndex : idx + 1);
+            return;
+        }
+        if (key === "Enter") {
+            if (idx < lastIndex) {
+                focusAt(idx + 1);
+                return;
+            }
+            if (typeof options.onLastEnter === "function") options.onLastEnter();
+        }
+    }
+
+    function bindPresetVariableInputNavigation(host, options = {}) {
+        if (!host || host.__pbPresetInputNavBound) return;
+        host.__pbPresetInputNavBound = true;
+        host.addEventListener("keydown", (ev) => {
+            if (ev.defaultPrevented) return;
+            const target = ev.target;
+            if (!(target instanceof HTMLInputElement)) return;
+            if (target.dataset?.pbModalInputNavSelf === "1") return;
+            if (ev.key !== "ArrowUp" && ev.key !== "ArrowDown" && ev.key !== "Enter") return;
+            ev.preventDefault();
+            handlePresetVariableInputNavigation(ev.key, target, Object.assign({}, options, { host }));
+        });
+    }
+
+    function focusFirstPresetVariableInput(host) {
+        requestAnimationFrame(() => {
+            const first = getPresetVariableInputNavControls(host)[0];
+            if (!first) return;
+            first.focus();
+            first.select?.();
+        });
     }
 
     function renderPresetVariableRows(host, info, values, options = {}) {
@@ -4166,6 +4228,14 @@ function initPointsBuilderMain() {
         host.classList.toggle("hidden", !entries.length);
         if (!entries.length) return;
 
+        const allowVariableRefs = !!options.allowVariableRefs;
+        const variableCatalog = options.variableCatalog || (typeof getVariableCatalog === "function" ? getVariableCatalog() : { scalar: new Map(), vector: new Map() });
+        const applyState = options.applyState || null;
+        if (applyState) {
+            if (!applyState.modes) applyState.modes = { scalar: {}, vector: {} };
+            if (!applyState.refs) applyState.refs = { scalar: {}, vector: {} };
+        }
+
         const title = document.createElement("div");
         title.className = "preset-variable-title";
         title.textContent = options.title || "变量默认值";
@@ -4174,6 +4244,51 @@ function initPointsBuilderMain() {
         const list = document.createElement("div");
         list.className = "preset-variable-list";
         host.appendChild(list);
+
+        const resolveCatalogEntry = (type, refName) => {
+            const map = type === "vector" ? variableCatalog.vector : variableCatalog.scalar;
+            if (!map || typeof map.get !== "function") return null;
+            return map.get(normalizeContextIdentifier(refName)) || null;
+        };
+        const resolveCatalogValue = (type, refName) => {
+            const found = resolveCatalogEntry(type, refName);
+            if (!found) return null;
+            return type === "vector"
+                ? normalizePointValue(found.value)
+                : (Number.isFinite(Number(found.value)) ? Number(found.value) : 0);
+        };
+        const getMode = (type, name) => {
+            if (!applyState || !applyState.modes || !applyState.modes[type]) return "manual";
+            return applyState.modes[type][name] === "reference" ? "reference" : "manual";
+        };
+        const setMode = (type, name, mode) => {
+            if (!applyState) return;
+            if (!applyState.modes[type]) applyState.modes[type] = {};
+            if (!applyState.refs[type]) applyState.refs[type] = {};
+            applyState.modes[type][name] = mode === "reference" ? "reference" : "manual";
+            if (mode !== "reference") delete applyState.refs[type][name];
+        };
+        const getRefName = (type, name) => {
+            if (!applyState || !applyState.refs || !applyState.refs[type]) return "";
+            return String(applyState.refs[type][name] || "");
+        };
+        const setRefName = (type, name, refName) => {
+            if (!applyState) return;
+            if (!applyState.refs[type]) applyState.refs[type] = {};
+            const clean = normalizeContextIdentifier(refName);
+            if (clean) applyState.refs[type][name] = clean;
+            else delete applyState.refs[type][name];
+        };
+        const catalogEntriesForType = (type) => {
+            const map = type === "vector" ? variableCatalog.vector : variableCatalog.scalar;
+            if (!map || typeof map.values !== "function") return [];
+            return Array.from(map.values()).sort((a, b) => {
+                const aSrc = a?.source === "external" ? 1 : 0;
+                const bSrc = b?.source === "external" ? 1 : 0;
+                if (aSrc !== bSrc) return aSrc - bSrc;
+                return String(a?.label || a?.name || "").localeCompare(String(b?.label || b?.name || ""));
+            });
+        };
 
         for (const entry of entries) {
             const name = normalizeContextIdentifier(entry.name);
@@ -4190,13 +4305,52 @@ function initPointsBuilderMain() {
             labelMeta.className = "preset-variable-meta";
             labelMeta.textContent = `${getPresetVariableSourceText(entry.source)} / ${entry.type === "vector" ? "Vec3" : "数值"}`;
             label.append(labelName, labelMeta);
-            row.appendChild(label);
+
+            const valueStack = document.createElement("div");
+            valueStack.className = "preset-variable-value-stack";
+            row.append(label, valueStack);
+
+            const manualRow = document.createElement("div");
+            manualRow.className = `preset-variable-manual-row ${entry.type === "vector" ? "vector" : "scalar"}`;
+            const currentMode = allowVariableRefs ? getMode(entry.type, name) : "manual";
+            const catalogEntries = allowVariableRefs ? catalogEntriesForType(entry.type) : [];
+            let currentRefName = allowVariableRefs ? getRefName(entry.type, name) : "";
+            if (allowVariableRefs && currentMode === "reference" && !currentRefName && catalogEntries.length) {
+                currentRefName = normalizeContextIdentifier(catalogEntries[0]?.name || "");
+                setRefName(entry.type, name, currentRefName);
+            }
+
+            let scalarInput = null;
+            let vectorInputs = null;
+            let pickBtn = null;
+            let modeSelect = null;
+            let refRow = null;
+            let refSelect = null;
+            const syncManualScalar = () => {
+                if (!scalarInput) return;
+                updatePresetVariableValue(values, entry, scalarInput.value);
+            };
+            const syncManualVector = () => {
+                if (!vectorInputs || vectorInputs.length < 3) return;
+                const next = normalizePointValue({
+                    x: vectorInputs[0]?.value,
+                    y: vectorInputs[1]?.value,
+                    z: vectorInputs[2]?.value
+                });
+                updatePresetVariableValue(values, entry, next);
+            };
+            const applyReferenceValue = (refName) => {
+                const resolved = resolveCatalogValue(entry.type, refName);
+                if (resolved === null || resolved === undefined) return false;
+                updatePresetVariableValue(values, entry, resolved);
+                return true;
+            };
 
             if (entry.type === "vector") {
                 const current = normalizePointValue(values?.vector?.[name]);
                 const coords = document.createElement("div");
                 coords.className = "preset-variable-vec-inputs";
-                const inputs = ["x", "y", "z"].map((axis) => {
+                vectorInputs = ["x", "y", "z"].map((axis) => {
                     const input = document.createElement("input");
                     input.className = "input";
                     input.type = "text";
@@ -4205,17 +4359,18 @@ function initPointsBuilderMain() {
                     input.placeholder = axis;
                     input.value = String(current[axis]);
                     input.addEventListener("input", () => {
-                        const next = normalizePointValue({
-                            x: inputs[0]?.value,
-                            y: inputs[1]?.value,
-                            z: inputs[2]?.value
-                        });
-                        updatePresetVariableValue(values, entry, next);
+                        if (allowVariableRefs && currentMode === "reference") {
+                            setMode(entry.type, name, "manual");
+                            if (modeSelect) modeSelect.value = "manual";
+                            if (refRow) refRow.hidden = true;
+                            manualRow.hidden = false;
+                        }
+                        syncManualVector();
                     });
                     coords.appendChild(input);
                     return input;
                 });
-                const pickBtn = document.createElement("button");
+                pickBtn = document.createElement("button");
                 pickBtn.type = "button";
                 pickBtn.className = "btn icon preset-variable-pick";
                 pickBtn.title = `拾取 ${name}`;
@@ -4223,26 +4378,148 @@ function initPointsBuilderMain() {
                 pickBtn.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 21s6-5.6 6-11a6 6 0 0 0-12 0c0 5.4 6 11 6 11Z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/><circle cx="12" cy="10" r="2.2" fill="none" stroke="currentColor" stroke-width="1.8"/></svg>';
                 pickBtn.addEventListener("click", () => {
                     if (typeof options.onPickVector === "function") {
+                        if (allowVariableRefs) {
+                            setMode(entry.type, name, "manual");
+                            if (modeSelect) modeSelect.value = "manual";
+                            if (refRow) refRow.hidden = true;
+                            manualRow.hidden = false;
+                        }
                         options.onPickVector(entry, (point) => {
                             const p = normalizePointValue(point);
                             updatePresetVariableValue(values, entry, p);
-                            inputs[0].value = String(p.x);
-                            inputs[1].value = String(p.y);
-                            inputs[2].value = String(p.z);
+                            if (vectorInputs && vectorInputs.length >= 3) {
+                                vectorInputs[0].value = String(p.x);
+                                vectorInputs[1].value = String(p.y);
+                                vectorInputs[2].value = String(p.z);
+                            }
                         });
                     }
                 });
-                row.append(coords, pickBtn);
             } else {
-                const input = document.createElement("input");
-                input.className = "input";
-                input.type = "text";
-                input.inputMode = "decimal";
-                input.step = "0.01";
-                input.value = String(Number.isFinite(Number(values?.scalar?.[name])) ? Number(values.scalar[name]) : 0);
-                input.addEventListener("input", () => updatePresetVariableValue(values, entry, input.value));
-                row.appendChild(input);
+                const current = normalizePresetScalarVariableValue(values?.scalar?.[name]);
+                const onScalarInput = (nextValue) => {
+                    if (allowVariableRefs && currentMode === "reference") {
+                        setMode(entry.type, name, "manual");
+                        if (modeSelect) modeSelect.value = "manual";
+                        if (refRow) refRow.hidden = true;
+                        manualRow.hidden = false;
+                    }
+                    updatePresetVariableValue(values, entry, nextValue);
+                };
+                if (typeof inputNum === "function") {
+                    scalarInput = inputNum(current, onScalarInput, {
+                        modalNavigation: !!options.modalNavigation,
+                        onNavigate: (key, input) => handlePresetVariableInputNavigation(key, input, {
+                            host,
+                            onLastEnter: options.onLastEnter
+                        })
+                    });
+                } else {
+                    scalarInput = document.createElement("input");
+                    scalarInput.className = "input";
+                    scalarInput.type = "text";
+                    scalarInput.inputMode = "decimal";
+                    scalarInput.step = "0.01";
+                    scalarInput.value = String(current);
+                    scalarInput.addEventListener("input", () => onScalarInput(scalarInput.value));
+                }
             }
+
+            if (allowVariableRefs) {
+                const modeRow = document.createElement("div");
+                modeRow.className = "preset-variable-source-row";
+                const modeLabel = document.createElement("span");
+                modeLabel.className = "preset-variable-meta";
+                modeLabel.textContent = "输入方式";
+                modeSelect = document.createElement("select");
+                modeSelect.className = "input preset-variable-source-select";
+                const manualOpt = document.createElement("option");
+                manualOpt.value = "manual";
+                manualOpt.textContent = "手动值";
+                const refOpt = document.createElement("option");
+                refOpt.value = "reference";
+                refOpt.textContent = "引用变量";
+                if (!catalogEntries.length) refOpt.disabled = true;
+                modeSelect.append(manualOpt, refOpt);
+                modeSelect.value = currentMode === "reference" && catalogEntries.length ? "reference" : "manual";
+                modeSelect.addEventListener("change", () => {
+                    const nextMode = modeSelect.value === "reference" && catalogEntries.length ? "reference" : "manual";
+                    setMode(entry.type, name, nextMode);
+                    manualRow.hidden = nextMode === "reference";
+                    refRow.hidden = nextMode !== "reference";
+                    if (nextMode === "reference") {
+                        if (!refSelect.value && catalogEntries.length) refSelect.value = normalizeContextIdentifier(catalogEntries[0]?.name || "");
+                        setRefName(entry.type, name, refSelect.value);
+                        if (!applyReferenceValue(refSelect.value) && catalogEntries.length) {
+                            refSelect.value = normalizeContextIdentifier(catalogEntries[0]?.name || "");
+                            setRefName(entry.type, name, refSelect.value);
+                            applyReferenceValue(refSelect.value);
+                        }
+                    } else {
+                        setRefName(entry.type, name, "");
+                        if (entry.type === "vector") syncManualVector();
+                        else syncManualScalar();
+                    }
+                });
+                modeRow.append(modeLabel, modeSelect);
+                valueStack.appendChild(modeRow);
+
+                refRow = document.createElement("div");
+                refRow.className = "preset-variable-ref-row";
+                const refLabel = document.createElement("span");
+                refLabel.className = "preset-variable-meta";
+                refLabel.textContent = "引用变量";
+                refSelect = document.createElement("select");
+                refSelect.className = "input preset-variable-ref-select";
+                const emptyOpt = document.createElement("option");
+                emptyOpt.value = "";
+                emptyOpt.textContent = catalogEntries.length ? "选择变量" : "暂无可引用变量";
+                refSelect.appendChild(emptyOpt);
+                for (const catalogEntry of catalogEntries) {
+                    const opt = document.createElement("option");
+                    opt.value = normalizeContextIdentifier(catalogEntry?.name || "");
+                    const sourceTag = catalogEntry?.source === "external" ? "（外部）" : "（本地）";
+                    opt.textContent = `${catalogEntry?.label || catalogEntry?.name || ""}${sourceTag}`;
+                    refSelect.appendChild(opt);
+                }
+                refSelect.value = currentRefName && catalogEntries.some((it) => normalizeContextIdentifier(it?.name || "") === currentRefName)
+                    ? currentRefName
+                    : "";
+                refSelect.disabled = !catalogEntries.length;
+                refSelect.addEventListener("change", () => {
+                    const nextRef = normalizeContextIdentifier(refSelect.value || "");
+                    setRefName(entry.type, name, nextRef);
+                    if (!applyReferenceValue(nextRef) && catalogEntries.length) {
+                        refSelect.value = normalizeContextIdentifier(catalogEntries[0]?.name || "");
+                        setRefName(entry.type, name, refSelect.value);
+                        applyReferenceValue(refSelect.value);
+                    }
+                });
+                refRow.append(refLabel, refSelect);
+                refRow.hidden = modeSelect.value !== "reference";
+                valueStack.appendChild(refRow);
+            }
+
+            if (entry.type === "vector") {
+                const manualRowWrap = document.createElement("div");
+                manualRowWrap.className = "preset-variable-manual-row vector";
+                const coords = document.createElement("div");
+                coords.className = "preset-variable-vec-inputs";
+                coords.appendChild(vectorInputs[0].parentElement || vectorInputs[0]);
+                coords.appendChild(vectorInputs[1].parentElement || vectorInputs[1]);
+                coords.appendChild(vectorInputs[2].parentElement || vectorInputs[2]);
+                manualRowWrap.append(coords, pickBtn);
+                manualRow.hidden = allowVariableRefs && currentMode === "reference";
+                manualRow.appendChild(manualRowWrap);
+            } else {
+                const manualRowWrap = document.createElement("div");
+                manualRowWrap.className = "preset-variable-manual-row scalar";
+                manualRowWrap.appendChild(scalarInput);
+                manualRow.hidden = allowVariableRefs && currentMode === "reference";
+                manualRow.appendChild(manualRowWrap);
+            }
+
+            valueStack.appendChild(manualRow);
             list.appendChild(row);
         }
     }
@@ -4268,7 +4545,12 @@ function initPointsBuilderMain() {
                     requestAnimationFrame(() => {
                         renderPresetVariableRows(host, presetSaveVariableInfo, presetSaveVariableInfo.inputs, {
                             title: "保存时使用的变量默认值",
+                            modalNavigation: true,
+                            onLastEnter: () => btnPresetSaveCurrent?.click(),
                             onPickVector: beginVectorPick
+                        });
+                        bindPresetVariableInputNavigation(host, {
+                            onLastEnter: () => btnPresetSaveCurrent?.click()
                         });
                     });
                     showToast(`已拾取变量：${entry.name}`, "success");
@@ -4277,7 +4559,12 @@ function initPointsBuilderMain() {
         };
         renderPresetVariableRows(host, presetSaveVariableInfo, presetSaveVariableInfo.inputs, {
             title: "保存时使用的变量默认值",
+            modalNavigation: true,
+            onLastEnter: () => btnPresetSaveCurrent?.click(),
             onPickVector: beginVectorPick
+        });
+        bindPresetVariableInputNavigation(host, {
+            onLastEnter: () => btnPresetSaveCurrent?.click()
         });
     }
 
@@ -4290,11 +4577,33 @@ function initPointsBuilderMain() {
         return Number.isFinite(n) ? String(Number(n.toFixed(10))) : "0";
     }
 
-    function replaceScalarIdentifier(expr, name, value) {
+    function isSimplePresetScalarExpression(value) {
+        const text = String(value || "").trim();
+        if (!text) return false;
+        if (isNumericLiteral(text) || isIdentifier(text)) return true;
+        return /^[A-Za-z_$][A-Za-z0-9_$]*(?:\s*\.\s*[A-Za-z_$][A-Za-z0-9_$]*)+$/.test(text);
+    }
+
+    function formatPresetScalarReplacement(value) {
+        const normalized = normalizePresetScalarVariableValue(value);
+        if (typeof normalized === "number") return formatPresetVariableNumber(normalized);
+        const text = stripNumericSuffix(transpileKotlinThisQualifierToJs(String(normalized || "").trim()));
+        if (!text) return "0";
+        const n = Number(text);
+        if (Number.isFinite(n) && isNumericLiteral(text)) return formatPresetVariableNumber(n);
+        if (isSimplePresetScalarExpression(text)) return text.replace(/\s+/g, "");
+        return `(${text})`;
+    }
+
+    function replaceScalarIdentifierWithText(expr, name, replacement) {
         const safe = escapeRegExp(name);
         if (!safe) return expr;
         const re = new RegExp(`(^|[^A-Za-z0-9_$])(${safe})(?![A-Za-z0-9_$.])`, "g");
-        return String(expr || "").replace(re, `$1${formatPresetVariableNumber(value)}`);
+        return String(expr || "").replace(re, (_match, prefix) => `${prefix}${replacement}`);
+    }
+
+    function replaceScalarIdentifier(expr, name, value) {
+        return replaceScalarIdentifierWithText(expr, name, formatPresetScalarReplacement(value));
     }
 
     function replaceVectorComponent(expr, name, value) {
@@ -4336,7 +4645,15 @@ function initPointsBuilderMain() {
             const before = stripNumericSuffix(transpileKotlinThisQualifierToJs(value));
             let next = before;
             for (const [name, vec] of vectorEntries) next = replaceVectorComponent(next, name, vec);
-            for (const [name, scalar] of scalarEntries) next = replaceScalarIdentifier(next, name, scalar);
+            const placeholders = [];
+            scalarEntries.forEach(([name, scalar], index) => {
+                const token = `__PB_PRESET_SCALAR_${index}__`;
+                placeholders.push([token, formatPresetScalarReplacement(scalar)]);
+                next = replaceScalarIdentifierWithText(next, name, token);
+            });
+            for (const [token, replacement] of placeholders) {
+                next = next.replaceAll(token, replacement);
+            }
             return next !== before ? foldPresetNumericExpression(next) : next;
         }
         if (Array.isArray(value)) {
@@ -4357,7 +4674,7 @@ function initPointsBuilderMain() {
         if (!name || !Object.prototype.hasOwnProperty.call(variableValues.scalar || {}, name)) return false;
         const raw = stripNumericSuffix(transpileKotlinThisQualifierToJs(String(value ?? "").trim()));
         if (raw && raw !== name) return false;
-        params[key] = formatPresetVariableNumber(variableValues.scalar[name]);
+        params[key] = formatPresetScalarReplacement(variableValues.scalar[name]);
         return true;
     }
 
@@ -4507,6 +4824,8 @@ function initPointsBuilderMain() {
             const rerender = () => {
                 renderPresetVariableRows(host, variableInfo, values, {
                     title: "输入本次应用的变量值",
+                    modalNavigation: true,
+                    onLastEnter: () => modal.querySelector("#btnApplyPresetVariables")?.click(),
                     onPickVector: (entry, setValue) => {
                         mask.classList.add("hidden");
                         modal.classList.add("hidden");
@@ -4522,6 +4841,9 @@ function initPointsBuilderMain() {
                         });
                     }
                 });
+                bindPresetVariableInputNavigation(host, {
+                    onLastEnter: () => modal.querySelector("#btnApplyPresetVariables")?.click()
+                });
             };
             modal.querySelector("#btnClosePresetVariables").onclick = () => close(null);
             modal.querySelector("#btnCancelPresetVariables").onclick = () => close(null);
@@ -4530,6 +4852,7 @@ function initPointsBuilderMain() {
             rerender();
             mask.classList.remove("hidden");
             modal.classList.remove("hidden");
+            focusFirstPresetVariableInput(host);
         });
     }
 
@@ -13075,6 +13398,9 @@ function collectSyntheticVecTargetsForNode(node) {
         }
         updateBezierGuidePreview();
         rebuildPreviewAndKotlin();
+        if (presetRingTool && !presetRingTool.classList.contains("hidden") && typeof renderPresetRingPreview === "function") {
+            renderPresetRingPreview();
+        }
     }
 
     const pickerModule = createPickerModule({

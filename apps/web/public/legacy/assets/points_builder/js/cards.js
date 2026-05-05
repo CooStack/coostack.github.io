@@ -537,13 +537,15 @@ export function createCardInputs(ctx) {
         closeExprSuggestion();
     }
 
-    function inputNum(value, onInput) {
+    function inputNum(value, onInput, options = {}) {
         const i = document.createElement("input");
         i.className = "input";
         const exprMode = true;
         const suggestMode = exprModeEnabled();
+        const modalNavigation = !!options.modalNavigation;
+        const onNavigate = typeof options.onNavigate === "function" ? options.onNavigate : null;
         i.type = "text";
-        i.inputMode = "decimal";
+        i.inputMode = (suggestMode || modalNavigation) ? "text" : "decimal";
         const step = (typeof getParamStep === "function") ? getParamStep() : null;
         const initialValue = (value === null || value === undefined || (typeof value === "string" && value.trim() === ""))
             ? 0
@@ -552,6 +554,7 @@ export function createCardInputs(ctx) {
         i.placeholder = i.placeholder || "支持变量/表达式";
         i.autocomplete = "off";
         i.spellcheck = false;
+        if (modalNavigation) i.dataset.pbModalInputNavSelf = "1";
         armHistoryOnFocus && armHistoryOnFocus(i, "edit");
         i.addEventListener("keydown", (e) => {
             if (suggestMode) {
@@ -563,26 +566,38 @@ export function createCardInputs(ctx) {
                     openExprSuggestion(i, true);
                     return;
                 }
-                if (suggestOpen && e.key === "ArrowDown") {
-                    e.preventDefault();
-                    moveExprSuggestion(1);
-                    return;
-                }
-                if (suggestOpen && e.key === "ArrowUp") {
-                    e.preventDefault();
-                    moveExprSuggestion(-1);
-                    return;
-                }
-                if (suggestOpen && (e.key === "Enter" || e.key === "Tab")) {
-                    e.preventDefault();
-                    acceptExprSuggestion(exprSuggestActive);
-                    return;
-                }
-                if (suggestOpen && e.key === "Escape") {
+                if (!modalNavigation) {
+                    if (suggestOpen && e.key === "ArrowDown") {
+                        e.preventDefault();
+                        moveExprSuggestion(1);
+                        return;
+                    }
+                    if (suggestOpen && e.key === "ArrowUp") {
+                        e.preventDefault();
+                        moveExprSuggestion(-1);
+                        return;
+                    }
+                    if (suggestOpen && (e.key === "Enter" || e.key === "Tab")) {
+                        e.preventDefault();
+                        acceptExprSuggestion(exprSuggestActive);
+                        return;
+                    }
+                    if (suggestOpen && e.key === "Escape") {
+                        e.preventDefault();
+                        closeExprSuggestion();
+                        return;
+                    }
+                } else if (suggestOpen && e.key === "Escape") {
                     e.preventDefault();
                     closeExprSuggestion();
                     return;
                 }
+            }
+            if (modalNavigation && (e.key === "ArrowUp" || e.key === "ArrowDown" || e.key === "Enter")) {
+                e.preventDefault();
+                if (exprSuggestInput === i) closeExprSuggestion();
+                if (onNavigate) onNavigate(e.key, i, e);
+                return;
             }
             if (e.key !== "ArrowUp" && e.key !== "ArrowDown") return;
             const liveStep = (typeof getParamStep === "function") ? getParamStep() : null;
