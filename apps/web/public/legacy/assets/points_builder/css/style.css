@@ -1762,6 +1762,94 @@ body.resizing-panels .panel.right {
     grid-template-columns: 34px minmax(0, 1fr);
 }
 
+.preset-ring-shared-vars {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 8px;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: rgba(0, 0, 0, .12);
+}
+
+.preset-ring-shared-vars.hidden {
+    display: none;
+}
+
+.preset-ring-shared-title {
+    color: var(--text);
+    font-size: 12px;
+    font-weight: 750;
+}
+
+.preset-ring-shared-card {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.preset-ring-shared-head,
+.preset-ring-shared-affected-item {
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    color: var(--muted);
+    font-size: 11px;
+}
+
+.preset-ring-shared-name {
+    min-width: 0;
+    color: var(--text);
+    font-weight: 700;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.preset-ring-shared-meta {
+    margin-left: auto;
+    color: var(--muted);
+    font-size: 10px;
+}
+
+.preset-ring-shared-value {
+    min-width: 0;
+    display: grid;
+    grid-template-columns: 48px minmax(0, 1fr);
+    gap: 6px;
+    align-items: center;
+    padding-left: 18px;
+}
+
+.preset-ring-shared-value.vector {
+    grid-template-columns: 48px repeat(3, minmax(0, 1fr));
+}
+
+.preset-ring-shared-value-label {
+    color: var(--muted);
+    font-size: 10px;
+}
+
+.preset-ring-shared-value .input {
+    min-width: 0;
+    width: 100%;
+}
+
+.preset-ring-shared-affected {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 4px;
+    padding-left: 18px;
+}
+
+.preset-ring-shared-affected-item span {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
 .preset-ring-actions {
     justify-content: flex-end;
 }

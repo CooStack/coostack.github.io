@@ -8,7 +8,10 @@ export function createCardInputs(ctx) {
         enableExprNumbers,
         getExprSuggestions,
         getVec3VariableOptions,
-        parseExprNumber
+        parseExprNumber,
+        compareSuggestionNames,
+        sortSuggestionNames,
+        touchSuggestionUsage
     } = ctx || {};
     const startPointPickForVecTarget = (...args) => {
         const fn = ctx && ctx.startPointPickForVecTarget;
@@ -501,6 +504,14 @@ export function createCardInputs(ctx) {
         if (token) {
             const lower = token.toLowerCase();
             list = source.filter((it) => String(it || "").toLowerCase().includes(lower));
+            list = list.slice().sort((a, b) => {
+                const cmp = typeof compareSuggestionNames === "function"
+                    ? compareSuggestionNames(a, b, token)
+                    : String(a || "").localeCompare(String(b || ""));
+                return cmp;
+            });
+        } else if (typeof sortSuggestionNames === "function") {
+            list = sortSuggestionNames(list);
         }
         list = list.slice(0, 16);
         if (!list.length) {
@@ -534,6 +545,7 @@ export function createCardInputs(ctx) {
         exprSuggestInput.value = next;
         exprSuggestInput.setSelectionRange(caret, caret);
         exprSuggestInput.dispatchEvent(new Event("input", { bubbles: true }));
+        if (typeof touchSuggestionUsage === "function") touchSuggestionUsage(item);
         closeExprSuggestion();
     }
 

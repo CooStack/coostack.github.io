@@ -265,6 +265,12 @@ function initPointsBuilderMain() {
     let presetSaveVariableInfo = null;
     let presetSaveVariablePanelEl = null;
     let presetSaveOverwriteTarget = null;
+    let presetRingSharedVariablePanelEl = null;
+    const presetRingSharedVariableState = {
+        enabled: {},
+        values: {},
+        excluded: {}
+    };
     const DEFAULT_PRESET_GROUP = "默认分组";
     const LEGACY_UNGROUPED_PRESET_GROUP = "未分组";
     let draggingPresetId = "";
@@ -1190,6 +1196,101 @@ function initPointsBuilderMain() {
         return isIdentifier(text) ? text : "";
     }
 
+    const VARIABLE_SUGGESTION_USAGE_KEY = "pb_variable_suggestion_usage_v1";
+    let variableSuggestionUsageCache = null;
+
+    function getSuggestionUsageKey(raw) {
+        const text = String(raw || "").trim();
+        if (!text) return "";
+        const base = text.split(".")[0].trim();
+        const clean = normalizeContextIdentifier(base);
+        return clean || base.toLowerCase();
+    }
+
+    function loadVariableSuggestionUsage() {
+        if (variableSuggestionUsageCache) return variableSuggestionUsageCache;
+        try {
+            if (!globalThis.localStorage) throw new Error("localStorage unavailable");
+            const raw = localStorage.getItem(VARIABLE_SUGGESTION_USAGE_KEY);
+            const parsed = raw ? JSON.parse(raw) : {};
+            variableSuggestionUsageCache = parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+        } catch {
+            variableSuggestionUsageCache = {};
+        }
+        return variableSuggestionUsageCache;
+    }
+
+    function persistVariableSuggestionUsage() {
+        if (!variableSuggestionUsageCache) return;
+        try {
+            if (!globalThis.localStorage) return;
+            localStorage.setItem(VARIABLE_SUGGESTION_USAGE_KEY, JSON.stringify(variableSuggestionUsageCache));
+        } catch {
+            // ignore storage failures
+        }
+    }
+
+    function getSuggestionUsageRecord(raw) {
+        const key = getSuggestionUsageKey(raw);
+        if (!key) return { count: 0, lastUsed: 0 };
+        const store = loadVariableSuggestionUsage();
+        const item = store[key];
+        if (!item || typeof item !== "object") return { count: 0, lastUsed: 0 };
+        return {
+            count: Number(item.count) || 0,
+            lastUsed: Number(item.lastUsed) || 0
+        };
+    }
+
+    function touchSuggestionUsage(raw) {
+        const key = getSuggestionUsageKey(raw);
+        if (!key) return;
+        const store = loadVariableSuggestionUsage();
+        const prev = store[key] && typeof store[key] === "object" ? store[key] : { count: 0, lastUsed: 0 };
+        store[key] = {
+            count: (Number(prev.count) || 0) + 1,
+            lastUsed: Date.now()
+        };
+        variableSuggestionUsageCache = store;
+        persistVariableSuggestionUsage();
+    }
+
+    function getSuggestionMatchRank(raw, token = "") {
+        const name = String(raw || "").trim();
+        const needle = String(token || "").trim().toLowerCase();
+        if (!needle) return 2;
+        const lower = name.toLowerCase();
+        if (!lower) return 4;
+        if (lower === needle) return 0;
+        if (lower.startsWith(needle)) return 1;
+        const idx = lower.indexOf(needle);
+        if (idx < 0) return 4;
+        if (idx === 0) return 1;
+        const prev = name[idx - 1];
+        if (prev === "_" || prev === "-" || prev === "." || prev === "/" || prev === " " || /[A-Z]/.test(name[idx])) return 2;
+        return 3;
+    }
+
+    function compareSuggestionNames(a, b, token = "") {
+        const textA = String(a || "").trim();
+        const textB = String(b || "").trim();
+        const rankA = getSuggestionMatchRank(textA, token);
+        const rankB = getSuggestionMatchRank(textB, token);
+        if (rankA !== rankB) return rankA - rankB;
+        const usageA = getSuggestionUsageRecord(textA);
+        const usageB = getSuggestionUsageRecord(textB);
+        if (usageA.count !== usageB.count) return usageB.count - usageA.count;
+        if (usageA.lastUsed !== usageB.lastUsed) return usageB.lastUsed - usageA.lastUsed;
+        const lowerA = textA.toLowerCase();
+        const lowerB = textB.toLowerCase();
+        if (lowerA.length !== lowerB.length) return lowerA.length - lowerB.length;
+        return lowerA.localeCompare(lowerB);
+    }
+
+    function sortSuggestionNames(items, token = "") {
+        return Array.from(items || []).sort((a, b) => compareSuggestionNames(a, b, token));
+    }
+
     function isFiniteVectorLike(value) {
         return !!value
             && Number.isFinite(Number(value.x))
@@ -1453,12 +1554,12 @@ function initPointsBuilderMain() {
         for (const name of Object.keys(vars.vector || {})) {
             out.push(`${name}.x`, `${name}.y`, `${name}.z`);
         }
-        return out.sort((a, b) => a.localeCompare(b));
+        return out;
     }
 
     function getLocalVec3VariableOptions() {
         const vars = getLocalVariableState();
-        return Object.keys(vars.vector || {}).sort((a, b) => a.localeCompare(b)).map((name) => ({
+        return Object.keys(vars.vector || {}).map((name) => ({
             name,
             ref: name,
             type: "Vec3",
@@ -1496,7 +1597,7 @@ function initPointsBuilderMain() {
             for (const value of getCompositionNumericSuggestions()) add(value);
         }
         for (const value of getLocalNumericSuggestions()) add(value);
-        return out.sort((a, b) => a.localeCompare(b));
+        return sortSuggestionNames(out);
     }
 
     function getEffectiveVec3VariableOptions() {
@@ -1510,7 +1611,7 @@ function initPointsBuilderMain() {
             for (const option of getCompositionVec3VariableOptions()) add(option);
         }
         for (const option of getLocalVec3VariableOptions()) add(option);
-        return Array.from(byRef.values()).sort((a, b) => String(a.ref || a.name || "").localeCompare(String(b.ref || b.name || "")));
+        return Array.from(byRef.values()).sort((a, b) => compareSuggestionNames(String(a.ref || a.name || ""), String(b.ref || b.name || "")));
     }
 
     function num(v) {
@@ -3481,13 +3582,20 @@ function initPointsBuilderMain() {
             select.addEventListener("change", () => {
                 presetRingSlotPresetIds[i] = select.value || "";
                 updatePresetRingStatus();
+                renderPresetRingSharedVariables();
                 renderPresetRingPreview();
             });
             row.append(label, select);
             presetRingSlots.appendChild(row);
         }
         updatePresetRingStatus();
+        renderPresetRingSharedVariables();
         renderPresetRingPreview();
+    }
+
+    function syncPresetRingSlots() {
+        renderPresetRingSlots();
+        renderPresetRingSharedVariables();
     }
 
     function getPresetRingSelectedIds() {
@@ -3497,11 +3605,253 @@ function initPointsBuilderMain() {
         return presetRingSlotPresetIds.slice();
     }
 
+    function getRingVariableKey(type, name) {
+        const cleanType = type === "vector" ? "vector" : "scalar";
+        const cleanName = normalizeContextIdentifier(name);
+        return cleanName ? `${cleanType}:${cleanName}` : "";
+    }
+
+    function ensurePresetRingSharedVariablePanel() {
+        if (presetRingSharedVariablePanelEl && presetRingSharedVariablePanelEl.isConnected) return presetRingSharedVariablePanelEl;
+        if (!presetRingTool) return null;
+        const el = document.createElement("div");
+        el.id = "presetRingSharedVariables";
+        el.className = "preset-ring-shared-vars hidden";
+        if (presetRingSlots && presetRingSlots.parentNode) presetRingSlots.insertAdjacentElement("afterend", el);
+        else presetRingTool.appendChild(el);
+        presetRingSharedVariablePanelEl = el;
+        return el;
+    }
+
+    function getPresetRingVariableGroups() {
+        const count = getPresetRingCount();
+        const presetIds = getPresetRingSelectedIds();
+        const presetsById = new Map(getPresetList().map((preset) => [preset.id, preset]));
+        const groups = new Map();
+        for (let i = 0; i < count; i++) {
+            const preset = presetsById.get(presetIds[i]);
+            const normalized = normalizePresetList([preset])[0];
+            if (!normalized) continue;
+            const variableInfo = getPresetEffectiveVariableInfo(normalized);
+            const entries = getPresetVariableEntries(variableInfo);
+            const defaults = getPresetVariableDefaultValues(variableInfo);
+            for (const entry of entries) {
+                const name = normalizeContextIdentifier(entry?.name);
+                if (!name) continue;
+                const type = entry?.type === "vector" ? "vector" : "scalar";
+                const key = getRingVariableKey(type, name);
+                if (!key) continue;
+                if (!groups.has(key)) {
+                    groups.set(key, {
+                        key,
+                        type,
+                        name,
+                        entries: [],
+                        defaultValue: type === "vector"
+                            ? normalizePointValue(defaults.vector?.[name])
+                            : normalizePresetScalarVariableValue(defaults.scalar?.[name])
+                    });
+                }
+                groups.get(key).entries.push({
+                    index: i,
+                    presetId: normalized.id,
+                    presetName: normalized.name || "未命名预设",
+                    group: getPresetGroupLabel(normalized.group),
+                    entry
+                });
+            }
+        }
+        return Array.from(groups.values())
+            .filter((group) => group.entries.length > 1)
+            .sort((a, b) => {
+                if (a.type !== b.type) return a.type === "vector" ? -1 : 1;
+                return compareSuggestionNames(a.name, b.name);
+            });
+    }
+
+    function cleanupPresetRingSharedState(groups) {
+        const valid = new Set((groups || []).map((group) => group.key));
+        for (const key of Object.keys(presetRingSharedVariableState.enabled)) {
+            if (!valid.has(key)) delete presetRingSharedVariableState.enabled[key];
+        }
+        for (const key of Object.keys(presetRingSharedVariableState.values)) {
+            if (!valid.has(key)) delete presetRingSharedVariableState.values[key];
+        }
+        for (const key of Object.keys(presetRingSharedVariableState.excluded)) {
+            if (!valid.has(key)) {
+                delete presetRingSharedVariableState.excluded[key];
+                continue;
+            }
+            const group = groups.find((it) => it.key === key);
+            const validSlots = new Set((group?.entries || []).map((entry) => String(entry.index)));
+            for (const slot of Object.keys(presetRingSharedVariableState.excluded[key] || {})) {
+                if (!validSlots.has(slot)) delete presetRingSharedVariableState.excluded[key][slot];
+            }
+        }
+    }
+
+    function isPresetRingSharedVariableEnabled(key) {
+        return presetRingSharedVariableState.enabled[key] === true;
+    }
+
+    function isPresetRingSharedVariableExcluded(key, index) {
+        return !!presetRingSharedVariableState.excluded[key]?.[String(index)];
+    }
+
+    function getPresetRingSharedVariableValue(group) {
+        const key = group?.key || "";
+        if (!key) return group?.defaultValue;
+        if (!Object.prototype.hasOwnProperty.call(presetRingSharedVariableState.values, key)) {
+            presetRingSharedVariableState.values[key] = group.type === "vector"
+                ? normalizePointValue(group.defaultValue)
+                : normalizePresetScalarVariableValue(group.defaultValue);
+        }
+        return presetRingSharedVariableState.values[key];
+    }
+
+    function setPresetRingSharedVariableInputValue(group, value) {
+        if (!group?.key) return;
+        presetRingSharedVariableState.values[group.key] = group.type === "vector"
+            ? normalizePointValue(value)
+            : normalizePresetScalarVariableValue(value);
+    }
+
+    function setPresetRingSharedVariableValue(values, group, value) {
+        if (!values || !group) return;
+        const name = normalizeContextIdentifier(group.name);
+        if (!name) return;
+        if (group.type === "vector") {
+            if (!values.vector) values.vector = {};
+            values.vector[name] = normalizePointValue(value);
+        } else {
+            if (!values.scalar) values.scalar = {};
+            values.scalar[name] = normalizePresetScalarVariableValue(value);
+        }
+    }
+
+    function makePresetVariableInfoWithoutShared(info, sharedKeys) {
+        const normalized = normalizePresetVariableInfoForStorage(info);
+        if (!normalized || !(sharedKeys instanceof Set) || !sharedKeys.size) return normalized;
+        const refs = { scalar: [], vector: [] };
+        const inputs = { scalar: {}, vector: {} };
+        const entries = [];
+        for (const entry of getPresetVariableEntries(normalized)) {
+            const name = normalizeContextIdentifier(entry?.name);
+            if (!name) continue;
+            const type = entry?.type === "vector" ? "vector" : "scalar";
+            const key = getRingVariableKey(type, name);
+            if (sharedKeys.has(key)) continue;
+            entries.push(entry);
+            refs[type].push(name);
+            if (type === "vector") inputs.vector[name] = normalizePointValue(normalized.inputs?.vector?.[name]);
+            else inputs.scalar[name] = normalizePresetScalarVariableValue(normalized.inputs?.scalar?.[name]);
+        }
+        return normalizePresetVariableInfoForStorage({ refs, inputs, entries });
+    }
+
+    function renderPresetRingSharedVariables() {
+        const panel = ensurePresetRingSharedVariablePanel();
+        if (!panel) return;
+        const groups = getPresetRingVariableGroups();
+        cleanupPresetRingSharedState(groups);
+        panel.innerHTML = "";
+        panel.classList.toggle("hidden", !groups.length);
+        if (!groups.length) return;
+        const title = document.createElement("div");
+        title.className = "preset-ring-shared-title";
+        title.textContent = "同名变量统一应用";
+        panel.appendChild(title);
+        for (const group of groups) {
+            const card = document.createElement("div");
+            card.className = "preset-ring-shared-card";
+            const head = document.createElement("label");
+            head.className = "preset-ring-shared-head";
+            const checkbox = document.createElement("input");
+            checkbox.type = "checkbox";
+            checkbox.checked = isPresetRingSharedVariableEnabled(group.key);
+            const name = document.createElement("span");
+            name.className = "preset-ring-shared-name";
+            name.textContent = `${group.name} / ${group.type === "vector" ? "Vec3" : "数值"}`;
+            const meta = document.createElement("span");
+            meta.className = "preset-ring-shared-meta";
+            meta.textContent = `${group.entries.length} 个槽位`;
+            head.append(checkbox, name, meta);
+            checkbox.addEventListener("change", () => {
+                presetRingSharedVariableState.enabled[group.key] = checkbox.checked;
+                renderPresetRingSharedVariables();
+            });
+            card.appendChild(head);
+
+            const valueRow = document.createElement("div");
+            valueRow.className = `preset-ring-shared-value ${group.type === "vector" ? "vector" : "scalar"}`;
+            const valueLabel = document.createElement("span");
+            valueLabel.className = "preset-ring-shared-value-label";
+            valueLabel.textContent = "统一值";
+            valueRow.appendChild(valueLabel);
+            if (group.type === "vector") {
+                const current = normalizePointValue(getPresetRingSharedVariableValue(group));
+                const inputs = ["x", "y", "z"].map((axis) => {
+                    const input = document.createElement("input");
+                    input.className = "input";
+                    input.type = "text";
+                    input.inputMode = "decimal";
+                    input.value = String(current[axis]);
+                    input.placeholder = axis;
+                    input.disabled = !isPresetRingSharedVariableEnabled(group.key);
+                    input.addEventListener("input", () => {
+                        setPresetRingSharedVariableInputValue(group, {
+                            x: inputs[0]?.value,
+                            y: inputs[1]?.value,
+                            z: inputs[2]?.value
+                        });
+                    });
+                    valueRow.appendChild(input);
+                    return input;
+                });
+            } else {
+                const input = document.createElement("input");
+                input.className = "input";
+                input.type = "text";
+                input.inputMode = "decimal";
+                input.value = String(getPresetRingSharedVariableValue(group));
+                input.disabled = !isPresetRingSharedVariableEnabled(group.key);
+                input.addEventListener("input", () => setPresetRingSharedVariableInputValue(group, input.value));
+                valueRow.appendChild(input);
+            }
+            card.appendChild(valueRow);
+
+            const affected = document.createElement("div");
+            affected.className = "preset-ring-shared-affected";
+            for (const item of group.entries) {
+                const opt = document.createElement("label");
+                opt.className = "preset-ring-shared-affected-item";
+                const exclude = document.createElement("input");
+                exclude.type = "checkbox";
+                exclude.checked = !isPresetRingSharedVariableExcluded(group.key, item.index);
+                exclude.disabled = !isPresetRingSharedVariableEnabled(group.key);
+                const text = document.createElement("span");
+                const groupText = item.group ? `${item.group} / ` : "";
+                text.textContent = `${String(item.index + 1).padStart(2, "0")} ${groupText}${item.presetName}`;
+                opt.append(exclude, text);
+                exclude.addEventListener("change", () => {
+                    if (!presetRingSharedVariableState.excluded[group.key]) presetRingSharedVariableState.excluded[group.key] = {};
+                    if (exclude.checked) delete presetRingSharedVariableState.excluded[group.key][String(item.index)];
+                    else presetRingSharedVariableState.excluded[group.key][String(item.index)] = true;
+                    renderPresetRingSharedVariables();
+                });
+                affected.appendChild(opt);
+            }
+            card.appendChild(affected);
+            panel.appendChild(card);
+        }
+    }
+
     function openPresetRingTool() {
         if (!presetRingTool) return false;
         setRightPanelPage("presets");
         presetRingTool.classList.remove("hidden");
         renderPresetRingSlots();
+        renderPresetRingSharedVariables();
         requestAnimationFrame(() => {
             presetRingCount?.focus?.();
             presetRingTool.scrollIntoView?.({ block: "nearest" });
@@ -3623,9 +3973,46 @@ function initPointsBuilderMain() {
             params: { ox: 0, oy: 0, oz: 0 }
         });
         if (options.usedIds instanceof Set) group.id = makeFreshNodeId(options.usedIds);
+        const sharedGroups = getPresetRingVariableGroups().filter((sharedGroup) => isPresetRingSharedVariableEnabled(sharedGroup.key));
+        const sharedValuesByKey = new Map();
+        const sharedKeysBySlot = new Map();
+        for (const sharedGroup of sharedGroups) {
+            for (const item of sharedGroup.entries) {
+                if (isPresetRingSharedVariableExcluded(sharedGroup.key, item.index)) continue;
+                if (!sharedValuesByKey.has(sharedGroup.key)) sharedValuesByKey.set(sharedGroup.key, getPresetRingSharedVariableValue(sharedGroup));
+                if (!sharedKeysBySlot.has(item.index)) sharedKeysBySlot.set(item.index, new Set());
+                sharedKeysBySlot.get(item.index).add(sharedGroup.key);
+            }
+        }
         for (let i = 0; i < count; i++) {
-            const preset = presetsById.get(presetIds[i]);
-            const resolved = await resolvePresetForRingSlot(preset, i);
+            const normalized = normalizePresetList([presetsById.get(presetIds[i])])[0];
+            let resolved = normalized;
+            const variableInfo = getPresetEffectiveVariableInfo(normalized);
+            const entries = getPresetVariableEntries(variableInfo);
+            if (entries.length) {
+                const sharedKeys = sharedKeysBySlot.get(i) || new Set();
+                const values = getPresetVariableDefaultValues(variableInfo);
+                for (const sharedGroup of sharedGroups) {
+                    if (!sharedKeys.has(sharedGroup.key)) continue;
+                    setPresetRingSharedVariableValue(values, sharedGroup, sharedValuesByKey.get(sharedGroup.key));
+                }
+                const remainingInfo = makePresetVariableInfoWithoutShared(variableInfo, sharedKeys);
+                const remainingEntries = getPresetVariableEntries(remainingInfo);
+                if (remainingEntries.length) {
+                    const withRemainingVars = Object.assign({}, normalized, {
+                        name: `${normalized.name || "未命名预设"} #${i + 1}`,
+                        variables: Object.assign({}, remainingInfo, { inputs: values })
+                    });
+                    const slotValues = await openPresetVariableApplyDialog(withRemainingVars);
+                    if (!slotValues) {
+                        showToast("环形放置已取消", "info");
+                        return false;
+                    }
+                    Object.assign(values.scalar, slotValues.scalar || {});
+                    Object.assign(values.vector, slotValues.vector || {});
+                }
+                resolved = clonePresetWithVariableValues(Object.assign({}, normalized, { variables: variableInfo }), values);
+            }
             if (!resolved) {
                 showToast("环形放置已取消", "info");
                 return false;
@@ -5899,7 +6286,7 @@ function initPointsBuilderMain() {
         });
         btnOpenPresetRingTool?.addEventListener("click", openPresetRingTool);
         btnPresetRingClose?.addEventListener("click", closePresetRingTool);
-        btnPresetRingSyncSlots?.addEventListener("click", renderPresetRingSlots);
+        btnPresetRingSyncSlots?.addEventListener("click", syncPresetRingSlots);
         btnPresetRingApply?.addEventListener("click", () => {
             applyPresetRingTool().catch((e) => {
                 console.error("applyPresetRingTool failed:", e);
@@ -6180,7 +6567,10 @@ function initPointsBuilderMain() {
         getExprSuggestions: () => getEffectiveNumericSuggestions(),
         getVec3VariableOptions: () => getEffectiveVec3VariableOptions(),
         parseExprNumber: (raw) => num(raw),
-        startPointPickForVecTarget
+        startPointPickForVecTarget,
+        compareSuggestionNames,
+        sortSuggestionNames,
+        touchSuggestionUsage
     });
 
     // 用户要求：左侧卡片允许“全部删除”（不再强制至少保留 axis）。
@@ -10651,6 +11041,28 @@ function normalizeActionTargetIds(ids) {
     return out;
 }
 
+function normalizeOutermostActionTargetIds(ids) {
+    const out = normalizeActionTargetIds(ids);
+    if (out.length <= 1) return out;
+    const outSet = new Set(out);
+    const pruned = [];
+    for (const id of out) {
+        const path = findNodePathById(id);
+        let coveredByAncestor = false;
+        if (Array.isArray(path) && path.length > 1) {
+            for (let i = 0; i < path.length - 1; i++) {
+                const ancId = path[i] && path[i].node ? path[i].node.id : null;
+                if (ancId && outSet.has(ancId)) {
+                    coveredByAncestor = true;
+                    break;
+                }
+            }
+        }
+        if (!coveredByAncestor) pruned.push(id);
+    }
+    return pruned;
+}
+
 function getActionTargetIds(preferredId = null) {
     const selectedSet = (typeof getCardSelectionIds === "function") ? getCardSelectionIds() : null;
     const selected = selectedSet ? Array.from(selectedSet).filter(Boolean) : [];
@@ -10677,7 +11089,7 @@ function areActionTargetsSameKind(ids) {
 }
 
 function wrapTargetIdsInGroup(ids, kind = "add_builder") {
-    const valid = normalizeActionTargetIds(ids);
+    const valid = normalizeOutermostActionTargetIds(ids);
     if (!valid.length) return false;
 
     const rows = [];
@@ -12726,33 +13138,7 @@ function collectSyntheticVecTargetsForNode(node) {
     }
 
     function normalizeOffsetTargetIds(ids) {
-        const src = Array.isArray(ids) ? ids : [];
-        const out = [];
-        const seen = new Set();
-        for (const id of src) {
-            if (!id || seen.has(id)) continue;
-            seen.add(id);
-            if (!findNodeContextById(id)) continue;
-            out.push(id);
-        }
-        if (out.length <= 1) return out;
-        const outSet = new Set(out);
-        const pruned = [];
-        for (const id of out) {
-            const path = findNodePathById(id);
-            let coveredByAncestor = false;
-            if (Array.isArray(path) && path.length > 1) {
-                for (let i = 0; i < path.length - 1; i++) {
-                    const ancId = path[i] && path[i].node ? path[i].node.id : null;
-                    if (ancId && outSet.has(ancId)) {
-                        coveredByAncestor = true;
-                        break;
-                    }
-                }
-            }
-            if (!coveredByAncestor) pruned.push(id);
-        }
-        return pruned;
+        return normalizeOutermostActionTargetIds(ids);
     }
 
     function startOffsetMode(nodeId, options = {}) {
