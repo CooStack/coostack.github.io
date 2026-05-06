@@ -1075,6 +1075,8 @@ body {
     display: flex;
     flex-direction: column;
     gap: 4px;
+    max-height: min(460px, calc(100vh - 24px));
+    overflow: auto;
 }
 
 .pb-context-menu-item {
@@ -1089,6 +1091,10 @@ body {
     cursor: pointer;
     font-size: 12px;
     transition: background .12s ease, border-color .12s ease;
+    max-width: 280px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
 .pb-context-menu-item:hover,
@@ -1641,6 +1647,10 @@ body.resizing-panels .panel.right {
     overflow: hidden;
 }
 
+#presetRingTool:not(.hidden) + .preset-library-list {
+    display: none;
+}
+
 .preset-save-panel {
     flex: 0 0 auto;
     padding: 10px 12px;
@@ -1672,7 +1682,9 @@ body.resizing-panels .panel.right {
 }
 
 .preset-ring-tool {
-    flex: 0 0 auto;
+    flex: 1 1 auto;
+    min-height: 0;
+    max-height: 100%;
     display: flex;
     flex-direction: column;
     gap: 8px;
@@ -1681,6 +1693,7 @@ body.resizing-panels .panel.right {
     border: 1px solid var(--line);
     border-radius: 8px;
     background: color-mix(in srgb, var(--panel2) 82%, transparent);
+    overflow: hidden;
 }
 
 .preset-ring-tool.hidden {
@@ -1689,6 +1702,7 @@ body.resizing-panels .panel.right {
 
 .preset-ring-head,
 .preset-ring-actions {
+    flex: 0 0 auto;
     display: flex;
     align-items: center;
     gap: 8px;
@@ -1711,6 +1725,7 @@ body.resizing-panels .panel.right {
 }
 
 .preset-ring-grid {
+    flex: 0 0 auto;
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 8px;
@@ -1735,6 +1750,7 @@ body.resizing-panels .panel.right {
 }
 
 .preset-ring-vector {
+    flex: 0 0 auto;
     display: grid;
     grid-template-columns: 44px repeat(3, minmax(0, 1fr)) minmax(68px, auto);
     gap: 6px;
@@ -1750,6 +1766,8 @@ body.resizing-panels .panel.right {
 }
 
 .preset-ring-slots {
+    flex: 0 1 210px;
+    min-height: 72px;
     max-height: 210px;
     overflow: auto;
     display: flex;
@@ -1762,7 +1780,34 @@ body.resizing-panels .panel.right {
     grid-template-columns: 34px minmax(0, 1fr);
 }
 
+.preset-ring-slot-picker {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    text-align: left;
+    cursor: pointer;
+}
+
+.preset-ring-slot-picker.empty .preset-ring-slot-picker-label,
+.preset-ring-slot-picker-arrow {
+    color: var(--muted);
+}
+
+.preset-ring-slot-picker-label {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.preset-ring-slot-picker-arrow {
+    flex: 0 0 auto;
+}
+
 .preset-ring-shared-vars {
+    flex: 1 1 auto;
+    min-height: 0;
     display: flex;
     flex-direction: column;
     gap: 8px;
@@ -1770,6 +1815,7 @@ body.resizing-panels .panel.right {
     border: 1px solid var(--line);
     border-radius: 8px;
     background: rgba(0, 0, 0, .12);
+    overflow: auto;
 }
 
 .preset-ring-shared-vars.hidden {
@@ -1852,6 +1898,8 @@ body.resizing-panels .panel.right {
 
 .preset-ring-actions {
     justify-content: flex-end;
+    padding-top: 8px;
+    border-top: 1px solid var(--line);
 }
 
 .preset-save-modal-foot {

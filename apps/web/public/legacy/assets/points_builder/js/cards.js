@@ -1362,6 +1362,8 @@ export function initCardSystem(ctx = {}) {
         info.appendChild(summary);
 
         wrap.appendChild(info);
+        wrap.dataset.builderScopeId = node && node.id ? String(node.id) : "";
+        wrap.dataset.builderScopeKind = node && node.kind ? String(node.kind) : "";
 
         return wrap;
     }
@@ -2786,6 +2788,7 @@ export function initCardSystem(ctx = {}) {
         const sync = getParamSync();
         if (sync && sync.selectedIds && sync.selectedIds.has(node.id)) card.classList.add("sync-target");
         if (node.collapsed) card.classList.add("collapsed");
+        card.dataset.ownerId = ownerNode ? String(ownerNode.id || "") : "";
 
         const head = document.createElement("div");
         head.className = "card-head";

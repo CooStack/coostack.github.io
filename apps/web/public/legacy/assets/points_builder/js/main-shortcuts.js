@@ -100,6 +100,7 @@ export function initGlobalShortcuts(ctx = {}) {
         const linePickMode = !!(typeof getLinePickMode === "function" && getLinePickMode());
         const linePickType = (typeof getLinePickType === "function" && getLinePickType()) || "line";
         const pointPickMode = !!(typeof getPointPickMode === "function" && getPointPickMode());
+        const activeVecTarget = (document.activeElement && document.activeElement.__vecTarget) || null;
 
         const isMac = /Mac|iPhone|iPad|iPod/i.test(navigator.platform);
         const mod = isMac ? e.metaKey : e.ctrlKey;
@@ -108,6 +109,17 @@ export function initGlobalShortcuts(ctx = {}) {
             const target = e.target;
             const tag = target && target.tagName ? String(target.tagName).toUpperCase() : "";
             if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || target?.isContentEditable) return;
+            const cardEl = target && target.closest ? target.closest(".card[data-id]") : null;
+            if (cardEl && typeof beginRenameNode === "function") {
+                const cardId = cardEl.dataset.id || "";
+                if (cardId) {
+                    e.preventDefault();
+                    beginRenameNode(cardId, e);
+                    return;
+                }
+            }
+            const scopeBar = target && target.closest ? target.closest(".pb-scope-crumb, .pb-scope-bar") : null;
+            if (scopeBar) return;
             const presetItem = target && target.closest ? target.closest(".preset-item[data-preset-id]") : null;
             if (presetItem && typeof beginPresetItemRenameById === "function") {
                 e.preventDefault();
@@ -216,7 +228,7 @@ export function initGlobalShortcuts(ctx = {}) {
             }
             return;
         }
-        if (isPlainKey && shouldIgnorePlainHotkeys()) return;
+        if (isPlainKey && shouldIgnorePlainHotkeys() && !(activeVecTarget && hotkeyMatchEvent(e, hotkeys.actions.pickPoint))) return;
 
         // when Add-Card modal is open, avoid triggering kind hotkeys while typing search
         if (modal && !modal.classList.contains("hidden") && document.activeElement === cardSearch && isPlainKey) {

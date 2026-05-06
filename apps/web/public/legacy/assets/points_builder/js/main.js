@@ -334,17 +334,33 @@ function initPointsBuilderMain() {
         return wrap;
     }
 
+    function removeActionSubmenusFrom(wrap, depth = 0) {
+        if (!wrap) return;
+        const submenus = Array.isArray(wrap.__pbSubmenus) ? wrap.__pbSubmenus : [];
+        for (let i = submenus.length - 1; i >= Math.max(0, depth); i--) {
+            const entry = submenus[i];
+            if (entry?.anchor) {
+                entry.anchor.classList.remove("active");
+                entry.anchor.setAttribute("aria-expanded", "false");
+            }
+            if (entry?.el) entry.el.remove();
+            submenus.pop();
+        }
+        wrap.__pbSubmenus = submenus;
+        if (depth <= 0 && wrap.__pbSubmenu) {
+            wrap.__pbSubmenu.remove();
+            wrap.__pbSubmenu = null;
+        }
+        if (depth <= 0 && wrap.__pbSubmenuAnchor) {
+            wrap.__pbSubmenuAnchor.classList.remove("active");
+            wrap.__pbSubmenuAnchor.setAttribute("aria-expanded", "false");
+            wrap.__pbSubmenuAnchor = null;
+        }
+    }
+
     function hideActionMenu() {
         if (!actionMenuEl) return;
-        if (actionMenuEl.__pbSubmenu) {
-            actionMenuEl.__pbSubmenu.remove();
-            actionMenuEl.__pbSubmenu = null;
-        }
-        if (actionMenuEl.__pbSubmenuAnchor) {
-            actionMenuEl.__pbSubmenuAnchor.classList.remove("active");
-            actionMenuEl.__pbSubmenuAnchor.setAttribute("aria-expanded", "false");
-            actionMenuEl.__pbSubmenuAnchor = null;
-        }
+        removeActionSubmenusFrom(actionMenuEl, 0);
         actionMenuEl.classList.add("hidden");
     }
 
@@ -478,46 +494,62 @@ function initPointsBuilderMain() {
         const wrap = ensureActionMenuEl();
         const host = actionMenuListEl;
         if (!wrap || !host) return false;
-        const removeSubmenu = () => {
-            if (wrap.__pbSubmenuAnchor) {
-                wrap.__pbSubmenuAnchor.classList.remove("active");
-                wrap.__pbSubmenuAnchor.setAttribute("aria-expanded", "false");
-                wrap.__pbSubmenuAnchor = null;
+        let renderSubmenu = null;
+        const renderMenuButton = (item, parent, depth) => {
+            if (!item || !item.label) return;
+            const hasChildren = Array.isArray(item.children) && item.children.length;
+            if (!hasChildren && typeof item.onSelect !== "function") return;
+            const btn = document.createElement("button");
+            btn.type = "button";
+            btn.className = `pb-context-menu-item${item.danger ? " danger" : ""}${hasChildren ? " has-children" : ""}${item.muted ? " muted" : ""}`;
+            btn.textContent = hasChildren ? `${item.label} ›` : item.label;
+            btn.title = String(item.label || "");
+            const openChildren = () => {
+                if (!hasChildren || typeof renderSubmenu !== "function") return false;
+                return renderSubmenu(item.children, btn, depth);
+            };
+            if (hasChildren) {
+                btn.setAttribute("aria-haspopup", "menu");
+                btn.setAttribute("aria-expanded", "false");
+                btn.__pbOpenChildren = openChildren;
+                btn.addEventListener("pointerenter", openChildren);
+                btn.addEventListener("mouseover", openChildren);
+                btn.addEventListener("focus", openChildren);
+                btn.addEventListener("pointerdown", (ev) => {
+                    ev.preventDefault();
+                    ev.stopPropagation();
+                    openChildren();
+                });
             }
-            if (wrap.__pbSubmenu) {
-                wrap.__pbSubmenu.remove();
-                wrap.__pbSubmenu = null;
-            }
+            btn.addEventListener("click", (ev) => {
+                ev.preventDefault();
+                ev.stopPropagation();
+                if (hasChildren) {
+                    openChildren();
+                    return;
+                }
+                hideActionMenu();
+                item.onSelect();
+            });
+            parent.appendChild(btn);
         };
-        const renderSubmenu = (submenuItems, anchorBtn) => {
-            removeSubmenu();
+        renderSubmenu = (submenuItems, anchorBtn, depth = 0) => {
+            removeActionSubmenusFrom(wrap, depth);
             const sub = document.createElement("div");
             sub.className = "pb-context-menu pb-context-submenu";
             const subHost = document.createElement("div");
             subHost.className = "pb-context-menu-list";
             sub.appendChild(subHost);
-            for (const child of submenuItems || []) {
-                if (!child || !child.label || typeof child.onSelect !== "function") continue;
-                const btn = document.createElement("button");
-                btn.type = "button";
-                btn.className = `pb-context-menu-item${child.danger ? " danger" : ""}`;
-                btn.textContent = child.label;
-                btn.addEventListener("click", (ev) => {
-                    ev.preventDefault();
-                    ev.stopPropagation();
-                    hideActionMenu();
-                    child.onSelect();
-                });
-                subHost.appendChild(btn);
-            }
+            for (const child of submenuItems || []) renderMenuButton(child, subHost, depth + 1);
             if (!subHost.children.length) return false;
             sub.addEventListener("contextmenu", (ev) => {
                 ev.preventDefault();
                 ev.stopPropagation();
             });
             document.body.appendChild(sub);
-            wrap.__pbSubmenu = sub;
-            wrap.__pbSubmenuAnchor = anchorBtn;
+            const submenus = Array.isArray(wrap.__pbSubmenus) ? wrap.__pbSubmenus : [];
+            submenus[depth] = { el: sub, anchor: anchorBtn };
+            wrap.__pbSubmenus = submenus;
             anchorBtn.classList.add("active");
             anchorBtn.setAttribute("aria-expanded", "true");
             const rect = anchorBtn.getBoundingClientRect();
@@ -525,45 +557,9 @@ function initPointsBuilderMain() {
             return true;
         };
         const renderItems = (menuItems) => {
-            removeSubmenu();
+            removeActionSubmenusFrom(wrap, 0);
             host.innerHTML = "";
-            for (const item of menuItems) {
-                if (!item || !item.label) continue;
-                const hasChildren = Array.isArray(item.children) && item.children.length;
-                if (!hasChildren && typeof item.onSelect !== "function") continue;
-                const btn = document.createElement("button");
-                btn.type = "button";
-                btn.className = `pb-context-menu-item${item.danger ? " danger" : ""}${hasChildren ? " has-children" : ""}`;
-                btn.textContent = hasChildren ? `${item.label} ›` : item.label;
-                const openChildren = () => {
-                    if (!hasChildren) return false;
-                    return renderSubmenu(item.children, btn);
-                };
-                if (hasChildren) {
-                    btn.setAttribute("aria-haspopup", "menu");
-                    btn.setAttribute("aria-expanded", "false");
-                    btn.__pbOpenChildren = openChildren;
-                    btn.addEventListener("pointerenter", openChildren);
-                    btn.addEventListener("mouseover", openChildren);
-                    btn.addEventListener("focus", openChildren);
-                    btn.addEventListener("pointerdown", (ev) => {
-                        ev.preventDefault();
-                        ev.stopPropagation();
-                        openChildren();
-                    });
-                }
-                btn.addEventListener("click", (ev) => {
-                    ev.preventDefault();
-                    ev.stopPropagation();
-                    if (hasChildren) {
-                        openChildren();
-                        return;
-                    }
-                    hideActionMenu();
-                    item.onSelect();
-                });
-                host.appendChild(btn);
-            }
+            for (const item of menuItems) renderMenuButton(item, host, 0);
         };
         renderItems(list);
         if (!host.children.length) {
@@ -835,6 +831,7 @@ function initPointsBuilderMain() {
         document.addEventListener("pointerdown", (ev) => {
             if (!actionMenuEl || actionMenuEl.classList.contains("hidden")) return;
             if (actionMenuEl.contains(ev.target)) return;
+            if (Array.isArray(actionMenuEl.__pbSubmenus) && actionMenuEl.__pbSubmenus.some((entry) => entry?.el?.contains(ev.target))) return;
             if (actionMenuEl.__pbSubmenu && actionMenuEl.__pbSubmenu.contains(ev.target)) return;
             hideActionMenu();
         }, true);
@@ -3464,10 +3461,85 @@ function initPointsBuilderMain() {
     }
 
     function getPresetRingPresetOptions() {
-        return getPresetList().map((preset) => ({
-            id: preset.id,
-            label: `${preset.group ? `${preset.group} / ` : ""}${preset.name || "未命名预设"}`
-        }));
+        return getPresetList().map((preset) => {
+            const group = getPresetGroupLabel(preset.group);
+            const name = preset.name || "未命名预设";
+            return {
+                id: preset.id,
+                name,
+                group,
+                label: `${group ? `${group} / ` : ""}${name}`
+            };
+        });
+    }
+
+    function setPresetRingSlotPickerValue(button, presetId, options = null) {
+        if (!button) return;
+        const id = String(presetId || "");
+        const list = Array.isArray(options) ? options : getPresetRingPresetOptions();
+        const option = list.find((it) => it && it.id === id) || null;
+        button.value = option ? option.id : "";
+        button.dataset.value = option ? option.id : "";
+        button.classList.toggle("empty", !option);
+        const text = option ? option.label : "选择预设";
+        const labelEl = button.__pbPickerLabelEl || button.querySelector?.(".preset-ring-slot-picker-label");
+        if (labelEl) labelEl.textContent = text;
+        else button.textContent = text;
+        button.title = text;
+    }
+
+    function buildPresetRingPickerMenuItems(options, onSelect) {
+        const root = { children: [], groups: new Map() };
+        const ensureGroup = (parts) => {
+            let node = root;
+            for (const raw of parts) {
+                const label = String(raw || "").trim();
+                if (!label) continue;
+                let child = node.groups.get(label);
+                if (!child) {
+                    child = { label, children: [], groups: new Map() };
+                    node.groups.set(label, child);
+                    node.children.push(child);
+                }
+                node = child;
+            }
+            return node;
+        };
+        for (const option of options || []) {
+            if (!option || !option.id) continue;
+            const parts = splitPresetGroupPath(option.group || DEFAULT_PRESET_GROUP);
+            const parent = ensureGroup(parts.length ? parts : [DEFAULT_PRESET_GROUP]);
+            parent.children.push({
+                label: option.name || "未命名预设",
+                onSelect: () => onSelect(option)
+            });
+        }
+        const serialize = (node) => (node.children || []).map((child) => {
+            if (child.groups) {
+                return { label: child.label, children: serialize(child) };
+            }
+            return child;
+        }).filter((item) => item && (item.onSelect || (Array.isArray(item.children) && item.children.length)));
+        const items = [{ label: "清空槽位", onSelect: () => onSelect(null) }];
+        const grouped = serialize(root);
+        if (grouped.length) items.push(...grouped);
+        else items.push({ label: "暂无预设", muted: true, onSelect: () => {} });
+        return items;
+    }
+
+    function openPresetRingSlotPicker(button, slotIndex) {
+        const options = getPresetRingPresetOptions();
+        const applySelection = (option) => {
+            const id = option?.id || "";
+            presetRingSlotPresetIds[slotIndex] = id;
+            setPresetRingSlotPickerValue(button, id, options);
+            updatePresetRingStatus();
+            renderPresetRingSharedVariables();
+            renderPresetRingPreview();
+        };
+        const items = buildPresetRingPickerMenuItems(options, applySelection);
+        const rect = button.getBoundingClientRect();
+        return showActionMenu(rect.left, rect.bottom + 4, items);
     }
 
     function getPresetRingSlotPlacement(options, index) {
@@ -3555,37 +3627,34 @@ function initPointsBuilderMain() {
     function renderPresetRingSlots() {
         if (!presetRingSlots) return;
         const count = getPresetRingCount();
-        const previous = Array.from(presetRingSlots.querySelectorAll(".preset-ring-slot-select")).map((el) => el.value || "");
+        const previous = Array.from(presetRingSlots.querySelectorAll(".preset-ring-slot-select")).map((el) => el.value || el.dataset.value || "");
         for (let i = 0; i < previous.length; i++) presetRingSlotPresetIds[i] = previous[i];
         presetRingSlotPresetIds.length = count;
         const options = getPresetRingPresetOptions();
         presetRingSlots.replaceChildren();
         for (let i = 0; i < count; i++) {
-            const row = document.createElement("label");
+            const row = document.createElement("div");
             row.className = "preset-ring-slot";
             const label = document.createElement("span");
             label.textContent = String(i + 1).padStart(2, "0");
-            const select = document.createElement("select");
-            select.className = "input preset-ring-slot-select";
-            select.dataset.slotIndex = String(i);
-            const empty = document.createElement("option");
-            empty.value = "";
-            empty.textContent = "选择预设";
-            select.appendChild(empty);
-            for (const option of options) {
-                const opt = document.createElement("option");
-                opt.value = option.id;
-                opt.textContent = option.label;
-                select.appendChild(opt);
-            }
-            select.value = presetRingSlotPresetIds[i] || "";
-            select.addEventListener("change", () => {
-                presetRingSlotPresetIds[i] = select.value || "";
-                updatePresetRingStatus();
-                renderPresetRingSharedVariables();
-                renderPresetRingPreview();
+            const picker = document.createElement("button");
+            picker.type = "button";
+            picker.className = "input preset-ring-slot-select preset-ring-slot-picker";
+            picker.dataset.slotIndex = String(i);
+            const pickerLabel = document.createElement("span");
+            pickerLabel.className = "preset-ring-slot-picker-label";
+            const pickerArrow = document.createElement("span");
+            pickerArrow.className = "preset-ring-slot-picker-arrow";
+            pickerArrow.textContent = "▾";
+            picker.__pbPickerLabelEl = pickerLabel;
+            picker.append(pickerLabel, pickerArrow);
+            setPresetRingSlotPickerValue(picker, presetRingSlotPresetIds[i] || "", options);
+            picker.addEventListener("click", (ev) => {
+                ev.preventDefault();
+                ev.stopPropagation();
+                openPresetRingSlotPicker(picker, i);
             });
-            row.append(label, select);
+            row.append(label, picker);
             presetRingSlots.appendChild(row);
         }
         updatePresetRingStatus();
@@ -3600,7 +3669,7 @@ function initPointsBuilderMain() {
 
     function getPresetRingSelectedIds() {
         if (!presetRingSlots) return presetRingSlotPresetIds.slice(0, getPresetRingCount());
-        const ids = Array.from(presetRingSlots.querySelectorAll(".preset-ring-slot-select")).map((el) => el.value || "");
+        const ids = Array.from(presetRingSlots.querySelectorAll(".preset-ring-slot-select")).map((el) => el.value || el.dataset.value || "");
         presetRingSlotPresetIds = ids.slice(0, getPresetRingCount());
         return presetRingSlotPresetIds.slice();
     }
