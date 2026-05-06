@@ -3578,6 +3578,7 @@ function initPointsBuilderMain() {
             reverse: !!presetRingReverse?.checked
         };
         const previewPoints = [];
+        const sharedGroups = getPresetRingVariableGroups();
         for (let i = 0; i < count; i++) {
             const placement = getPresetRingSlotPlacement(options, i);
             const presetId = presetIds[i] || "";
@@ -3586,7 +3587,7 @@ function initPointsBuilderMain() {
                 previewPoints.push(placement.slotPoint);
                 continue;
             }
-            const resolved = resolvePresetForPreviewDefaults(preset);
+            const resolved = resolvePresetForRingSlotPreview(preset, i, sharedGroups);
             const slot = resolved ? makePresetRingSlotNode(resolved, i, options) : null;
             if (!slot) {
                 previewPoints.push(placement.slotPoint);
@@ -3848,6 +3849,7 @@ function initPointsBuilderMain() {
             checkbox.addEventListener("change", () => {
                 presetRingSharedVariableState.enabled[group.key] = checkbox.checked;
                 renderPresetRingSharedVariables();
+                renderPresetRingPreview();
             });
             card.appendChild(head);
 
@@ -3873,6 +3875,7 @@ function initPointsBuilderMain() {
                             y: inputs[1]?.value,
                             z: inputs[2]?.value
                         });
+                        renderPresetRingPreview();
                     });
                     valueRow.appendChild(input);
                     return input;
@@ -3884,7 +3887,10 @@ function initPointsBuilderMain() {
                 input.inputMode = "decimal";
                 input.value = String(getPresetRingSharedVariableValue(group));
                 input.disabled = !isPresetRingSharedVariableEnabled(group.key);
-                input.addEventListener("input", () => setPresetRingSharedVariableInputValue(group, input.value));
+                input.addEventListener("input", () => {
+                    setPresetRingSharedVariableInputValue(group, input.value);
+                    renderPresetRingPreview();
+                });
                 valueRow.appendChild(input);
             }
             card.appendChild(valueRow);
@@ -3907,6 +3913,7 @@ function initPointsBuilderMain() {
                     if (exclude.checked) delete presetRingSharedVariableState.excluded[group.key][String(item.index)];
                     else presetRingSharedVariableState.excluded[group.key][String(item.index)] = true;
                     renderPresetRingSharedVariables();
+                    renderPresetRingPreview();
                 });
                 affected.appendChild(opt);
             }
@@ -3949,6 +3956,22 @@ function initPointsBuilderMain() {
         if (!getPresetVariableEntries(variableInfo).length) return normalized;
         const withVars = Object.assign({}, normalized, { variables: variableInfo });
         return clonePresetWithVariableValues(withVars, getPresetVariableDefaultValues(variableInfo));
+    }
+
+    function resolvePresetForRingSlotPreview(preset, index, sharedGroups) {
+        const normalized = normalizePresetList([preset])[0];
+        if (!normalized) return null;
+        const variableInfo = getPresetEffectiveVariableInfo(normalized);
+        const entries = getPresetVariableEntries(variableInfo);
+        if (!entries.length) return normalized;
+        const values = getPresetVariableDefaultValues(variableInfo);
+        for (const sharedGroup of sharedGroups || []) {
+            if (!isPresetRingSharedVariableEnabled(sharedGroup.key)) continue;
+            const affectsSlot = (sharedGroup.entries || []).some((item) => item && item.index === index);
+            if (!affectsSlot || isPresetRingSharedVariableExcluded(sharedGroup.key, index)) continue;
+            setPresetRingSharedVariableValue(values, sharedGroup, getPresetRingSharedVariableValue(sharedGroup));
+        }
+        return clonePresetWithVariableValues(Object.assign({}, normalized, { variables: variableInfo }), values);
     }
 
     async function resolvePresetForRingSlot(preset, index) {
@@ -10390,12 +10413,18 @@ function mapLocalPointToWorldPoints(localPoint, path) {
     return points;
 }
 
-function collectGeometryCenterPreviewPoints() {
+function collectGeometryCenterPreviewPoints(scopeCtx = null) {
     if (!geometryCenterPreviewEnabled && lineDivisionPoints <= 0) return [];
     const out = [];
-    forEachNode(state.root.children, (node) => {
+    const scopeId = scopeCtx && scopeCtx.scopeId ? String(scopeCtx.scopeId) : null;
+    const sourceList = (scopeCtx && Array.isArray(scopeCtx.list)) ? scopeCtx.list : state.root.children;
+    forEachNode(sourceList, (node) => {
         if (!node) return;
-        const path = findNodePathById(node.id);
+        const fullPath = findNodePathById(node.id);
+        const scopeIndex = scopeId && Array.isArray(fullPath)
+            ? fullPath.findIndex((step) => step && step.node && String(step.node.id) === scopeId)
+            : -1;
+        const path = scopeIndex >= 0 ? fullPath.slice(scopeIndex + 1) : fullPath;
         if (!Array.isArray(path) || !path.length) return;
         const params = node.params || {};
         if (geometryCenterPreviewEnabled && GEOMETRY_CENTER_PREVIEW_KINDS.has(node.kind)) {
@@ -11057,8 +11086,7 @@ function focusCardById(id, recordHistory = true, scrollToTop = true, revealPath 
     const needRender = revealPath ? (revealCardPathById(id) || (typeof revealCardScopeById === "function" ? revealCardScopeById(id) : false)) : false;
     setFocusedNode(id, recordHistory);
     if (needRender) {
-        if (typeof renderCards === "function") renderCards();
-        else renderAll();
+        renderAll();
     }
     requestAnimationFrame(() => {
         const el = elCardsRoot ? elCardsRoot.querySelector(`.card[data-id="${id}"]`) : null;
@@ -13962,10 +13990,12 @@ function collectSyntheticVecTargetsForNode(node) {
     function rebuildPreviewAndKotlin() {
         if (rebuildTimer) cancelAnimationFrame(rebuildTimer);
         rebuildTimer = requestAnimationFrame(() => {
-            const res = evalBuilderWithMeta(state.root.children, U.v(0, 1, 0));
+            const scopeCtx = (typeof getCurrentCardScopeContext === "function") ? getCurrentCardScopeContext() : null;
+            const previewNodes = (scopeCtx && Array.isArray(scopeCtx.list)) ? scopeCtx.list : state.root.children;
+            const res = evalBuilderWithMeta(previewNodes, U.v(0, 1, 0));
             nodePointSegments = res.segments;
             pointOwnerByIndex = buildPointOwnerByIndex(res.points.length, res.segments);
-            const geometryCenters = collectGeometryCenterPreviewPoints();
+            const geometryCenters = collectGeometryCenterPreviewPoints(scopeCtx);
             setPoints(res.points, res.previewPoints || [], geometryCenters, res.maskPreviewPoints || []);
             // setPoints 内部会根据 focusedNodeId 重新上色
             kotlinDirty = true;

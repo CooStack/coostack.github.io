@@ -2148,7 +2148,7 @@ body.resizing-panels .panel.right {
     padding: 10px 12px 12px;
     display: flex;
     flex-direction: column;
-    gap: 10px;
+    gap: 8px;
     scrollbar-width: thin;
     scrollbar-color: rgba(120, 170, 255, .45) rgba(0, 0, 0, .18);
 }
@@ -2181,17 +2181,17 @@ body.resizing-panels .panel.right {
 .preset-group {
     display: flex;
     flex-direction: column;
-    gap: 8px;
+    gap: 6px;
     margin-left: calc(var(--preset-depth, 0) * 14px);
 }
 
 .preset-group-head {
     display: grid;
     grid-template-columns: auto auto minmax(0, 1fr) auto;
-    gap: 8px;
+    gap: 6px;
     align-items: center;
-    min-height: 38px;
-    padding: 7px 8px;
+    min-height: 34px;
+    padding: 6px 8px;
     border-radius: var(--radius2);
     border: 1px solid color-mix(in srgb, var(--text) 12%, transparent);
     background: color-mix(in srgb, var(--card) 76%, transparent);
@@ -2253,9 +2253,9 @@ body.resizing-panels .panel.right {
 .preset-group-body {
     display: flex;
     flex-direction: column;
-    gap: 6px;
-    margin-left: 8px;
-    padding-left: 8px;
+    gap: 4px;
+    margin-left: 6px;
+    padding-left: 6px;
     border-left: 1px solid color-mix(in srgb, var(--text) 16%, transparent);
     overflow: hidden;
     opacity: 1;
@@ -2274,14 +2274,14 @@ body.resizing-panels .panel.right {
 .preset-group-actions {
     display: flex;
     align-items: center;
-    gap: 6px;
+    gap: 4px;
 }
 
 .preset-group-title {
     min-width: 0;
     display: flex;
     align-items: center;
-    gap: 6px;
+    gap: 4px;
     color: var(--text);
     font-size: 13px;
     font-weight: 700;
@@ -2327,7 +2327,7 @@ body.resizing-panels .panel.right {
 .preset-items {
     display: flex;
     flex-direction: column;
-    gap: 6px;
+    gap: 4px;
 }
 
 .preset-item {

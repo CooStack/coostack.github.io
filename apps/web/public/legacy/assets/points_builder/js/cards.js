@@ -1272,8 +1272,7 @@ export function initCardSystem(ctx = {}) {
 
     function navigateCardScope(builderId) {
         if (!setActiveCardScope(builderId)) return false;
-        if (typeof renderCards === "function") renderCards();
-        else renderAll();
+        renderAll();
         requestAnimationFrame(() => {
             if (elCardsRoot) elCardsRoot.scrollTop = 0;
         });

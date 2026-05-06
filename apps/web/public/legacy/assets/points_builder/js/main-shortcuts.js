@@ -141,7 +141,7 @@ export function initGlobalShortcuts(ctx = {}) {
             }
             if (targetId && typeof beginRenameNode === "function") {
                 e.preventDefault();
-                if (typeof focusCardById === "function") focusCardById(targetId, false, false, true);
+                if (typeof focusCardById === "function") focusCardById(targetId, false, false, false);
                 beginRenameNode(targetId);
             }
             return;
