@@ -199,6 +199,7 @@ export function createPickerModule(ctx = {}) {
 
             const hk = hotkeys && hotkeys.presets ? (hotkeys.presets[preset.id] || "") : "";
             if (hk) {
+                div.classList.add("has-hotkey");
                 const bad = document.createElement("div");
                 bad.className = "hkbad";
                 bad.textContent = hotkeyToHuman ? hotkeyToHuman(hk) : hk;
@@ -346,6 +347,7 @@ export function createPickerModule(ctx = {}) {
             const hotkeys = typeof getHotkeys === "function" ? getHotkeys() : null;
             const hk = hotkeys && hotkeys.kinds ? (hotkeys.kinds[it.kind] || "") : "";
             if (hk) {
+                div.classList.add("has-hotkey");
                 const bad = document.createElement("div");
                 bad.className = "hkbad";
                 bad.textContent = hotkeyToHuman ? hotkeyToHuman(hk) : hk;
