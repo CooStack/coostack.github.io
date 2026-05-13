@@ -34,7 +34,7 @@ import {
     hasAngleOffsetEaseSpecialParams,
     formatAngleValue
 } from "./angle_offset_utils.js";
-import { installPreviewRuntimeMethods } from "./preview_runtime_mixin.js?v=20260316_2";
+import { installPreviewRuntimeMethods } from "./preview_runtime_mixin.js?v=20260513_1";
 import { installKotlinCodegenMethods } from "./kotlin_codegen_mixin.js?v=20260313_1";
 import { installCodeOutputMethods } from "./code_output_mixin.js";
 import { installExpressionEditorMethods } from "./expression_editor_mixin.js?v=20260316_1";

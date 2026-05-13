@@ -44,6 +44,7 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
             : DEFAULT_TEXTURE_EFFECT_WHITELIST
         ).map((it) => String(it || "").trim()).filter(Boolean)
     );
+    const PREVIEW_GEOMETRY_POINT_LIMIT = 120000;
 
     class PreviewRuntimeMixin {
     rebuildPreview() {
@@ -191,6 +192,39 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
                 appendFlatPoints(card, basePoints);
             }
         }
+        const sourcePointTotal = points.length;
+        if (sourcePointTotal > PREVIEW_GEOMETRY_POINT_LIMIT) {
+            const sampleIndices = [];
+            const sampleCount = PREVIEW_GEOMETRY_POINT_LIMIT;
+            for (let i = 0; i < sampleCount; i++) {
+                sampleIndices.push(Math.min(sourcePointTotal - 1, Math.floor(i * sourcePointTotal / sampleCount)));
+            }
+            const sampleInPlace = (list) => {
+                const sampled = new Array(sampleCount);
+                for (let i = 0; i < sampleCount; i++) sampled[i] = list[sampleIndices[i]];
+                list.length = sampleCount;
+                for (let i = 0; i < sampleCount; i++) list[i] = sampled[i];
+            };
+            sampleInPlace(points);
+            sampleInPlace(owners);
+            sampleInPlace(birthOffsets);
+            sampleInPlace(ownerLocalIndex);
+            sampleInPlace(ownerPointCount);
+            sampleInPlace(anchorBases);
+            sampleInPlace(localBases);
+            sampleInPlace(anchorRefs);
+            sampleInPlace(localRefs);
+            sampleInPlace(levelBases);
+            sampleInPlace(levelRefs);
+            sampleInPlace(levelOffsetRefs);
+            sampleInPlace(levelMetas);
+            sampleInPlace(useLocalOpsList);
+            sampleInPlace(rootOffsetIndexList);
+            sampleInPlace(rootVirtualIndexList);
+            sampleInPlace(leafTextureConfigs);
+            sampleInPlace(leafVisualSources);
+        }
+        this.previewSourcePointTotal = sourcePointTotal;
         this.previewBasePoints = points.map((p) => U.clone(p));
         this.previewPoints = points.map((p) => U.clone(p));
         this.previewOwners = owners;
@@ -655,7 +689,8 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
         this.syncTextureUniforms();
         this.pointsGeom.computeBoundingSphere();
         if (this.pointsMat) this.pointsMat.size = this.state.settings.pointSize;
-        const statusText = `点数: ${count}/${this.previewBasePoints.length || count}`;
+        const sourceCount = Math.max(count, int(this.previewSourcePointTotal || this.previewBasePoints.length || count));
+        const statusText = `点数: ${count}/${sourceCount}`;
         if (this.lastPointsStatusText !== statusText) {
             this.lastPointsStatusText = statusText;
             this.dom.statusPoints.textContent = statusText;
@@ -1709,7 +1744,11 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
         let appear = 16;
         const play = Math.max(1, int(this.state.previewPlayTicks || 70));
         const fade = Math.max(0, int(this.state.disabledInterval || 0));
-        const maxOwner = Math.max(1, ...this.previewOwnerPointCount.map((x) => Math.max(1, int(x || 1))));
+        let maxOwner = 1;
+        const ownerCounts = Array.isArray(this.previewOwnerPointCount) ? this.previewOwnerPointCount : [];
+        for (const x of ownerCounts) {
+            maxOwner = Math.max(maxOwner, Math.max(1, int(x || 1)));
+        }
         const maxCards = Math.max(1, int(this.previewRootVirtualTotal || this.state.cards.length));
         let hasExprGrowth = false;
         let maxGrowthTarget = 1;
