@@ -45,9 +45,14 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
         ).map((it) => String(it || "").trim()).filter(Boolean)
     );
     const PREVIEW_GEOMETRY_POINT_LIMIT = 120000;
+    const PREVIEW_RENDER_CACHE_MAX_FRAMES = 120;
+    const PREVIEW_RENDER_CACHE_MAX_BYTES = 256 * 1024 * 1024;
+    const PREVIEW_RENDER_CACHE_POINT_LIMIT = PREVIEW_GEOMETRY_POINT_LIMIT;
+    const PREVIEW_RENDER_CACHE_SUBFRAMES_PER_TICK = 4;
 
     class PreviewRuntimeMixin {
     rebuildPreview() {
+        this.clearPreviewRenderCache("rebuildPreview");
         this.previewCycleCache = null;
         this.previewExprCountCache.clear();
         this.previewExprPrefixCache.clear();
@@ -653,7 +658,9 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
             frameIndices.fill(0);
             this.pointsGeom.attributes.aFrameIndex.needsUpdate = true;
         }
-        const canReuseRuntimeState = this.canReusePreviewRuntimeState(count, owners);
+        const nextRuntimeStateSignature = this.makePreviewStructuralStateSignature();
+        const canReuseRuntimeState = this.previewRuntimeStateSignature === nextRuntimeStateSignature
+            && this.canReusePreviewRuntimeState(count, owners);
         const prevPersistentCurrentAges = this.previewPersistentCurrentAges;
         const prevPersistentLifetimes = this.previewPersistentLifetimes;
         const prevManualAgeFlags = this.previewManualAgeFlags;
@@ -685,6 +692,7 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
             ? prevPersistentControllerStates.slice()
             : new Array(count).fill(null);
         this.previewCanResumeRuntimeState = canReuseRuntimeState;
+        this.previewRuntimeStateSignature = nextRuntimeStateSignature;
         this.snapshotPreviewRuntimeStateLayout(owners);
         this.syncTextureUniforms();
         this.pointsGeom.computeBoundingSphere();
@@ -698,25 +706,728 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
         this.updateSelectionStatus();
     }
 
+    makePreviewStructuralStateSignature() {
+        const stripPreviewLayerState = (key, value) => {
+            if (key === "previewVisible" || key === "previewSolo") return undefined;
+            return value;
+        };
+        try {
+            const target = typeof this.extractProjectState === "function"
+                ? this.extractProjectState(this.state)
+                : {
+                    cards: this.state?.cards || [],
+                    displayActions: this.state?.displayActions || [],
+                    compositionType: this.state?.compositionType || "",
+                    previewPlayTicks: this.state?.previewPlayTicks || 0,
+                    disabledInterval: this.state?.disabledInterval || 0,
+                    projectAlpha: this.state?.projectAlpha || null,
+                    projectScale: this.state?.projectScale || null
+                };
+            return JSON.stringify(target || {}, stripPreviewLayerState);
+        } catch {
+            return `fallback:${Date.now()}`;
+        }
+    }
+
+    makePreviewSettingsRenderSignature() {
+        try {
+            const settings = Object.assign({}, this.state?.settings || {});
+            delete settings.previewFocusSingleCard;
+            return JSON.stringify(settings || {});
+        } catch {
+            return "";
+        }
+    }
+
+    makePreviewLayerVisibilitySignature() {
+        const cards = Array.isArray(this.state?.cards) ? this.state.cards : [];
+        const soloIds = cards
+            .filter((card) => card && card.previewSolo === true)
+            .map((card) => String(card.id || ""))
+            .filter(Boolean);
+        if (soloIds.length) return `solo:${soloIds.join(",")}`;
+        return `visible:${cards
+            .filter((card) => card && card.previewVisible !== false)
+            .map((card) => String(card.id || ""))
+            .filter(Boolean)
+            .join(",")}`;
+    }
+
+    getPreviewRenderCacheSubframesPerTick(totalCount = null, cycleCfg = null) {
+        const count = totalCount == null
+            ? Math.max(0, int(this.previewBasePoints?.length || 0))
+            : Math.max(0, int(totalCount || 0));
+        let subframes = count >= 100000 ? 2 : PREVIEW_RENDER_CACHE_SUBFRAMES_PER_TICK;
+        const cycleTotal = Math.max(1, Math.ceil(num(cycleCfg?.total || this.getPreviewCycleConfig?.().total || 1)));
+        const bytesPerFrame = Math.max(1, this.estimatePreviewFrameBytes(count));
+        const maxFramesByBytes = Math.max(0, Math.floor(PREVIEW_RENDER_CACHE_MAX_BYTES / bytesPerFrame));
+        while (subframes > 1 && (cycleTotal * subframes + 1) > maxFramesByBytes) {
+            subframes = Math.max(1, Math.floor(subframes / 2));
+        }
+        return subframes;
+    }
+
+    getPreviewRenderCacheMaxFrames(totalCount = null, cycleCfg = null) {
+        const subframes = this.getPreviewRenderCacheSubframesPerTick(totalCount, cycleCfg);
+        const cycleTotal = Math.max(1, Math.ceil(num(cycleCfg?.total || this.getPreviewCycleConfig?.().total || 1)));
+        return Math.max(PREVIEW_RENDER_CACHE_MAX_FRAMES, cycleTotal * subframes + 1);
+    }
+
+    resolvePreviewFrameTimeContext(context = {}) {
+        const cycleCfg = context.cycleCfg || this.getPreviewCycleConfig();
+        const cycleTotal = Math.max(1e-6, num(cycleCfg?.total || 1));
+        const rawElapsedTick = Number.isFinite(Number(context.elapsedTick))
+            ? num(context.elapsedTick)
+            : ((performance.now() - this.previewAnimStart) / 50);
+        const rawGlobalCycleAge = Number.isFinite(Number(context.globalCycleAge))
+            ? num(context.globalCycleAge)
+            : ((rawElapsedTick % cycleTotal) + cycleTotal) % cycleTotal;
+        const cycleIndex = Number.isFinite(Number(context.cycleIndex))
+            ? int(context.cycleIndex)
+            : (cycleTotal > 1e-6 ? Math.floor(rawElapsedTick / cycleTotal) : 0);
+        const totalCount = Math.max(0, int(context.totalCount ?? this.previewBasePoints?.length ?? 0));
+        const subframes = this.getPreviewRenderCacheSubframesPerTick(totalCount, cycleCfg);
+        const cycleFrameCount = Math.max(1, Math.ceil(cycleTotal * subframes));
+        const renderFrame = clamp(Math.floor(Math.max(0, rawGlobalCycleAge) * subframes + 1e-6), 0, cycleFrameCount - 1);
+        const globalCycleAge = Math.min(Math.max(0, renderFrame / subframes), Math.max(0, cycleTotal - (1 / subframes)));
+        const elapsedTick = cycleIndex * cycleTotal + globalCycleAge;
+        return {
+            elapsedTick,
+            globalCycleAge,
+            cycleIndex,
+            tickStep: Math.max(0, Math.floor(globalCycleAge)),
+            renderFrame,
+            subframes,
+            cycleFrameCount
+        };
+    }
+
+    makePreviewRenderSignature() {
+        const count = Math.max(0, int(this.previewBasePoints?.length || 0));
+        const sourceCount = Math.max(0, int(this.previewSourcePointTotal || count));
+        const nextSignature = [
+            `generation:${int(this.previewRenderCacheGeneration || 0)}`,
+            `count:${count}`,
+            `source:${sourceCount}`,
+            `rootTotal:${int(this.previewRootVirtualTotal || 0)}`
+        ].join("||");
+        this.previewRenderSignature = nextSignature;
+        return this.previewRenderSignature;
+    }
+
+    makePreviewCameraCacheKey(totalCount = 0) {
+        if (Math.max(0, int(totalCount || 0)) < 12000 || !this.camera) return "";
+        const round = (v) => {
+            const n = Number(v);
+            return Number.isFinite(n) ? Math.round(n * 1000) / 1000 : 0;
+        };
+        const pos = this.camera.position || {};
+        const quat = this.camera.quaternion || {};
+        const matrix = this.camera.matrixWorldInverse?.elements || [];
+        const projection = this.camera.projectionMatrix?.elements || [];
+        const matrixKey = Array.from(matrix).map(round).join(",");
+        const projectionKey = Array.from(projection).map(round).join(",");
+        return [
+            round(pos.x), round(pos.y), round(pos.z),
+            round(quat.x), round(quat.y), round(quat.z), round(quat.w),
+            round(this.camera.zoom),
+            matrixKey,
+            projectionKey
+        ].join(",");
+    }
+
+    makePreviewTextureCacheKey() {
+        const offsets = this._mergedAtlasOffsets;
+        if (!(offsets instanceof Map) || !offsets.size) return "none";
+        return Array.from(offsets.entries())
+            .sort((a, b) => String(a[0]).localeCompare(String(b[0])))
+            .map(([name, offset]) => `${String(name)}:${int(offset || 0)}`)
+            .join(",");
+    }
+
+    makePreviewFrameCacheKey(context = {}) {
+        const totalCount = Math.max(0, int(context.totalCount ?? this.previewBasePoints?.length ?? 0));
+        const cycleCfg = context.cycleCfg || this.getPreviewCycleConfig();
+        const cache = this.ensurePreviewRenderCache(totalCount, { cycleCfg });
+        if (!cache || cache.disabled) return "";
+        const globalCycleAge = Number.isFinite(Number(context.globalCycleAge))
+            ? num(context.globalCycleAge)
+            : 0;
+        const frameTime = this.resolvePreviewFrameTimeContext(Object.assign({}, context, { cycleCfg, globalCycleAge }));
+        const tickStep = frameTime.tickStep;
+        const cycleKey = [
+            cycleCfg?.appear,
+            cycleCfg?.live,
+            cycleCfg?.fade,
+            cycleCfg?.play,
+            cycleCfg?.total
+        ].map((v) => Math.round(num(v || 0) * 1000)).join(",");
+        return [
+            this.makePreviewRenderSignature(),
+            `cycle:${cycleKey}`,
+            `tick:${tickStep}`,
+            `renderFrame:${frameTime.renderFrame}/${frameTime.subframes}`,
+            `globalCycleAge:${Math.round(frameTime.globalCycleAge * 1000)}`,
+            `layers:${this.makePreviewLayerVisibilitySignature()}`,
+            `camera:${this.makePreviewCameraCacheKey(totalCount)}`,
+            `texture:${this.makePreviewTextureCacheKey()}`
+        ].join("||");
+    }
+
+    ensurePreviewBoundedFrameCache(cacheProp, opts = {}) {
+        const prop = String(cacheProp || "previewRenderCache");
+        let cache = this[prop];
+        if (!cache || !(cache.frames instanceof Map)) {
+            cache = {
+                frames: new Map(),
+                bytes: 0,
+                maxFrames: Math.max(1, int(opts.maxFrames || PREVIEW_RENDER_CACHE_MAX_FRAMES)),
+                maxBytes: Math.max(1, int(opts.maxBytes || PREVIEW_RENDER_CACHE_MAX_BYTES)),
+                pointLimit: Math.max(0, int(opts.pointLimit ?? PREVIEW_RENDER_CACHE_POINT_LIMIT)),
+                disabled: false,
+                hits: 0,
+                misses: 0,
+                stores: 0,
+                evictions: 0,
+                lastClearReason: ""
+            };
+            this[prop] = cache;
+        }
+        cache.maxFrames = Math.max(1, int(opts.maxFrames || cache.maxFrames || PREVIEW_RENDER_CACHE_MAX_FRAMES));
+        cache.maxBytes = Math.max(1, int(opts.maxBytes || cache.maxBytes || PREVIEW_RENDER_CACHE_MAX_BYTES));
+        cache.pointLimit = Math.max(0, int(opts.pointLimit ?? cache.pointLimit ?? PREVIEW_RENDER_CACHE_POINT_LIMIT));
+        const count = opts.pointCount == null ? null : Math.max(0, int(opts.pointCount || 0));
+        const estimatedBytes = Number.isFinite(Number(opts.estimatedBytes))
+            ? Math.max(0, int(opts.estimatedBytes || 0))
+            : 0;
+        const tooLarge = (count != null && cache.pointLimit > 0 && count > cache.pointLimit)
+            || (estimatedBytes > 0 && estimatedBytes > cache.maxBytes)
+            || (Number.isFinite(Number(opts.workingSetBytes)) && int(opts.workingSetBytes || 0) > cache.maxBytes);
+        cache.disabled = tooLarge;
+        if (tooLarge && cache.frames.size) {
+            cache.frames.clear();
+            cache.bytes = 0;
+        }
+        return cache;
+    }
+
+    clearPreviewBoundedFrameCache(cacheProp, reason = "") {
+        const cache = this[String(cacheProp || "previewRenderCache")];
+        if (cache && cache.frames instanceof Map) {
+            cache.frames.clear();
+            cache.bytes = 0;
+            cache.hits = 0;
+            cache.misses = 0;
+            cache.stores = 0;
+            cache.evictions = 0;
+            cache.lastClearReason = String(reason || "");
+        }
+    }
+
+    getPreviewBoundedFrameCacheEntry(cacheProp, key, opts = {}) {
+        if (!key) return null;
+        const cache = this.ensurePreviewBoundedFrameCache(cacheProp, opts);
+        if (!cache || cache.disabled) return null;
+        const record = cache.frames.get(key);
+        if (!record) {
+            cache.misses += 1;
+            return null;
+        }
+        cache.frames.delete(key);
+        cache.frames.set(key, record);
+        cache.hits += 1;
+        return record.value;
+    }
+
+    storePreviewBoundedFrameCacheEntry(cacheProp, key, value, opts = {}) {
+        if (!key || value == null) return false;
+        const estimatedBytes = typeof opts.estimateBytes === "function"
+            ? opts.estimateBytes(value)
+            : (Number.isFinite(Number(opts.estimatedBytes)) ? int(opts.estimatedBytes || 0) : 0);
+        const cache = this.ensurePreviewBoundedFrameCache(cacheProp, Object.assign({}, opts, { estimatedBytes }));
+        if (!cache || cache.disabled) return false;
+        const entry = typeof opts.clone === "function" ? opts.clone(value) : value;
+        const bytes = typeof opts.estimateBytes === "function"
+            ? opts.estimateBytes(entry)
+            : (estimatedBytes || 0);
+        if (bytes <= 0 || bytes > cache.maxBytes) return false;
+        const old = cache.frames.get(key);
+        if (old) {
+            cache.bytes = Math.max(0, cache.bytes - int(old.bytes || 0));
+            cache.frames.delete(key);
+        }
+        while (cache.frames.size >= cache.maxFrames || cache.bytes + bytes > cache.maxBytes) {
+            const first = cache.frames.keys().next();
+            if (!first || first.done) break;
+            const evicted = cache.frames.get(first.value);
+            cache.frames.delete(first.value);
+            cache.bytes = Math.max(0, cache.bytes - int(evicted?.bytes || 0));
+            cache.evictions += 1;
+        }
+        if (cache.bytes + bytes > cache.maxBytes) return false;
+        cache.frames.set(key, { value: entry, bytes });
+        cache.bytes += bytes;
+        cache.stores += 1;
+        return true;
+    }
+
+    ensurePreviewRenderCache(totalCount = null, context = {}) {
+        const count = totalCount == null
+            ? Math.max(0, int(this.previewBasePoints?.length || 0))
+            : Math.max(0, int(totalCount || 0));
+        const cycleCfg = context?.cycleCfg || context;
+        const maxFrames = this.getPreviewRenderCacheMaxFrames(count, cycleCfg);
+        const requiredFrames = Math.max(1, Math.ceil(num(cycleCfg?.total || this.getPreviewCycleConfig?.().total || 1))
+            * this.getPreviewRenderCacheSubframesPerTick(count, cycleCfg) + 1);
+        const estimatedBytes = this.estimatePreviewFrameBytes(count);
+        return this.ensurePreviewBoundedFrameCache("previewRenderCache", {
+            maxFrames,
+            maxBytes: PREVIEW_RENDER_CACHE_MAX_BYTES,
+            pointLimit: PREVIEW_RENDER_CACHE_POINT_LIMIT,
+            pointCount: count,
+            estimatedBytes,
+            workingSetBytes: estimatedBytes * requiredFrames
+        });
+    }
+
+    clearPreviewRenderCache(reason = "") {
+        this.clearPreviewBoundedFrameCache("previewRenderCache", reason);
+        this.previewRenderSignature = "";
+        this.previewRenderCacheGeneration = int(this.previewRenderCacheGeneration || 0) + 1;
+        this.updatePreviewCacheStatus();
+    }
+
+    getPreviewRenderCacheStatusText() {
+        const cache = this.previewRenderCache;
+        if (!cache || !(cache.frames instanceof Map)) return "缓存: --";
+        if (cache.disabled) return "缓存: 关闭";
+        const frames = cache.frames.size;
+        const maxFrames = Math.max(1, int(cache.maxFrames || PREVIEW_RENDER_CACHE_MAX_FRAMES));
+        const hits = Math.max(0, int(cache.hits || 0));
+        const misses = Math.max(0, int(cache.misses || 0));
+        const lookups = hits + misses;
+        const hitRate = lookups > 0 ? Math.round((hits * 100) / lookups) : 0;
+        return `缓存: ${frames}/${maxFrames} 命中 ${hitRate}%`;
+    }
+
+    updatePreviewCacheStatus() {
+        if (!this.dom?.statusCache) return;
+        const text = this.getPreviewRenderCacheStatusText();
+        if (this.lastPreviewCacheStatusText === text) return;
+        this.lastPreviewCacheStatusText = text;
+        this.dom.statusCache.textContent = text;
+    }
+
+    getPreviewCachedFrame(key, context = {}) {
+        const count = Math.max(0, int(this.previewBasePoints?.length || 0));
+        const cycleCfg = context?.cycleCfg || context;
+        const maxFrames = this.getPreviewRenderCacheMaxFrames(count, cycleCfg);
+        const requiredFrames = Math.max(1, Math.ceil(num(cycleCfg?.total || this.getPreviewCycleConfig?.().total || 1))
+            * this.getPreviewRenderCacheSubframesPerTick(count, cycleCfg) + 1);
+        const estimatedBytes = this.estimatePreviewFrameBytes(count);
+        return this.getPreviewBoundedFrameCacheEntry("previewRenderCache", key, {
+            maxFrames,
+            maxBytes: PREVIEW_RENDER_CACHE_MAX_BYTES,
+            pointLimit: PREVIEW_RENDER_CACHE_POINT_LIMIT,
+            pointCount: count,
+            estimatedBytes,
+            workingSetBytes: estimatedBytes * requiredFrames
+        });
+    }
+
+    storePreviewCachedFrame(key, frame, context = {}) {
+        const cycleCfg = context?.cycleCfg || context;
+        const maxFrames = this.getPreviewRenderCacheMaxFrames(frame?.pointCount, cycleCfg);
+        const requiredFrames = Math.max(1, Math.ceil(num(cycleCfg?.total || this.getPreviewCycleConfig?.().total || 1))
+            * this.getPreviewRenderCacheSubframesPerTick(frame?.pointCount, cycleCfg) + 1);
+        const estimatedBytes = this.estimatePreviewFrameBytes(frame?.pointCount || 0);
+        return this.storePreviewBoundedFrameCacheEntry("previewRenderCache", key, frame, {
+            maxFrames,
+            maxBytes: PREVIEW_RENDER_CACHE_MAX_BYTES,
+            pointLimit: PREVIEW_RENDER_CACHE_POINT_LIMIT,
+            pointCount: frame?.pointCount,
+            workingSetBytes: estimatedBytes * requiredFrames,
+            clone: (it) => this.clonePreviewCachedRenderFrame(it),
+            estimateBytes: (it) => this.estimatePreviewFrameBytes(it)
+        });
+    }
+
+    estimatePreviewFrameBytes(frameOrCount) {
+        if (typeof frameOrCount === "number") {
+            return Math.max(0, int(frameOrCount || 0)) * 37;
+        }
+        const frame = frameOrCount || {};
+        let bytes = 0;
+        const add = (arr) => {
+            if (arr && Number.isFinite(Number(arr.byteLength))) bytes += int(arr.byteLength || 0);
+        };
+        add(frame.positions);
+        add(frame.colors);
+        add(frame.sizes);
+        add(frame.alphas);
+        add(frame.frameIndices);
+        add(frame.visibleMask);
+        add(frame.resolvedCurrentAges);
+        add(frame.resolvedLifetimes);
+        add(frame.manualAgeFlags);
+        add(frame.initializedLifetimeFlags);
+        if (Array.isArray(frame.persistentControllerStates)) {
+            for (const state of frame.persistentControllerStates) {
+                if (!state || typeof state !== "object") continue;
+                try {
+                    bytes += JSON.stringify(state).length * 2;
+                } catch {
+                    bytes += 64;
+                }
+            }
+        }
+        if (frame.runtimeGlobals && typeof frame.runtimeGlobals === "object") {
+            try {
+                bytes += JSON.stringify(frame.runtimeGlobals).length * 2;
+            } catch {
+                bytes += 256;
+            }
+        }
+        return bytes;
+    }
+
+    clonePreviewRuntimeGlobals(runtimeGlobals) {
+        if (!runtimeGlobals || typeof runtimeGlobals !== "object") return null;
+        const clonePlain = (value) => {
+            if (!value || typeof value !== "object") return value;
+            if (Number.isFinite(Number(value.x)) && Number.isFinite(Number(value.y)) && Number.isFinite(Number(value.z))) {
+                return U.v(num(value.x), num(value.y), num(value.z));
+            }
+            if (Array.isArray(value)) return value.map((it) => clonePlain(it));
+            const out = {};
+            for (const [key, child] of Object.entries(value)) {
+                if (typeof child === "function") continue;
+                out[key] = clonePlain(child);
+            }
+            return out;
+        };
+        const out = {};
+        for (const [key, value] of Object.entries(runtimeGlobals)) {
+            if (typeof value === "function") continue;
+            out[key] = clonePlain(value);
+        }
+        out.status = ensureStatusHelperMethods(out.status && typeof out.status === "object" ? out.status : {});
+        return out;
+    }
+
+    clonePreviewControllerState(state) {
+        if (!state || typeof state !== "object") return null;
+        if (typeof structuredClone === "function") {
+            try {
+                return structuredClone(state);
+            } catch {
+            }
+        }
+        try {
+            return JSON.parse(JSON.stringify(state));
+        } catch {
+            return Object.assign({}, state);
+        }
+    }
+
+    clonePreviewControllerStates(states, count) {
+        const safeCount = Math.max(0, int(count || 0));
+        const out = new Array(safeCount).fill(null);
+        if (!Array.isArray(states)) return out;
+        const n = Math.min(safeCount, states.length);
+        for (let i = 0; i < n; i++) {
+            out[i] = this.clonePreviewControllerState(states[i]);
+        }
+        return out;
+    }
+
+    clonePreviewFrame(frame) {
+        const count = Math.max(0, int(frame?.pointCount ?? this.previewBasePoints?.length ?? 0));
+        const copyFloat = (arr, len) => {
+            if (arr instanceof Float32Array && arr.length === len) return new Float32Array(arr);
+            const out = new Float32Array(len);
+            if (arr && Number.isFinite(Number(arr.length))) {
+                const n = Math.min(len, int(arr.length || 0));
+                for (let i = 0; i < n; i++) out[i] = num(arr[i]);
+            }
+            return out;
+        };
+        const copyMask = (arr, len, defaultValue = 0) => {
+            const out = new Uint8Array(len);
+            if (!arr || !Number.isFinite(Number(arr.length))) {
+                if (defaultValue) out.fill(defaultValue);
+                return out;
+            }
+            const n = Math.min(len, int(arr.length || 0));
+            for (let i = 0; i < n; i++) {
+                out[i] = (arr[i] === false || arr[i] === 0) ? 0 : 1;
+            }
+            if (defaultValue && n < len) out.fill(defaultValue, n);
+            return out;
+        };
+        return {
+            pointCount: count,
+            visible: Math.max(0, int(frame?.visible || 0)),
+            statusText: String(frame?.statusText || ""),
+            elapsedTick: num(frame?.elapsedTick || 0),
+            globalCycleAge: num(frame?.globalCycleAge || 0),
+            cycleTick: Math.max(0, int(frame?.cycleTick || 0)),
+            cycleIndex: int(frame?.cycleIndex || 0),
+            runtimeAppliedTick: int(frame?.runtimeAppliedTick ?? frame?.cycleTick ?? -1),
+            runtimeGlobals: this.clonePreviewRuntimeGlobals(frame?.runtimeGlobals),
+            positions: copyFloat(frame?.positions, count * 3),
+            colors: copyFloat(frame?.colors, count * 3),
+            sizes: copyFloat(frame?.sizes, count),
+            alphas: copyFloat(frame?.alphas, count),
+            frameIndices: copyFloat(frame?.frameIndices, count),
+            visibleMask: copyMask(frame?.visibleMask, count, 1),
+            resolvedCurrentAges: copyFloat(frame?.resolvedCurrentAges, count),
+            resolvedLifetimes: copyFloat(frame?.resolvedLifetimes, count),
+            manualAgeFlags: copyMask(frame?.manualAgeFlags, count, 0),
+            initializedLifetimeFlags: copyMask(frame?.initializedLifetimeFlags, count, 0),
+            persistentControllerStates: this.clonePreviewControllerStates(frame?.persistentControllerStates, count)
+        };
+    }
+
+    clonePreviewCachedRenderFrame(frame) {
+        const count = Math.max(0, int(frame?.pointCount ?? this.previewBasePoints?.length ?? 0));
+        const copyFloat = (arr, len) => {
+            if (arr instanceof Float32Array && arr.length === len) return new Float32Array(arr);
+            const out = new Float32Array(len);
+            if (arr && Number.isFinite(Number(arr.length))) {
+                const n = Math.min(len, int(arr.length || 0));
+                for (let i = 0; i < n; i++) out[i] = num(arr[i]);
+            }
+            return out;
+        };
+        const copyMask = (arr, len, defaultValue = 0) => {
+            const out = new Uint8Array(len);
+            if (!arr || !Number.isFinite(Number(arr.length))) {
+                if (defaultValue) out.fill(defaultValue);
+                return out;
+            }
+            const n = Math.min(len, int(arr.length || 0));
+            for (let i = 0; i < n; i++) {
+                out[i] = (arr[i] === false || arr[i] === 0) ? 0 : 1;
+            }
+            if (defaultValue && n < len) out.fill(defaultValue, n);
+            return out;
+        };
+        return {
+            pointCount: count,
+            visible: Math.max(0, int(frame?.visible || 0)),
+            statusText: String(frame?.statusText || ""),
+            elapsedTick: num(frame?.elapsedTick || 0),
+            globalCycleAge: num(frame?.globalCycleAge || 0),
+            cycleTick: Math.max(0, int(frame?.cycleTick || 0)),
+            cycleIndex: int(frame?.cycleIndex || 0),
+            runtimeAppliedTick: -1,
+            runtimeGlobals: null,
+            positions: copyFloat(frame?.positions, count * 3),
+            colors: copyFloat(frame?.colors, count * 3),
+            sizes: copyFloat(frame?.sizes, count),
+            alphas: copyFloat(frame?.alphas, count),
+            frameIndices: copyFloat(frame?.frameIndices, count),
+            visibleMask: copyMask(frame?.visibleMask, count, 1),
+            resolvedCurrentAges: null,
+            resolvedLifetimes: null,
+            manualAgeFlags: null,
+            initializedLifetimeFlags: null,
+            persistentControllerStates: []
+        };
+    }
+
+    applyPreviewFrame(frame, context = {}) {
+        if (!this.pointsGeom || !frame) return false;
+        const totalCount = Math.max(0, int(frame.pointCount || 0));
+        const posAttr = this.pointsGeom.getAttribute("position");
+        const colAttr = this.pointsGeom.getAttribute("color");
+        const sizeAttr = this.pointsGeom.getAttribute("aSize");
+        const alphaAttr = this.pointsGeom.getAttribute("aAlpha");
+        if (!posAttr || !colAttr || !sizeAttr || !alphaAttr) return false;
+        if (posAttr.array.length !== totalCount * 3
+            || colAttr.array.length !== totalCount * 3
+            || sizeAttr.array.length !== totalCount
+            || alphaAttr.array.length !== totalCount) {
+            return false;
+        }
+        if (!frame.positions || frame.positions.length !== totalCount * 3
+            || !frame.colors || frame.colors.length !== totalCount * 3
+            || !frame.sizes || frame.sizes.length !== totalCount
+            || !frame.alphas || frame.alphas.length !== totalCount) {
+            return false;
+        }
+        const attributesAlreadyWritten = context.attributesAlreadyWritten === true;
+        if (!attributesAlreadyWritten) {
+            posAttr.array.set(frame.positions);
+            colAttr.array.set(frame.colors);
+            sizeAttr.array.set(frame.sizes);
+            alphaAttr.array.set(frame.alphas);
+        }
+        posAttr.needsUpdate = true;
+        colAttr.needsUpdate = true;
+        sizeAttr.needsUpdate = true;
+        alphaAttr.needsUpdate = true;
+        const frameAttr = this.pointsGeom.getAttribute("aFrameIndex");
+        if (frameAttr && frame.frameIndices && frame.frameIndices.length === totalCount) {
+            if (!attributesAlreadyWritten || frameAttr.array !== frame.frameIndices) {
+                frameAttr.array.set(frame.frameIndices);
+            }
+            frameAttr.needsUpdate = true;
+        }
+        const points = Array.isArray(this.previewPoints) && this.previewPoints.length === totalCount
+            ? this.previewPoints
+            : new Array(totalCount);
+        const visibleMask = new Array(totalCount);
+        for (let i = 0; i < totalCount; i++) {
+            const px = frame.positions[i * 3 + 0];
+            const py = frame.positions[i * 3 + 1];
+            const pz = frame.positions[i * 3 + 2];
+            let p = points[i];
+            if (!p) {
+                p = U.v(px, py, pz);
+                points[i] = p;
+            } else {
+                p.x = px;
+                p.y = py;
+                p.z = pz;
+            }
+            visibleMask[i] = frame.visibleMask ? frame.visibleMask[i] !== 0 : true;
+        }
+        this.previewPoints = points;
+        this.previewVisibleMask = visibleMask;
+        const restoreRuntimeState = context.restoreRuntimeState !== false;
+        if (restoreRuntimeState) {
+            this.previewFrameCurrentAges = frame.resolvedCurrentAges instanceof Float32Array
+                ? new Float32Array(frame.resolvedCurrentAges)
+                : new Float32Array(totalCount);
+            this.previewFrameLifetimes = frame.resolvedLifetimes instanceof Float32Array
+                ? new Float32Array(frame.resolvedLifetimes)
+                : new Float32Array(totalCount).fill(100);
+            this.previewManualAgeFlags = frame.manualAgeFlags instanceof Uint8Array
+                ? new Uint8Array(frame.manualAgeFlags)
+                : new Uint8Array(totalCount);
+            this.previewInitializedLifetimeFlags = frame.initializedLifetimeFlags instanceof Uint8Array
+                ? new Uint8Array(frame.initializedLifetimeFlags)
+                : new Uint8Array(totalCount);
+            this.previewPersistentCurrentAges = new Float32Array(this.previewFrameCurrentAges);
+            this.previewPersistentLifetimes = new Float32Array(this.previewFrameLifetimes);
+            this.previewPersistentControllerStates = this.clonePreviewControllerStates(frame.persistentControllerStates, totalCount);
+        }
+        if (restoreRuntimeState && frame.runtimeGlobals && typeof frame.runtimeGlobals === "object") {
+            const runtimeAppliedTick = Number.isFinite(Number(context.runtimeAppliedTick))
+                ? int(context.runtimeAppliedTick)
+                : int(frame.runtimeAppliedTick ?? frame.cycleTick ?? -1);
+            const runtimeCycleIndex = Number.isFinite(Number(context.cycleIndex))
+                ? int(context.cycleIndex)
+                : int(frame.cycleIndex ?? this.previewRuntimeCycleIndex ?? 0);
+            this.previewRuntimeGlobals = this.clonePreviewRuntimeGlobals(frame.runtimeGlobals);
+            this.previewRuntimeAppliedTick = runtimeAppliedTick;
+            this.previewRuntimeCycleIndex = runtimeCycleIndex;
+            this.previewCanResumeRuntimeState = true;
+        }
+        this.previewManualProjectScaleTick = num(frame.globalCycleAge || 0);
+        if (restoreRuntimeState) this.syncTextureUniforms();
+        if (frame.statusText && this.lastPointsStatusText !== frame.statusText) {
+            this.lastPointsStatusText = frame.statusText;
+            if (this.dom?.statusPoints) this.dom.statusPoints.textContent = frame.statusText;
+        }
+        return true;
+    }
+
     updatePreviewAnimation() {
         if (!this.pointsGeom || !this.previewBasePoints.length) return;
         const now = performance.now();
         const totalCount = this.previewBasePoints.length;
         const minInterval = totalCount >= 50000 ? 16 : 0;
         if (minInterval > 0 && (now - this.previewPerfLastTs) < minInterval) return;
+        this.previewPerfLastTs = now;
         const elapsedTick = (now - this.previewAnimStart) / 50;
         const cycleCfg = this.getPreviewCycleConfig();
+        const cycleTotal = cycleCfg.total;
+        const globalCycleAge = ((elapsedTick % cycleTotal) + cycleTotal) % cycleTotal;
+        const cycleIndex = cycleTotal > 1e-6 ? Math.floor(elapsedTick / cycleTotal) : 0;
+        const frameTime = this.resolvePreviewFrameTimeContext({
+            totalCount,
+            elapsedTick,
+            cycleCfg,
+            globalCycleAge,
+            cycleIndex
+        });
+        const frameKey = this.makePreviewFrameCacheKey({
+            totalCount,
+            elapsedTick: frameTime.elapsedTick,
+            cycleCfg,
+            globalCycleAge: frameTime.globalCycleAge,
+            cycleIndex: frameTime.cycleIndex,
+            tickStep: frameTime.tickStep,
+            renderFrame: frameTime.renderFrame
+        });
+        const cachedFrame = this.getPreviewCachedFrame(frameKey, { cycleCfg });
+        const frameApplyContext = {
+            cycleIndex: frameTime.cycleIndex,
+            runtimeAppliedTick: frameTime.tickStep,
+            restoreRuntimeState: true,
+            attributesAlreadyWritten: false
+        };
+        if (cachedFrame && this.applyPreviewFrame(cachedFrame, {
+            cycleIndex: frameTime.cycleIndex,
+            runtimeAppliedTick: frameTime.tickStep,
+            restoreRuntimeState: false
+        })) return;
+        const frame = this.computePreviewFrame({
+            now,
+            totalCount,
+            elapsedTick: frameTime.elapsedTick,
+            cycleCfg,
+            globalCycleAge: frameTime.globalCycleAge,
+            cycleIndex: frameTime.cycleIndex,
+            outputToGeometry: !frameKey
+        });
+        if (!frame) return;
+        if (frameKey) this.storePreviewCachedFrame(frameKey, frame, { cycleCfg });
+        frameApplyContext.attributesAlreadyWritten = frame.attributesWrittenToGeometry === true;
+        this.applyPreviewFrame(frame, frameApplyContext);
+    }
+
+    computePreviewFrame(context = {}) {
+        if (!this.pointsGeom || !this.previewBasePoints.length) return null;
+        const now = Number.isFinite(Number(context.now)) ? num(context.now) : performance.now();
+        const totalCount = Math.max(0, int(context.totalCount || this.previewBasePoints.length || 0));
+        if (!totalCount) return null;
+        const elapsedTick = Number.isFinite(Number(context.elapsedTick))
+            ? num(context.elapsedTick)
+            : (now - this.previewAnimStart) / 50;
+        const cycleCfg = context.cycleCfg || this.getPreviewCycleConfig();
         const cycleAppear = cycleCfg.appear;
         const cycleLive = cycleCfg.live;
         const cycleFade = cycleCfg.fade;
         const cycleTotal = cycleCfg.total;
-        const globalCycleAge = ((elapsedTick % cycleTotal) + cycleTotal) % cycleTotal;
-        const cycleIndex = cycleTotal > 1e-6 ? Math.floor(elapsedTick / cycleTotal) : 0;
+        const globalCycleAge = Number.isFinite(Number(context.globalCycleAge))
+            ? num(context.globalCycleAge)
+            : ((elapsedTick % cycleTotal) + cycleTotal) % cycleTotal;
+        const cycleIndex = Number.isFinite(Number(context.cycleIndex))
+            ? int(context.cycleIndex)
+            : (cycleTotal > 1e-6 ? Math.floor(elapsedTick / cycleTotal) : 0);
         this.previewManualProjectScaleTick = globalCycleAge;
-        const positions = this.pointsGeom.getAttribute("position")?.array;
-        const colors = this.pointsGeom.getAttribute("color")?.array;
-        const sizes = this.pointsGeom.getAttribute("aSize")?.array;
-        const alphas = this.pointsGeom.getAttribute("aAlpha")?.array;
+        const outputToGeometry = context.outputToGeometry === true;
+        const posAttr = outputToGeometry ? this.pointsGeom.getAttribute("position") : null;
+        const colAttr = outputToGeometry ? this.pointsGeom.getAttribute("color") : null;
+        const sizeAttr = outputToGeometry ? this.pointsGeom.getAttribute("aSize") : null;
+        const alphaAttr = outputToGeometry ? this.pointsGeom.getAttribute("aAlpha") : null;
+        const frameAttr = outputToGeometry ? this.pointsGeom.getAttribute("aFrameIndex") : null;
+        const attributesWrittenToGeometry = !!(outputToGeometry
+            && posAttr?.array?.length === totalCount * 3
+            && colAttr?.array?.length === totalCount * 3
+            && sizeAttr?.array?.length === totalCount
+            && alphaAttr?.array?.length === totalCount
+            && frameAttr?.array?.length === totalCount);
+        const positions = attributesWrittenToGeometry ? posAttr.array : new Float32Array(totalCount * 3);
+        const colors = attributesWrittenToGeometry ? colAttr.array : new Float32Array(totalCount * 3);
+        const sizes = attributesWrittenToGeometry ? sizeAttr.array : new Float32Array(totalCount);
+        const alphas = attributesWrittenToGeometry ? alphaAttr.array : new Float32Array(totalCount);
+        const frameIndices = attributesWrittenToGeometry ? frameAttr.array : new Float32Array(totalCount);
+        this.previewVisibleMask = new Array(totalCount).fill(false);
         let resolvedCurrentAges = this.previewFrameCurrentAges;
         if (!(resolvedCurrentAges instanceof Float32Array) || resolvedCurrentAges.length !== totalCount) {
             resolvedCurrentAges = new Float32Array(totalCount);
@@ -768,6 +1479,7 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
             && String(projectAlphaCfg.runMode || "auto").trim() !== "manual";
         const globalAxis = this.resolveCompositionAxisDirection();
         const tickStep = Math.max(0, Math.floor(globalCycleAge));
+        const shouldResetParticleInitState = this.previewCanResumeRuntimeState === false;
         const shouldResetPersistentRuntime = tickStep < this.previewRuntimeAppliedTick
             || this.previewRuntimeCycleIndex !== cycleIndex
             || this.previewCanResumeRuntimeState === false;
@@ -776,10 +1488,12 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
             this.previewRuntimeAppliedTick = -1;
             this.previewRuntimeCycleIndex = cycleIndex;
             persistentCurrentAges.fill(0);
-            persistentLifetimes.fill(100);
             manualAgeFlags.fill(0);
-            initializedLifetimeFlags.fill(0);
             persistentControllerStates.fill(null);
+            if (shouldResetParticleInitState) {
+                persistentLifetimes.fill(100);
+                initializedLifetimeFlags.fill(0);
+            }
         }
         this.previewCanResumeRuntimeState = true;
         const frameRuntimeGlobals = this.previewRuntimeGlobals;
@@ -873,7 +1587,7 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
         const levelRefsAll = this.previewLevelRefs;
         const levelOffsetRefsAll = this.previewLevelOffsetRefs;
         const sequencedRoot = this.state.compositionType === "sequenced";
-        const isolatedPreviewCardId = this.getPreviewIsolatedCardId();
+        const visiblePreviewCardIds = this.getPreviewVisibleCardIdSet();
         const rootVirtualTotal = Math.max(1, int(this.previewRootVirtualTotal || this.state.cards.length || 1));
         const rootGrowthPlan = sequencedRoot
             ? this.buildSequencedRootGrowthPlan(runtimeActions, rootVirtualTotal, globalCycleAge, elapsedTick, {
@@ -895,11 +1609,20 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
         }
 
         let visible = 0;
+        const preserveFrameLifetimeAt = (index) => {
+            const persistedLifetimeRaw = persistentLifetimes[index];
+            const persistedLifetime = (Number.isFinite(Number(persistedLifetimeRaw)) && persistedLifetimeRaw >= 1)
+                ? Math.max(1, int(persistedLifetimeRaw))
+                : 100;
+            resolvedLifetimes[index] = persistedLifetime;
+            persistentLifetimes[index] = persistedLifetime;
+            return persistedLifetime;
+        };
         for (let i = 0; i < totalCount; i++) {
             const base = basePoints[i];
             const groupId = (pointGroupIndex && i < pointGroupIndex.length) ? int(pointGroupIndex[i]) : -1;
             const owner = groupId >= 0 ? (groupOwner[groupId] || ownerIds[i]) : ownerIds[i];
-            if (isolatedPreviewCardId && String(owner || "") !== String(isolatedPreviewCardId)) {
+            if (visiblePreviewCardIds && !visiblePreviewCardIds.has(String(owner || ""))) {
                 positions[i * 3 + 0] = base.x;
                 positions[i * 3 + 1] = base.y;
                 positions[i * 3 + 2] = base.z;
@@ -907,6 +1630,7 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
                 alphas[i] = 0;
                 this.previewVisibleMask[i] = false;
                 manualAgeFlags[i] = 0;
+                preserveFrameLifetimeAt(i);
                 continue;
             }
             const localIndex = int(ownerLocalIndex[i] || 0);
@@ -1097,6 +1821,7 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
                 resolvedCurrentAges[i] = 0;
                 persistentCurrentAges[i] = 0;
                 manualAgeFlags[i] = 0;
+                preserveFrameLifetimeAt(i);
                 continue;
             }
 
@@ -1331,16 +2056,14 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
                 colors[i * 3 + 2] = 0;
                 sizes[i] = 0.01;
                 alphas[i] = 0;
+                preserveFrameLifetimeAt(i);
                 continue;
             }
             const persistedCurrentAgeRaw = persistentCurrentAges[i];
             const persistedCurrentAge = Number.isFinite(Number(persistedCurrentAgeRaw))
                 ? Math.max(0, num(persistedCurrentAgeRaw))
                 : 0;
-            const persistedLifetimeRaw = persistentLifetimes[i];
-            const persistedLifetime = (Number.isFinite(Number(persistedLifetimeRaw)) && persistedLifetimeRaw >= 1)
-                ? Math.max(1, int(persistedLifetimeRaw))
-                : 100;
+            const persistedLifetime = preserveFrameLifetimeAt(i);
             const persistedControllerState = (persistentControllerStates[i] && typeof persistentControllerStates[i] === "object")
                 ? persistentControllerStates[i]
                 : null;
@@ -1360,8 +2083,10 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
             const visualInitPointDependentLifetime = pointVisualSource
                 ? !!sourceVisualDependency?.initPointDependentLifetime
                 : !!cached.cardVisualInitPointDependentLifetime;
-            const needsInitCurrentAge = visualInitPointDependentCurrentAge && manualAgeFlags[i] !== 1;
-            const needsInitLifetime = visualInitPointDependentLifetime && initializedLifetimeFlags[i] !== 1;
+            const hadManualCurrentAge = manualAgeFlags[i] === 1;
+            const hadInitializedLifetime = initializedLifetimeFlags[i] === 1;
+            const needsInitCurrentAge = visualInitPointDependentCurrentAge && !hadManualCurrentAge;
+            const needsInitLifetime = visualInitPointDependentLifetime && !hadInitializedLifetime;
             const needsPerPointVisual = !skipExprPerPoint && (
                 visualFramePointDependent
                 || needsInitCurrentAge
@@ -1385,8 +2110,8 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
                             ageTick: pointAgeTick,
                             currentAge: persistedCurrentAge,
                             lifetime: persistedLifetime,
-                            keepInitializedCurrentAge: manualAgeFlags[i] === 1,
-                            keepInitializedLifetime: initializedLifetimeFlags[i] === 1,
+                            keepInitializedCurrentAge: hadManualCurrentAge,
+                            keepInitializedLifetime: hadInitializedLifetime,
                             controllerState: persistedControllerState,
                             pointIndex: localIndex,
                             visualSource: pointVisualSource
@@ -1407,8 +2132,8 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
                             ageTick: cached.age,
                             currentAge: persistedCurrentAge,
                             lifetime: persistedLifetime,
-                            keepInitializedCurrentAge: manualAgeFlags[i] === 1,
-                            keepInitializedLifetime: initializedLifetimeFlags[i] === 1,
+                            keepInitializedCurrentAge: hadManualCurrentAge,
+                            keepInitializedLifetime: hadInitializedLifetime,
                             controllerState: persistedControllerState,
                             pointIndex: 0,
                             visualSource: pointVisualSource
@@ -1425,8 +2150,8 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
                         ageTick: cached.age,
                         currentAge: persistedCurrentAge,
                         lifetime: persistedLifetime,
-                        keepInitializedCurrentAge: manualAgeFlags[i] === 1,
-                        keepInitializedLifetime: initializedLifetimeFlags[i] === 1,
+                        keepInitializedCurrentAge: hadManualCurrentAge,
+                        keepInitializedLifetime: hadInitializedLifetime,
                         controllerState: persistedControllerState,
                         pointIndex: 0,
                         visualSource: pointVisualSource
@@ -1438,9 +2163,7 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
                 persistentControllerStates[i] = pointVisual.__controllerState;
             }
 
-            const preserveInitializedCurrentAge = !needsPerPointVisual
-                && !!cached.cardVisualInitPointDependentCurrentAge
-                && manualAgeFlags[i] === 1;
+            const preserveInitializedCurrentAge = hadManualCurrentAge && visualInitPointDependentCurrentAge;
             let hasManualCurrentAge = pointVisual?.__manualCurrentAge === true;
             const resolvedCurrentAgeRaw = Number(pointVisual?.__resolvedCurrentAge);
             let resolvedCurrentAge;
@@ -1455,14 +2178,12 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
             resolvedCurrentAges[i] = resolvedCurrentAge;
             persistentCurrentAges[i] = resolvedCurrentAge;
             manualAgeFlags[i] = hasManualCurrentAge ? 1 : 0;
-            if (pointVisual?.__particleLifetimeInitialized === true || (!needsPerPointVisual
-                && !!cached.cardVisualInitPointDependentLifetime
-                && initializedLifetimeFlags[i] === 1)) {
+            if (pointVisual?.__particleLifetimeInitialized === true
+                || (hadInitializedLifetime && visualInitPointDependentLifetime)) {
                 initializedLifetimeFlags[i] = 1;
             }
-            const preserveInitializedLifetime = !needsPerPointVisual
-                && !!cached.cardVisualInitPointDependentLifetime
-                && initializedLifetimeFlags[i] === 1;
+            const preserveInitializedLifetime = hadInitializedLifetime
+                && (visualInitPointDependentLifetime || pointVisual?.__particleLifetimeInitialized === true);
             const resolvedLifetimeRaw = Number(pointVisual?.__resolvedLifetime);
             if (preserveInitializedLifetime) {
                 resolvedLifetimes[i] = persistedLifetime;
@@ -1490,17 +2211,31 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
             visible++;
         }
 
-        this.pointsGeom.attributes.position.needsUpdate = true;
-        this.pointsGeom.attributes.color.needsUpdate = true;
-        this.pointsGeom.attributes.aSize.needsUpdate = true;
-        this.pointsGeom.attributes.aAlpha.needsUpdate = true;
-        this.updatePreviewFrameIndices(elapsedTick, cycleCfg, groupRuntimeCache, pointGroupIndex, totalCount);
-        this.syncTextureUniforms();
+        this.updatePreviewFrameIndices(elapsedTick, cycleCfg, groupRuntimeCache, pointGroupIndex, totalCount, frameIndices);
         const statusText = `点数: ${visible}/${this.previewBasePoints.length}`;
-        if (this.lastPointsStatusText !== statusText) {
-            this.lastPointsStatusText = statusText;
-            this.dom.statusPoints.textContent = statusText;
-        }
+        return {
+            pointCount: totalCount,
+            visible,
+            statusText,
+            elapsedTick,
+            globalCycleAge,
+            cycleTick: Math.max(0, Math.floor(globalCycleAge)),
+            cycleIndex,
+            runtimeAppliedTick: this.previewRuntimeAppliedTick,
+            runtimeGlobals: frameRuntimeGlobals,
+            attributesWrittenToGeometry,
+            positions,
+            colors,
+            sizes,
+            alphas,
+            frameIndices,
+            visibleMask: this.previewVisibleMask,
+            resolvedCurrentAges,
+            resolvedLifetimes,
+            manualAgeFlags,
+            initializedLifetimeFlags,
+            persistentControllerStates
+        };
     }
 
     isParticleTextureRenderable(pData) {
@@ -1595,10 +2330,10 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
         return `${cardKey}|${sourceKey}`;
     }
 
-    updatePreviewFrameIndices(elapsedTick, cycleCfg, groupRuntimeCache, pointGroupIndex, totalCount) {
-        const frameAttr = this.pointsGeom?.getAttribute("aFrameIndex");
-        if (!frameAttr) return;
-        const frameIndices = frameAttr.array;
+    updatePreviewFrameIndices(elapsedTick, cycleCfg, groupRuntimeCache, pointGroupIndex, totalCount, outputFrameIndices = null) {
+        const frameAttr = outputFrameIndices ? null : this.pointsGeom?.getAttribute("aFrameIndex");
+        if (!outputFrameIndices && !frameAttr) return;
+        const frameIndices = outputFrameIndices || frameAttr.array;
         const { calcTextureFrame, getParticleDataByName } = this._particleDataFns || {};
         if (!calcTextureFrame || !getParticleDataByName) return;
         const resolvedCurrentAges = this.previewFrameCurrentAges;
@@ -1642,7 +2377,7 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
                 : 0;
             frameIndices[i] = baseFrame + atlasOffset;
         }
-        frameAttr.needsUpdate = true;
+        if (frameAttr) frameAttr.needsUpdate = true;
     }
 
     syncTextureUniforms() {
@@ -1945,30 +2680,17 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
         };
     }
 
+    getPreviewVisibleCardIdSet() {
+        const cards = Array.isArray(this.state?.cards) ? this.state.cards : [];
+        const soloCards = cards.filter((card) => card && card.previewSolo === true);
+        const source = soloCards.length ? soloCards : cards.filter((card) => card && card.previewVisible !== false);
+        return new Set(source.map((card) => String(card.id || "")).filter(Boolean));
+    }
+
     getPreviewIsolatedCardId() {
-        if (this.state?.settings?.previewFocusSingleCard === false) return null;
-        if (String(this.state?.settings?.leftPanelTab || "project") !== "cards") return null;
-        if (typeof this.getCardById !== "function") return null;
-        const candidateIds = [];
-        const pushId = (raw) => {
-            const id = String(raw || "").trim();
-            if (!id || candidateIds.includes(id)) return;
-            candidateIds.push(id);
-        };
-        try {
-            const activeCardEl = document?.activeElement?.closest?.(".card[data-card-id]");
-            pushId(activeCardEl?.dataset?.cardId);
-        } catch {
-        }
-        if (this.selectedCardIds instanceof Set && this.selectedCardIds.size === 1) {
-            for (const id of this.selectedCardIds) pushId(id);
-        }
-        pushId(this.focusedCardId);
-        for (const id of candidateIds) {
-            const card = this.getCardById(id);
-            if (card) return id;
-        }
-        return null;
+        const cards = Array.isArray(this.state?.cards) ? this.state.cards : [];
+        const soloCards = cards.filter((card) => card && card.previewSolo === true);
+        return soloCards.length === 1 ? String(soloCards[0].id || "") || null : null;
     }
 
     getPreviewRootSequencedGrowthBypassCardId() {
@@ -4312,7 +5034,7 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
     parseVecLikeValueWithRuntime(rawExpr, runtimeVars = null, opts = {}) {
         const srcRaw = String(rawExpr || "").trim();
         if (!srcRaw) return U.v(0, 0, 0);
-        const src = transpileKotlinThisQualifierToJs(srcRaw);
+        const src = transpileKotlinThisQualifierToJs(srcRaw).replace(/(\d+(?:\.\d+)?)[fFdDlL]\b/g, "$1");
         if (src === "Vec3.ZERO") return U.v(0, 0, 0);
         if (src === "RelativeLocation.yAxis()") return U.v(0, 1, 0);
         if (src.endsWith(".asRelative()")) {

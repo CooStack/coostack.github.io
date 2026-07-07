@@ -34,7 +34,7 @@ import {
     hasAngleOffsetEaseSpecialParams,
     formatAngleValue
 } from "./angle_offset_utils.js";
-import { installPreviewRuntimeMethods } from "./preview_runtime_mixin.js?v=20260513_1";
+import { installPreviewRuntimeMethods } from "./preview_runtime_mixin.js?v=20260707_1";
 import { installKotlinCodegenMethods } from "./kotlin_codegen_mixin.js?v=20260313_1";
 import { installCodeOutputMethods } from "./code_output_mixin.js";
 import { installExpressionEditorMethods } from "./expression_editor_mixin.js?v=20260316_1";
@@ -728,6 +728,8 @@ function normalizeCard(card, index = 0) {
     x.id = x.id || uid();
     x.name = String(x.name || `卡片 ${index + 1}`);
     x.folded = !!x.folded;
+    x.previewVisible = x.previewVisible !== false;
+    x.previewSolo = x.previewSolo === true;
     x.sectionCollapse = normalizeCardSectionCollapse(x.sectionCollapse);
     x.bindMode = x.bindMode === "point" ? "point" : "builder";
     x.point = x.point && typeof x.point === "object" ? x.point : { x: 0, y: 0, z: 0 };
@@ -887,8 +889,14 @@ function normalizeStateShape(state) {
     next.settings.showAxes = next.settings.showAxes !== false;
     next.settings.showGrid = next.settings.showGrid === true ? true : false;
     next.settings.realtimeCode = next.settings.realtimeCode !== false;
-    next.settings.previewFocusSingleCard = next.settings.previewFocusSingleCard !== false;
-    next.settings.leftPanelWidth = clamp(num(next.settings.leftPanelWidth || 586), 400, 1200);
+    next.settings.previewFocusSingleCard = false;
+    next.settings.leftPanelTab = "cards";
+    {
+        const rawLeftWidth = num(next.settings.leftPanelWidth || 0);
+        next.settings.leftPanelWidth = clamp((rawLeftWidth < 820 || rawLeftWidth > 960) ? 900 : rawLeftWidth, 620, 1400);
+    }
+    next.settings.compositionLayerWidth = clamp(num(next.settings.compositionLayerWidth || 300), 260, 420);
+    next.settings.compositionLayersOpen = true;
     next.settings.projectSectionHeight = clamp(num(next.settings.projectSectionHeight || 42), 20, 70);
     next.projectAlpha = normalizeAlphaHelperConfig(next.projectAlpha, { type: "none" });
     next.projectScale = normalizeScaleHelperConfig(next.projectScale, { type: "none" });
@@ -984,9 +992,11 @@ function createDefaultState() {
             showAxes: true,
             showGrid: false,
             realtimeCode: true,
-            previewFocusSingleCard: true,
+            previewFocusSingleCard: false,
             leftPanelTab: "cards",
-            leftPanelWidth: 586,
+            leftPanelWidth: 900,
+            compositionLayerWidth: 300,
+            compositionLayersOpen: true,
             projectSectionHeight: 42
         },
         hotkeys: deepClone(DEFAULT_HOTKEYS)
@@ -1306,7 +1316,6 @@ class CompositionBuilderApp {
             btnPageCode: document.getElementById("btnPageCode"),
             btnNewProject: document.getElementById("btnNewProject"),
             btnAddCard: document.getElementById("btnAddCard"),
-            btnAddCard2: document.getElementById("btnAddCard2"),
             btnCollapseAllCardSections: document.getElementById("btnCollapseAllCardSections"),
             btnExpandAllCardSections: document.getElementById("btnExpandAllCardSections"),
             btnUndo: document.getElementById("btnUndo"),
@@ -1325,12 +1334,10 @@ class CompositionBuilderApp {
             btnPausePreview: document.getElementById("btnPausePreview"),
             btnReplayPreview: document.getElementById("btnReplayPreview"),
             btnCompileExpr: document.getElementById("btnCompileExpr"),
-            btnLeftTabProject: document.getElementById("btnLeftTabProject"),
-            btnLeftTabCards: document.getElementById("btnLeftTabCards"),
-            leftPageProject: document.getElementById("leftPageProject"),
-            leftPageCards: document.getElementById("leftPageCards"),
             projectSection: document.getElementById("projectSection"),
             projectCardsResizer: document.getElementById("projectCardsResizer"),
+            compositionSideWorkbench: document.querySelector(".composition-side-workbench"),
+            compositionLayersRoot: document.getElementById("compositionLayersRoot"),
             cardsRoot: document.getElementById("cardsRoot"),
             leftPanel: document.querySelector(".panel.left"),
             editorResizer: document.getElementById("editorResizer"),
@@ -1341,6 +1348,7 @@ class CompositionBuilderApp {
             statusPoints: document.getElementById("statusPoints"),
             statusSelection: document.getElementById("statusSelection"),
             statusFps: document.getElementById("statusFps"),
+            statusCache: document.getElementById("statusCache"),
             btnJumpPreviewEnd: document.getElementById("btnJumpPreviewEnd"),
             btnResetCamera: document.getElementById("btnResetCamera"),
             btnFullscreen: document.getElementById("btnFullscreen"),
@@ -1396,7 +1404,6 @@ class CompositionBuilderApp {
         d.btnPageCode.addEventListener("click", () => this.switchPage("code"));
         d.btnNewProject?.addEventListener("click", () => this.handleNewProjectClick());
         d.btnAddCard.addEventListener("click", () => this.addCard());
-        d.btnAddCard2.addEventListener("click", () => this.addCard());
         d.btnCollapseAllCardSections?.addEventListener("click", () => {
             this.setAllCardsFolded(true);
             this.setAllCardsSectionsCollapsed(true);
@@ -1416,8 +1423,6 @@ class CompositionBuilderApp {
         d.btnImportProject.addEventListener("click", () => d.fileProject.click());
         d.btnExportProject.addEventListener("click", () => this.exportProject());
         d.fileProject.addEventListener("change", () => this.importProjectFromFile());
-        d.btnLeftTabProject?.addEventListener("click", () => this.switchLeftTab("project"));
-        d.btnLeftTabCards?.addEventListener("click", () => this.switchLeftTab("cards"));
         if (d.chkRealtimeCode) d.chkRealtimeCode.addEventListener("change", () => this.setRealtimeCode(d.chkRealtimeCode.checked));
         d.btnGenerateCode.addEventListener("click", () => this.generateCodeAndRender(true));
         d.btnGenerateCode2.addEventListener("click", () => this.generateCodeAndRender(true));
@@ -1434,13 +1439,18 @@ class CompositionBuilderApp {
         d.projectSection.addEventListener("compositionend", (e) => this.onEditableCompositionEnd(e), true);
         d.projectSection.addEventListener("focusout", (e) => this.onCodeEditorFocusOut(e), true);
 
-        d.cardsRoot.addEventListener("click", (e) => this.onCardClick(e));
-        d.cardsRoot.addEventListener("input", (e) => this.onCardInput(e));
-        d.cardsRoot.addEventListener("change", (e) => this.onCardChange(e));
-        d.cardsRoot.addEventListener("compositionstart", (e) => this.onEditableCompositionStart(e), true);
-        d.cardsRoot.addEventListener("compositionend", (e) => this.onEditableCompositionEnd(e), true);
-        d.cardsRoot.addEventListener("focusin", (e) => this.onCardFocusIn(e), true);
-        d.cardsRoot.addEventListener("focusout", (e) => this.onCodeEditorFocusOut(e), true);
+        d.compositionLayersRoot?.addEventListener("click", (e) => this.onCardClick(e));
+        d.compositionLayersRoot?.addEventListener("input", (e) => this.onCardInput(e));
+        d.compositionLayersRoot?.addEventListener("change", (e) => this.onCardChange(e));
+        for (const root of [d.cardsRoot].filter(Boolean)) {
+            root.addEventListener("click", (e) => this.onCardClick(e));
+            root.addEventListener("input", (e) => this.onCardInput(e));
+            root.addEventListener("change", (e) => this.onCardChange(e));
+            root.addEventListener("compositionstart", (e) => this.onEditableCompositionStart(e), true);
+            root.addEventListener("compositionend", (e) => this.onEditableCompositionEnd(e), true);
+            root.addEventListener("focusin", (e) => this.onCardFocusIn(e), true);
+            root.addEventListener("focusout", (e) => this.onCodeEditorFocusOut(e), true);
+        }
         if (d.btnCompileExpr) d.btnCompileExpr.addEventListener("click", () => this.compileAllCodeEditorSources({ force: true, showToast: true }));
         if (d.btnJumpPreviewEnd) d.btnJumpPreviewEnd.addEventListener("click", () => this.jumpPreviewToPreFade());
 
@@ -1685,21 +1695,9 @@ class CompositionBuilderApp {
         this.dom.chkPreviewFocusSingleCard.checked = !!s.previewFocusSingleCard;
         if (this.dom.chkRealtimeCode) this.dom.chkRealtimeCode.checked = !!s.realtimeCode;
         this.dom.chkRealtimeCode2.checked = !!s.realtimeCode;
-        this.switchLeftTab(String(s.leftPanelTab || "project"), { skipSave: true });
+        this.state.settings.leftPanelTab = "cards";
         this.applySplitSizesFromSettings();
         this.applyTheme();
-    }
-
-    switchLeftTab(tab, opts = {}) {
-        const next = tab === "cards" ? "cards" : "project";
-        this.state.settings.leftPanelTab = next;
-        this.dom.leftPageProject?.classList.toggle("hidden", next !== "project");
-        this.dom.leftPageCards?.classList.toggle("hidden", next !== "cards");
-        this.dom.btnLeftTabProject?.classList.toggle("primary", next === "project");
-        this.dom.btnLeftTabCards?.classList.toggle("primary", next === "cards");
-        this.updateSelectionStatus();
-        if (!opts.skipSave) this.scheduleSave();
-        this.onResize();
     }
 
     applyTheme() {
@@ -2788,6 +2786,10 @@ class CompositionBuilderApp {
             const cardId = btn.dataset.cardId || null;
             const idx = int(btn.dataset.idx);
             const levelIdx = int(btn.dataset.shapeLevelIdx);
+            if (act === "add-card") {
+                this.addCard();
+                return;
+            }
             if (act === "select-card") {
                 this.selectCardById(cardId, e.ctrlKey || e.metaKey, e.shiftKey);
                 return;
@@ -3357,6 +3359,28 @@ class CompositionBuilderApp {
         const card = this.getCardById(cardId);
         if (!card) return;
 
+        if (t.dataset.layerPreviewField) {
+            const field = String(t.dataset.layerPreviewField || "");
+            if (field === "visible") {
+                card.previewVisible = !!t.checked;
+            } else if (field === "solo") {
+                const enabled = !!t.checked;
+                for (const item of this.state.cards) {
+                    item.previewSolo = enabled && item.id === card.id;
+                }
+            } else {
+                return;
+            }
+            this.renderCards();
+            this.updateSelectionStatus();
+            this.scheduleSave();
+            if (this.previewPaused && this.renderer) {
+                this.updatePreviewAnimation();
+                this.renderer.render(this.scene, this.camera);
+            }
+            return;
+        }
+
         if (t.dataset.cardField) {
             const cardField = String(t.dataset.cardField || "");
             if (cardField.startsWith("angleOffset")) {
@@ -3850,7 +3874,6 @@ class CompositionBuilderApp {
                 this.focusedCardId = focusCardId;
                 this.selectedCardIds = new Set([focusCardId]);
                 this.renderCards();
-                this.updatePreviewGeometry(this.previewPoints, this.previewOwners);
                 this.updateSelectionStatus();
             }
         }
@@ -4085,7 +4108,6 @@ class CompositionBuilderApp {
                 this.focusedCardId = card.id;
                 this.ensureSelectionValid();
                 this.renderCards();
-                this.updatePreviewGeometry(this.previewPoints, this.previewOwners);
                 this.updateSelectionStatus();
                 return;
             }
@@ -4100,7 +4122,6 @@ class CompositionBuilderApp {
         }
         this.ensureSelectionValid();
         this.renderCards();
-        this.updatePreviewGeometry(this.previewPoints, this.previewOwners);
         this.updateSelectionStatus();
     }
 
@@ -4117,7 +4138,6 @@ class CompositionBuilderApp {
         }
         this.ensureSelectionValid();
         this.renderCards();
-        this.updatePreviewGeometry(this.previewPoints, this.previewOwners);
         this.updateSelectionStatus();
     }
 
@@ -4153,6 +4173,9 @@ class CompositionBuilderApp {
         if (this.lastFpsStatusText !== text) {
             this.lastFpsStatusText = text;
             this.dom.statusFps.textContent = text;
+        }
+        if (typeof this.updatePreviewCacheStatus === "function") {
+            this.updatePreviewCacheStatus();
         }
     }
 
@@ -5355,7 +5378,7 @@ class CompositionBuilderApp {
         return html;
     }
 
-    renderTreeNodeEditor(card, node, treePath) {
+    renderTreeNodeEditor(card, node, treePath, opts = {}) {
         if (!card || !node) return "";
         const cardId = card.id;
         const tp = esc(JSON.stringify(treePath));
@@ -5365,10 +5388,10 @@ class CompositionBuilderApp {
         const builderNodeCount = this.countBuilderNodes(node.builderState?.root?.children || []);
         const builderPointCount = (builderStats.points || []).length;
         const effectHtml = this.getEffectOptionsHtml(node.effectClass || DEFAULT_EFFECT_CLASS);
-        return this._renderTreeNodeEditorInner(card, node, treePath, tp, cardId, nodeType, bindMode, builderNodeCount, builderPointCount, effectHtml);
+        return this._renderTreeNodeEditorInner(card, node, treePath, tp, cardId, nodeType, bindMode, builderNodeCount, builderPointCount, effectHtml, opts);
     }
 
-    _renderTreeNodeEditorInner(card, node, treePath, tp, cardId, nodeType, bindMode, builderNodeCount, builderPointCount, effectHtml) {
+    _renderTreeNodeEditorInner(card, node, treePath, tp, cardId, nodeType, bindMode, builderNodeCount, builderPointCount, effectHtml, opts = {}) {
         const step = this.state.settings.paramStep;
         const typeBlock = `
             <div class="grid2">
@@ -5401,7 +5424,7 @@ class CompositionBuilderApp {
         if (nodeType === "single") {
             return this._renderTreeNodeSingleView(card, node, tp, cardId, typeBlock, bindBlock, axisBlock, displayBlock, angleOffsetBlock, scaleBlock, effectHtml, treePath);
         }
-        return this._renderTreeNodeShapeView(card, node, tp, cardId, typeBlock, bindBlock, axisBlock, displayBlock, angleOffsetBlock, scaleBlock, nodeType, treePath);
+        return this._renderTreeNodeShapeView(card, node, tp, cardId, typeBlock, bindBlock, axisBlock, displayBlock, angleOffsetBlock, scaleBlock, nodeType, treePath, opts);
     }
 
     _renderTreeNodeBindBlock(card, node, tp, cardId, bindMode, builderNodeCount, builderPointCount, step) {
@@ -5518,7 +5541,7 @@ class CompositionBuilderApp {
             </div>`;
     }
 
-    _renderTreeNodeShapeView(card, node, tp, cardId, typeBlock, bindBlock, axisBlock, displayBlock, angleOffsetBlock, scaleBlock, nodeType, treePath) {
+    _renderTreeNodeShapeView(card, node, tp, cardId, typeBlock, bindBlock, axisBlock, displayBlock, angleOffsetBlock, scaleBlock, nodeType, treePath, opts = {}) {
         const growthBlock = nodeType === "sequenced_shape"
             ? this.renderCardAnimates(
                 card.id, `treeNodeGrowth:${JSON.stringify(treePath)}`,
@@ -5527,7 +5550,7 @@ class CompositionBuilderApp {
                 { embedOnly: true }
             ).replaceAll(`data-card-id="${card.id}"`, `data-card-id="${card.id}" data-tree-path="${tp}"`)
             : "";
-        const childrenList = this._renderTreeNodeChildrenList(card, node, treePath, cardId);
+        const childrenList = opts.includeChildren === false ? "" : this._renderTreeNodeChildrenList(card, node, treePath, cardId);
         return `
             ${typeBlock}
             ${bindBlock}
@@ -5536,8 +5559,7 @@ class CompositionBuilderApp {
             ${angleOffsetBlock}
             ${scaleBlock}
             ${growthBlock}
-            <div class="mini-note">并列子节点</div>
-            ${childrenList}`;
+            ${opts.includeChildren === false ? "" : `<div class="mini-note">并列子节点</div>${childrenList}`}`;
     }
 
     renderTreeNodeParticleInitRows(cardId, node, tp) {
@@ -6282,10 +6304,250 @@ class CompositionBuilderApp {
 
     renderCards() {
         this.ensureSelectionValid();
-        this.dom.cardsRoot.innerHTML = this.state.cards.map((card, idx) => this.renderCardHtml(card, idx)).join("");
+        const activeCard = this.getFocusedCard() || this.state.cards[0] || null;
+        const activeIdx = activeCard ? this.getCardIndexById(activeCard.id) : -1;
+        if (this.dom.compositionLayersRoot) {
+            this.dom.compositionLayersRoot.innerHTML = this.renderCompositionLayersHtml();
+        }
+        this.dom.cardsRoot.innerHTML = activeCard ? this.renderActiveCardWorkspaceHtml(activeCard, activeIdx) : `
+            <section class="workbench-panel empty-card-editor">
+                <div class="mini-note">暂无卡片，请添加一个合成层。</div>
+            </section>
+        `;
         this.decorateCardSubgroups();
         this.refreshCodeEditors();
         this.updateSelectionStatus();
+    }
+
+    renderCompositionLayersHtml() {
+        return `
+            <section class="workbench-panel composition-layers-panel">
+                <div class="workbench-panel-title">
+                    <span>合成层</span>
+                    <div class="card-title-row-actions">
+                        <span class="badge">${this.state.cards.length}</span>
+                        <button class="btn small primary" data-act="add-card">添加</button>
+                    </div>
+                </div>
+                <div class="layer-stack">
+                    ${this.state.cards.map((card, idx) => this.renderLayerRowHtml(card, idx)).join("")}
+                </div>
+            </section>
+        `;
+    }
+
+    renderLayerRowHtml(card, idx) {
+        const selected = this.selectedCardIds.has(card.id);
+        const focused = this.focusedCardId === card.id;
+        const typeLabel = card.dataType === "particle_shape"
+            ? "Shape"
+            : (card.dataType === "sequenced_shape" ? "SeqShape" : "Single");
+        const sourceLabel = card.bindMode === "point" ? "Point" : "Builder";
+        const previewVisible = card.previewVisible !== false;
+        const previewSolo = card.previewSolo === true;
+        return `
+            <div class="layer-row ${selected ? "selected" : ""} ${focused ? "focused" : ""}" data-card-id="${card.id}">
+                <button class="layer-pick" data-act="select-card" data-card-id="${card.id}" title="选择图层">
+                    <span class="layer-index">${idx + 1}</span>
+                    <span class="layer-main">
+                        <span class="layer-name">${esc(card.name || `卡片 ${idx + 1}`)}</span>
+                        <span class="layer-meta">${typeLabel} / ${sourceLabel}</span>
+                    </span>
+                </button>
+                <div class="layer-toggles">
+                    <label class="chk layer-toggle" title="控制该合成层是否参与总预览">
+                        <input type="checkbox" data-card-id="${card.id}" data-layer-preview-field="visible" ${previewVisible ? "checked" : ""}/>可见
+                    </label>
+                    <label class="chk layer-toggle" title="只预览该合成层，关闭后恢复原可见状态">
+                        <input type="checkbox" data-card-id="${card.id}" data-layer-preview-field="solo" ${previewSolo ? "checked" : ""}/>独显
+                    </label>
+                </div>
+                <div class="layer-actions">
+                    <button class="iconbtn" data-act="move-card-up" data-card-id="${card.id}" title="上移">↑</button>
+                    <button class="iconbtn" data-act="move-card-down" data-card-id="${card.id}" title="下移">↓</button>
+                    <button class="iconbtn" data-act="duplicate-card" data-card-id="${card.id}" title="复制">⧉</button>
+                    <button class="iconbtn" data-act="delete-card" data-card-id="${card.id}" title="删除">🗑</button>
+                </div>
+            </div>
+        `;
+    }
+
+    renderActiveCardWorkspaceHtml(card, idx) {
+        const selected = this.selectedCardIds.has(card.id);
+        return `
+            <section class="card composition-editor-card ${selected ? "selected" : ""}" data-card-id="${card.id}">
+                <header class="card-head composition-editor-head" data-card-id="${card.id}">
+                    <div class="card-head-left">
+                        <input
+                            class="input card-name-input"
+                            data-card-id="${card.id}"
+                            data-card-field="name"
+                            value="${esc(card.name || `卡片 ${idx + 1}`)}"
+                            placeholder="卡片备注 / 名称"
+                            title="可编辑卡片备注名称"
+                        />
+                    </div>
+                    <div class="card-head-actions">
+                        <button class="btn small" data-act="collapse-all-sections" data-card-id="${card.id}" title="折叠全部分区">折叠属性</button>
+                        <button class="btn small" data-act="expand-all-sections" data-card-id="${card.id}" title="展开全部分区">展开属性</button>
+                    </div>
+                </header>
+                <div class="composition-editor-grid">
+                    <section class="workbench-panel layer-settings-panel">
+                        <div class="workbench-panel-title">图层属性</div>
+                        ${this.renderCardBaseSection(card, idx)}
+                        ${this.renderCardSourceSection(card)}
+                    </section>
+                    <section class="workbench-panel effect-stack-panel">
+                        ${card.dataType === "single" ? this.renderSingleEffectStackPanel(card) : this.renderShapeStackPanel(card)}
+                    </section>
+                    <section class="workbench-panel inspector-panel">
+                        ${card.dataType === "single" ? this.renderSingleInspectorPanel(card) : this.renderShapeInspectorPanel(card)}
+                    </section>
+                </div>
+            </section>
+        `;
+    }
+
+    renderCardBaseSection(card, idx) {
+        return `
+            <div class="subgroup" data-section-key="base">
+                <div class="subgroup-title">基础</div>
+                <div class="grid2">
+                    <label class="field">
+                        <span>绑定方式</span>
+                        <select class="input" data-card-id="${card.id}" data-card-field="bindMode">
+                            <option value="builder" ${card.bindMode === "builder" ? "selected" : ""}>PointsBuilder</option>
+                            <option value="point" ${card.bindMode === "point" ? "selected" : ""}>Point</option>
+                        </select>
+                    </label>
+                    <label class="field">
+                        <span>点类型</span>
+                        <select class="input" data-card-id="${card.id}" data-card-field="dataType">
+                            <option value="single" ${card.dataType === "single" ? "selected" : ""}>single</option>
+                            <option value="particle_shape" ${card.dataType === "particle_shape" ? "selected" : ""}>ParticleShapeComposition</option>
+                            <option value="sequenced_shape" ${card.dataType === "sequenced_shape" ? "selected" : ""}>SequencedParticleShapeComposition</option>
+                        </select>
+                    </label>
+                </div>
+            </div>
+        `;
+    }
+
+    renderCardSourceSection(card) {
+        const builderStats = this.evaluateBuilderPoints(card.builderState);
+        const builderNodeCount = this.countBuilderNodes(card.builderState?.root?.children || []);
+        const builderPointCount = (builderStats.points || []).length;
+        if (card.bindMode === "point") {
+            return `
+                <div class="subgroup" data-section-key="source">
+                    <div class="subgroup-title">Point Source</div>
+                    <div class="grid3">
+                        <label class="field"><span>X</span><input class="input" type="number" step="${this.state.settings.paramStep}" data-card-id="${card.id}" data-card-point-field="x" value="${esc(String(card.point.x))}"/></label>
+                        <label class="field"><span>Y</span><input class="input" type="number" step="${this.state.settings.paramStep}" data-card-id="${card.id}" data-card-point-field="y" value="${esc(String(card.point.y))}"/></label>
+                        <label class="field"><span>Z</span><input class="input" type="number" step="${this.state.settings.paramStep}" data-card-id="${card.id}" data-card-point-field="z" value="${esc(String(card.point.z))}"/></label>
+                    </div>
+                </div>
+            `;
+        }
+        return `
+            <div class="subgroup" data-section-key="source">
+                <div class="subgroup-title">PointsBuilder Source</div>
+                <div class="kv-list">
+                    <div class="kv-row display-row">
+                        <div class="builder-actions">
+                            <button class="btn small primary" data-act="open-builder-editor" data-card-id="${card.id}">编辑 Builder</button>
+                            <button class="btn small" data-act="import-builder-json" data-card-id="${card.id}">导入 JSON</button>
+                            <button class="btn small" data-act="export-builder-json" data-card-id="${card.id}">导出 JSON</button>
+                            <button class="btn small" data-act="clear-builder" data-card-id="${card.id}">清空</button>
+                        </div>
+                    </div>
+                    <div class="kv-row display-row">
+                        <div class="builder-meta">节点 ${builderNodeCount} / 预览点 ${builderPointCount}</div>
+                    </div>
+                </div>
+            </div>
+        `;
+    }
+
+    renderSingleEffectStackPanel(card) {
+        return `
+            <div class="workbench-panel-title">
+                <span>效果栈</span>
+                <span class="badge">Single</span>
+            </div>
+            <div class="effect-stack-content">
+                <div class="subgroup" data-section-key="single_particle_init">
+                    <div class="subgroup-title">Particle Init</div>
+                    <div class="list-tools">
+                        <button class="btn small primary" data-act="add-pinit" data-card-id="${card.id}">添加 init</button>
+                    </div>
+                    <div class="kv-list">
+                        ${this.renderParticleInitRows(card)}
+                    </div>
+                </div>
+                <div class="subgroup" data-section-key="single_controller_init">
+                    <div class="subgroup-title">Controller</div>
+                    <div class="list-tools">
+                        <button class="btn small primary" data-act="add-cvar" data-card-id="${card.id}">添加局部变量</button>
+                        <button class="btn small primary" data-act="add-caction" data-card-id="${card.id}">添加 tick action</button>
+                    </div>
+                    <div class="kv-list">
+                        ${card.controllerVars.map((it, cIdx) => `
+                            <div class="kv-row grid-var">
+                                <input class="input" data-card-id="${card.id}" data-cvar-idx="${cIdx}" data-cvar-field="name" value="${esc(it.name)}" placeholder="name"/>
+                                <select class="input" data-card-id="${card.id}" data-cvar-idx="${cIdx}" data-cvar-field="type">
+                                    ${CONTROLLER_VAR_TYPES.map((tp) => `<option value="${esc(tp)}" ${it.type === tp ? "selected" : ""}>${esc(tp)}</option>`).join("")}
+                                </select>
+                                <input class="input" data-card-id="${card.id}" data-cvar-idx="${cIdx}" data-cvar-field="expr" value="${esc(it.expr)}" placeholder="初始值"/>
+                                <div></div><div></div>
+                                <button class="btn small" data-act="remove-cvar" data-card-id="${card.id}" data-idx="${cIdx}">删除</button>
+                            </div>
+                        `).join("")}
+                    </div>
+                    <div class="kv-list">
+                        ${(card.controllerActions || []).map((a, aIdx) => this.renderControllerActionRow(card.id, a, aIdx)).join("")}
+                    </div>
+                </div>
+            </div>
+        `;
+    }
+
+    renderSingleInspectorPanel(card) {
+        const effectOptions = this.getEffectOptionsHtml(card.singleEffectClass);
+        return `
+            <section class="card-editor-panel node-inspector-panel">
+                <div class="card-editor-panel-title">
+                    <span>Particle 属性</span>
+                    <span class="badge">Single</span>
+                </div>
+                <div class="node-inspector-body">
+                    <div class="inspector-fields">
+                        <label class="field">
+                            <span>Effect</span>
+                            <select class="input" data-card-id="${card.id}" data-card-field="singleEffectClass">${effectOptions}</select>
+                        </label>
+                        <label class="field">
+                            <span>Texture Preview</span>
+                            <span class="chk"><input type="checkbox" data-card-id="${card.id}" data-card-field="singleUseTexture" ${card.singleUseTexture === false ? "" : "checked"}/>Use Texture</span>
+                        </label>
+                    </div>
+                </div>
+            </section>
+        `;
+    }
+
+    renderShapeStackPanel(card) {
+        return `
+            <div class="workbench-panel-title">
+                <span>Composition Stack</span>
+                <span class="badge">${card.dataType === "sequenced_shape" ? "SeqShape" : "Shape"}</span>
+            </div>
+            ${this.renderShapeTreePanel(card)}
+            ${card.dataType === "sequenced_shape"
+                ? `<div class="effect-stack-content">${this.renderCardAnimates(card.id, "growthAnimates", card.growthAnimates, "生长动画", "add-growth-animate", "remove-growth-animate", { sectionKey: "growth" })}</div>`
+                : ""}
+        `;
     }
 
     inferSectionKeyFromTitle(title, fallback = "base") {
@@ -6305,13 +6567,13 @@ class CompositionBuilderApp {
     }
 
     decorateCardSubgroups() {
-        const cards = this.dom.cardsRoot?.querySelectorAll?.(".card[data-card-id]") || [];
+        const cards = Array.from(this.dom.cardsRoot?.querySelectorAll?.(".card[data-card-id]") || []);
         for (const cardEl of cards) {
             const cardId = String(cardEl.dataset.cardId || "");
             const card = this.getCardById(cardId);
             if (!card) continue;
             card.sectionCollapse = normalizeCardSectionCollapse(card.sectionCollapse);
-            const groups = cardEl.querySelectorAll(".card-body > .subgroup");
+            const groups = cardEl.querySelectorAll(".card-body > .subgroup, .node-inspector-body > .subgroup, .layer-settings-panel > .subgroup, .effect-stack-content > .subgroup");
             let idx = 0;
             for (const group of groups) {
                 group.dataset.cardId = cardId;
@@ -6391,7 +6653,7 @@ class CompositionBuilderApp {
                     </div>
                 </header>
                 ${card.folded ? "" : `
-                    <div class="card-body">
+                    <div class="card-body ${card.dataType === "single" ? "" : "card-body--shape"}">
                         <div class="subgroup" data-section-key="base">
                             <div class="subgroup-title">基础</div>
                             <div class="grid2">
@@ -6498,29 +6760,74 @@ class CompositionBuilderApp {
 
     renderShapeChildParamsSection(card) {
         if (!card) return "";
-        const viewPath = card.viewPath || [];
-        const breadcrumb = this._renderTreeBreadcrumb(card, viewPath);
-        let body = "";
-        if (viewPath.length === 0) {
-            body = this._renderTreeRootView(card);
-        } else {
-            const node = this.getShapeNodeByPath(card, viewPath);
-            if (!node) {
-                body = `<div class="mini-note">节点不存在，请返回上级</div>`;
-            } else {
-                body = this.renderTreeNodeEditor(card, node, viewPath);
-            }
-        }
         return `
-            <div class="subgroup subgroup-tight" data-section-key="shape_child_params">
-                <div class="subgroup-title">形状树</div>
-                ${breadcrumb}
-                ${body}
+            <div class="subgroup subgroup-tight shape-workbench-shell" data-section-key="shape_child_params">
+                <div class="subgroup-title">形状编辑</div>
+                <div class="shape-workbench">
+                    ${this.renderShapeTreePanel(card)}
+                    ${this.renderShapeInspectorPanel(card)}
+                </div>
             </div>
         `;
     }
 
-    _renderTreeRootView(card) {
+    renderShapeTreePanel(card) {
+        const viewPath = Array.isArray(card?.viewPath) ? card.viewPath : [];
+        const breadcrumb = this._renderTreeBreadcrumb(card, viewPath);
+        let body = "";
+        if (viewPath.length === 0) {
+            body = this._renderTreeRootChildrenList(card);
+        } else {
+            const node = this.getShapeNodeByPath(card, viewPath);
+            if (!node) {
+                body = `<div class="mini-note">节点不存在，请返回上级</div>`;
+            } else if ((node.type || "single") === "single") {
+                body = `<div class="mini-note">当前节点是 single，切换为 Shape 后可继续添加子节点。</div>`;
+            } else {
+                body = this._renderTreeNodeChildrenList(card, node, viewPath, card.id);
+            }
+        }
+        return `
+            <section class="card-editor-panel shape-tree-panel">
+                <div class="card-editor-panel-title">形状树</div>
+                ${breadcrumb}
+                <div class="shape-tree-content">${body}</div>
+            </section>
+        `;
+    }
+
+    renderShapeInspectorPanel(card) {
+        const viewPath = Array.isArray(card?.viewPath) ? card.viewPath : [];
+        let title = "根属性";
+        let badge = "Root";
+        let body = "";
+        if (viewPath.length === 0) {
+            body = this._renderTreeRootView(card, { includeChildren: false });
+        } else {
+            const node = this.getShapeNodeByPath(card, viewPath);
+            if (!node) {
+                title = "节点属性";
+                badge = "Missing";
+                body = `<div class="mini-note">节点不存在，请返回上级</div>`;
+            } else {
+                const nodeType = node.type || "single";
+                title = node.name ? `${node.name} 属性` : `子节点 ${viewPath[viewPath.length - 1] + 1} 属性`;
+                badge = nodeType === "particle_shape" ? "Shape" : (nodeType === "sequenced_shape" ? "SeqShape" : "Single");
+                body = this.renderTreeNodeEditor(card, node, viewPath, { includeChildren: false });
+            }
+        }
+        return `
+            <section class="card-editor-panel node-inspector-panel">
+                <div class="card-editor-panel-title">
+                    <span>${esc(title)}</span>
+                    <span class="badge">${esc(badge)}</span>
+                </div>
+                <div class="node-inspector-body">${body}</div>
+            </section>
+        `;
+    }
+
+    _renderTreeRootView(card, opts = {}) {
         const cardId = card.id;
         const axisBlock = `
             <div class="subgroup" data-section-key="shape_axis">
@@ -6560,7 +6867,7 @@ class CompositionBuilderApp {
             scope: "card", cardId, scale: card.shapeScale,
             helperName: "缩放助手", sectionKey: "shape_scale"
         });
-        const childrenList = this._renderTreeRootChildrenList(card);
+        const childrenList = opts.includeChildren === false ? "" : this._renderTreeRootChildrenList(card);
         return `${axisBlock}${displayBlock}${scaleBlock}${childrenList}`;
     }
 
@@ -8649,8 +8956,8 @@ class CompositionBuilderApp {
                 const rect = pageEditor.getBoundingClientRect();
                 const startX = ev.clientX;
                 const startW = leftPanel.getBoundingClientRect().width;
-                const minW = 400;
-                const maxW = Math.max(minW, Math.min(1200, rect.width - 260));
+                const minW = 260;
+                const maxW = Math.max(minW, Math.min(520, rect.width - 260));
                 try {
                     resizer.setPointerCapture(ev.pointerId);
                 } catch {
@@ -8660,7 +8967,7 @@ class CompositionBuilderApp {
                     const w = clamp(startW + dx, minW, maxW);
                     leftPanel.style.flexBasis = `${w}px`;
                     leftPanel.style.width = `${w}px`;
-                    this.state.settings.leftPanelWidth = w;
+                    this.state.settings.compositionLayerWidth = w;
                     this.onResize();
                 };
                 const onUp = (e) => {
@@ -8683,6 +8990,7 @@ class CompositionBuilderApp {
         if (verticalResizer) {
             verticalResizer.style.display = "none";
         }
+
     }
 
     applySplitSizesFromSettings() {
@@ -8693,10 +9001,14 @@ class CompositionBuilderApp {
                 leftPanel.style.flexBasis = "";
                 leftPanel.style.width = "";
             } else {
-                const w = clamp(num(this.state.settings.leftPanelWidth || 560), 400, 1200);
+                const w = clamp(num(this.state.settings.compositionLayerWidth || 300), 260, 520);
                 leftPanel.style.flexBasis = `${w}px`;
                 leftPanel.style.width = `${w}px`;
             }
+        }
+        if (this.dom.compositionSideWorkbench) {
+            const layerW = clamp(num(this.state.settings.compositionLayerWidth || 300), 260, 420);
+            this.dom.compositionSideWorkbench.style.setProperty("--composition-layers-width", `${layerW}px`);
         }
     }
 

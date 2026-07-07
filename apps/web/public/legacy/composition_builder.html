@@ -4,7 +4,7 @@
     <meta charset="utf-8"/>
     <meta name="viewport" content="width=device-width,initial-scale=1"/>
     <title>Composition 构建器</title>
-    <link rel="stylesheet" href="./assets/composition_builder/css/style.css?v=20260313_6"/>
+    <link rel="stylesheet" href="./assets/composition_builder/css/style.css?v=20260707_1"/>
     <script src="./assets/src/js/compat/spa-router-bridge.js"></script>
 </head>
 <body data-theme="dark-1">
@@ -38,25 +38,9 @@
     </header>
 
     <main id="pageEditor" class="page page-editor">
-        <aside class="panel left">
-            <div class="panel-title">项目与卡片</div>
-            <div class="left-tabbar">
-                <button id="btnLeftTabProject" class="btn small primary">项目</button>
-                <button id="btnLeftTabCards" class="btn small">卡片</button>
-            </div>
-            <div id="leftPageProject" class="left-page">
-                <div id="projectSection" class="project-section"></div>
-            </div>
-            <div id="leftPageCards" class="left-page hidden">
-                <div class="panel-title card-title-row">
-                    <span>卡片</span>
-                    <div class="card-title-row-actions">
-                        <button id="btnCollapseAllCardSections" class="btn small" title="折叠所有卡片">折叠所有</button>
-                        <button id="btnExpandAllCardSections" class="btn small" title="展开所有卡片">展开所有</button>
-                        <button id="btnAddCard2" class="btn small primary">添加</button>
-                    </div>
-                </div>
-                <div id="cardsRoot" class="cards"></div>
+        <aside class="panel left composition-layer-sidebar">
+            <div class="composition-side-workbench">
+                <div id="compositionLayersRoot" class="composition-layers-root"></div>
             </div>
         </aside>
         <div id="editorResizer" class="editor-resizer" aria-hidden="true"></div>
@@ -78,15 +62,28 @@
                     <div id="statusSnapMode" class="badge hidden"></div>
                     <div id="statusSelection" class="badge">选中: 无</div>
                     <div id="statusFps" class="badge">FPS: --</div>
+                    <div id="statusCache" class="badge">缓存: --</div>
                 </div>
                 <div class="hud-right">
                     <div class="badge">中键旋转 / 右键平移 / 滚轮缩放</div>
                     <div class="badge">左键框选</div>
                 </div>
             </div>
-            <div id="viewerWrap" class="viewer-wrap">
-                <div id="threeHost" class="three-host"></div>
-                <div id="selectBox" class="select-box hidden"></div>
+            <div class="preview-workbench">
+                <div id="viewerWrap" class="viewer-wrap">
+                    <div id="threeHost" class="three-host"></div>
+                    <div id="selectBox" class="select-box hidden"></div>
+                </div>
+                <aside class="preview-editor-column">
+                    <details id="projectEditorDrawer" class="preview-project-drawer">
+                        <summary class="project-drawer-summary">
+                            <span>项目设置</span>
+                            <span class="badge">全局</span>
+                        </summary>
+                        <div id="projectSection" class="project-section"></div>
+                    </details>
+                    <aside id="cardsRoot" class="cards composition-card-editor-root preview-editor-root"></aside>
+                </aside>
             </div>
         </section>
     </main>
@@ -153,7 +150,7 @@
                             <span>实时生成代码</span>
                         </label>
                         <label class="chk settings-toggle">
-                            <input id="chkPreviewFocusSingleCard" type="checkbox" checked/>
+                            <input id="chkPreviewFocusSingleCard" type="checkbox" disabled/>
                             <span>卡片页聚焦时只显示当前卡片</span>
                         </label>
                     </div>
@@ -268,6 +265,6 @@
   }
 }
 </script>
-<script type="module" src="./assets/src/js/pages/composition-builder.page.js?v=20260503_1"></script>
+<script type="module" src="./assets/src/js/pages/composition-builder.page.js?v=20260707_1"></script>
 </body>
 </html>

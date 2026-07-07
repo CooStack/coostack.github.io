@@ -300,14 +300,16 @@ body {
 }
 
 .panel.left {
-    flex: 0 0 560px;
-    width: 560px;
-    min-width: 400px;
-    max-width: 78vw;
+    flex: 0 0 300px;
+    width: 300px;
+    min-width: 260px;
+    max-width: 520px;
 }
 
 .panel.right {
     flex: 1 1 auto;
+    min-width: 0;
+    container-type: inline-size;
 }
 
 .panel-title {
@@ -650,6 +652,316 @@ body[data-theme^="light"] select.input option {
     gap: 10px;
 }
 
+.composition-side-workbench {
+    flex: 1 1 auto;
+    min-height: 0;
+    padding: 10px;
+    overflow: hidden;
+    display: flex;
+}
+
+.composition-layer-resizer {
+    display: none;
+}
+
+.composition-layers-root {
+    flex: 1 1 auto;
+    width: 100%;
+    min-height: 0;
+    height: 100%;
+    overflow: hidden;
+    display: flex;
+}
+
+.composition-card-editor-root {
+    min-height: 0;
+    padding: 0;
+    overflow: auto;
+}
+
+.workbench-panel {
+    min-width: 0;
+    container-type: inline-size;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: color-mix(in srgb, var(--panel2) 78%, transparent);
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.workbench-panel-title {
+    min-height: 30px;
+    padding: 7px 9px;
+    border-bottom: 1px solid var(--line);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    font-size: 12px;
+    font-weight: 800;
+    color: var(--text);
+}
+
+.composition-layers-panel {
+    width: 100%;
+    min-height: 0;
+    height: 100%;
+}
+
+.layer-stack {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow: auto;
+    scrollbar-gutter: stable;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 6px;
+}
+
+.layer-row {
+    flex: 0 0 44px;
+    height: 44px;
+    box-sizing: border-box;
+    overflow: hidden;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto auto;
+    gap: 5px;
+    align-items: center;
+    border: 1px solid var(--line);
+    border-radius: 7px;
+    background: rgba(255, 255, 255, .025);
+    padding: 4px 6px;
+}
+
+.layer-row.selected {
+    border-color: color-mix(in srgb, var(--accent) 70%, transparent);
+    background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+.layer-row.focused {
+    box-shadow: inset 3px 0 0 color-mix(in srgb, var(--accent) 82%, transparent);
+}
+
+.layer-pick {
+    appearance: none;
+    border: 0;
+    background: transparent;
+    color: var(--text);
+    min-width: 0;
+    padding: 0;
+    width: 100%;
+    display: grid;
+    grid-template-columns: 20px minmax(0, 1fr);
+    gap: 5px;
+    align-items: center;
+    text-align: left;
+    cursor: pointer;
+}
+
+.layer-index {
+    width: 20px;
+    height: 20px;
+    border-radius: 6px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(255, 255, 255, .06);
+    color: var(--muted);
+    font-size: 11px;
+    font-weight: 800;
+}
+
+.layer-main {
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+}
+
+.layer-name {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 12px;
+    line-height: 13px;
+    font-weight: 800;
+}
+
+.layer-meta {
+    color: var(--muted);
+    font-size: 10px;
+    line-height: 11px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.layer-actions {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    justify-content: flex-end;
+}
+
+.layer-toggles {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    white-space: nowrap;
+}
+
+.layer-toggle {
+    gap: 3px;
+    font-size: 11px;
+}
+
+.layer-toggle input[type="checkbox"] {
+    width: 13px;
+    height: 13px;
+}
+
+.layer-actions .iconbtn {
+    width: 20px;
+    height: 20px;
+    border-radius: 6px;
+    font-size: 10px;
+}
+
+.composition-editor-card {
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+}
+
+.empty-card-editor {
+    padding: 14px;
+}
+
+.composition-editor-head {
+    cursor: default;
+    min-height: 38px;
+    padding: 6px 8px;
+}
+
+.composition-editor-grid {
+    padding: 8px;
+    min-width: 0;
+    display: grid;
+    grid-template-columns: minmax(220px, .85fr) minmax(280px, 1.15fr);
+    gap: 8px;
+    align-items: start;
+}
+
+.composition-editor-card .card-name-input {
+    width: clamp(170px, 26vw, 280px);
+    height: 28px;
+}
+
+.composition-editor-card .btn.small {
+    height: 26px;
+    padding: 0 7px;
+}
+
+.composition-editor-card .input {
+    height: 28px;
+    border-radius: 8px;
+    padding-inline: 8px;
+}
+
+.composition-editor-card select.input {
+    padding-right: 24px;
+    background-position: calc(100% - 14px) 50%, calc(100% - 8px) 50%;
+}
+
+.composition-editor-card .kv-list {
+    gap: 6px;
+}
+
+.composition-editor-card .kv-row {
+    border-radius: 8px;
+    padding: 6px;
+    gap: 6px;
+}
+
+.composition-editor-card .subgroup {
+    border-radius: 8px;
+    padding: 6px;
+    gap: 6px;
+}
+
+.composition-editor-card .subgroup-toggle {
+    width: 22px;
+    height: 22px;
+    border-radius: 6px;
+}
+
+.composition-editor-card .subgroup-body {
+    gap: 6px;
+}
+
+.composition-editor-card .list-tools {
+    gap: 6px;
+    margin-bottom: 6px;
+}
+
+.composition-editor-card .pinit-value,
+.composition-editor-card .pinit-value.vector-manual {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 6px;
+}
+
+.composition-editor-card .pinit-color {
+    width: 100%;
+    min-width: 0;
+    justify-self: stretch;
+}
+
+.layer-settings-panel,
+.effect-stack-panel,
+.inspector-panel {
+    padding: 8px;
+}
+
+.layer-settings-panel > .workbench-panel-title,
+.effect-stack-panel > .workbench-panel-title {
+    margin: -8px -8px 0;
+}
+
+.effect-stack-content,
+.inspector-fields {
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.effect-stack-panel > .card-editor-panel,
+.inspector-panel > .card-editor-panel {
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    padding: 0;
+}
+
+.effect-stack-panel > .card-editor-panel > .card-editor-panel-title,
+.inspector-panel > .card-editor-panel > .card-editor-panel-title {
+    min-height: 34px;
+    margin: -8px -8px 0;
+    padding: 7px 9px;
+}
+
+.effect-stack-panel .child-row {
+    flex-wrap: nowrap;
+    align-items: center;
+}
+
+.effect-stack-panel .child-row .child-name {
+    flex: 1 1 auto;
+}
+
 .editor-resizer {
     width: 8px;
     border-radius: 999px;
@@ -670,6 +982,10 @@ body[data-theme^="light"] select.input option {
     width: 10px;
 }
 
+.layer-stack::-webkit-scrollbar {
+    width: 10px;
+}
+
 .cards::-webkit-scrollbar-thumb {
     background: color-mix(in srgb, var(--text) 22%, transparent);
     border: 2px solid transparent;
@@ -677,8 +993,11 @@ body[data-theme^="light"] select.input option {
     background-clip: content-box;
 }
 
-#leftPageCards .cards {
-    padding: 10px 12px 12px;
+.layer-stack::-webkit-scrollbar-thumb {
+    background: color-mix(in srgb, var(--text) 22%, transparent);
+    border: 2px solid transparent;
+    border-radius: 10px;
+    background-clip: content-box;
 }
 
 .project-section::-webkit-scrollbar {
@@ -698,6 +1017,7 @@ body[data-theme^="light"] select.input option {
     background: color-mix(in srgb, var(--card) 86%, transparent);
     overflow: hidden;
     flex: 0 0 auto;
+    container-type: inline-size;
 }
 
 .card.selected {
@@ -779,6 +1099,67 @@ body[data-theme^="light"] select.input option {
     display: flex;
     flex-direction: column;
     gap: 10px;
+}
+
+.card-body--shape {
+    gap: 12px;
+}
+
+.shape-workbench-shell {
+    border-style: solid;
+    background: color-mix(in srgb, var(--panel2) 88%, transparent);
+}
+
+.shape-workbench-shell > .subgroup-body {
+    gap: 10px;
+}
+
+.shape-workbench {
+    display: grid;
+    grid-template-columns: minmax(230px, .85fr) minmax(320px, 1.15fr);
+    gap: 10px;
+    align-items: start;
+    min-width: 0;
+}
+
+.card-editor-panel {
+    min-width: 0;
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    background: color-mix(in srgb, var(--card) 72%, transparent);
+    padding: 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.card-editor-panel-title {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    min-height: 24px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--line);
+    color: var(--text);
+    font-size: 13px;
+    font-weight: 700;
+}
+
+.shape-tree-panel {
+    position: static;
+}
+
+.shape-tree-content,
+.node-inspector-body {
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.node-inspector-panel {
+    background: color-mix(in srgb, var(--panel) 78%, transparent);
 }
 
 .subgroup {
@@ -1217,11 +1598,21 @@ body[data-theme^="light"] select.input option {
 .tok-builtin { color: #90e1ff; }
 .tok-id { color: var(--text); }
 
+.preview-workbench {
+    flex: 1 1 auto;
+    min-height: 0;
+    padding: 10px;
+    display: grid;
+    grid-template-columns: minmax(340px, 1fr) minmax(420px, 660px);
+    gap: 10px;
+    overflow: hidden;
+}
+
 .viewer-wrap {
     position: relative;
     flex: 1;
     min-height: 0;
-    margin: 10px;
+    margin: 0;
     border-radius: 18px;
     overflow: hidden;
     border: none;
@@ -1241,6 +1632,67 @@ body[data-theme^="light"] select.input option {
     display: block;
     width: 100%;
     height: 100%;
+}
+
+.preview-editor-root {
+    flex: 1 1 auto;
+    min-width: 0;
+    min-height: 0;
+    overflow: auto;
+    overflow-x: hidden;
+    scrollbar-gutter: stable;
+    overscroll-behavior: contain;
+    display: flex;
+}
+
+.preview-editor-root .composition-editor-card {
+    width: 100%;
+}
+
+.preview-editor-column {
+    min-width: 0;
+    min-height: 0;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.preview-project-drawer {
+    flex: 0 0 auto;
+    min-width: 0;
+    min-height: 0;
+    max-height: min(42vh, 420px);
+    overflow: hidden;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: color-mix(in srgb, var(--panel2) 78%, transparent);
+}
+
+.project-drawer-summary {
+    min-height: 30px;
+    padding: 7px 9px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    list-style: none;
+    cursor: pointer;
+    font-size: 12px;
+    font-weight: 800;
+    border-bottom: 1px solid transparent;
+}
+
+.project-drawer-summary::-webkit-details-marker {
+    display: none;
+}
+
+.preview-project-drawer[open] .project-drawer-summary {
+    border-bottom-color: var(--line);
+}
+
+.preview-project-drawer .project-section {
+    max-height: calc(min(42vh, 420px) - 31px);
 }
 
 .viewer-hud {
@@ -1688,7 +2140,7 @@ body[data-theme^="light"] .tok-type {
 
 @media (max-width: 1280px) {
     .panel.left {
-        flex-basis: 500px;
+        flex-basis: 820px;
     }
     .kv-row.grid-const {
         grid-template-columns: minmax(0, 1.1fr) 116px minmax(0, 1fr);
@@ -1710,6 +2162,70 @@ body[data-theme^="light"] .tok-type {
     }
 }
 
+@container (max-width: 560px) {
+    .shape-workbench {
+        grid-template-columns: 1fr;
+    }
+
+}
+
+@container (max-width: 760px) {
+    .composition-editor-grid {
+        grid-template-columns: 1fr;
+    }
+}
+
+@container (max-width: 920px) {
+    .preview-workbench {
+        grid-template-columns: 1fr;
+        grid-template-rows: minmax(260px, 1fr) minmax(340px, auto);
+        overflow: auto;
+    }
+
+    .preview-editor-column {
+        min-height: 340px;
+        overflow: visible;
+    }
+
+    .preview-editor-root {
+        min-height: 320px;
+        overflow: visible;
+    }
+}
+
+@container (max-width: 460px) {
+    .grid2,
+    .grid3,
+    .grid5,
+    .vector-inputs,
+    .kv-row.grid-var > .grid2,
+    .kv-row.grid-const,
+    .kv-row.grid-animate,
+    .kv-row.grid-action {
+        grid-template-columns: 1fr;
+    }
+
+    .kv-row.grid-const > * {
+        grid-column: auto;
+    }
+
+    .pinit-value,
+    .pinit-value.vector-manual {
+        grid-template-columns: 1fr;
+    }
+
+    .pinit-color {
+        width: 100%;
+        min-width: 0;
+    }
+
+    .row-actions,
+    .card-head-actions,
+    .list-tools {
+        justify-content: flex-start;
+    }
+}
+
 @media (max-width: 1100px) {
     .page-editor {
         flex-direction: column;
@@ -1719,7 +2235,15 @@ body[data-theme^="light"] .tok-type {
     }
     .panel.left {
         max-width: none;
-        flex: 0 0 52vh;
+        flex: 0 0 220px;
+        min-width: 0;
+        width: auto;
+    }
+    .composition-layers-root {
+        height: auto;
+    }
+    .composition-layers-panel {
+        max-height: 24vh;
     }
     .panel.right {
         flex: 1 1 auto;
@@ -1852,10 +2376,12 @@ body[data-theme^="light"] .tok-type {
     margin-bottom: 8px;
 }
 .child-row {
-    display: flex;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 58px repeat(4, minmax(44px, auto));
     align-items: center;
     gap: 6px;
-    padding: 6px 10px;
+    min-height: 36px;
+    padding: 0 8px;
     background: var(--panel);
     border-radius: var(--radius2);
     border: 1px solid var(--line);
@@ -1865,19 +2391,44 @@ body[data-theme^="light"] .tok-type {
     border-color: var(--line2);
 }
 .child-row .child-name {
-    flex: 1;
+    height: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
     font-size: 13px;
     color: var(--text);
     min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+    text-align: center;
 }
 .child-row .child-type.badge {
+    justify-self: center;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 58px;
+    min-height: 20px;
     font-size: 11px;
     padding: 1px 6px;
     border-radius: 4px;
     background: var(--line2);
     color: var(--muted);
     white-space: nowrap;
+}
+
+.child-row .btn.small {
+    height: 28px;
+    min-height: 28px;
+    max-height: 28px;
+    min-width: 44px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0 8px;
+}
+
+.children-list + .list-tools {
+    justify-content: center;
 }
