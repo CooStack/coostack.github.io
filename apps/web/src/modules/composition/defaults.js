@@ -132,7 +132,7 @@ export function createCompositionParticleInit(overrides = {}) {
     id: makeId('pinit'),
     target: 'color',
     exprPreset: '',
-    expr: 'RelativeLocation(1.0, 1.0, 1.0)',
+    expr: 'Vector3f(1F, 1F, 1F)',
     ...overrides
   };
 }

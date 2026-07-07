@@ -601,7 +601,11 @@
 }
 .composition-legacy .kv-row.grid-pinit {
   grid-template-columns: minmax(160px, 220px) minmax(0, 1fr) auto;
+  grid-template-rows: auto auto;
   align-items: center;
+}
+.composition-legacy .particle-color-editor {
+  grid-column: 1 / -1;
 }
 .composition-legacy .kv-row.grid-animate {
   grid-template-columns: 110px 1fr auto;

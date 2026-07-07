@@ -142,11 +142,18 @@
               <div class="kv-list">
                 <div v-if="!card.particleInit.length" class="mini-note">暂无 Particle Init。</div>
                 <div v-for="(item, index) in card.particleInit" :key="item.id || index" class="kv-row grid-pinit">
-                  <select v-model="item.target" class="input">
+                  <select v-model="item.target" class="input" @change="normalizeParticleInitExpr(item)">
                     <option v-for="target in particleInitTargets" :key="target" :value="target">{{ target }}</option>
                   </select>
-                  <input v-model="item.expr" class="input mono" type="text" :placeholder="particleInitPlaceholder(item.target)" />
+                  <input v-model="item.expr" class="input mono" type="text" :placeholder="particleInitPlaceholder(item.target)" @blur="normalizeParticleInitExpr(item)" />
                   <button class="btn small" @click.stop="removeParticleInit(card, item.id)">删除</button>
+                  <div v-if="isDirectColorParticleInit(item)" class="vector-inputs inline-vector-inputs particle-color-editor">
+                    <div class="vector-ctor-label">Vector3f</div>
+                    <input class="input" type="number" min="0" max="1" step="0.01" :value="particleInitVectorParts(item).x" @input="updateParticleInitVector(item, 'x', $event.target.value)" />
+                    <input class="input" type="number" min="0" max="1" step="0.01" :value="particleInitVectorParts(item).y" @input="updateParticleInitVector(item, 'y', $event.target.value)" />
+                    <input class="input" type="number" min="0" max="1" step="0.01" :value="particleInitVectorParts(item).z" @input="updateParticleInitVector(item, 'z', $event.target.value)" />
+                    <input class="input vector-color" type="color" :value="particleInitColorHex(item)" title="打开调色板" @input="updateParticleInitColor(item, $event.target.value)" />
+                  </div>
                 </div>
               </div>
               </template>
@@ -501,11 +508,18 @@ addSingle() / addMultiple(2)"></textarea>
                     <div class="kv-list">
                       <div v-if="!activeShapeNode(card).particleInit.length" class="mini-note">暂无 Particle Init。</div>
                       <div v-for="(item, index) in activeShapeNode(card).particleInit" :key="item.id || index" class="kv-row grid-pinit">
-                        <select v-model="item.target" class="input">
+                        <select v-model="item.target" class="input" @change="normalizeParticleInitExpr(item)">
                           <option v-for="target in particleInitTargets" :key="target" :value="target">{{ target }}</option>
                         </select>
-                        <input v-model="item.expr" class="input mono" type="text" :placeholder="particleInitPlaceholder(item.target)" />
+                        <input v-model="item.expr" class="input mono" type="text" :placeholder="particleInitPlaceholder(item.target)" @blur="normalizeParticleInitExpr(item)" />
                         <button class="btn small" @click.stop="removeTreeNodeParticleInit(activeShapeNode(card), item.id)">删除</button>
+                        <div v-if="isDirectColorParticleInit(item)" class="vector-inputs inline-vector-inputs particle-color-editor">
+                          <div class="vector-ctor-label">Vector3f</div>
+                          <input class="input" type="number" min="0" max="1" step="0.01" :value="particleInitVectorParts(item).x" @input="updateParticleInitVector(item, 'x', $event.target.value)" />
+                          <input class="input" type="number" min="0" max="1" step="0.01" :value="particleInitVectorParts(item).y" @input="updateParticleInitVector(item, 'y', $event.target.value)" />
+                          <input class="input" type="number" min="0" max="1" step="0.01" :value="particleInitVectorParts(item).z" @input="updateParticleInitVector(item, 'z', $event.target.value)" />
+                          <input class="input vector-color" type="color" :value="particleInitColorHex(item)" title="打开调色板" @input="updateParticleInitColor(item, $event.target.value)" />
+                        </div>
                       </div>
                     </div>
                   </div>
@@ -863,7 +877,7 @@ import {
   createDisplayAction,
   createScaleHelper
 } from '../modules/composition/defaults.js';
-import { formatVectorLiteral } from '../modules/composition/expression-runtime.js';
+import { formatVectorLiteral, parseVectorLiteral } from '../modules/composition/expression-runtime.js';
 import { evaluatePointsProject } from '../modules/pointsbuilder/evaluator.js';
 import { exportJsonFile, parseJsonFile, sanitizeFileBase } from '../modules/pointsbuilder/io.js';
 import { createCompositionPointsBuilderState } from '../modules/composition/defaults.js';
@@ -988,11 +1002,71 @@ function clearBuilder(card) {
 }
 
 function particleInitPlaceholder(target) {
-  if (target === 'color') return 'RelativeLocation(1.0, 1.0, 1.0)';
+  if (target === 'color') return 'Vector3f(1F, 1F, 1F)';
   if (target === 'size') return '1.0';
   if (target === 'particleAlpha') return '1.0';
   if (target === 'currentAge') return '0';
   return '0';
+}
+
+function isParticleInitDefaultExpr(expr) {
+  const text = String(expr || '').trim();
+  return [
+    '',
+    '0',
+    '1.0',
+    'RelativeLocation(1.0, 1.0, 1.0)',
+    'Vector3f(1F, 1F, 1F)'
+  ].includes(text);
+}
+
+function isVectorCtorExpr(expr) {
+  return /^(Vector3f|RelativeLocation|Vec3)\s*\(/.test(String(expr || '').trim());
+}
+
+function normalizeParticleInitExpr(item) {
+  if (!item) return;
+  if (item.target !== 'color') {
+    if (!String(item.expr || '').trim() || isVectorCtorExpr(item.expr)) {
+      item.expr = particleInitPlaceholder(item.target);
+    }
+    return;
+  }
+  const expr = String(item.expr || '').trim();
+  if (isParticleInitDefaultExpr(expr)) {
+    item.expr = 'Vector3f(1F, 1F, 1F)';
+    return;
+  }
+  if (isVectorCtorExpr(expr)) {
+    const parsed = parseVectorLiteral(expr, { x: 1, y: 1, z: 1 });
+    item.expr = formatVectorLiteral('Vector3f', parsed.x, parsed.y, parsed.z);
+  }
+}
+
+function isDirectColorParticleInit(item) {
+  return item?.target === 'color' && isVectorCtorExpr(item.expr || 'Vector3f(1F, 1F, 1F)');
+}
+
+function particleInitVectorParts(item) {
+  return parseVectorLiteral(item?.expr || 'Vector3f(1F, 1F, 1F)', { x: 1, y: 1, z: 1 });
+}
+
+function updateParticleInitVector(item, axis, value) {
+  if (!item || item.target !== 'color') return;
+  const parsed = particleInitVectorParts(item);
+  parsed[axis] = toFiniteNumber(value, 0);
+  item.expr = formatVectorLiteral('Vector3f', parsed.x, parsed.y, parsed.z);
+}
+
+function updateParticleInitColor(item, hex) {
+  if (!item || item.target !== 'color') return;
+  const color = hexToVector01(hex);
+  item.expr = formatVectorLiteral('Vector3f', color.x, color.y, color.z);
+}
+
+function particleInitColorHex(item) {
+  const parsed = particleInitVectorParts(item);
+  return vectorToHex01(parsed.x, parsed.y, parsed.z);
 }
 
 function applyCardAxisManual(card) {

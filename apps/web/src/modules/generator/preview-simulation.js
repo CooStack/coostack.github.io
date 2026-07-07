@@ -1,0 +1,913 @@
+const MAX_SIM_PARTICLES = 65536;
+const EPSILON = 1e-8;
+
+const COMMAND_ALIASES = {
+  ParticleDragCommand: 'drag',
+  ParticleGravityCommand: 'gravity',
+  ParticleAttractionCommand: 'attraction',
+  ParticleOrbitCommand: 'orbit',
+  ParticleNoiseCommand: 'noise',
+  ParticleFlowFieldCommand: 'flow_field',
+  ParticleVortexCommand: 'vortex',
+  ParticleRotationForceCommand: 'rotation_force',
+  ParticleToroidalCirculationCommand: 'toroidal_circulation',
+  ParticleDistortionCommand: 'distortion',
+  ParticleInheritVelocityCommand: 'inherit_velocity',
+  ParticleLifetimeMotionCommand: 'lifetime_motion',
+  acceleration: 'velocity_add'
+};
+
+export function createGeneratorPreviewRuntime() {
+  const runtime = {
+    tick: 0,
+    particles: [],
+    emitters: new Map(),
+    snapshotPoints: [],
+    renderBuffers: createRenderBuffers(256)
+  };
+
+  function reset() {
+    runtime.tick = 0;
+    runtime.particles = [];
+    runtime.snapshotPoints = [];
+    runtime.emitters.clear();
+  }
+
+  function clearParticles() {
+    runtime.particles = [];
+    runtime.snapshotPoints = [];
+  }
+
+  function step(project, tickCount = 1) {
+    const steps = Math.max(1, Math.trunc(Number(tickCount) || 1));
+    for (let i = 0; i < steps; i += 1) tickOnce(project || {});
+  }
+
+  function tickOnce(project) {
+    const emitters = Array.isArray(project.emitters) ? project.emitters : [];
+    syncEmitterRuntime(runtime, emitters);
+    const tick = runtime.tick;
+
+    if (shouldParentEmit(project.rootLifecycle, tick)) {
+      emitters.forEach((card) => {
+        if (!card?.enabled || !isEmitterActive(card, tick)) return;
+        const state = runtime.emitters.get(String(card.id || ''));
+        if (!state) return;
+        const mode = card.emission?.mode || 'continuous';
+        if (mode === 'once') {
+          if (state.emittedOnce) return;
+          spawnFor(card);
+          state.emittedOnce = true;
+          return;
+        }
+        if (mode === 'burst') {
+          const interval = Math.max(1, Math.trunc(Number(card.emission?.burstInterval || 1)));
+          if (state.burstTick % interval === 0) spawnFor(card);
+          state.burstTick += 1;
+          return;
+        }
+        spawnFor(card);
+      });
+    }
+
+    const queues = collectCommandQueues(project.commandQueues);
+    const hasCommands = queues.length > 0;
+    for (let index = runtime.particles.length - 1; index >= 0; index -= 1) {
+      const particle = runtime.particles[index];
+      particle.age += 1;
+      if (hasCommands) applyCommandQueues(queues, particle, tick);
+      particle.prev.x = particle.pos.x;
+      particle.prev.y = particle.pos.y;
+      particle.prev.z = particle.pos.z;
+      particle.pos.x += particle.vel.x;
+      particle.pos.y += particle.vel.y;
+      particle.pos.z += particle.vel.z;
+
+      if (particle.age >= particle.life) {
+        if (project.deathBehavior?.enabled && project.deathBehavior?.mode === 'respawn') {
+          respawnParticle(particle);
+        } else {
+          removeParticleAt(runtime, index);
+        }
+      }
+    }
+    runtime.tick += 1;
+  }
+
+  function spawnFor(card) {
+    const countMin = Math.max(0, Math.trunc(Number(card.particle?.countMin || 0)));
+    const countMax = Math.max(countMin, Math.trunc(Number(card.particle?.countMax || countMin)));
+    const count = randomInt(countMin, countMax);
+    for (let i = 0; i < count && runtime.particles.length < MAX_SIM_PARTICLES; i += 1) {
+      runtime.particles.push(createParticle(card));
+    }
+  }
+
+  function snapshot(project, options = {}) {
+    const contexts = new Map((Array.isArray(project?.emitters) ? project.emitters : [])
+      .map((card) => [String(card.id || ''), createEmitterSnapshotContext(card)]));
+    const points = runtime.snapshotPoints;
+    points.length = 0;
+    for (const particle of runtime.particles) {
+      const context = contexts.get(particle.cardId);
+      if (!context?.enabled || context.textureSheet === 'NO_RENDER') continue;
+      points.push(particleToPreviewPoint(particle, context));
+    }
+    const result = options.copy === false ? points : points.slice();
+    Object.defineProperty(result, 'effectSignature', {
+      value: resolveEffectSignature(contexts),
+      configurable: true,
+      writable: true,
+      enumerable: false
+    });
+    return result;
+  }
+
+  function snapshotRenderData(project) {
+    const contexts = new Map((Array.isArray(project?.emitters) ? project.emitters : [])
+      .map((card) => [String(card.id || ''), createEmitterSnapshotContext(card)]));
+    const effectSignature = resolveEffectSignature(contexts);
+    if (!effectSignature || effectSignature.includes('|') || !canUseBillboardBuffers(contexts)) {
+      return snapshot(project);
+    }
+
+    ensureRenderBuffers(runtime, runtime.particles.length);
+    const buffers = runtime.renderBuffers;
+    let count = 0;
+    for (const particle of runtime.particles) {
+      const context = contexts.get(particle.cardId);
+      if (!context?.enabled || context.textureSheet === 'NO_RENDER') continue;
+      writeParticlePreviewData(particle, context, buffers, count);
+      count += 1;
+    }
+    return {
+      kind: 'preview-buffers',
+      length: count,
+      count,
+      effectSignature,
+      effectClass: effectSignature,
+      positions: buffers.positions,
+      prevPositions: buffers.prevPositions,
+      colors: buffers.colors,
+      alphas: buffers.alphas,
+      sizes: buffers.sizes,
+      rolls: buffers.rolls,
+      lifeProgresses: buffers.lifeProgresses
+    };
+  }
+
+  return {
+    reset,
+    clearParticles,
+    step,
+    snapshot,
+    snapshotRenderData,
+    getParticleCount: () => runtime.particles.length
+  };
+}
+
+function syncEmitterRuntime(runtime, emitters) {
+  const activeIds = new Set();
+  let removedEmitter = false;
+  emitters.forEach((card) => {
+    const id = String(card?.id || '');
+    if (!id) return;
+    activeIds.add(id);
+    if (!runtime.emitters.has(id)) runtime.emitters.set(id, { burstTick: 0, emittedOnce: false });
+  });
+  Array.from(runtime.emitters.keys()).forEach((id) => {
+    if (!activeIds.has(id)) {
+      runtime.emitters.delete(id);
+      removedEmitter = true;
+    }
+  });
+  if (removedEmitter) {
+    runtime.particles = runtime.particles.filter((particle) => activeIds.has(particle.cardId));
+  }
+}
+
+function shouldParentEmit(rootLifecycle = {}, tick) {
+  const mode = rootLifecycle.mode || 'interval';
+  if (mode === 'once') return tick === 0;
+  if (mode === 'interval_n_tick') {
+    const maxTick = Math.max(1, Math.trunc(Number(rootLifecycle.maxTick || 1)));
+    if (tick >= maxTick) return false;
+  }
+  const interval = Math.max(1, Math.trunc(Number(rootLifecycle.intervalTick || 1)));
+  return tick % interval === 0;
+}
+
+function isEmitterActive(card, tick) {
+  const start = Math.max(0, Math.trunc(Number(card.emission?.startTick || 0)));
+  const end = Math.trunc(Number(card.emission?.endTick ?? -1));
+  return tick >= start && (end < 0 || tick <= end);
+}
+
+function createParticle(card) {
+  const pos = sampleEmitterPoint(card);
+  const velocity = sampleVelocity(card, pos);
+  const lifeMin = Math.max(1, Math.trunc(Number(card.particle?.lifeMin || 1)));
+  const lifeMax = Math.max(lifeMin, Math.trunc(Number(card.particle?.lifeMax || lifeMin)));
+  const sizeMin = Math.max(0.001, Number(card.particle?.sizeMin || card.render?.baseScale?.x || 0.08));
+  const sizeMax = Math.max(sizeMin, Number(card.particle?.sizeMax || sizeMin));
+  return {
+    cardId: String(card.id || ''),
+    card,
+    pos,
+    prev: { ...pos },
+    vel: velocity,
+    age: 0,
+    life: randomInt(lifeMin, lifeMax),
+    baseSize: random(sizeMin, sizeMax),
+    sign: Math.trunc(Number(card.render?.sign || 0)),
+    seed: Math.trunc(Math.random() * 0x7fffffff),
+    respawnCount: 0,
+    previewPoint: {}
+  };
+}
+
+function respawnParticle(particle) {
+  const next = createParticle(particle.card || {});
+  particle.pos = next.pos;
+  particle.prev = { ...next.pos };
+  particle.vel = next.vel;
+  particle.age = 0;
+  particle.life = next.life;
+  particle.baseSize = next.baseSize;
+  particle.seed = next.seed;
+  particle.respawnCount += 1;
+}
+
+function removeParticleAt(runtime, index) {
+  const last = runtime.particles.length - 1;
+  if (index !== last) runtime.particles[index] = runtime.particles[last];
+  runtime.particles.pop();
+}
+
+function collectCommandQueues(rawQueues) {
+  return (Array.isArray(rawQueues) ? rawQueues : []).map((queue) => ({
+    signs: makeSignSet(queue?.signs),
+    commands: (Array.isArray(queue?.commands) ? queue.commands : [])
+      .filter((command) => command && command.enabled !== false)
+      .map((command) => ({ ...command, type: normalizeCommandType(command.type) }))
+  })).filter((queue) => queue.commands.length);
+}
+
+function makeSignSet(values) {
+  if (!Array.isArray(values) || !values.length) return null;
+  const set = new Set();
+  values.forEach((value) => {
+    const sign = Math.trunc(Number(value));
+    if (Number.isFinite(sign)) set.add(sign);
+  });
+  return set.size ? set : null;
+}
+
+function normalizeCommandType(type) {
+  const text = String(type || '').trim();
+  return COMMAND_ALIASES[text] || text || 'drag';
+}
+
+function applyCommandQueues(queues, particle, tick) {
+  queues.forEach((queue) => {
+    if (queue.signs && !queue.signs.has(particle.sign)) return;
+    queue.commands.forEach((command) => {
+      if (particle.age < Math.trunc(Number(command.tick || 0))) return;
+      applyCommand(command, particle, tick);
+    });
+  });
+}
+
+function applyCommand(command, particle, tick) {
+  const params = command.params && typeof command.params === 'object' ? command.params : command;
+  const n = (key, fallback = 0) => numberParam(params, key, fallback);
+  switch (command.type) {
+    case 'drag': {
+      const damping = Math.max(0, n('damping', 0.15));
+      const minSpeed = Math.max(0, n('minSpeed', 0));
+      const speed = vectorLength(particle.vel);
+      if (minSpeed > 0 && speed <= minSpeed) {
+        particle.vel = vec();
+        return;
+      }
+      const factor = Math.exp(-damping);
+      multiplyInPlace(particle.vel, factor * clamp(1 - Math.max(0, n('linear', 0)), 0, 1));
+      return;
+    }
+    case 'gravity':
+      particle.vel.y -= Math.max(0, n('gravity', 0.04));
+      return;
+    case 'velocity_add':
+      addInPlace(particle.vel, vecParam(params, 'delta'));
+      return;
+    case 'velocity_scale': {
+      const scale = vecParam(params, 'scale', vec(1, 1, 1));
+      particle.vel.x *= scale.x;
+      particle.vel.y *= scale.y;
+      particle.vel.z *= scale.z;
+      return;
+    }
+    case 'attraction': {
+      const target = vecParam(params, 'target');
+      const delta = sub(target, particle.pos);
+      const dist = Math.max(vectorLength(delta), Math.max(EPSILON, n('minDistance', 0.25)));
+      const strength = n('strength', 0.8) * inversePowerFalloff(dist, n('range', 8), n('falloffPower', 2));
+      addInPlace(particle.vel, multiply(delta, strength / dist));
+      return;
+    }
+    case 'orbit':
+      applyOrbitCommand(particle, params);
+      return;
+    case 'noise':
+      applyNoiseCommand(particle, params);
+      return;
+    case 'flow_field':
+      applyFlowFieldCommand(particle, params, tick);
+      return;
+    case 'vortex':
+      applyVortexCommand(particle, params);
+      return;
+    case 'rotation_force':
+      applyRotationForceCommand(particle, params);
+      return;
+    case 'toroidal_circulation':
+      applyToroidalCommand(particle, params);
+      return;
+    case 'distortion':
+      applyDistortionCommand(particle, params, tick);
+      return;
+    case 'inherit_velocity':
+      applyInheritVelocityCommand(particle, params);
+      return;
+    case 'lifetime_motion':
+      applyLifetimeMotionCommand(particle, params);
+      return;
+    default:
+      return;
+  }
+}
+
+function applyOrbitCommand(particle, params) {
+  const center = vecParam(params, 'center');
+  const axis = normalize(vecParam(params, 'axis', vec(0, 1, 0)));
+  const rel = sub(particle.pos, center);
+  const axial = multiply(axis, dot(rel, axis));
+  const radial = sub(rel, axial);
+  const radius = vectorLength(radial);
+  if (radius < EPSILON) return;
+  const radialUnit = multiply(radial, 1 / radius);
+  const tangent = normalize(cross(axis, radialUnit));
+  addInPlace(particle.vel, multiply(tangent, numberParam(params, 'angularSpeed', 0.35)));
+  addInPlace(particle.vel, multiply(radialUnit, (numberParam(params, 'radius', radius) - radius) * numberParam(params, 'radialCorrect', 0.25)));
+}
+
+function applyNoiseCommand(particle, params) {
+  const strength = numberParam(params, 'strength', 0.03);
+  const frequency = numberParam(params, 'frequency', 0.15);
+  const speed = numberParam(params, 'speed', 0.12);
+  const t = particle.age * speed;
+  const nx = valueNoise(particle.pos.x * frequency + t, particle.pos.y * frequency, particle.pos.z * frequency, particle.seed + 11) * 2 - 1;
+  const ny = valueNoise(particle.pos.y * frequency + t, particle.pos.z * frequency, particle.pos.x * frequency, particle.seed + 23) * 2 - 1;
+  const nz = valueNoise(particle.pos.z * frequency + t, particle.pos.x * frequency, particle.pos.y * frequency, particle.seed + 37) * 2 - 1;
+  const lifeScale = params.useLifeCurve === false ? 1 : 1 - clamp(particle.age / Math.max(1, particle.life), 0, 1);
+  addInPlace(particle.vel, multiply(normalize(vec(nx, ny * numberParam(params, 'affectY', 1), nz)), strength * lifeScale));
+  clampVelocity(particle.vel, Math.max(0, numberParam(params, 'clampSpeed', 0.8)));
+}
+
+function applyFlowFieldCommand(particle, params, tick) {
+  const amp = numberParam(params, 'amplitude', 0.15) * 0.5;
+  const frequency = numberParam(params, 'frequency', 0.25);
+  const t = tick * numberParam(params, 'timeScale', 0.06) + numberParam(params, 'phaseOffset', 0);
+  const offset = vecParam(params, 'worldOffset');
+  const p = add(particle.pos, offset);
+  particle.vel.x += (Math.sin((p.y + t) * frequency) + Math.cos((p.z - t) * frequency)) * amp;
+  particle.vel.y += (Math.sin((p.z + t) * frequency) + Math.cos((p.x + t) * frequency)) * amp;
+  particle.vel.z += (Math.sin((p.x - t) * frequency) + Math.cos((p.y - t) * frequency)) * amp;
+}
+
+function applyVortexCommand(particle, params) {
+  const center = vecParam(params, 'center');
+  const axis = normalize(vecParam(params, 'axis', vec(0, 1, 0)));
+  const rel = sub(particle.pos, center);
+  const axial = multiply(axis, dot(rel, axis));
+  const radial = sub(rel, axial);
+  const radius = vectorLength(radial);
+  if (radius < EPSILON) return;
+  const falloff = inversePowerFalloff(radius, numberParam(params, 'range', 10), numberParam(params, 'falloffPower', 2));
+  const radialUnit = multiply(radial, 1 / radius);
+  const tangent = normalize(cross(axis, radialUnit));
+  addInPlace(particle.vel, multiply(tangent, numberParam(params, 'swirlStrength', 0.8) * falloff));
+  addInPlace(particle.vel, multiply(radialUnit, -numberParam(params, 'radialPull', 0.35) * falloff));
+  addInPlace(particle.vel, multiply(axis, numberParam(params, 'axialLift', 0) * falloff));
+}
+
+function applyRotationForceCommand(particle, params) {
+  const center = vecParam(params, 'center');
+  const axis = normalize(vecParam(params, 'axis', vec(0, 1, 0)));
+  const rel = sub(particle.pos, center);
+  const radial = sub(rel, multiply(axis, dot(rel, axis)));
+  const radius = vectorLength(radial);
+  if (radius < EPSILON) return;
+  const tangent = normalize(cross(axis, radial));
+  const falloff = inversePowerFalloff(radius, numberParam(params, 'range', 8), numberParam(params, 'falloffPower', 2));
+  addInPlace(particle.vel, multiply(tangent, numberParam(params, 'strength', 0.35) * falloff));
+}
+
+function applyToroidalCommand(particle, params) {
+  const center = vecParam(params, 'center');
+  const axis = normalize(vecParam(params, 'axis', vec(0, 1, 0)));
+  const rel = sub(particle.pos, center);
+  const axial = dot(rel, axis);
+  const radial = sub(rel, multiply(axis, axial));
+  const radialLength = vectorLength(radial);
+  if (radialLength < EPSILON) return;
+  const radialUnit = multiply(radial, 1 / radialLength);
+  const tangent = normalize(cross(axis, radialUnit));
+  const ringRadius = numberParam(params, 'ringRadius', 3);
+  const radialDelta = radialLength - ringRadius;
+  const falloff = inversePowerFalloff(Math.hypot(radialDelta, axial), Math.max(numberParam(params, 'radialThickness', 1.2), numberParam(params, 'axialThickness', 0.8)), 2);
+  addInPlace(particle.vel, multiply(tangent, numberParam(params, 'circulationStrength', 0.35) * falloff));
+  addInPlace(particle.vel, multiply(radialUnit, numberParam(params, 'outwardStrength', 0) * falloff));
+  addInPlace(particle.vel, multiply(axis, numberParam(params, 'upwardStrength', 0) * falloff));
+  addInPlace(particle.vel, multiply(radialUnit, -radialDelta * numberParam(params, 'followStrength', 0.12) * falloff));
+}
+
+function applyDistortionCommand(particle, params, tick) {
+  const center = vecParam(params, 'center');
+  const axis = normalize(vecParam(params, 'axis', vec(0, 1, 0)));
+  const rel = sub(particle.pos, center);
+  const axial = multiply(axis, dot(rel, axis));
+  const radial = sub(rel, axial);
+  const radius = vectorLength(radial);
+  if (radius < EPSILON) return;
+  const radialUnit = multiply(radial, 1 / radius);
+  const tangent = normalize(cross(axis, radialUnit));
+  const phase = tick * numberParam(params, 'timeScale', 0.1) + numberParam(params, 'phaseOffset', 0) + particle.seed * 0.001;
+  const wave = Math.sin((radius + phase) * numberParam(params, 'frequency', 0.25));
+  addInPlace(particle.vel, multiply(radialUnit, wave * numberParam(params, 'radialStrength', 0.35)));
+  addInPlace(particle.vel, multiply(axis, wave * numberParam(params, 'axialStrength', 0.25)));
+  addInPlace(particle.vel, multiply(tangent, wave * numberParam(params, 'tangentialStrength', 0)));
+}
+
+function applyInheritVelocityCommand(particle, params) {
+  const mode = String(params.mode || 'INITIAL');
+  if (mode === 'INITIAL' && particle.age > 1) return;
+  const source = vecParam(params, 'source');
+  const mask = vecParam(params, 'axisMask', vec(1, 1, 1));
+  const lifeWeight = clamp(numberParam(params, 'overLifetime', 1), 0, 1);
+  const factor = numberParam(params, 'multiplier', 1) * lifeWeight;
+  particle.vel.x += source.x * mask.x * factor;
+  particle.vel.y += source.y * mask.y * factor;
+  particle.vel.z += source.z * mask.z * factor;
+  clampVelocity(particle.vel, numberParam(params, 'maxContributionSpeed', 0));
+}
+
+function applyLifetimeMotionCommand(particle, params) {
+  const force = vecParam(params, 'force');
+  const velocity = vecParam(params, 'velocity');
+  addInPlace(particle.vel, force);
+  const mode = String(params.velocityMode || 'ADD');
+  if (mode === 'OVERRIDE') particle.vel = { ...velocity };
+  else if (mode === 'MULTIPLY') {
+    particle.vel.x *= velocity.x;
+    particle.vel.y *= velocity.y;
+    particle.vel.z *= velocity.z;
+  } else {
+    addInPlace(particle.vel, velocity);
+  }
+  clampVelocity(particle.vel, numberParam(params, 'maxVelocityDeltaPerTick', 0));
+}
+
+function createEmitterSnapshotContext(card) {
+  const render = card?.render || {};
+  const particle = card?.particle || {};
+  const curves = card?.curves || {};
+  const scaleMode = render.scaleMode === 'uniform_xy' ? 'uniform_xy' : 'xyz';
+  const sizeSyncAxes = curves.size?.syncAxes === true;
+  const rotationSyncAxes = curves.rotation?.syncAxes === true;
+  return {
+    enabled: card?.enabled !== false,
+    effectClass: render.effectClass,
+    textureSheet: render.textureSheet,
+    billboardMode: render.billboardMode,
+    axis: render.axis || { x: 0, y: 1, z: 0 },
+    roll: Number(render.roll || 0),
+    yaw: Number(render.yaw || 0),
+    pitch: Number(render.pitch || 0),
+    alpha: Number(render.alpha ?? 100) / 100,
+    light: Number(render.light ?? 15),
+    scaleMode,
+    baseScale: render.baseScale || {},
+    sizeSyncAxes,
+    rotationSyncAxes,
+    colorStart: hexToRgb(particle.colorStart),
+    colorEnd: hexToRgb(particle.colorOverLifeEnabled ? particle.colorEnd : particle.colorStart),
+    curves: {
+      sizeX: prepareCurve(curves.size?.x, 1),
+      sizeY: prepareCurve(sizeSyncAxes ? curves.size?.x : curves.size?.y, 1),
+      sizeZ: prepareCurve(sizeSyncAxes ? curves.size?.x : curves.size?.z, 1),
+      opacity: prepareCurve(curves.opacity, 100),
+      brightness: prepareCurve(curves.brightness, Number(render.light ?? 15)),
+      roll: prepareCurve(curves.rotation?.roll, 0),
+      yaw: prepareCurve(rotationSyncAxes ? curves.rotation?.roll : curves.rotation?.yaw, 0),
+      pitch: prepareCurve(rotationSyncAxes ? curves.rotation?.roll : curves.rotation?.pitch, 0)
+    }
+  };
+}
+
+function resolveEffectSignature(contexts) {
+  const names = new Set();
+  contexts.forEach((context) => {
+    if (context?.enabled && context.textureSheet !== 'NO_RENDER' && context.effectClass) {
+      names.add(String(context.effectClass));
+    }
+  });
+  return Array.from(names).sort().join('|');
+}
+
+function canUseBillboardBuffers(contexts) {
+  let ok = true;
+  contexts.forEach((context) => {
+    if (!ok || !context?.enabled || context.textureSheet === 'NO_RENDER') return;
+    if (context.billboardMode === 'none' || context.billboardMode === 'axis_billboard') ok = false;
+  });
+  return ok;
+}
+
+function createRenderBuffers(capacity) {
+  return {
+    capacity,
+    positions: new Float32Array(capacity * 3),
+    prevPositions: new Float32Array(capacity * 3),
+    colors: new Float32Array(capacity * 3),
+    alphas: new Float32Array(capacity),
+    sizes: new Float32Array(capacity),
+    rolls: new Float32Array(capacity),
+    lifeProgresses: new Float32Array(capacity)
+  };
+}
+
+function ensureRenderBuffers(runtime, count) {
+  if (runtime.renderBuffers.capacity >= count) return;
+  let capacity = runtime.renderBuffers.capacity || 256;
+  while (capacity < count) capacity = Math.ceil(capacity * 1.5);
+  runtime.renderBuffers = createRenderBuffers(capacity);
+}
+
+function writeParticlePreviewData(particle, context, buffers, index) {
+  const agePercent = clamp((particle.age / Math.max(1, particle.life)) * 100, 0, 100);
+  const lifeAlpha = agePercent / 100;
+  const scaleMode = context.scaleMode;
+  const baseScale = context.baseScale;
+  const sizeCurveX = Math.max(0, samplePreparedCurve(context.curves.sizeX, agePercent, 1));
+  const sizeCurveY = Math.max(0, samplePreparedCurve(context.curves.sizeY, agePercent, 1));
+  const sx = particle.baseSize * Math.max(0, Number(baseScale.x ?? 1)) * sizeCurveX;
+  const sy = particle.baseSize * Math.max(0, Number((scaleMode === 'xyz' ? baseScale.y : baseScale.x) ?? 1)) * sizeCurveY;
+  const opacity = clamp(context.alpha * (samplePreparedCurve(context.curves.opacity, agePercent, 100) / 100), 0, 1);
+  const light = clamp(samplePreparedCurve(context.curves.brightness, agePercent, context.light), -1, 15);
+  const offset = index * 3;
+  const factor = light < 0 ? 0.62 : 0.5 + clamp(light, 0, 15) / 30;
+  buffers.positions[offset] = particle.pos.x;
+  buffers.positions[offset + 1] = particle.pos.y;
+  buffers.positions[offset + 2] = particle.pos.z;
+  buffers.prevPositions[offset] = particle.prev.x;
+  buffers.prevPositions[offset + 1] = particle.prev.y;
+  buffers.prevPositions[offset + 2] = particle.prev.z;
+  buffers.colors[offset] = clamp(mix(context.colorStart.r, context.colorEnd.r, lifeAlpha) * factor, 0, 255) / 255;
+  buffers.colors[offset + 1] = clamp(mix(context.colorStart.g, context.colorEnd.g, lifeAlpha) * factor, 0, 255) / 255;
+  buffers.colors[offset + 2] = clamp(mix(context.colorStart.b, context.colorEnd.b, lifeAlpha) * factor, 0, 255) / 255;
+  buffers.alphas[index] = opacity;
+  buffers.sizes[index] = Math.max(0.001, Math.max(0.01, sx, sy) * 1.6);
+  buffers.rolls[index] = context.roll + samplePreparedCurve(context.curves.roll, agePercent, 0);
+  buffers.lifeProgresses[index] = clamp(particle.age / Math.max(1, particle.life), 0, 1);
+}
+
+function particleToPreviewPoint(particle, context) {
+  const point = particle.previewPoint || (particle.previewPoint = {});
+  const agePercent = clamp((particle.age / Math.max(1, particle.life)) * 100, 0, 100);
+  const lifeAlpha = agePercent / 100;
+  const scaleMode = context.scaleMode;
+  const baseScale = context.baseScale;
+  const sizeCurveX = Math.max(0, samplePreparedCurve(context.curves.sizeX, agePercent, 1));
+  const sizeCurveY = Math.max(0, samplePreparedCurve(context.curves.sizeY, agePercent, 1));
+  const sizeCurveZ = Math.max(0, samplePreparedCurve(context.curves.sizeZ, agePercent, 1));
+  const sx = particle.baseSize * Math.max(0, Number(baseScale.x ?? 1)) * sizeCurveX;
+  const sy = particle.baseSize * Math.max(0, Number((scaleMode === 'xyz' ? baseScale.y : baseScale.x) ?? 1)) * sizeCurveY;
+  const sz = particle.baseSize * Math.max(0, Number((scaleMode === 'xyz' ? baseScale.z : baseScale.x) ?? 1)) * sizeCurveZ;
+  const opacity = clamp(context.alpha * (samplePreparedCurve(context.curves.opacity, agePercent, 100) / 100), 0, 1);
+  const light = clamp(samplePreparedCurve(context.curves.brightness, agePercent, context.light), -1, 15);
+  const rotation = sampleRotation(context, agePercent);
+  fillInterpolatedRgb(point, context.colorStart, context.colorEnd, lifeAlpha, light);
+  point.x = particle.pos.x;
+  point.y = particle.pos.y;
+  point.z = particle.pos.z;
+  point.prevX = particle.prev.x;
+  point.prevY = particle.prev.y;
+  point.prevZ = particle.prev.z;
+  point.alpha = opacity;
+  point.light = light;
+  point.effectClass = context.effectClass;
+  point.textureSheet = context.textureSheet;
+  point.billboardMode = context.billboardMode;
+  point.axis = context.axis;
+  point.roll = rotation.roll;
+  point.yaw = rotation.yaw;
+  point.pitch = rotation.pitch;
+  point.scaleX = sx;
+  point.scaleY = sy;
+  point.scaleZ = sz;
+  point.size = Math.max(0.01, sx, sy);
+  point.age = particle.age;
+  point.life = particle.life;
+  point.seed = particle.seed;
+  return point;
+}
+
+function sampleRotation(context, agePercent) {
+  const rollCurve = samplePreparedCurve(context.curves.roll, agePercent, 0);
+  const yawCurve = samplePreparedCurve(context.curves.yaw, agePercent, 0);
+  const pitchCurve = samplePreparedCurve(context.curves.pitch, agePercent, 0);
+  return {
+    roll: context.roll + rollCurve,
+    yaw: context.billboardMode === 'none' ? context.yaw + yawCurve : 0,
+    pitch: context.billboardMode === 'none' ? context.pitch + pitchCurve : 0
+  };
+}
+
+function prepareCurve(curve, fallback = 0) {
+  const frames = Array.isArray(curve?.keyframes)
+    ? curve.keyframes.slice().sort((a, b) => Number(a.time || 0) - Number(b.time || 0))
+    : [];
+  return {
+    mode: curve?.mode,
+    defaultValue: Number(curve?.defaultValue ?? fallback),
+    frames
+  };
+}
+
+function samplePreparedCurve(curve, percent, fallback = 0) {
+  const frames = curve?.frames || [];
+  if (!frames.length) return Number(curve?.defaultValue ?? fallback);
+  if (frames.length === 1) return Number(frames[0].value ?? fallback);
+  const t = clamp(percent, 0, 100);
+  if (t <= Number(frames[0].time || 0)) return Number(frames[0].value ?? fallback);
+  const last = frames[frames.length - 1];
+  if (t >= Number(last.time || 0)) return Number(last.value ?? fallback);
+  for (let i = 1; i < frames.length; i += 1) {
+    const prev = frames[i - 1];
+    const next = frames[i];
+    if (t > Number(next.time || 0)) continue;
+    if (curve?.mode === 'bezier') return sampleBezier(prev, next, t);
+    const start = Number(prev.time || 0);
+    const span = Math.max(0.0001, Number(next.time || 0) - start);
+    const alpha = (t - start) / span;
+    return mix(Number(prev.value || 0), Number(next.value || 0), alpha);
+  }
+  return Number(last.value ?? fallback);
+}
+
+function sampleBezier(a, b, percent) {
+  const x0 = Number(a.time || 0);
+  const y0 = Number(a.value || 0);
+  const x3 = Number(b.time || 0);
+  const y3 = Number(b.value || 0);
+  const x1 = clamp(x0 + Number(a.out?.x || 0), 0, 100);
+  const y1 = y0 + Number(a.out?.y || 0);
+  const x2 = clamp(x3 + Number(b.in?.x || 0), 0, 100);
+  const y2 = y3 + Number(b.in?.y || 0);
+  let bestDistance = Infinity;
+  let bestValue = y0;
+  for (let i = 0; i <= 24; i += 1) {
+    const t = i / 24;
+    const x = cubic(x0, x1, x2, x3, t);
+    const distance = Math.abs(x - percent);
+    if (distance < bestDistance) {
+      bestDistance = distance;
+      bestValue = cubic(y0, y1, y2, y3, t);
+    }
+  }
+  return bestValue;
+}
+
+function cubic(p0, p1, p2, p3, t) {
+  const mt = 1 - t;
+  return mt * mt * mt * p0 + 3 * mt * mt * t * p1 + 3 * mt * t * t * p2 + t * t * t * p3;
+}
+
+function sampleEmitterPoint(card) {
+  const type = card.emitter?.type || 'point';
+  const offset = vectorFrom(card.emitter?.offset);
+  if (type === 'point') return { ...offset };
+  if (type === 'box') {
+    const box = card.emitter?.box || {};
+    let point = vec((Math.random() - 0.5) * Number(box.x || 1), (Math.random() - 0.5) * Number(box.y || 1), (Math.random() - 0.5) * Number(box.z || 1));
+    if (box.surface) {
+      const axis = randomInt(0, 2);
+      if (axis === 0) point.x = (Math.random() < 0.5 ? -0.5 : 0.5) * Number(box.x || 1);
+      if (axis === 1) point.y = (Math.random() < 0.5 ? -0.5 : 0.5) * Number(box.y || 1);
+      if (axis === 2) point.z = (Math.random() < 0.5 ? -0.5 : 0.5) * Number(box.z || 1);
+    }
+    return add(point, offset);
+  }
+  if (type === 'sphere' || type === 'sphere_surface') {
+    const radius = type === 'sphere' ? Number(card.emitter?.sphere?.r || 1) : Number(card.emitter?.sphereSurface?.r || 1);
+    const theta = Math.random() * Math.PI * 2;
+    const phi = Math.acos(2 * Math.random() - 1);
+    const r = type === 'sphere' ? radius * Math.cbrt(Math.random()) : radius;
+    return add(vec(Math.sin(phi) * Math.cos(theta) * r, Math.cos(phi) * r, Math.sin(phi) * Math.sin(theta) * r), offset);
+  }
+  if (type === 'line') {
+    const dir = normalize(vectorFrom(card.emitter?.line?.dir, vec(1, 0, 0)));
+    const count = Math.max(1, Math.trunc(Number(card.particle?.countMax || 1)));
+    return add(multiply(dir, randomInt(0, count - 1) * Number(card.emitter?.line?.step || 0.2)), offset);
+  }
+  if (type === 'circle') {
+    const angle = Math.random() * Math.PI * 2;
+    const r = Number(card.emitter?.circle?.r || 1);
+    return add(rotateFromYAxis(vec(Math.cos(angle) * r, 0, Math.sin(angle) * r), vectorFrom(card.emitter?.circle?.axis, vec(0, 1, 0))), offset);
+  }
+  if (type === 'arc') {
+    const arc = card.emitter?.arc || {};
+    const start = Math.min(Number(arc.start || 0), Number(arc.end || 0)) * Math.PI / 180;
+    const end = Math.max(Number(arc.start || 0), Number(arc.end || 0)) * Math.PI / 180;
+    const angle = random(start, end) + Number(arc.rotate || 0) * Math.PI / 180;
+    const r = Number(arc.r || 1);
+    return add(rotateFromYAxis(vec(Math.cos(angle) * r, 0, Math.sin(angle) * r), vectorFrom(arc.axis, vec(0, 1, 0))), offset);
+  }
+  if (type === 'spiral') {
+    const spiral = card.emitter?.spiral || {};
+    const t = Math.random();
+    const radius = mix(Number(spiral.startR || 0.5), Number(spiral.endR || 2.5), Math.pow(t, Number(spiral.rBias || 1)));
+    const height = Math.pow(t, Number(spiral.hBias || 1)) * Number(spiral.height || 2);
+    const angle = t * Number(spiral.rotateSpeed || 0.35) * Math.PI * 8;
+    return add(rotateFromYAxis(vec(Math.cos(angle) * radius, height, Math.sin(angle) * radius), vectorFrom(spiral.axis, vec(0, 1, 0))), offset);
+  }
+  const ring = card.emitter?.ring || {};
+  const angle = Math.random() * Math.PI * 2;
+  const radius = Number(ring.r || 1) + (Math.random() - 0.5) * Number(ring.thickness || 0);
+  return add(rotateFromYAxis(vec(Math.cos(angle) * radius, 0, Math.sin(angle) * radius), vectorFrom(ring.axis, vec(0, 1, 0))), offset);
+}
+
+function sampleVelocity(card, spawnPos) {
+  const particle = card.particle || {};
+  const offset = vectorFrom(card.emitter?.offset);
+  const mode = particle.velocityMode || particle.velMode;
+  let direction = mode === 'spawn_relative' || mode === 'spawn_rel'
+    ? sub(spawnPos, offset)
+    : vectorFrom(particle.velocity || particle.vel);
+  const randomSpread = vectorFrom(particle.velocityRandom || particle.velRandom);
+  direction = add(direction, vec(
+    random(-randomSpread.x, randomSpread.x),
+    random(-randomSpread.y, randomSpread.y),
+    random(-randomSpread.z, randomSpread.z)
+  ));
+  const speedMin = Math.max(0, Number(particle.speedMin ?? particle.velSpeedMin ?? 0));
+  const speedMax = Math.max(speedMin, Number(particle.speedMax ?? particle.velSpeedMax ?? speedMin));
+  const speed = random(speedMin, speedMax);
+  return vectorLength(direction) < EPSILON ? vec() : multiply(normalize(direction), speed);
+}
+
+function rotateFromYAxis(value, axis) {
+  const target = normalize(axis);
+  const up = vec(0, 1, 0);
+  const c = clamp(dot(up, target), -1, 1);
+  if (c > 1 - EPSILON) return value;
+  if (c < -1 + EPSILON) return vec(value.x, -value.y, -value.z);
+  const k = normalize(cross(up, target));
+  const s = Math.sqrt(1 - c * c);
+  return add(add(multiply(value, c), multiply(cross(k, value), s)), multiply(k, dot(k, value) * (1 - c)));
+}
+
+function numberParam(params, key, fallback = 0) {
+  const value = params?.[key];
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? numeric : fallback;
+}
+
+function vecParam(params, prefix, fallback = vec()) {
+  return vec(
+    numberParam(params, `${prefix}X`, fallback.x),
+    numberParam(params, `${prefix}Y`, fallback.y),
+    numberParam(params, `${prefix}Z`, fallback.z)
+  );
+}
+
+function vectorFrom(raw, fallback = vec()) {
+  return vec(
+    Number.isFinite(Number(raw?.x)) ? Number(raw.x) : fallback.x,
+    Number.isFinite(Number(raw?.y)) ? Number(raw.y) : fallback.y,
+    Number.isFinite(Number(raw?.z)) ? Number(raw.z) : fallback.z
+  );
+}
+
+function vec(x = 0, y = 0, z = 0) {
+  return { x, y, z };
+}
+
+function add(a, b) {
+  return vec(a.x + b.x, a.y + b.y, a.z + b.z);
+}
+
+function sub(a, b) {
+  return vec(a.x - b.x, a.y - b.y, a.z - b.z);
+}
+
+function multiply(value, scalar) {
+  return vec(value.x * scalar, value.y * scalar, value.z * scalar);
+}
+
+function addInPlace(target, value) {
+  target.x += value.x;
+  target.y += value.y;
+  target.z += value.z;
+}
+
+function multiplyInPlace(target, scalar) {
+  target.x *= scalar;
+  target.y *= scalar;
+  target.z *= scalar;
+}
+
+function dot(a, b) {
+  return a.x * b.x + a.y * b.y + a.z * b.z;
+}
+
+function cross(a, b) {
+  return vec(a.y * b.z - a.z * b.y, a.z * b.x - a.x * b.z, a.x * b.y - a.y * b.x);
+}
+
+function vectorLength(value) {
+  return Math.hypot(value.x, value.y, value.z);
+}
+
+function normalize(value) {
+  const length = vectorLength(value);
+  return length < EPSILON ? vec() : multiply(value, 1 / length);
+}
+
+function clampVelocity(value, maxSpeed) {
+  if (!(maxSpeed > 0)) return;
+  const speed = vectorLength(value);
+  if (speed > maxSpeed) multiplyInPlace(value, maxSpeed / speed);
+}
+
+function inversePowerFalloff(distance, range, power) {
+  const safeRange = Math.max(EPSILON, Number(range) || 1);
+  const safePower = Math.max(1, Number(power) || 1);
+  return 1 / (1 + Math.pow(distance / safeRange, safePower));
+}
+
+function valueNoise(x, y, z, seed) {
+  const n = Math.sin(x * 12.9898 + y * 78.233 + z * 37.719 + seed * 0.001) * 43758.5453;
+  return n - Math.floor(n);
+}
+
+function fillInterpolatedRgb(target, start, end, alpha, light = 15) {
+  const factor = light < 0 ? 0.62 : 0.5 + clamp(light, 0, 15) / 30;
+  target.r = clamp(mix(start.r, end.r, alpha) * factor, 0, 255) / 255;
+  target.g = clamp(mix(start.g, end.g, alpha) * factor, 0, 255) / 255;
+  target.b = clamp(mix(start.b, end.b, alpha) * factor, 0, 255) / 255;
+}
+
+function interpolateHex(startHex, endHex, alpha, light = 15) {
+  const start = hexToRgb(startHex);
+  const end = hexToRgb(endHex);
+  const factor = light < 0 ? 0.62 : 0.5 + clamp(light, 0, 15) / 30;
+  const r = clamp(mix(start.r, end.r, alpha) * factor, 0, 255);
+  const g = clamp(mix(start.g, end.g, alpha) * factor, 0, 255);
+  const b = clamp(mix(start.b, end.b, alpha) * factor, 0, 255);
+  return rgbToHex(r, g, b);
+}
+
+function hexToRgb(hex) {
+  const text = /^#[0-9a-fA-F]{6}$/.test(String(hex || '')) ? String(hex).slice(1) : 'ffffff';
+  const value = Number.parseInt(text, 16);
+  return {
+    r: (value >> 16) & 255,
+    g: (value >> 8) & 255,
+    b: value & 255
+  };
+}
+
+function rgbToHex(r, g, b) {
+  const toHex = (value) => Math.round(clamp(value, 0, 255)).toString(16).padStart(2, '0');
+  return `#${toHex(r)}${toHex(g)}${toHex(b)}`;
+}
+
+function random(min, max) {
+  return min + (max - min) * Math.random();
+}
+
+function randomInt(min, max) {
+  return Math.floor(random(min, max + 1));
+}
+
+function mix(a, b, alpha) {
+  return a + (b - a) * alpha;
+}
+
+function clamp(value, min, max) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return min;
+  return Math.max(min, Math.min(max, numeric));
+}

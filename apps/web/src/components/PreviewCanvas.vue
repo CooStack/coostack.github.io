@@ -28,11 +28,12 @@ const props = defineProps({
   title: { type: String, default: '预览' },
   eyebrow: { type: String, default: 'Preview' },
   hint: { type: String, default: '二维投影视图' },
-  points: { type: Array, default: () => [] },
+  points: { type: [Array, Object], default: () => [] },
   line: { type: Array, default: () => [] },
   showGrid: { type: Boolean, default: true },
   showAxes: { type: Boolean, default: true },
   pointSize: { type: Number, default: 0.07 },
+  interpolationMs: { type: Number, default: 50 },
   bare: { type: Boolean, default: false }
 });
 
@@ -41,6 +42,10 @@ const threeCanvasRef = ref(null);
 const hostRef = ref(null);
 const threePreview = ref(null);
 let resizeObserver = null;
+let lastShowGrid = null;
+let lastShowAxes = null;
+let lastPointSize = null;
+let lastInterpolationMs = null;
 
 const isLineMode = computed(() => Array.isArray(props.line) && props.line.length > 0 && (!props.points || props.points.length === 0));
 
@@ -83,13 +88,21 @@ function draw2d() {
     ctx.stroke();
   }
 
-  ctx.fillStyle = '#22c55e';
   (props.points || []).forEach((point) => {
     const projected = project(point);
+    const size = Math.max(1, Math.round(Number(point?.size || props.pointSize || 0.07) * scale * 0.7));
+    ctx.fillStyle = resolvePointFill(point);
     ctx.beginPath();
-    ctx.arc(projected.x, projected.y, 3, 0, Math.PI * 2);
+    ctx.arc(projected.x, projected.y, size, 0, Math.PI * 2);
     ctx.fill();
   });
+}
+
+function resolvePointFill(point) {
+  const color = /^#[0-9a-fA-F]{6}$/.test(String(point?.color || '')) ? point.color : '#22c55e';
+  const alpha = Math.max(0, Math.min(1, Number(point?.alpha ?? 1)));
+  const value = Number.parseInt(color.slice(1), 16);
+  return `rgba(${(value >> 16) & 255}, ${(value >> 8) & 255}, ${value & 255}, ${Number.isFinite(alpha) ? alpha : 1})`;
 }
 
 async function ensureThreePreview() {
@@ -104,6 +117,12 @@ async function ensureThreePreview() {
   });
   threePreview.value.setGridVisible(props.showGrid);
   threePreview.value.setAxesVisible(props.showAxes);
+  threePreview.value.setPointSize(props.pointSize);
+  threePreview.value.setInterpolationDuration(props.interpolationMs);
+  lastShowGrid = props.showGrid;
+  lastShowAxes = props.showAxes;
+  lastPointSize = props.pointSize;
+  lastInterpolationMs = props.interpolationMs;
   threePreview.value.updatePoints(props.points || []);
 }
 
@@ -113,9 +132,22 @@ function syncPreview() {
     return;
   }
   if (!threePreview.value) return;
-  threePreview.value.setGridVisible(props.showGrid);
-  threePreview.value.setAxesVisible(props.showAxes);
-  threePreview.value.setPointSize(props.pointSize);
+  if (lastShowGrid !== props.showGrid) {
+    threePreview.value.setGridVisible(props.showGrid);
+    lastShowGrid = props.showGrid;
+  }
+  if (lastShowAxes !== props.showAxes) {
+    threePreview.value.setAxesVisible(props.showAxes);
+    lastShowAxes = props.showAxes;
+  }
+  if (lastPointSize !== props.pointSize) {
+    threePreview.value.setPointSize(props.pointSize);
+    lastPointSize = props.pointSize;
+  }
+  if (lastInterpolationMs !== props.interpolationMs) {
+    threePreview.value.setInterpolationDuration(props.interpolationMs);
+    lastInterpolationMs = props.interpolationMs;
+  }
   threePreview.value.updatePoints(props.points || []);
 }
 
@@ -148,7 +180,7 @@ watch(isLineMode, async () => {
   await ensureThreePreview();
   syncPreview();
 });
-watch(() => [props.points, props.line, props.showGrid, props.showAxes, props.pointSize], syncPreview, { deep: true });
+watch(() => [props.points, props.line, props.showGrid, props.showAxes, props.pointSize, props.interpolationMs], syncPreview);
 
 onBeforeUnmount(() => {
   resizeObserver?.disconnect();

@@ -90,6 +90,16 @@ function normalizeParticleInitTarget(rawTarget = 'color') {
   return COMPOSITION_PARTICLE_INIT_TARGET_OPTIONS.includes(target) ? target : 'color';
 }
 
+function normalizeParticleInitExpr(target, rawExpr, fallbackExpr) {
+  const expr = String(rawExpr ?? '').trim();
+  if (target !== 'color') return expr || String(fallbackExpr || '0');
+  if (!expr) return 'Vector3f(1F, 1F, 1F)';
+  const match = expr.match(/^([A-Za-z0-9_]+)\s*\(([^)]+)\)$/);
+  if (!match || !['Vector3f', 'RelativeLocation', 'Vec3'].includes(match[1])) return expr;
+  const parsed = parseVectorLiteral(expr, { x: 1, y: 1, z: 1 });
+  return formatVectorLiteral('Vector3f', parsed.x, parsed.y, parsed.z);
+}
+
 function normalizeControllerActionType(rawType = 'tick_js') {
   const type = String(rawType || 'tick_js').trim();
   return COMPOSITION_CONTROLLER_ACTION_TYPES.some((item) => item.id === type) ? type : 'tick_js';
@@ -184,13 +194,14 @@ export function normalizeDisplayAction(rawAction = {}, index = 0) {
 
 export function normalizeCompositionParticleInit(rawItem = {}, index = 0) {
   const base = createCompositionParticleInit();
+  const target = normalizeParticleInitTarget(rawItem?.target || base.target);
   return {
     ...base,
     ...rawItem,
     id: rawItem?.id || base.id || `pinit_${index}`,
-    target: normalizeParticleInitTarget(rawItem?.target || base.target),
+    target,
     exprPreset: String(rawItem?.exprPreset || ''),
-    expr: String(rawItem?.expr || base.expr)
+    expr: normalizeParticleInitExpr(target, rawItem?.expr, base.expr)
   };
 }
 
