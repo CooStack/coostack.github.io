@@ -364,6 +364,7 @@ export function normalizeCompositionProject(rawProject = {}) {
   merged.compositionAxisManualZ = coerceNumber(rawProject?.compositionAxisManualZ, 0);
   merged.settings.previewTicks = merged.previewPlayTicks;
   merged.settings.pointSize = Math.max(0.01, coerceNumber(merged.settings.pointSize, 0.08));
+  merged.settings.previewCacheWorkerCount = Math.max(0, Math.min(16, Math.round(coerceNumber(merged.settings.previewCacheWorkerCount, 0))));
   merged.settings.showAxes = merged.settings.showAxes !== false;
   merged.settings.showGrid = merged.settings.showGrid !== false;
   merged.settings.leftPanelWidth = Math.max(400, Math.min(1200, Math.round(coerceNumber(merged.settings.leftPanelWidth, 560))));

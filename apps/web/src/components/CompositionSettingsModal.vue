@@ -18,6 +18,10 @@
               <div class="settings-label">点大小</div>
               <input v-model.number="projectSettings.pointSize" class="input" type="number" min="0.001" step="0.01" />
             </div>
+            <div class="settings-row">
+              <div class="settings-label">缓存线程</div>
+              <input v-model.number="projectSettings.previewCacheWorkerCount" class="input" type="number" min="0" max="16" step="1" />
+            </div>
           </div>
         </div>
         <div class="settings-panel">
