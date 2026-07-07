@@ -34,7 +34,7 @@ import {
     hasAngleOffsetEaseSpecialParams,
     formatAngleValue
 } from "./angle_offset_utils.js";
-import { installPreviewRuntimeMethods } from "./preview_runtime_mixin.js?v=20260707_1";
+import { installPreviewRuntimeMethods } from "./preview_runtime_mixin.js?v=20260707_10";
 import { installKotlinCodegenMethods } from "./kotlin_codegen_mixin.js?v=20260313_1";
 import { installCodeOutputMethods } from "./code_output_mixin.js";
 import { installExpressionEditorMethods } from "./expression_editor_mixin.js?v=20260316_1";
@@ -886,6 +886,8 @@ function normalizeStateShape(state) {
     next.settings.theme = String(next.settings.theme || "dark-1");
     next.settings.paramStep = Math.max(0.000001, num(next.settings.paramStep || 0.1));
     next.settings.pointSize = Math.max(0.001, num(next.settings.pointSize || 0.5));
+    next.settings.previewRenderCacheEnabled = next.settings.previewRenderCacheEnabled !== false;
+    next.settings.previewCacheWorkerCount = clamp(int(next.settings.previewCacheWorkerCount || 0), 0, 16);
     next.settings.showAxes = next.settings.showAxes !== false;
     next.settings.showGrid = next.settings.showGrid === true ? true : false;
     next.settings.realtimeCode = next.settings.realtimeCode !== false;
@@ -989,6 +991,8 @@ function createDefaultState() {
             theme: "dark-1",
             paramStep: 0.1,
             pointSize: 0.5,
+            previewRenderCacheEnabled: true,
+            previewCacheWorkerCount: 0,
             showAxes: true,
             showGrid: false,
             realtimeCode: true,
@@ -1304,6 +1308,9 @@ class CompositionBuilderApp {
         setBasePath("./");
         loadAllParticleData().then(() => {
             this.renderCards();
+            if (typeof this.clearPreviewRenderCache === "function") {
+                this.clearPreviewRenderCache("particle-data-loaded");
+            }
             this.syncTextureUniforms();
         });
     }
@@ -1358,6 +1365,8 @@ class CompositionBuilderApp {
             btnCloseSettings: document.getElementById("btnCloseSettings"),
             inpParamStep: document.getElementById("inpParamStep"),
             inpPointSize: document.getElementById("inpPointSize"),
+            chkPreviewRenderCache: document.getElementById("chkPreviewRenderCache"),
+            inpPreviewCacheWorkers: document.getElementById("inpPreviewCacheWorkers"),
             themeSelect: document.getElementById("themeSelect"),
             chkAxes: document.getElementById("chkAxes"),
             chkGrid: document.getElementById("chkGrid"),
@@ -1463,6 +1472,29 @@ class CompositionBuilderApp {
         d.inpPointSize.addEventListener("input", () => {
             this.state.settings.pointSize = Math.max(0.001, num(d.inpPointSize.value));
             if (this.pointsMat) this.pointsMat.size = this.state.settings.pointSize;
+            this.scheduleSave();
+        });
+        d.chkPreviewRenderCache?.addEventListener("change", () => {
+            this.state.settings.previewRenderCacheEnabled = d.chkPreviewRenderCache.checked !== false;
+            if (this.state.settings.previewRenderCacheEnabled) {
+                if (this.previewRenderCache) this.previewRenderCache.disabled = false;
+                if (this.previewRenderCacheWorkerPool?.disabled) this.previewRenderCacheWorkerPool = null;
+                if (typeof this.clearPreviewRenderCache === "function") this.clearPreviewRenderCache("cache-enabled");
+            } else {
+                if (typeof this.clearPreviewRenderCache === "function") this.clearPreviewRenderCache("cache-disabled");
+                if (typeof this.disposePreviewRenderCacheWorkerPool === "function") {
+                    this.disposePreviewRenderCacheWorkerPool("cache-disabled", { disable: true });
+                }
+            }
+            if (typeof this.updatePreviewCacheStatus === "function") this.updatePreviewCacheStatus();
+            this.scheduleSave();
+        });
+        d.inpPreviewCacheWorkers?.addEventListener("input", () => {
+            this.state.settings.previewCacheWorkerCount = clamp(int(d.inpPreviewCacheWorkers.value || 0), 0, 16);
+            if (typeof this.disposePreviewRenderCacheWorkerPool === "function") {
+                this.disposePreviewRenderCacheWorkerPool("worker-count-change", { disable: false });
+            }
+            if (typeof this.updatePreviewCacheStatus === "function") this.updatePreviewCacheStatus();
             this.scheduleSave();
         });
         d.themeSelect.addEventListener("change", () => {
@@ -1689,6 +1721,8 @@ class CompositionBuilderApp {
         const s = this.state.settings;
         this.dom.inpParamStep.value = String(s.paramStep);
         this.dom.inpPointSize.value = String(s.pointSize);
+        if (this.dom.chkPreviewRenderCache) this.dom.chkPreviewRenderCache.checked = s.previewRenderCacheEnabled !== false;
+        if (this.dom.inpPreviewCacheWorkers) this.dom.inpPreviewCacheWorkers.value = String(s.previewCacheWorkerCount || 0);
         this.dom.themeSelect.value = s.theme;
         this.dom.chkAxes.checked = !!s.showAxes;
         this.dom.chkGrid.checked = !!s.showGrid;
@@ -4433,6 +4467,7 @@ class CompositionBuilderApp {
         if (rerenderProject) this.renderProjectSection();
         if (rerenderCards) this.renderCards();
         if (rebuildPreview) this.rebuildPreview();
+        else if (typeof this.clearPreviewRenderCache === "function") this.clearPreviewRenderCache("structure-mutate");
         this.generateCodeAndRender(this.state.settings.realtimeCode);
         this.writeBuilderCompositionContext();
         this.restoreEditableFocusState(focusState, { rerenderProject, rerenderCards });
@@ -4456,6 +4491,7 @@ class CompositionBuilderApp {
         if (rerenderProject) this.renderProjectSection();
         if (rerenderCards) this.renderCards();
         if (opts.rebuildPreview !== false) this.rebuildPreview();
+        else if (typeof this.clearPreviewRenderCache === "function") this.clearPreviewRenderCache("value-mutate");
         this.generateCodeAndRender(this.state.settings.realtimeCode);
         this.writeBuilderCompositionContext();
         this.restoreEditableFocusState(focusState, { rerenderProject, rerenderCards });

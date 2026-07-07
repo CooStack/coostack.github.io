@@ -1,4 +1,4 @@
-import * as THREE from "three";
+import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.182.0/build/three.module.min.js";
 import { computeAngleAnimatorAngle } from "./preview_angle_animator.js";
 
 export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
@@ -47,8 +47,16 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
     const PREVIEW_GEOMETRY_POINT_LIMIT = 120000;
     const PREVIEW_RENDER_CACHE_MAX_FRAMES = 120;
     const PREVIEW_RENDER_CACHE_MAX_BYTES = 256 * 1024 * 1024;
+    const PREVIEW_RENDER_CACHE_HARD_MAX_BYTES = 1024 * 1024 * 1024;
     const PREVIEW_RENDER_CACHE_POINT_LIMIT = PREVIEW_GEOMETRY_POINT_LIMIT;
     const PREVIEW_RENDER_CACHE_SUBFRAMES_PER_TICK = 4;
+    const PREVIEW_RENDER_CACHE_WORKER_MIN_POINTS = 8000;
+    const PREVIEW_RENDER_CACHE_WORKER_DEFAULT_MAX_WORKERS = 2;
+    const PREVIEW_RENDER_CACHE_WORKER_USER_MAX_WORKERS = 16;
+    const PREVIEW_RENDER_CACHE_WORKER_MAX_QUEUE = 8;
+    const PREVIEW_RENDER_CACHE_CAMERA_MIN_POINTS = 12000;
+    const PREVIEW_RENDER_CACHE_CAMERA_SETTLE_MS = 300;
+    const PREVIEW_RENDER_CACHE_WORKER_URL = "./preview_render_cache_worker.js?v=20260707_10";
 
     class PreviewRuntimeMixin {
     rebuildPreview() {
@@ -692,6 +700,8 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
             ? prevPersistentControllerStates.slice()
             : new Array(count).fill(null);
         this.previewCanResumeRuntimeState = canReuseRuntimeState;
+        this.previewRenderWorkerInitBaselineReady = canReuseRuntimeState
+            && this.previewRenderWorkerInitBaselineReady === true;
         this.previewRuntimeStateSignature = nextRuntimeStateSignature;
         this.snapshotPreviewRuntimeStateLayout(owners);
         this.syncTextureUniforms();
@@ -733,6 +743,8 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
         try {
             const settings = Object.assign({}, this.state?.settings || {});
             delete settings.previewFocusSingleCard;
+            delete settings.previewRenderCacheEnabled;
+            delete settings.previewCacheWorkerCount;
             return JSON.stringify(settings || {});
         } catch {
             return "";
@@ -753,15 +765,29 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
             .join(",")}`;
     }
 
+    getPreviewRenderCacheMaxBytes(totalCount = null, cycleCfg = null) {
+        const count = totalCount == null
+            ? Math.max(0, int(this.previewBasePoints?.length || 0))
+            : Math.max(0, int(totalCount || 0));
+        const resolvedCycleCfg = cycleCfg || this.getPreviewCycleConfig?.() || {};
+        const cycleTotal = Math.max(1, Math.ceil(num(resolvedCycleCfg?.total || 1)));
+        const bytesPerFrame = Math.max(1, this.estimatePreviewFrameBytes(count));
+        const oneFramePerTickBytes = bytesPerFrame * (cycleTotal + 1);
+        const targetBytes = Math.max(PREVIEW_RENDER_CACHE_MAX_BYTES, oneFramePerTickBytes);
+        return Math.max(1, Math.min(PREVIEW_RENDER_CACHE_HARD_MAX_BYTES, Math.ceil(targetBytes)));
+    }
+
     getPreviewRenderCacheSubframesPerTick(totalCount = null, cycleCfg = null) {
         const count = totalCount == null
             ? Math.max(0, int(this.previewBasePoints?.length || 0))
             : Math.max(0, int(totalCount || 0));
+        const resolvedCycleCfg = cycleCfg || this.getPreviewCycleConfig?.() || {};
         let subframes = count >= 100000 ? 2 : PREVIEW_RENDER_CACHE_SUBFRAMES_PER_TICK;
-        const cycleTotal = Math.max(1, Math.ceil(num(cycleCfg?.total || this.getPreviewCycleConfig?.().total || 1)));
+        const cycleTotal = Math.max(1, Math.ceil(num(resolvedCycleCfg?.total || 1)));
         const bytesPerFrame = Math.max(1, this.estimatePreviewFrameBytes(count));
-        const maxFramesByBytes = Math.max(0, Math.floor(PREVIEW_RENDER_CACHE_MAX_BYTES / bytesPerFrame));
-        while (subframes > 1 && (cycleTotal * subframes + 1) > maxFramesByBytes) {
+        const maxBytes = this.getPreviewRenderCacheMaxBytes(count, resolvedCycleCfg);
+        const maxFramesByBytes = Math.max(0, Math.floor(maxBytes / bytesPerFrame));
+        while (subframes > 1 && (maxFramesByBytes <= 0 || (cycleTotal * subframes + 1) > maxFramesByBytes)) {
             subframes = Math.max(1, Math.floor(subframes / 2));
         }
         return subframes;
@@ -769,8 +795,16 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
 
     getPreviewRenderCacheMaxFrames(totalCount = null, cycleCfg = null) {
         const subframes = this.getPreviewRenderCacheSubframesPerTick(totalCount, cycleCfg);
-        const cycleTotal = Math.max(1, Math.ceil(num(cycleCfg?.total || this.getPreviewCycleConfig?.().total || 1)));
-        return Math.max(PREVIEW_RENDER_CACHE_MAX_FRAMES, cycleTotal * subframes + 1);
+        const resolvedCycleCfg = cycleCfg || this.getPreviewCycleConfig?.() || {};
+        const count = totalCount == null
+            ? Math.max(0, int(this.previewBasePoints?.length || 0))
+            : Math.max(0, int(totalCount || 0));
+        const cycleTotal = Math.max(1, Math.ceil(num(resolvedCycleCfg?.total || 1)));
+        const cycleFrameCount = Math.max(1, cycleTotal * subframes + 1);
+        const bytesPerFrame = Math.max(1, this.estimatePreviewFrameBytes(count));
+        const maxBytes = this.getPreviewRenderCacheMaxBytes(count, resolvedCycleCfg);
+        const maxFramesByBytes = Math.max(1, Math.floor(maxBytes / bytesPerFrame));
+        return Math.max(1, Math.min(cycleFrameCount, maxFramesByBytes));
     }
 
     resolvePreviewFrameTimeContext(context = {}) {
@@ -815,8 +849,8 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
         return this.previewRenderSignature;
     }
 
-    makePreviewCameraCacheKey(totalCount = 0) {
-        if (Math.max(0, int(totalCount || 0)) < 12000 || !this.camera) return "";
+    makePreviewRawCameraCacheKey(totalCount = 0) {
+        if (Math.max(0, int(totalCount || 0)) < PREVIEW_RENDER_CACHE_CAMERA_MIN_POINTS || !this.camera) return "";
         const round = (v) => {
             const n = Number(v);
             return Number.isFinite(n) ? Math.round(n * 1000) / 1000 : 0;
@@ -836,6 +870,44 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
         ].join(",");
     }
 
+    getPreviewCameraCacheInfo(totalCount = 0) {
+        const count = Math.max(0, int(totalCount || 0));
+        const rawKey = this.makePreviewRawCameraCacheKey(count);
+        if (!rawKey) return { key: "", rawKey: "", usesCamera: false, stable: true };
+        const now = (typeof performance !== "undefined" && typeof performance.now === "function")
+            ? performance.now()
+            : Date.now();
+        const state = this.previewRenderCameraCacheState && typeof this.previewRenderCameraCacheState === "object"
+            ? this.previewRenderCameraCacheState
+            : { rawKey: "", settlingUntil: 0 };
+        const previousKey = String(state.rawKey || "");
+        if (!previousKey) {
+            state.rawKey = rawKey;
+            state.settlingUntil = 0;
+            this.previewRenderCameraCacheState = state;
+            return { key: rawKey, rawKey, usesCamera: true, stable: true };
+        }
+        if (previousKey !== rawKey) {
+            const wasStable = !state.settlingUntil || now >= num(state.settlingUntil || 0);
+            state.rawKey = rawKey;
+            state.settlingUntil = now + PREVIEW_RENDER_CACHE_CAMERA_SETTLE_MS;
+            this.previewRenderCameraCacheState = state;
+            if (wasStable && typeof this.clearPreviewRenderCacheWorkerQueue === "function") {
+                this.clearPreviewRenderCacheWorkerQueue("camera-moving");
+            }
+            if (wasStable && typeof this.disposePreviewRenderCacheWorkerPool === "function") {
+                this.disposePreviewRenderCacheWorkerPool("camera-moving", { disable: false });
+            }
+            return { key: "", rawKey, usesCamera: true, stable: false };
+        }
+        const stable = !state.settlingUntil || now >= num(state.settlingUntil || 0);
+        return { key: stable ? rawKey : "", rawKey, usesCamera: true, stable };
+    }
+
+    makePreviewCameraCacheKey(totalCount = 0) {
+        return this.getPreviewCameraCacheInfo(totalCount).key;
+    }
+
     makePreviewTextureCacheKey() {
         const offsets = this._mergedAtlasOffsets;
         if (!(offsets instanceof Map) || !offsets.size) return "none";
@@ -845,11 +917,18 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
             .join(",");
     }
 
+    isPreviewRenderCacheEnabled() {
+        return this.state?.settings?.previewRenderCacheEnabled !== false;
+    }
+
     makePreviewFrameCacheKey(context = {}) {
+        if (!this.isPreviewRenderCacheEnabled()) return "";
         const totalCount = Math.max(0, int(context.totalCount ?? this.previewBasePoints?.length ?? 0));
         const cycleCfg = context.cycleCfg || this.getPreviewCycleConfig();
         const cache = this.ensurePreviewRenderCache(totalCount, { cycleCfg });
         if (!cache || cache.disabled) return "";
+        const cameraInfo = this.getPreviewCameraCacheInfo(totalCount);
+        if (cameraInfo.usesCamera && !cameraInfo.stable) return "";
         const globalCycleAge = Number.isFinite(Number(context.globalCycleAge))
             ? num(context.globalCycleAge)
             : 0;
@@ -869,7 +948,7 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
             `renderFrame:${frameTime.renderFrame}/${frameTime.subframes}`,
             `globalCycleAge:${Math.round(frameTime.globalCycleAge * 1000)}`,
             `layers:${this.makePreviewLayerVisibilitySignature()}`,
-            `camera:${this.makePreviewCameraCacheKey(totalCount)}`,
+            `camera:${cameraInfo.key}`,
             `texture:${this.makePreviewTextureCacheKey()}`
         ].join("||");
     }
@@ -900,13 +979,24 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
         const estimatedBytes = Number.isFinite(Number(opts.estimatedBytes))
             ? Math.max(0, int(opts.estimatedBytes || 0))
             : 0;
-        const tooLarge = (count != null && cache.pointLimit > 0 && count > cache.pointLimit)
-            || (estimatedBytes > 0 && estimatedBytes > cache.maxBytes)
-            || (Number.isFinite(Number(opts.workingSetBytes)) && int(opts.workingSetBytes || 0) > cache.maxBytes);
+        const disabledBySetting = prop === "previewRenderCache" && !this.isPreviewRenderCacheEnabled();
+        const tooLarge = disabledBySetting
+            || (count != null && cache.pointLimit > 0 && count > cache.pointLimit)
+            || (estimatedBytes > 0 && estimatedBytes > cache.maxBytes);
         cache.disabled = tooLarge;
+        cache.disabledReason = disabledBySetting ? "setting" : (tooLarge ? "limit" : "");
         if (tooLarge && cache.frames.size) {
             cache.frames.clear();
             cache.bytes = 0;
+        } else if (!tooLarge) {
+            while (cache.frames.size > cache.maxFrames || cache.bytes > cache.maxBytes) {
+                const first = cache.frames.keys().next();
+                if (!first || first.done) break;
+                const evicted = cache.frames.get(first.value);
+                cache.frames.delete(first.value);
+                cache.bytes = Math.max(0, cache.bytes - int(evicted?.bytes || 0));
+                cache.evictions += 1;
+            }
         }
         return cache;
     }
@@ -977,12 +1067,13 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
             : Math.max(0, int(totalCount || 0));
         const cycleCfg = context?.cycleCfg || context;
         const maxFrames = this.getPreviewRenderCacheMaxFrames(count, cycleCfg);
+        const maxBytes = this.getPreviewRenderCacheMaxBytes(count, cycleCfg);
         const requiredFrames = Math.max(1, Math.ceil(num(cycleCfg?.total || this.getPreviewCycleConfig?.().total || 1))
             * this.getPreviewRenderCacheSubframesPerTick(count, cycleCfg) + 1);
         const estimatedBytes = this.estimatePreviewFrameBytes(count);
         return this.ensurePreviewBoundedFrameCache("previewRenderCache", {
             maxFrames,
-            maxBytes: PREVIEW_RENDER_CACHE_MAX_BYTES,
+            maxBytes,
             pointLimit: PREVIEW_RENDER_CACHE_POINT_LIMIT,
             pointCount: count,
             estimatedBytes,
@@ -994,20 +1085,62 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
         this.clearPreviewBoundedFrameCache("previewRenderCache", reason);
         this.previewRenderSignature = "";
         this.previewRenderCacheGeneration = int(this.previewRenderCacheGeneration || 0) + 1;
+        this.clearPreviewRenderCacheWorkerQueue(reason);
         this.updatePreviewCacheStatus();
     }
 
+    resetPreviewRuntimeCurrentAgeState(persistentCurrentAges, manualAgeFlags, totalCount = 0) {
+        const count = Math.max(0, int(totalCount || 0));
+        if (!(persistentCurrentAges instanceof Float32Array)
+            || !(manualAgeFlags instanceof Uint8Array)
+            || persistentCurrentAges.length !== count
+            || manualAgeFlags.length !== count) {
+            return;
+        }
+        if (!this.previewPointGroupIndex || this.previewPointGroupIndex.length !== count) {
+            this.rebuildPreviewRuntimeIndex();
+        }
+        const pointGroupIndex = this.previewPointGroupIndex;
+        const pointVisualSources = Array.isArray(this.previewLeafVisualSources) ? this.previewLeafVisualSources : [];
+        const groupOwner = Array.isArray(this.previewGroupOwner) ? this.previewGroupOwner : [];
+        const groupCard = Array.isArray(this.previewGroupCard) ? this.previewGroupCard : [];
+        const ownerIds = this.previewOwners;
+        for (let i = 0; i < count; i++) {
+            if (manualAgeFlags[i] !== 1) {
+                persistentCurrentAges[i] = 0;
+                continue;
+            }
+            const groupId = pointGroupIndex && i < pointGroupIndex.length ? pointGroupIndex[i] : -1;
+            const owner = groupId >= 0 ? (groupOwner[groupId] || ownerIds?.[i]) : ownerIds?.[i];
+            const ownerCardRef = groupId >= 0
+                ? (groupCard[groupId] || this.getCardById(owner))
+                : this.getCardById(owner);
+            const pointVisualSource = pointVisualSources[i] || null;
+            const dependency = ownerCardRef
+                ? this.getCardPreviewVisualDependency(ownerCardRef, pointVisualSource ? { visualSource: pointVisualSource } : {})
+                : null;
+            if (dependency?.initPointDependentCurrentAge) continue;
+            persistentCurrentAges[i] = 0;
+            manualAgeFlags[i] = 0;
+        }
+    }
+
     getPreviewRenderCacheStatusText() {
+        if (!this.isPreviewRenderCacheEnabled()) return "缓存: 关闭";
         const cache = this.previewRenderCache;
         if (!cache || !(cache.frames instanceof Map)) return "缓存: --";
         if (cache.disabled) return "缓存: 关闭";
+        const count = Math.max(0, int(this.previewBasePoints?.length || 0));
+        const cameraInfo = this.getPreviewCameraCacheInfo(count);
+        const cameraText = cameraInfo.usesCamera && !cameraInfo.stable ? " 暂停相机" : "";
         const frames = cache.frames.size;
         const maxFrames = Math.max(1, int(cache.maxFrames || PREVIEW_RENDER_CACHE_MAX_FRAMES));
         const hits = Math.max(0, int(cache.hits || 0));
         const misses = Math.max(0, int(cache.misses || 0));
         const lookups = hits + misses;
         const hitRate = lookups > 0 ? Math.round((hits * 100) / lookups) : 0;
-        return `缓存: ${frames}/${maxFrames} 命中 ${hitRate}%`;
+        const workerText = this.getPreviewRenderCacheWorkerStatusText();
+        return `缓存: ${frames}/${maxFrames} 命中 ${hitRate}%${cameraText}${workerText}`;
     }
 
     updatePreviewCacheStatus() {
@@ -1018,16 +1151,712 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
         this.dom.statusCache.textContent = text;
     }
 
+    getPreviewRenderCacheWorkerStatusText() {
+        const pool = this.previewRenderCacheWorkerPool;
+        if (!pool || pool.disabled || !Array.isArray(pool.workers) || !pool.workers.length) return "";
+        const pending = (pool.pending instanceof Map ? pool.pending.size : 0)
+            + (Array.isArray(pool.queue) ? pool.queue.length : 0);
+        const active = Math.max(0, int(pool.active || 0));
+        if (pending || active) return ` 线程${pool.workers.length} 构建${pending + active}`;
+        if (Math.max(0, int(pool.stores || 0)) > 0) return ` 线程${pool.workers.length}`;
+        return "";
+    }
+
+    getPreviewRenderCacheWorkerCount() {
+        const configured = clamp(
+            int(this.state?.settings?.previewCacheWorkerCount || 0),
+            0,
+            PREVIEW_RENDER_CACHE_WORKER_USER_MAX_WORKERS
+        );
+        if (configured > 0) return configured;
+        const hardware = Math.max(1, int((globalThis.navigator?.hardwareConcurrency || 2) - 1));
+        return Math.max(1, Math.min(PREVIEW_RENDER_CACHE_WORKER_DEFAULT_MAX_WORKERS, hardware));
+    }
+
+    ensurePreviewRenderCacheWorkerPool(totalCount = 0) {
+        if (!this.isPreviewRenderCacheEnabled()) return null;
+        const count = Math.max(0, int(totalCount || 0));
+        if (count < PREVIEW_RENDER_CACHE_WORKER_MIN_POINTS) return null;
+        if (typeof Worker === "undefined") return null;
+        const workerCount = this.getPreviewRenderCacheWorkerCount();
+        let pool = this.previewRenderCacheWorkerPool;
+        if (pool && !pool.disabled && Array.isArray(pool.workers) && pool.workers.length
+            && int(pool.workerCount || pool.workers.length) !== workerCount) {
+            this.disposePreviewRenderCacheWorkerPool("worker-count-change", { disable: false });
+            pool = null;
+        }
+        if (pool && !pool.disabled && Array.isArray(pool.workers) && pool.workers.length) return pool;
+        if (pool?.disabled) return null;
+        pool = {
+            workers: [],
+            queue: [],
+            pending: new Map(),
+            buildKeys: new Set(),
+            nextWorker: 0,
+            active: 0,
+            workerCount,
+            maxQueue: Math.max(PREVIEW_RENDER_CACHE_WORKER_MAX_QUEUE, workerCount * 3),
+            snapshotSignature: "",
+            disabled: false,
+            stores: 0,
+            errors: 0,
+            rejected: 0
+        };
+        try {
+            const workerUrl = new URL(PREVIEW_RENDER_CACHE_WORKER_URL, import.meta.url);
+            for (let i = 0; i < workerCount; i++) {
+                const worker = new Worker(workerUrl, {
+                    type: "module",
+                    name: `composition-preview-cache-${i + 1}`
+                });
+                worker.onmessage = (event) => this.handlePreviewRenderCacheWorkerMessage(event);
+                worker.onerror = () => {
+                    pool.errors += 1;
+                    this.disposePreviewRenderCacheWorkerPool("worker-error");
+                    this.updatePreviewCacheStatus();
+                };
+                pool.workers.push(worker);
+            }
+        } catch {
+            pool.disabled = true;
+            pool.workers = [];
+        }
+        this.previewRenderCacheWorkerPool = pool;
+        return pool.disabled || !pool.workers.length ? null : pool;
+    }
+
+    disposePreviewRenderCacheWorkerPool(reason = "", opts = {}) {
+        const pool = this.previewRenderCacheWorkerPool;
+        if (!pool) return;
+        if (Array.isArray(pool.workers)) {
+            for (const worker of pool.workers) {
+                try {
+                    worker.terminate();
+                } catch {
+                }
+            }
+        }
+        pool.workers = [];
+        pool.queue = [];
+        if (pool.pending instanceof Map) pool.pending.clear();
+        if (pool.buildKeys instanceof Set) pool.buildKeys.clear();
+        pool.active = 0;
+        pool.snapshotSignature = "";
+        pool.disabled = opts.disable !== false;
+        pool.lastDisposeReason = String(reason || "");
+        if (opts.disable === false && this.previewRenderCacheWorkerPool === pool) {
+            this.previewRenderCacheWorkerPool = null;
+        }
+    }
+
+    clearPreviewRenderCacheWorkerQueue(reason = "") {
+        this.previewRenderWorkerGeneration = int(this.previewRenderWorkerGeneration || 0) + 1;
+        const pool = this.previewRenderCacheWorkerPool;
+        if (!pool) return;
+        pool.queue = [];
+        if (pool.pending instanceof Map) pool.pending.clear();
+        if (pool.buildKeys instanceof Set) pool.buildKeys.clear();
+        pool.active = 0;
+        pool.snapshotSignature = "";
+        pool.lastClearReason = String(reason || "");
+    }
+
+    makePreviewRenderWorkerPlainClone(value) {
+        const seen = new WeakMap();
+        const clone = (raw) => {
+            if (!raw || typeof raw !== "object") return raw;
+            if (typeof raw === "function") return undefined;
+            if (raw instanceof Float32Array) return new Float32Array(raw);
+            if (raw instanceof Int32Array) return new Int32Array(raw);
+            if (raw instanceof Uint8Array) return new Uint8Array(raw);
+            if (raw instanceof Map) return Array.from(raw.entries()).map(([k, v]) => [k, clone(v)]);
+            if (seen.has(raw)) return seen.get(raw);
+            if (Array.isArray(raw)) {
+                const out = new Array(raw.length);
+                seen.set(raw, out);
+                for (let i = 0; i < raw.length; i++) out[i] = clone(raw[i]);
+                return out;
+            }
+            const out = {};
+            seen.set(raw, out);
+            for (const [key, child] of Object.entries(raw)) {
+                if (typeof child === "function") continue;
+                out[key] = clone(child);
+            }
+            return out;
+        };
+        return clone(value);
+    }
+
+    makePreviewRenderWorkerTextureSnapshot() {
+        const framesByEffect = {};
+        const { getParticleDataByName } = this._particleDataFns || {};
+        const visitCfg = (cfg) => {
+            const effectClass = String(cfg?.effectClass || "").trim();
+            if (!effectClass || cfg?.useTexture === false) return;
+            let frames = 0;
+            try {
+                const pData = typeof getParticleDataByName === "function" ? getParticleDataByName(effectClass) : null;
+                frames = Math.max(0, int(pData?.frames || 0));
+            } catch {
+                frames = 0;
+            }
+            if (frames > 0) framesByEffect[effectClass] = frames;
+        };
+        for (const cfg of (Array.isArray(this.previewLeafTextureConfigs) ? this.previewLeafTextureConfigs : [])) {
+            visitCfg(cfg);
+        }
+        for (const card of (Array.isArray(this.state?.cards) ? this.state.cards : [])) {
+            visitCfg(this.resolvePreviewLeafTextureConfig(card));
+        }
+        const atlasOffsets = {};
+        const offsets = this._mergedAtlasOffsets;
+        if (offsets instanceof Map) {
+            for (const [name, offset] of offsets.entries()) {
+                atlasOffsets[String(name || "")] = Math.max(0, int(offset || 0));
+            }
+        }
+        return { framesByEffect, atlasOffsets };
+    }
+
+    makePreviewRenderWorkerCameraSnapshot(totalCount = 0) {
+        const count = Math.max(0, int(totalCount || 0));
+        if (count < PREVIEW_RENDER_CACHE_CAMERA_MIN_POINTS || !this.camera) return null;
+        const projection = this.camera.projectionMatrix?.elements;
+        const inverse = this.camera.matrixWorldInverse?.elements;
+        if (!projection || projection.length !== 16 || !inverse || inverse.length !== 16) return null;
+        return {
+            projectionMatrix: Array.from(projection, (v) => num(v)),
+            matrixWorldInverse: Array.from(inverse, (v) => num(v))
+        };
+    }
+
+    makePreviewRenderWorkerSnapshotSignature(totalCount = 0, cycleCfg = null) {
+        const count = Math.max(0, int(totalCount || this.previewBasePoints?.length || 0));
+        const cycle = cycleCfg || this.getPreviewCycleConfig();
+        const cycleKey = [
+            cycle?.appear,
+            cycle?.live,
+            cycle?.fade,
+            cycle?.play,
+            cycle?.total
+        ].map((v) => Math.round(num(v || 0) * 1000)).join(",");
+        return [
+            this.makePreviewRenderSignature(),
+            `cycle:${cycleKey}`,
+            `layers:${this.makePreviewLayerVisibilitySignature()}`,
+            `camera:${this.getPreviewCameraCacheInfo(count).key}`,
+            `texture:${this.makePreviewTextureCacheKey()}`
+        ].join("||");
+    }
+
+    hasPreviewRenderWorkerInitDependencies(totalCount = 0) {
+        const count = Math.max(0, int(totalCount || 0));
+        if (!count) return false;
+        if (!this.previewPointGroupIndex || this.previewPointGroupIndex.length !== count) {
+            this.rebuildPreviewRuntimeIndex();
+        }
+        const pointGroupIndex = this.previewPointGroupIndex;
+        const groupOwner = Array.isArray(this.previewGroupOwner) ? this.previewGroupOwner : [];
+        const groupCard = Array.isArray(this.previewGroupCard) ? this.previewGroupCard : [];
+        const ownerIds = Array.isArray(this.previewOwners) ? this.previewOwners : [];
+        const pointVisualSources = Array.isArray(this.previewLeafVisualSources) ? this.previewLeafVisualSources : [];
+        for (let i = 0; i < count; i++) {
+            const groupId = pointGroupIndex && i < pointGroupIndex.length ? int(pointGroupIndex[i]) : -1;
+            const owner = groupId >= 0 ? (groupOwner[groupId] || ownerIds[i]) : ownerIds[i];
+            const ownerCard = groupId >= 0 ? (groupCard[groupId] || this.getCardById(owner)) : this.getCardById(owner);
+            if (!ownerCard) continue;
+            const pointVisualSource = pointVisualSources[i] || null;
+            const dependency = this.getCardPreviewVisualDependency(ownerCard, pointVisualSource ? { visualSource: pointVisualSource } : {});
+            if (dependency?.initPointDependentCurrentAge || dependency?.initPointDependentLifetime) return true;
+        }
+        return false;
+    }
+
+    makePreviewRenderWorkerInitBaseline(totalCount = 0, cycleCfg = null) {
+        const count = Math.max(0, int(totalCount || 0));
+        const hasInitDependencies = this.hasPreviewRenderWorkerInitDependencies(count);
+        const sourceAges = this.previewPersistentCurrentAges;
+        const sourceLifetimes = this.previewPersistentLifetimes;
+        const sourceManualFlags = this.previewManualAgeFlags;
+        const sourceLifetimeFlags = this.previewInitializedLifetimeFlags;
+        const hasInitializedState = this.previewRenderWorkerInitBaselineReady === true
+            && sourceAges instanceof Float32Array
+            && sourceAges.length === count
+            && sourceLifetimes instanceof Float32Array
+            && sourceLifetimes.length === count
+            && sourceManualFlags instanceof Uint8Array
+            && sourceManualFlags.length === count
+            && sourceLifetimeFlags instanceof Uint8Array
+            && sourceLifetimeFlags.length === count;
+        if (hasInitDependencies && !hasInitializedState) return null;
+        const currentAges = hasInitializedState ? new Float32Array(sourceAges) : new Float32Array(count);
+        const lifetimes = hasInitializedState ? new Float32Array(sourceLifetimes) : new Float32Array(count);
+        if (!hasInitializedState) lifetimes.fill(100);
+        const manualAgeFlags = hasInitializedState ? new Uint8Array(sourceManualFlags) : new Uint8Array(count);
+        const initializedLifetimeFlags = hasInitializedState ? new Uint8Array(sourceLifetimeFlags) : new Uint8Array(count);
+        const controllerStates = Array.isArray(this.previewPersistentControllerStates)
+            ? this.clonePreviewControllerStates(this.previewPersistentControllerStates, count)
+            : new Array(count).fill(null);
+        const runtimeGlobals = this.buildPreviewRuntimeGlobals(0, 0, 0);
+        this.syncPreviewStatusWithCycle(runtimeGlobals, cycleCfg || this.getPreviewCycleConfig(), 0, 0);
+        for (let i = 0; i < count; i++) {
+            if (!Number.isFinite(Number(lifetimes[i])) || lifetimes[i] < 1) lifetimes[i] = 100;
+        }
+        if (hasInitDependencies && hasInitializedState) {
+            if (!this.previewPointGroupIndex || this.previewPointGroupIndex.length !== count) {
+                this.rebuildPreviewRuntimeIndex();
+            }
+            const pointGroupIndex = this.previewPointGroupIndex;
+            const groupOwner = Array.isArray(this.previewGroupOwner) ? this.previewGroupOwner : [];
+            const groupCard = Array.isArray(this.previewGroupCard) ? this.previewGroupCard : [];
+            const ownerIds = Array.isArray(this.previewOwners) ? this.previewOwners : [];
+            const ownerLocalIndex = Array.isArray(this.previewOwnerLocalIndex) ? this.previewOwnerLocalIndex : [];
+            const pointVisualSources = Array.isArray(this.previewLeafVisualSources) ? this.previewLeafVisualSources : [];
+            let mutatedBaseline = false;
+            for (let i = 0; i < count; i++) {
+                const groupId = pointGroupIndex && i < pointGroupIndex.length ? int(pointGroupIndex[i]) : -1;
+                const owner = groupId >= 0 ? (groupOwner[groupId] || ownerIds[i]) : ownerIds[i];
+                const ownerCard = groupId >= 0 ? (groupCard[groupId] || this.getCardById(owner)) : this.getCardById(owner);
+                const pointVisualSource = pointVisualSources[i] || null;
+                const dependency = ownerCard
+                    ? this.getCardPreviewVisualDependency(ownerCard, pointVisualSource ? { visualSource: pointVisualSource } : {})
+                    : null;
+                if (!dependency?.initPointDependentCurrentAge) {
+                    if (currentAges[i] !== 0 || manualAgeFlags[i] !== 0) mutatedBaseline = true;
+                    currentAges[i] = 0;
+                    manualAgeFlags[i] = 0;
+                }
+                if (!dependency?.initPointDependentLifetime) {
+                    if (lifetimes[i] !== 100 || initializedLifetimeFlags[i] !== 0) mutatedBaseline = true;
+                    lifetimes[i] = 100;
+                    initializedLifetimeFlags[i] = 0;
+                }
+                if (!ownerCard) continue;
+                const needsCurrentAge = dependency?.initPointDependentCurrentAge && manualAgeFlags[i] !== 1;
+                const needsLifetime = dependency?.initPointDependentLifetime && initializedLifetimeFlags[i] !== 1;
+                if (!needsCurrentAge && !needsLifetime) continue;
+                const localIndex = Math.max(0, int(ownerLocalIndex[i] || 0));
+                const visual = this.resolveCardPreviewVisual(owner, {
+                    runtimeVars: runtimeGlobals,
+                    elapsedTick: 0,
+                    ageTick: 0,
+                    currentAge: currentAges[i],
+                    lifetime: lifetimes[i],
+                    keepInitializedCurrentAge: manualAgeFlags[i] === 1,
+                    keepInitializedLifetime: initializedLifetimeFlags[i] === 1,
+                    controllerState: controllerStates[i],
+                    pointIndex: localIndex,
+                    visualSource: pointVisualSource
+                });
+                if (needsCurrentAge && visual?.__manualCurrentAge === true && Number.isFinite(Number(visual.__resolvedCurrentAge))) {
+                    currentAges[i] = Math.max(0, num(visual.__resolvedCurrentAge));
+                    manualAgeFlags[i] = 1;
+                    mutatedBaseline = true;
+                }
+                if (needsLifetime && Number.isFinite(Number(visual?.__resolvedLifetime))) {
+                    lifetimes[i] = Math.max(1, int(visual.__resolvedLifetime));
+                    initializedLifetimeFlags[i] = 1;
+                    mutatedBaseline = true;
+                }
+                if (visual?.__controllerState && typeof visual.__controllerState === "object") {
+                    controllerStates[i] = this.clonePreviewControllerState(visual.__controllerState);
+                    mutatedBaseline = true;
+                }
+            }
+            if (mutatedBaseline) {
+                sourceAges.set(currentAges);
+                sourceLifetimes.set(lifetimes);
+                sourceManualFlags.set(manualAgeFlags);
+                sourceLifetimeFlags.set(initializedLifetimeFlags);
+                if (Array.isArray(this.previewPersistentControllerStates)) {
+                    this.previewPersistentControllerStates = this.clonePreviewControllerStates(controllerStates, count);
+                }
+            }
+        }
+        return {
+            runtimeGlobals: this.makePreviewRenderWorkerPlainClone(runtimeGlobals),
+            persistentCurrentAges: currentAges,
+            persistentLifetimes: lifetimes,
+            manualAgeFlags,
+            initializedLifetimeFlags,
+            persistentControllerStates: controllerStates
+        };
+    }
+
+    makePreviewRenderWorkerSnapshot(totalCount = 0, cycleCfg = null) {
+        const count = Math.max(0, int(totalCount || 0));
+        if (!count) return null;
+        if (!this.previewPointGroupIndex || this.previewPointGroupIndex.length !== count) {
+            this.rebuildPreviewRuntimeIndex();
+        }
+        const snapshotSignature = this.makePreviewRenderWorkerSnapshotSignature(count, cycleCfg);
+        const texture = this.makePreviewRenderWorkerTextureSnapshot();
+        const initBaseline = this.makePreviewRenderWorkerInitBaseline(count, cycleCfg);
+        if (!initBaseline) return null;
+        return {
+            version: 1,
+            snapshotSignature,
+            renderSignature: this.previewRenderSignature || this.makePreviewRenderSignature(),
+            generation: int(this.previewRenderWorkerGeneration || 0),
+            totalCount: count,
+            state: this.state,
+            cycleCfg: cycleCfg || this.getPreviewCycleConfig(),
+            previewBasePoints: this.previewBasePoints,
+            previewOwners: this.previewOwners,
+            previewBirthOffsets: this.previewBirthOffsets,
+            previewOwnerLocalIndex: this.previewOwnerLocalIndex,
+            previewOwnerPointCount: this.previewOwnerPointCount,
+            previewAnchorBase: this.previewAnchorBase,
+            previewLocalBase: this.previewLocalBase,
+            previewAnchorRef: this.previewAnchorRef,
+            previewLocalRef: this.previewLocalRef,
+            previewLevelBases: this.previewLevelBases,
+            previewLevelRefs: this.previewLevelRefs,
+            previewLevelOffsetRefs: this.previewLevelOffsetRefs,
+            previewLevelMetas: this.previewLevelMetas,
+            previewUseLocalOps: this.previewUseLocalOps,
+            previewRootOffsetIndex: this.previewRootOffsetIndex,
+            previewRootVirtualIndex: this.previewRootVirtualIndex,
+            previewRootVirtualTotal: this.previewRootVirtualTotal,
+            previewLeafTextureConfigs: this.previewLeafTextureConfigs,
+            previewLeafVisualSources: this.previewLeafVisualSources,
+            previewPointGroupIndex: this.previewPointGroupIndex,
+            previewGroupOwner: this.previewGroupOwner,
+            previewGroupOwnerCount: this.previewGroupOwnerCount,
+            previewGroupBirthOffset: this.previewGroupBirthOffset,
+            previewGroupRootVirtualIndex: this.previewGroupRootVirtualIndex,
+            previewGroupCard: this.previewGroupCard,
+            previewGroupCardIndex: this.previewGroupCardIndex,
+            textureFramesByEffect: texture.framesByEffect,
+            atlasOffsets: texture.atlasOffsets,
+            camera: this.makePreviewRenderWorkerCameraSnapshot(count),
+            initBaseline
+        };
+    }
+
+    ensurePreviewRenderWorkerSnapshot(pool, totalCount = 0, cycleCfg = null) {
+        if (!pool || pool.disabled || !Array.isArray(pool.workers) || !pool.workers.length) return null;
+        const count = Math.max(0, int(totalCount || 0));
+        const snapshotSignature = this.makePreviewRenderWorkerSnapshotSignature(count, cycleCfg);
+        if (pool.snapshotSignature === snapshotSignature) return { snapshotSignature };
+        const snapshot = this.makePreviewRenderWorkerSnapshot(count, cycleCfg);
+        if (!snapshot) return null;
+        this.previewRenderWorkerGeneration = int(this.previewRenderWorkerGeneration || 0) + 1;
+        snapshot.generation = int(this.previewRenderWorkerGeneration || 0);
+        pool.snapshotSignature = snapshot.snapshotSignature;
+        pool.queue = [];
+        if (pool.pending instanceof Map) pool.pending.clear();
+        if (pool.buildKeys instanceof Set) pool.buildKeys.clear();
+        pool.active = 0;
+        for (const worker of pool.workers) {
+            try {
+                worker.postMessage({
+                    type: "setSnapshot",
+                    generation: int(this.previewRenderWorkerGeneration || 0),
+                    snapshot
+                });
+            } catch {
+                pool.errors += 1;
+            }
+        }
+        return snapshot;
+    }
+
+    makePreviewWorkerCacheFrame(frame) {
+        const count = Math.max(0, int(frame?.pointCount || 0));
+        if (!count || frame?.attributesWrittenToGeometry === true) return null;
+        const positions = frame?.positions;
+        const colors = frame?.colors;
+        const sizes = frame?.sizes;
+        const alphas = frame?.alphas;
+        const frameIndices = frame?.frameIndices;
+        if (!(positions instanceof Float32Array) || positions.length !== count * 3) return null;
+        if (!(colors instanceof Float32Array) || colors.length !== count * 3) return null;
+        if (!(sizes instanceof Float32Array) || sizes.length !== count) return null;
+        if (!(alphas instanceof Float32Array) || alphas.length !== count) return null;
+        if (!(frameIndices instanceof Float32Array) || frameIndices.length !== count) return null;
+        const transfer = [
+            positions.buffer,
+            colors.buffer,
+            sizes.buffer,
+            alphas.buffer,
+            frameIndices.buffer
+        ];
+        const visibleMask = frame.visibleMask instanceof Uint8Array
+            ? frame.visibleMask
+            : (Array.isArray(frame.visibleMask) ? frame.visibleMask.slice() : null);
+        if (visibleMask instanceof Uint8Array) transfer.push(visibleMask.buffer);
+        return {
+            frame: {
+                pointCount: count,
+                visible: Math.max(0, int(frame?.visible || 0)),
+                statusText: String(frame?.statusText || ""),
+                elapsedTick: num(frame?.elapsedTick || 0),
+                globalCycleAge: num(frame?.globalCycleAge || 0),
+                cycleTick: Math.max(0, int(frame?.cycleTick || 0)),
+                cycleIndex: int(frame?.cycleIndex || 0),
+                positions,
+                colors,
+                sizes,
+                alphas,
+                frameIndices,
+                visibleMask
+            },
+            transfer
+        };
+    }
+
+    queuePreviewCachedFrameWorkerStore(key, frame, context = {}) {
+        if (!this.isPreviewRenderCacheEnabled()) return false;
+        if (!key || !frame) return false;
+        const count = Math.max(0, int(frame.pointCount || 0));
+        const pool = this.ensurePreviewRenderCacheWorkerPool(count);
+        if (!pool || pool.disabled || !Array.isArray(pool.workers) || !pool.workers.length) return false;
+        const pending = pool.pending instanceof Map ? pool.pending.size : 0;
+        const queued = Array.isArray(pool.queue) ? pool.queue.length : 0;
+        if (pending + queued >= Math.max(1, int(pool.maxQueue || PREVIEW_RENDER_CACHE_WORKER_MAX_QUEUE))) {
+            pool.rejected += 1;
+            return false;
+        }
+        const payload = this.makePreviewWorkerCacheFrame(frame);
+        if (!payload) return false;
+        const id = `${Date.now().toString(36)}:${Math.random().toString(36).slice(2)}`;
+        pool.queue.push({
+            id,
+            key,
+            generation: int(this.previewRenderWorkerGeneration || 0),
+            cycleCfg: context?.cycleCfg || context,
+            frame: payload.frame,
+            transfer: payload.transfer
+        });
+        this.drainPreviewRenderCacheWorkerQueue();
+        this.updatePreviewCacheStatus();
+        return true;
+    }
+
+    hasPreviewCachedFrameKey(key) {
+        if (!key) return false;
+        const cache = this.previewRenderCache;
+        return !!(cache && cache.frames instanceof Map && cache.frames.has(key));
+    }
+
+    queuePreviewRenderCacheBuilds(context = {}) {
+        if (!this.isPreviewRenderCacheEnabled()) return false;
+        const totalCount = Math.max(0, int(context.totalCount || this.previewBasePoints?.length || 0));
+        if (!totalCount) return false;
+        const cycleCfg = context.cycleCfg || this.getPreviewCycleConfig();
+        const cache = this.ensurePreviewRenderCache(totalCount, { cycleCfg });
+        if (!cache || cache.disabled) return false;
+        const cameraInfo = this.getPreviewCameraCacheInfo(totalCount);
+        if (cameraInfo.usesCamera && !cameraInfo.stable) return false;
+        const pool = this.ensurePreviewRenderCacheWorkerPool(totalCount);
+        if (!pool || pool.disabled || !Array.isArray(pool.workers) || !pool.workers.length) return false;
+        const snapshot = this.ensurePreviewRenderWorkerSnapshot(pool, totalCount, cycleCfg);
+        if (!snapshot?.snapshotSignature) return false;
+        if (!(pool.pending instanceof Map)) pool.pending = new Map();
+        if (!(pool.buildKeys instanceof Set)) pool.buildKeys = new Set();
+        const frameTime = context.frameTime || this.resolvePreviewFrameTimeContext({
+            totalCount,
+            cycleCfg,
+            elapsedTick: context.elapsedTick,
+            globalCycleAge: context.globalCycleAge,
+            cycleIndex: context.cycleIndex
+        });
+        const cycleFrameCount = Math.max(1, int(frameTime.cycleFrameCount || 1));
+        const subframes = Math.max(1, int(frameTime.subframes || this.getPreviewRenderCacheSubframesPerTick(totalCount, cycleCfg)));
+        const targetFrameCount = Math.max(1, Math.min(cycleFrameCount, Math.max(1, int(cache.maxFrames || cycleFrameCount))));
+        const cycleTotal = Math.max(1e-6, num(cycleCfg?.total || 1));
+        const cycleIndex = Number.isFinite(Number(frameTime.cycleIndex)) ? int(frameTime.cycleIndex) : 0;
+        const startFrame = clamp(int(frameTime.renderFrame || 0), 0, cycleFrameCount - 1);
+        const activeOrQueued = (pool.pending instanceof Map ? pool.pending.size : 0)
+            + (Array.isArray(pool.queue) ? pool.queue.length : 0);
+        let budget = Math.max(0, int(pool.maxQueue || PREVIEW_RENDER_CACHE_WORKER_MAX_QUEUE) - activeOrQueued);
+        if (budget <= 0) return false;
+        const skipKey = String(context.skipKey || "");
+        let queuedAny = false;
+        for (let offset = 0; offset < targetFrameCount && budget > 0; offset++) {
+            const renderFrame = (startFrame + offset) % cycleFrameCount;
+            const globalCycleAge = Math.min(
+                Math.max(0, renderFrame / subframes),
+                Math.max(0, cycleTotal - (1 / subframes))
+            );
+            const taskFrameTime = this.resolvePreviewFrameTimeContext({
+                totalCount,
+                cycleCfg,
+                globalCycleAge,
+                cycleIndex,
+                elapsedTick: cycleIndex * cycleTotal + globalCycleAge
+            });
+            const key = this.makePreviewFrameCacheKey({
+                totalCount,
+                elapsedTick: taskFrameTime.elapsedTick,
+                cycleCfg,
+                globalCycleAge: taskFrameTime.globalCycleAge,
+                cycleIndex: taskFrameTime.cycleIndex,
+                tickStep: taskFrameTime.tickStep,
+                renderFrame: taskFrameTime.renderFrame
+            });
+            if (!key || key === skipKey) continue;
+            if (this.hasPreviewCachedFrameKey(key) || pool.buildKeys.has(key)) continue;
+            const id = `${Date.now().toString(36)}:${Math.random().toString(36).slice(2)}`;
+            pool.queue.push({
+                type: "renderFrame",
+                id,
+                key,
+                generation: int(this.previewRenderWorkerGeneration || 0),
+                snapshotSignature: snapshot.snapshotSignature,
+                cycleCfg,
+                frameTime: taskFrameTime,
+                totalCount
+            });
+            pool.buildKeys.add(key);
+            budget -= 1;
+            queuedAny = true;
+        }
+        if (queuedAny) {
+            this.drainPreviewRenderCacheWorkerQueue();
+            this.updatePreviewCacheStatus();
+        }
+        return queuedAny;
+    }
+
+    drainPreviewRenderCacheWorkerQueue() {
+        const pool = this.previewRenderCacheWorkerPool;
+        if (!pool || pool.disabled || !Array.isArray(pool.workers) || !pool.workers.length) return;
+        if (!(pool.pending instanceof Map)) pool.pending = new Map();
+        while (pool.queue.length && pool.active < pool.workers.length) {
+            const task = pool.queue.shift();
+            const worker = pool.workers[pool.nextWorker % pool.workers.length];
+            pool.nextWorker = (pool.nextWorker + 1) % pool.workers.length;
+            pool.pending.set(task.id, {
+                type: task.type || "cacheFrame",
+                key: task.key,
+                generation: task.generation,
+                cycleCfg: task.cycleCfg,
+                snapshotSignature: task.snapshotSignature || ""
+            });
+            pool.active += 1;
+            try {
+                if (task.type === "renderFrame") {
+                    worker.postMessage({
+                        type: "renderFrame",
+                        id: task.id,
+                        key: task.key,
+                        generation: task.generation,
+                        snapshotSignature: task.snapshotSignature,
+                        cycleCfg: task.cycleCfg,
+                        frameTime: task.frameTime,
+                        totalCount: task.totalCount
+                    });
+                } else {
+                    worker.postMessage({
+                        type: "cacheFrame",
+                        id: task.id,
+                        key: task.key,
+                        generation: task.generation,
+                        frame: task.frame
+                    }, task.transfer);
+                }
+            } catch {
+                pool.pending.delete(task.id);
+                pool.active = Math.max(0, int(pool.active || 0) - 1);
+                pool.errors += 1;
+                if (task.type === "renderFrame") {
+                    if (pool.buildKeys instanceof Set) pool.buildKeys.delete(task.key);
+                } else {
+                    this.storePreviewCachedFrame(task.key, task.frame, { cycleCfg: task.cycleCfg });
+                }
+            }
+        }
+    }
+
+    handlePreviewRenderCacheWorkerMessage(event) {
+        const data = event?.data || {};
+        const pool = this.previewRenderCacheWorkerPool;
+        if (!pool || !(pool.pending instanceof Map)) return;
+        if (data.type === "snapshotReady") return;
+        if (data.type === "snapshotError") {
+            pool.errors += 1;
+            const isCurrentSnapshot = int(data.generation || 0) === int(this.previewRenderWorkerGeneration || 0)
+                && String(data.snapshotSignature || "") === String(pool.snapshotSignature || "");
+            if (!isCurrentSnapshot) {
+                this.updatePreviewCacheStatus();
+                return;
+            }
+            if (String(data.snapshotSignature || "") === String(pool.snapshotSignature || "")) {
+                pool.snapshotSignature = "";
+            }
+            pool.queue = [];
+            if (pool.pending instanceof Map) pool.pending.clear();
+            if (pool.buildKeys instanceof Set) pool.buildKeys.clear();
+            pool.active = 0;
+            this.updatePreviewCacheStatus();
+            return;
+        }
+        const pending = pool.pending.get(data.id);
+        if (pending) {
+            pool.pending.delete(data.id);
+            pool.active = Math.max(0, int(pool.active || 0) - 1);
+        }
+        if (pending?.type === "renderFrame" && pool.buildKeys instanceof Set) {
+            pool.buildKeys.delete(data.key || pending.key);
+        }
+        if (data.type === "cacheFrameReady" && pending
+            && int(data.generation || 0) === int(this.previewRenderWorkerGeneration || 0)
+            && int(pending.generation || 0) === int(this.previewRenderWorkerGeneration || 0)) {
+            if (this.storePreviewCachedFrameFromWorker(data.key || pending.key, data.frame, { cycleCfg: pending.cycleCfg })) {
+                pool.stores += 1;
+            }
+        } else if (data.type === "renderFrameReady" && pending
+            && int(data.generation || 0) === int(this.previewRenderWorkerGeneration || 0)
+            && int(pending.generation || 0) === int(this.previewRenderWorkerGeneration || 0)
+            && String(data.snapshotSignature || "") === String(pending.snapshotSignature || "")) {
+            if (this.storePreviewCachedFrameFromWorkerComputed(data.key || pending.key, data.frame, { cycleCfg: pending.cycleCfg })) {
+                pool.stores += 1;
+            }
+        } else if (data.type === "cacheFrameError") {
+            pool.errors += 1;
+        } else if (data.type === "renderFrameError") {
+            pool.errors += 1;
+        }
+        this.drainPreviewRenderCacheWorkerQueue();
+        this.updatePreviewCacheStatus();
+    }
+
+    storePreviewCachedFrameFromWorkerComputed(key, frame, context = {}) {
+        return this.storePreviewCachedFrameFromWorker(key, frame, context);
+    }
+
+    storePreviewCachedFrameFromWorker(key, frame, context = {}) {
+        const cycleCfg = context?.cycleCfg || context;
+        const count = Math.max(0, int(frame?.pointCount || 0));
+        const maxFrames = this.getPreviewRenderCacheMaxFrames(count, cycleCfg);
+        const maxBytes = this.getPreviewRenderCacheMaxBytes(count, cycleCfg);
+        const requiredFrames = Math.max(1, Math.ceil(num(cycleCfg?.total || this.getPreviewCycleConfig?.().total || 1))
+            * this.getPreviewRenderCacheSubframesPerTick(count, cycleCfg) + 1);
+        const estimatedBytes = this.estimatePreviewFrameBytes(count);
+        return this.storePreviewBoundedFrameCacheEntry("previewRenderCache", key, frame, {
+            maxFrames,
+            maxBytes,
+            pointLimit: PREVIEW_RENDER_CACHE_POINT_LIMIT,
+            pointCount: count,
+            workingSetBytes: estimatedBytes * requiredFrames,
+            estimateBytes: (it) => this.estimatePreviewFrameBytes(it)
+        });
+    }
+
     getPreviewCachedFrame(key, context = {}) {
         const count = Math.max(0, int(this.previewBasePoints?.length || 0));
         const cycleCfg = context?.cycleCfg || context;
         const maxFrames = this.getPreviewRenderCacheMaxFrames(count, cycleCfg);
+        const maxBytes = this.getPreviewRenderCacheMaxBytes(count, cycleCfg);
         const requiredFrames = Math.max(1, Math.ceil(num(cycleCfg?.total || this.getPreviewCycleConfig?.().total || 1))
             * this.getPreviewRenderCacheSubframesPerTick(count, cycleCfg) + 1);
         const estimatedBytes = this.estimatePreviewFrameBytes(count);
         return this.getPreviewBoundedFrameCacheEntry("previewRenderCache", key, {
             maxFrames,
-            maxBytes: PREVIEW_RENDER_CACHE_MAX_BYTES,
+            maxBytes,
             pointLimit: PREVIEW_RENDER_CACHE_POINT_LIMIT,
             pointCount: count,
             estimatedBytes,
@@ -1037,15 +1866,17 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
 
     storePreviewCachedFrame(key, frame, context = {}) {
         const cycleCfg = context?.cycleCfg || context;
-        const maxFrames = this.getPreviewRenderCacheMaxFrames(frame?.pointCount, cycleCfg);
+        const count = Math.max(0, int(frame?.pointCount || 0));
+        const maxFrames = this.getPreviewRenderCacheMaxFrames(count, cycleCfg);
+        const maxBytes = this.getPreviewRenderCacheMaxBytes(count, cycleCfg);
         const requiredFrames = Math.max(1, Math.ceil(num(cycleCfg?.total || this.getPreviewCycleConfig?.().total || 1))
-            * this.getPreviewRenderCacheSubframesPerTick(frame?.pointCount, cycleCfg) + 1);
-        const estimatedBytes = this.estimatePreviewFrameBytes(frame?.pointCount || 0);
+            * this.getPreviewRenderCacheSubframesPerTick(count, cycleCfg) + 1);
+        const estimatedBytes = this.estimatePreviewFrameBytes(count);
         return this.storePreviewBoundedFrameCacheEntry("previewRenderCache", key, frame, {
             maxFrames,
-            maxBytes: PREVIEW_RENDER_CACHE_MAX_BYTES,
+            maxBytes,
             pointLimit: PREVIEW_RENDER_CACHE_POINT_LIMIT,
-            pointCount: frame?.pointCount,
+            pointCount: count,
             workingSetBytes: estimatedBytes * requiredFrames,
             clone: (it) => this.clonePreviewCachedRenderFrame(it),
             estimateBytes: (it) => this.estimatePreviewFrameBytes(it)
@@ -1054,7 +1885,7 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
 
     estimatePreviewFrameBytes(frameOrCount) {
         if (typeof frameOrCount === "number") {
-            return Math.max(0, int(frameOrCount || 0)) * 37;
+            return Math.max(0, int(frameOrCount || 0)) * 25;
         }
         const frame = frameOrCount || {};
         let bytes = 0;
@@ -1089,6 +1920,51 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
             }
         }
         return bytes;
+    }
+
+    clonePreviewCachedColorArray(raw, length) {
+        const len = Math.max(0, int(length || 0));
+        if (raw instanceof Uint8Array && raw.length === len) return new Uint8Array(raw);
+        const out = new Uint8Array(len);
+        if (!raw || !Number.isFinite(Number(raw.length))) return out;
+        const n = Math.min(len, int(raw.length || 0));
+        for (let i = 0; i < n; i++) {
+            out[i] = clamp(Math.round(num(raw[i]) * 255), 0, 255);
+        }
+        return out;
+    }
+
+    clonePreviewCachedAlphaArray(raw, length) {
+        const len = Math.max(0, int(length || 0));
+        if (raw instanceof Uint8Array && raw.length === len) return new Uint8Array(raw);
+        const out = new Uint8Array(len);
+        if (!raw || !Number.isFinite(Number(raw.length))) return out;
+        const n = Math.min(len, int(raw.length || 0));
+        for (let i = 0; i < n; i++) {
+            out[i] = clamp(Math.round(num(raw[i]) * 255), 0, 255);
+        }
+        return out;
+    }
+
+    clonePreviewCachedFrameIndexArray(raw, length) {
+        const len = Math.max(0, int(length || 0));
+        if (raw instanceof Uint16Array && raw.length === len) return new Uint16Array(raw);
+        if (raw instanceof Uint32Array && raw.length === len) return new Uint32Array(raw);
+        let maxValue = 0;
+        if (raw && Number.isFinite(Number(raw.length))) {
+            const n = Math.min(len, int(raw.length || 0));
+            for (let i = 0; i < n; i++) {
+                const v = Math.max(0, int(raw[i] || 0));
+                if (v > maxValue) maxValue = v;
+            }
+        }
+        const out = maxValue > 65535 ? new Uint32Array(len) : new Uint16Array(len);
+        if (!raw || !Number.isFinite(Number(raw.length))) return out;
+        const n = Math.min(len, int(raw.length || 0));
+        for (let i = 0; i < n; i++) {
+            out[i] = Math.max(0, int(raw[i] || 0));
+        }
+        return out;
     }
 
     clonePreviewRuntimeGlobals(runtimeGlobals) {
@@ -1224,10 +2100,10 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
             runtimeAppliedTick: -1,
             runtimeGlobals: null,
             positions: copyFloat(frame?.positions, count * 3),
-            colors: copyFloat(frame?.colors, count * 3),
+            colors: this.clonePreviewCachedColorArray(frame?.colors, count * 3),
             sizes: copyFloat(frame?.sizes, count),
-            alphas: copyFloat(frame?.alphas, count),
-            frameIndices: copyFloat(frame?.frameIndices, count),
+            alphas: this.clonePreviewCachedAlphaArray(frame?.alphas, count),
+            frameIndices: this.clonePreviewCachedFrameIndexArray(frame?.frameIndices, count),
             visibleMask: copyMask(frame?.visibleMask, count, 1),
             resolvedCurrentAges: null,
             resolvedLifetimes: null,
@@ -1260,9 +2136,17 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
         const attributesAlreadyWritten = context.attributesAlreadyWritten === true;
         if (!attributesAlreadyWritten) {
             posAttr.array.set(frame.positions);
-            colAttr.array.set(frame.colors);
+            if (frame.colors instanceof Uint8Array) {
+                for (let i = 0; i < frame.colors.length; i++) colAttr.array[i] = frame.colors[i] / 255;
+            } else {
+                colAttr.array.set(frame.colors);
+            }
             sizeAttr.array.set(frame.sizes);
-            alphaAttr.array.set(frame.alphas);
+            if (frame.alphas instanceof Uint8Array) {
+                for (let i = 0; i < frame.alphas.length; i++) alphaAttr.array[i] = frame.alphas[i] / 255;
+            } else {
+                alphaAttr.array.set(frame.alphas);
+            }
         }
         posAttr.needsUpdate = true;
         colAttr.needsUpdate = true;
@@ -1275,28 +2159,30 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
             }
             frameAttr.needsUpdate = true;
         }
-        const points = Array.isArray(this.previewPoints) && this.previewPoints.length === totalCount
-            ? this.previewPoints
-            : new Array(totalCount);
-        const visibleMask = new Array(totalCount);
-        for (let i = 0; i < totalCount; i++) {
-            const px = frame.positions[i * 3 + 0];
-            const py = frame.positions[i * 3 + 1];
-            const pz = frame.positions[i * 3 + 2];
-            let p = points[i];
-            if (!p) {
-                p = U.v(px, py, pz);
-                points[i] = p;
-            } else {
-                p.x = px;
-                p.y = py;
-                p.z = pz;
-            }
-            visibleMask[i] = frame.visibleMask ? frame.visibleMask[i] !== 0 : true;
-        }
-        this.previewPoints = points;
-        this.previewVisibleMask = visibleMask;
         const restoreRuntimeState = context.restoreRuntimeState !== false;
+        if (restoreRuntimeState) {
+            const points = Array.isArray(this.previewPoints) && this.previewPoints.length === totalCount
+                ? this.previewPoints
+                : new Array(totalCount);
+            const visibleMask = new Array(totalCount);
+            for (let i = 0; i < totalCount; i++) {
+                const px = frame.positions[i * 3 + 0];
+                const py = frame.positions[i * 3 + 1];
+                const pz = frame.positions[i * 3 + 2];
+                let p = points[i];
+                if (!p) {
+                    p = U.v(px, py, pz);
+                    points[i] = p;
+                } else {
+                    p.x = px;
+                    p.y = py;
+                    p.z = pz;
+                }
+                visibleMask[i] = frame.visibleMask ? frame.visibleMask[i] !== 0 : true;
+            }
+            this.previewPoints = points;
+            this.previewVisibleMask = visibleMask;
+        }
         if (restoreRuntimeState) {
             this.previewFrameCurrentAges = frame.resolvedCurrentAges instanceof Float32Array
                 ? new Float32Array(frame.resolvedCurrentAges)
@@ -1370,6 +2256,12 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
             restoreRuntimeState: true,
             attributesAlreadyWritten: false
         };
+        this.queuePreviewRenderCacheBuilds({
+            totalCount,
+            cycleCfg,
+            frameTime,
+            skipKey: frameKey
+        });
         if (cachedFrame && this.applyPreviewFrame(cachedFrame, {
             cycleIndex: frameTime.cycleIndex,
             runtimeAppliedTick: frameTime.tickStep,
@@ -1385,9 +2277,17 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
             outputToGeometry: !frameKey
         });
         if (!frame) return;
-        if (frameKey) this.storePreviewCachedFrame(frameKey, frame, { cycleCfg });
         frameApplyContext.attributesAlreadyWritten = frame.attributesWrittenToGeometry === true;
-        this.applyPreviewFrame(frame, frameApplyContext);
+        const applied = this.applyPreviewFrame(frame, frameApplyContext);
+        if (frameKey && applied) {
+            this.storePreviewCachedFrame(frameKey, frame, { cycleCfg });
+            this.queuePreviewRenderCacheBuilds({
+                totalCount,
+                cycleCfg,
+                frameTime,
+                skipKey: frameKey
+            });
+        }
     }
 
     computePreviewFrame(context = {}) {
@@ -1487,12 +2387,14 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
             this.previewRuntimeGlobals = this.buildPreviewRuntimeGlobals(0, 0, 0);
             this.previewRuntimeAppliedTick = -1;
             this.previewRuntimeCycleIndex = cycleIndex;
-            persistentCurrentAges.fill(0);
-            manualAgeFlags.fill(0);
             persistentControllerStates.fill(null);
             if (shouldResetParticleInitState) {
+                persistentCurrentAges.fill(0);
+                manualAgeFlags.fill(0);
                 persistentLifetimes.fill(100);
                 initializedLifetimeFlags.fill(0);
+            } else {
+                this.resetPreviewRuntimeCurrentAgeState(persistentCurrentAges, manualAgeFlags, totalCount);
             }
         }
         this.previewCanResumeRuntimeState = true;
@@ -2213,6 +3115,7 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
 
         this.updatePreviewFrameIndices(elapsedTick, cycleCfg, groupRuntimeCache, pointGroupIndex, totalCount, frameIndices);
         const statusText = `点数: ${visible}/${this.previewBasePoints.length}`;
+        this.previewRenderWorkerInitBaselineReady = true;
         return {
             pointCount: totalCount,
             visible,
@@ -2239,14 +3142,22 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
     }
 
     isParticleTextureRenderable(pData) {
-        if (!pData || !pData.atlasReady || !pData.atlas) return false;        if (pData.textureLoadOk === false) return false;
+        if (!pData || !pData.atlasReady || !pData.atlas) return false;
+        if (pData.textureLoadOk === false) return false;
         return true;
     }
 
     isTextureEffectAllowed(effectClass) {
         const name = String(effectClass || "").trim();
         if (!name) return false;
-        return TEXTURE_EFFECT_NAME_SET.has(name);
+        if (TEXTURE_EFFECT_NAME_SET.has(name)) return true;
+        try {
+            const { getParticleDataByName } = this._particleDataFns || {};
+            const pData = typeof getParticleDataByName === "function" ? getParticleDataByName(name) : null;
+            if (Math.max(0, int(pData?.frames || 0)) > 0) return true;
+        } catch {
+        }
+        return Math.max(0, int(this.previewTextureFramesByEffect?.[name] || 0)) > 0;
     }
 
     normalizePreviewTextureConfig(raw, fallback = null) {
@@ -3972,11 +4883,11 @@ export function installPreviewRuntimeMethods(CompositionBuilderApp, deps = {}) {
             particleInit.push({ target, exprRaw, expr });
             if (target === "currentage" || target === "age" || target === "particle.currentage") {
                 ageDependent = true;
-                if (exprPointDependent) initPointDependentCurrentAge = true;
+                initPointDependentCurrentAge = true;
                 continue;
             }
             if (target === "lifetime" || target === "particle.lifetime") {
-                if (exprPointDependent) initPointDependentLifetime = true;
+                initPointDependentLifetime = true;
                 if (this.isPreviewVisualTimeDependent(exprRaw)) ageDependent = true;
                 continue;
             }
