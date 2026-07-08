@@ -1,5 +1,5 @@
 <template>
-  <div v-if="bare" ref="hostRef" class="preview-host preview-host--bare">
+  <div v-if="bare" ref="hostRef" class="preview-host preview-host--bare" :class="{ 'preview-host--skybox-off': !showSkybox }">
     <canvas v-if="isLineMode" ref="canvasRef" class="preview-canvas"></canvas>
     <canvas v-else ref="threeCanvasRef" class="preview-canvas"></canvas>
   </div>
@@ -11,7 +11,7 @@
       </div>
       <small class="muted">{{ hint }}</small>
     </div>
-    <div ref="hostRef" class="preview-host">
+    <div ref="hostRef" class="preview-host" :class="{ 'preview-host--skybox-off': !showSkybox }">
       <canvas v-if="isLineMode" ref="canvasRef" class="preview-canvas"></canvas>
       <canvas v-else ref="threeCanvasRef" class="preview-canvas"></canvas>
     </div>
@@ -34,6 +34,7 @@ const props = defineProps({
   showAxes: { type: Boolean, default: true },
   pointSize: { type: Number, default: 0.07 },
   interpolationMs: { type: Number, default: 50 },
+  showSkybox: { type: Boolean, default: true },
   bare: { type: Boolean, default: false }
 });
 

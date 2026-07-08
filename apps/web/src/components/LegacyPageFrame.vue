@@ -82,6 +82,8 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .legacy-page-host {
+  --mc-frame-line: #56313e;
+  --mc-frame-shadow: #3a2330;
   position: relative;
   box-sizing: border-box;
   width: 100%;
@@ -90,10 +92,12 @@ onBeforeUnmount(() => {
   overflow: hidden;
   padding: clamp(8px, 1.1vw, 16px);
   background:
-    radial-gradient(1280px 780px at 10% -10%, rgba(143, 167, 184, 0.14), transparent 50%),
-    radial-gradient(980px 720px at 88% 0%, rgba(180, 147, 99, 0.12), transparent 56%),
-    linear-gradient(180deg, rgba(255, 255, 255, 0.03), transparent 26%),
-    #0d1116;
+    linear-gradient(180deg, rgba(255, 255, 255, 0.2), transparent 34%),
+    url('../assets/textures/skybox.svg'),
+    linear-gradient(180deg, #83c8f2 0%, #bfe6fb 54%, #f7dbe1 100%);
+  background-repeat: no-repeat;
+  background-size: auto, cover, auto;
+  image-rendering: pixelated;
   isolation: isolate;
 }
 
@@ -104,9 +108,9 @@ onBeforeUnmount(() => {
   z-index: 0;
   pointer-events: none;
   background:
-    linear-gradient(125deg, rgba(255, 255, 255, 0.045), transparent 30%),
-    repeating-linear-gradient(90deg, rgba(255, 255, 255, 0.015) 0 1px, transparent 1px 60px);
-  opacity: 0.14;
+    linear-gradient(180deg, transparent 0 68%, rgba(239, 158, 190, 0.16) 68% 100%),
+    repeating-linear-gradient(90deg, rgba(255, 255, 255, 0.08) 0 8px, transparent 8px 16px);
+  opacity: 0.34;
 }
 
 .legacy-page-frame {
@@ -115,12 +119,13 @@ onBeforeUnmount(() => {
   display: block;
   width: 100%;
   height: 100%;
-  border: 1px solid rgba(166, 175, 186, 0.18);
-  border-radius: 28px;
-  background: transparent;
-  box-shadow:
-    0 24px 80px rgba(2, 6, 23, 0.46),
-    inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  border: 4px solid var(--mc-frame-line);
+  border-radius: 0;
+  background:
+    url('../assets/textures/sakura-planks.svg'),
+    #8d5361;
+  background-size: 48px 48px, auto;
+  box-shadow: 0 6px 0 var(--mc-frame-shadow), 0 16px 28px rgba(69, 38, 49, 0.34);
 }
 
 @media (max-width: 768px) {
@@ -129,7 +134,7 @@ onBeforeUnmount(() => {
   }
 
   .legacy-page-frame {
-    border-radius: 20px;
+    border-radius: 0;
   }
 }
 </style>

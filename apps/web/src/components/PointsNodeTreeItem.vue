@@ -35,8 +35,10 @@
         <label v-else class="list-column">
           <span class="muted">{{ field.label }}</span>
           <input
-            :type="field.type || 'text'"
+            :type="field.type === 'number' ? 'text' : (field.type || 'text')"
             class="input"
+            :inputmode="field.type === 'number' ? 'decimal' : undefined"
+            :list="field.type === 'number' && numberDatalistId ? numberDatalistId : undefined"
             :step="field.step || 1"
             :min="field.min"
             :max="field.max"
@@ -73,8 +75,10 @@
             <label v-else class="list-column">
               <span class="muted">{{ field.label }}</span>
               <input
-                :type="field.type || 'text'"
+                :type="field.type === 'number' ? 'text' : (field.type || 'text')"
                 class="input"
+                :inputmode="field.type === 'number' ? 'decimal' : undefined"
+                :list="field.type === 'number' && numberDatalistId ? numberDatalistId : undefined"
                 :step="field.step || 1"
                 :min="field.min"
                 :value="term[field.key]"
@@ -102,6 +106,7 @@
         :key="child.id"
         :node="child"
         :selected-node-id="selectedNodeId"
+        :number-datalist-id="numberDatalistId"
         @select="$emit('select', $event)"
         @remove="$emit('remove', $event)"
         @update-param="$emit('update-param', $event)"
@@ -124,7 +129,8 @@ defineOptions({
 
 const props = defineProps({
   node: { type: Object, required: true },
-  selectedNodeId: { type: String, default: '' }
+  selectedNodeId: { type: String, default: '' },
+  numberDatalistId: { type: String, default: '' }
 });
 
 defineEmits(['select', 'remove', 'update-param', 'add-child', 'add-term', 'remove-term', 'update-term']);

@@ -2,6 +2,7 @@ import {
   v,
   num,
   int,
+  intExpr,
   fmt,
   relExpr,
   getLineLocations,
@@ -97,7 +98,7 @@ export const POINTS_NODE_KINDS = {
       ctx.points.push(...getLineLocations(start, end, Math.max(2, int(node.params.count, 30))));
     },
     kotlin(node) {
-      return `.addLine(${relExpr(node.params.sx, node.params.sy, node.params.sz)}, ${relExpr(node.params.ex, node.params.ey, node.params.ez)}, ${Math.max(2, int(node.params.count, 30))})`;
+      return `.addLine(${relExpr(node.params.sx, node.params.sy, node.params.sz)}, ${relExpr(node.params.ex, node.params.ey, node.params.ez)}, ${intExpr(node.params.count, 30, 2)})`;
     }
   },
   add_fill_triangle: {
@@ -123,7 +124,7 @@ export const POINTS_NODE_KINDS = {
       ctx.points.push(...fillTriangle(p1, p2, p3, node.params.sampler));
     },
     kotlin(node) {
-      return `.addFillTriangle(${relExpr(node.params.p1x, node.params.p1y, node.params.p1z)}, ${relExpr(node.params.p2x, node.params.p2y, node.params.p2z)}, ${relExpr(node.params.p3x, node.params.p3y, node.params.p3z)}, ${fmt(num(node.params.sampler, 3))})`;
+      return `.addFillTriangle(${relExpr(node.params.p1x, node.params.p1y, node.params.p1z)}, ${relExpr(node.params.p2x, node.params.p2y, node.params.p2z)}, ${relExpr(node.params.p3x, node.params.p3y, node.params.p3z)}, ${fmt(node.params.sampler ?? 3)})`;
     }
   },
   add_circle: {
@@ -136,7 +137,7 @@ export const POINTS_NODE_KINDS = {
       ctx.points.push(...getCircleXZ(num(node.params.r, 2), Math.max(3, int(node.params.count, 120))));
     },
     kotlin(node) {
-      return `.addCircle(${fmt(num(node.params.r, 2))}, ${Math.max(3, int(node.params.count, 120))})`;
+      return `.addCircle(${fmt(node.params.r ?? 2)}, ${intExpr(node.params.count, 120, 3)})`;
     }
   },
   add_polygon: {
@@ -153,7 +154,7 @@ export const POINTS_NODE_KINDS = {
       ctx.points.push(...getPolygonInCircleLocations(int(node.params.sideCount, 5), int(node.params.count, 30), num(node.params.r, 2)));
     },
     kotlin(node) {
-      return `.addPolygonInCircle(${Math.max(3, int(node.params.sideCount, 5))}, ${Math.max(2, int(node.params.count, 30))}, ${fmt(num(node.params.r, 2))})`;
+      return `.addPolygonInCircle(${intExpr(node.params.sideCount, 5, 3)}, ${intExpr(node.params.count, 30, 2)}, ${fmt(node.params.r ?? 2)})`;
     }
   },
   add_polygon_in_circle: {
@@ -170,7 +171,7 @@ export const POINTS_NODE_KINDS = {
       ctx.points.push(...getPolygonInCircleLocations(int(node.params.n, 5), int(node.params.edgeCount, 30), num(node.params.r, 2)));
     },
     kotlin(node) {
-      return `.addPolygonInCircle(${Math.max(3, int(node.params.n, 5))}, ${Math.max(2, int(node.params.edgeCount, 30))}, ${fmt(num(node.params.r, 2))})`;
+      return `.addPolygonInCircle(${intExpr(node.params.n, 5, 3)}, ${intExpr(node.params.edgeCount, 30, 2)}, ${fmt(node.params.r ?? 2)})`;
     }
   },
   add_bezier: {
@@ -204,7 +205,7 @@ export const POINTS_NODE_KINDS = {
       const target = v(p2.x - p0.x, p2.y - p0.y, p2.z - p0.z);
       const startHandle = v(cubic.c1.x - p0.x, cubic.c1.y - p0.y, cubic.c1.z - p0.z);
       const endHandle = v(cubic.c2.x - p2.x, cubic.c2.y - p2.y, cubic.c2.z - p2.z);
-      return `.addWith { generateBezierCurve(${relExpr(target.x, target.y, target.z)}, ${relExpr(startHandle.x, startHandle.y, startHandle.z)}, ${relExpr(endHandle.x, endHandle.y, endHandle.z)}, ${Math.max(2, int(node.params.count, 80))}).onEach { it.add(${relExpr(p0.x, p0.y, p0.z)}) } }`;
+      return `.addWith { generateBezierCurve(${relExpr(target.x, target.y, target.z)}, ${relExpr(startHandle.x, startHandle.y, startHandle.z)}, ${relExpr(endHandle.x, endHandle.y, endHandle.z)}, ${intExpr(node.params.count, 80, 2)}).onEach { it.add(${relExpr(p0.x, p0.y, p0.z)}) } }`;
     }
   },
   add_bezier_4: {
@@ -240,7 +241,7 @@ export const POINTS_NODE_KINDS = {
       const target = v(p3.x - p0.x, p3.y - p0.y, p3.z - p0.z);
       const startHandle = v(c1.x - p0.x, c1.y - p0.y, c1.z - p0.z);
       const endHandle = v(c2.x - p3.x, c2.y - p3.y, c2.z - p3.z);
-      return `.addWith { generateBezierCurve(${relExpr(target.x, target.y, target.z)}, ${relExpr(startHandle.x, startHandle.y, startHandle.z)}, ${relExpr(endHandle.x, endHandle.y, endHandle.z)}, ${Math.max(2, int(node.params.count, 80))}).onEach { it.add(${relExpr(p0.x, p0.y, p0.z)}) } }`;
+      return `.addWith { generateBezierCurve(${relExpr(target.x, target.y, target.z)}, ${relExpr(startHandle.x, startHandle.y, startHandle.z)}, ${relExpr(endHandle.x, endHandle.y, endHandle.z)}, ${intExpr(node.params.count, 80, 2)}).onEach { it.add(${relExpr(p0.x, p0.y, p0.z)}) } }`;
     }
   },
   add_bezier_curve: {
@@ -269,7 +270,7 @@ export const POINTS_NODE_KINDS = {
       ctx.points.push(...generateBezierCurve(start, end, startHandle, endHandle, Math.max(2, int(node.params.count, 80))));
     },
     kotlin(node) {
-      return `.addBezierCurve(${relExpr(node.params.sx, node.params.sy, node.params.sz)}, ${relExpr(node.params.ex, node.params.ey, node.params.ez)}, ${relExpr(node.params.shx, node.params.shy, node.params.shz)}, ${relExpr(node.params.ehx, node.params.ehy, node.params.ehz)}, ${Math.max(2, int(node.params.count, 80))})`;
+      return `.addBezierCurve(${relExpr(node.params.sx, node.params.sy, node.params.sz)}, ${relExpr(node.params.ex, node.params.ey, node.params.ez)}, ${relExpr(node.params.shx, node.params.shy, node.params.shz)}, ${relExpr(node.params.ehx, node.params.ehy, node.params.ehz)}, ${intExpr(node.params.count, 80, 2)})`;
     }
   },
   points_on_each_offset: {
@@ -290,9 +291,9 @@ export const POINTS_NODE_KINDS = {
       ctx.points = ctx.points.map((point) => ({ x: point.x + dx, y: point.y + dy, z: point.z + dz }));
     },
     kotlin(node, emitCtx) {
-      const dx = fmt(num(node.params.offX));
-      const dy = fmt(num(node.params.offY));
-      const dz = fmt(num(node.params.offZ));
+      const dx = fmt(node.params.offX);
+      const dy = fmt(node.params.offY);
+      const dz = fmt(node.params.offZ);
       const mode = node.params.kotlinMode;
       if (mode === 'newRel') return `.pointsOnEach { it.add(RelativeLocation(${dx}, ${dy}, ${dz})) }`;
       if (mode === 'valRel') {
@@ -352,14 +353,14 @@ export const POINTS_NODE_KINDS = {
     ],
     kotlin(node, emitCtx, indent, emitNodesKotlinLines) {
       const lines = [];
-      const radius = fmt(num(node.params.r, 3));
-      const count = Math.max(1, int(node.params.c, 6));
+      const radius = fmt(node.params.r ?? 3);
+      const count = intExpr(node.params.c, 6, 1);
       const rotateToCenter = Boolean(node.params.rotateToCenter);
       const rotateReverse = Boolean(node.params.rotateReverse);
       const rotateOffsetEnabled = Boolean(node.params.rotateOffsetEnabled);
-      const rox = fmt(num(node.params.rox));
-      const roy = fmt(num(node.params.roy));
-      const roz = fmt(num(node.params.roz));
+      const rox = fmt(node.params.rox);
+      const roy = fmt(node.params.roy);
+      const roz = fmt(node.params.roz);
 
       lines.push(`${indent}.addWith {`);
       lines.push(`${indent}  val res = arrayListOf<RelativeLocation>()`);
@@ -405,10 +406,10 @@ export const POINTS_NODE_KINDS = {
       const lines = [];
       lines.push(`${indent}.addFourierSeries(`);
       lines.push(`${indent}  FourierSeriesBuilder()`);
-      lines.push(`${indent}    .count(${Math.max(2, int(node.params.count, 360))})`);
-      lines.push(`${indent}    .scale(${fmt(num(node.params.scale, 1))})`);
+      lines.push(`${indent}    .count(${intExpr(node.params.count, 360, 2)})`);
+      lines.push(`${indent}    .scale(${fmt(node.params.scale ?? 1)})`);
       (node.terms || []).forEach((term) => {
-        lines.push(`${indent}    .addFourier(${fmt(num(term.r, 1))}, ${fmt(num(term.w, 1))}, ${fmt(num(term.startAngle, 0))})`);
+        lines.push(`${indent}    .addFourier(${fmt(term.r ?? 1)}, ${fmt(term.w ?? 1)}, ${fmt(term.startAngle ?? 0)})`);
       });
       lines.push(`${indent}  )`);
       return lines;

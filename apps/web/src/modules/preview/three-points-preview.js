@@ -835,9 +835,9 @@ export function createThreePointsPreview({ canvas, host, pointSize = 0.07, onFps
   }
 
   function resetCamera() {
-    const box = getParticleBounds();
+    const box = getCameraFocusBounds();
     if (box.isEmpty()) {
-      camera.position.set(8, 8, 8);
+      camera.position.set(2.4, 1.8, 2.4);
       controls.target.set(0, 0, 0);
       controls.update();
       return;
@@ -845,21 +845,43 @@ export function createThreePointsPreview({ canvas, host, pointSize = 0.07, onFps
 
     const center = box.getCenter(new THREE.Vector3());
     const size = box.getSize(new THREE.Vector3());
-    const radius = Math.max(size.x, size.y, size.z, 1);
-    camera.position.set(center.x + radius * 1.8, center.y + radius * 1.5, center.z + radius * 1.8);
+    const sphereRadius = Math.max(0.12, size.length() * 0.5);
+    const verticalFov = THREE.MathUtils.degToRad(camera.fov);
+    const horizontalFov = 2 * Math.atan(Math.tan(verticalFov / 2) * Math.max(camera.aspect, 0.01));
+    const fitDistance = sphereRadius / Math.sin(Math.min(verticalFov, horizontalFov) / 2);
+    const distance = Math.max(1.1, Math.min(12, fitDistance * 1.08));
+    const viewDirection = new THREE.Vector3(1, 0.75, 1).normalize();
+    camera.position.copy(center).addScaledVector(viewDirection, distance);
     controls.target.copy(center);
     controls.update();
   }
 
-  function getParticleBounds() {
+  function getCameraFocusBounds() {
+    const primaryBounds = getParticleBounds((particle) => (
+      particle.alpha > 0.08 && particle.lifeProgress < 0.55
+    ));
+    if (!primaryBounds.isEmpty()) return primaryBounds;
+
+    const visibleBounds = getParticleBounds((particle) => particle.alpha > 0.03);
+    if (!visibleBounds.isEmpty()) return visibleBounds;
+
+    return getParticleBounds();
+  }
+
+  function getParticleBounds(filter = null) {
     if (currentBufferPoints?.count) {
       const bounds = new THREE.Box3();
       const count = currentBufferPoints.count;
       const positions = currentBufferPoints.positions;
       const sizes = currentBufferPoints.sizes;
+      const alphas = currentBufferPoints.alphas;
+      const lifeProgresses = currentBufferPoints.lifeProgresses;
       for (let index = 0; index < count; index += 1) {
+        const alpha = clamp01(alphas?.[index], 1);
+        const lifeProgress = clamp01(lifeProgresses?.[index], 0);
+        if (typeof filter === 'function' && !filter({ alpha, lifeProgress })) continue;
         const offset = index * 3;
-        const radius = Number(sizes[index] || currentPointSize || 0.07);
+        const radius = Number(sizes?.[index] || currentPointSize || 0.07);
         const x = Number(positions[offset] || 0);
         const y = Number(positions[offset + 1] || 0);
         const z = Number(positions[offset + 2] || 0);
@@ -871,6 +893,13 @@ export function createThreePointsPreview({ canvas, host, pointSize = 0.07, onFps
     if (!currentPoints.length) return new THREE.Box3().setFromObject(group);
     const bounds = new THREE.Box3();
     currentPoints.forEach((point) => {
+      const alpha = clamp01(point?.alpha, 1);
+      const age = Number(point?.age);
+      const life = Number(point?.life);
+      const lifeProgress = Number.isFinite(age) && Number.isFinite(life) && life > 0
+        ? clamp01(age / life, 0)
+        : 0;
+      if (typeof filter === 'function' && !filter({ alpha, lifeProgress })) return;
       const radius = Math.max(Number(point?.scaleX || 0), Number(point?.scaleY || 0), Number(point?.scaleZ || 0), currentPointSize || 0.07);
       bounds.expandByPoint(new THREE.Vector3(
         Number(point?.x || 0) - radius,

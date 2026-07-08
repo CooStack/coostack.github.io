@@ -52,15 +52,29 @@ export function int(value, fallback = 0) {
   return Math.round(num(value, fallback));
 }
 
+export function intExpr(value, fallback = 0, min = null) {
+  const expr = String(value ?? '').trim();
+  if (!Number.isFinite(Number(value)) && /^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*(?:\(\))?$/.test(expr)) {
+    const coerced = `(${expr}).toInt()`;
+    return min === null ? coerced : `${coerced}.coerceAtLeast(${Math.trunc(min)})`;
+  }
+  const numeric = int(value, fallback);
+  return String(min === null ? numeric : Math.max(Math.trunc(min), numeric));
+}
+
 export function fmt(value) {
   const next = num(value, 0);
+  if (!Number.isFinite(Number(value))) {
+    const expr = String(value ?? '').trim();
+    if (/^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*(?:\(\))?$/.test(expr)) return expr;
+  }
   const normalized = Math.abs(next) < EPSILON ? 0 : next;
   const fixed = normalized.toFixed(6).replace(/\.0+$/, '').replace(/(\.\d*?)0+$/, '$1');
   return fixed === '-0' ? '0' : fixed;
 }
 
 export function relExpr(x, y, z) {
-  return `RelativeLocation(${fmt(num(x))}, ${fmt(num(y))}, ${fmt(num(z))})`;
+  return `RelativeLocation(${fmt(x)}, ${fmt(y)}, ${fmt(z)})`;
 }
 
 export function angleToRad(value, unit = 'deg') {

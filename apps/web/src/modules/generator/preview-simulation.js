@@ -1,3 +1,5 @@
+import { evaluatePointsProject } from '../pointsbuilder/evaluator.js';
+
 const MAX_SIM_PARTICLES = 65536;
 const EPSILON = 1e-8;
 
@@ -17,11 +19,296 @@ const COMMAND_ALIASES = {
   acceleration: 'velocity_add'
 };
 
+const NUMERIC_VALUE_TYPES = new Set(['Int', 'Long', 'Float', 'Double']);
+const VECTOR_VALUE_TYPES = new Set(['Vec3', 'RelativeLocation', 'Vector3f']);
+const BINDING_PATH_LABELS = {
+  'emitter.offset': '世界偏移',
+  'emitter.box.x': '盒体 X',
+  'emitter.box.y': '盒体 Y',
+  'emitter.box.z': '盒体 Z',
+  'emitter.sphere.r': '半径',
+  'emitter.sphereSurface.r': '球面半径',
+  'emitter.ring.r': '圆环半径',
+  'emitter.ring.thickness': '圆环厚度',
+  'emitter.ring.axis': '圆环法线轴',
+  'emitter.line.step': '直线步长',
+  'emitter.line.dir': '直线方向',
+  'emitter.circle.r': '圆半径',
+  'emitter.circle.axis': '圆法线轴',
+  'emitter.arc.r': '弧线半径',
+  'emitter.arc.start': '弧线起始角',
+  'emitter.arc.end': '弧线结束角',
+  'emitter.arc.rotate': '弧线整体旋转',
+  'emitter.arc.axis': '弧线法线轴',
+  'emitter.spiral.startR': '螺旋起始半径',
+  'emitter.spiral.endR': '螺旋结束半径',
+  'emitter.spiral.height': '螺旋高度',
+  'emitter.spiral.rotateSpeed': '螺旋旋转速度',
+  'emitter.spiral.rBias': '螺旋半径偏置',
+  'emitter.spiral.hBias': '螺旋高度偏置',
+  'emitter.spiral.axis': '螺旋轴',
+  'particle.countMin': '最少数量',
+  'particle.countMax': '最多数量',
+  'particle.lifeMin': '最短寿命',
+  'particle.lifeMax': '最长寿命',
+  'particle.sizeMin': '最小大小',
+  'particle.sizeMax': '最大大小',
+  'particle.colorStart': '颜色 0%',
+  'particle.colorEnd': '颜色 100%',
+  'particle.visibleRange': '可见距离',
+  'particle.velocity': '速度方向',
+  'particle.velocityRandom': '速度随机量',
+  'particle.speedMin': '最小速度',
+  'particle.speedMax': '最大速度',
+  'render.axis': '渲染轴',
+  'render.baseScale': '基础缩放',
+  'render.alpha': '透明度',
+  'render.light': '亮度',
+  'render.roll': 'Roll',
+  'render.yaw': 'Yaw',
+  'render.pitch': 'Pitch',
+  'render.sign': 'Sign',
+  'render.speedLimit': '速度限制'
+};
+
+function createBindingResolver(project = {}, options = {}) {
+  return {
+    values: createProjectValueMap(project),
+    collectErrors: options.collectErrors === true,
+    errors: [],
+    seenErrors: new Set()
+  };
+}
+
+function createProjectValueMap(project = {}) {
+  const values = [
+    ...(Array.isArray(project?.parameters?.variables) ? project.parameters.variables : []),
+    ...(Array.isArray(project?.parameters?.constants) ? project.parameters.constants : [])
+  ];
+  return new Map(values
+    .filter((item) => isIdent(item?.name))
+    .map((item) => [String(item.name), item]));
+}
+
+function resolveEmitterCard(project, card, resolver, index = 0) {
+  const emitter = card?.emitter || {};
+  const particle = card?.particle || {};
+  const render = card?.render || {};
+  return {
+    ...card,
+    emitter: {
+      ...emitter,
+      offset: resolveVectorPath(resolver, card, 'emitter.offset', emitter.offset, ['Vec3', 'RelativeLocation']),
+      box: {
+        ...(emitter.box || {}),
+        x: resolveNumberPath(resolver, card, 'emitter.box.x', emitter.box?.x, 1),
+        y: resolveNumberPath(resolver, card, 'emitter.box.y', emitter.box?.y, 1),
+        z: resolveNumberPath(resolver, card, 'emitter.box.z', emitter.box?.z, 1)
+      },
+      sphere: {
+        ...(emitter.sphere || {}),
+        r: resolveNumberPath(resolver, card, 'emitter.sphere.r', emitter.sphere?.r, 1)
+      },
+      sphereSurface: {
+        ...(emitter.sphereSurface || {}),
+        r: resolveNumberPath(resolver, card, 'emitter.sphereSurface.r', emitter.sphereSurface?.r, 1)
+      },
+      ring: {
+        ...(emitter.ring || {}),
+        r: resolveNumberPath(resolver, card, 'emitter.ring.r', emitter.ring?.r, 1),
+        thickness: resolveNumberPath(resolver, card, 'emitter.ring.thickness', emitter.ring?.thickness, 0),
+        axis: resolveVectorPath(resolver, card, 'emitter.ring.axis', emitter.ring?.axis, ['Vec3', 'RelativeLocation'])
+      },
+      line: {
+        ...(emitter.line || {}),
+        step: resolveNumberPath(resolver, card, 'emitter.line.step', emitter.line?.step, 0.2),
+        dir: resolveVectorPath(resolver, card, 'emitter.line.dir', emitter.line?.dir, ['Vec3', 'RelativeLocation'])
+      },
+      circle: {
+        ...(emitter.circle || {}),
+        r: resolveNumberPath(resolver, card, 'emitter.circle.r', emitter.circle?.r, 1),
+        axis: resolveVectorPath(resolver, card, 'emitter.circle.axis', emitter.circle?.axis, ['Vec3', 'RelativeLocation'])
+      },
+      arc: {
+        ...(emitter.arc || {}),
+        r: resolveNumberPath(resolver, card, 'emitter.arc.r', emitter.arc?.r, 1),
+        start: resolveNumberPath(resolver, card, 'emitter.arc.start', emitter.arc?.start, 0),
+        end: resolveNumberPath(resolver, card, 'emitter.arc.end', emitter.arc?.end, 0),
+        rotate: resolveNumberPath(resolver, card, 'emitter.arc.rotate', emitter.arc?.rotate, 0),
+        axis: resolveVectorPath(resolver, card, 'emitter.arc.axis', emitter.arc?.axis, ['Vec3', 'RelativeLocation'])
+      },
+      spiral: {
+        ...(emitter.spiral || {}),
+        startR: resolveNumberPath(resolver, card, 'emitter.spiral.startR', emitter.spiral?.startR, 0.5),
+        endR: resolveNumberPath(resolver, card, 'emitter.spiral.endR', emitter.spiral?.endR, 2.5),
+        height: resolveNumberPath(resolver, card, 'emitter.spiral.height', emitter.spiral?.height, 2),
+        rotateSpeed: resolveNumberPath(resolver, card, 'emitter.spiral.rotateSpeed', emitter.spiral?.rotateSpeed, 0.35),
+        rBias: resolveNumberPath(resolver, card, 'emitter.spiral.rBias', emitter.spiral?.rBias, 1),
+        hBias: resolveNumberPath(resolver, card, 'emitter.spiral.hBias', emitter.spiral?.hBias, 1),
+        axis: resolveVectorPath(resolver, card, 'emitter.spiral.axis', emitter.spiral?.axis, ['Vec3', 'RelativeLocation'])
+      }
+    },
+    particle: {
+      ...particle,
+      countMin: resolveNumberPath(resolver, card, 'particle.countMin', particle.countMin, 1),
+      countMax: resolveNumberPath(resolver, card, 'particle.countMax', particle.countMax, 1),
+      lifeMin: resolveNumberPath(resolver, card, 'particle.lifeMin', particle.lifeMin, 1),
+      lifeMax: resolveNumberPath(resolver, card, 'particle.lifeMax', particle.lifeMax, 1),
+      sizeMin: resolveNumberPath(resolver, card, 'particle.sizeMin', particle.sizeMin, 0.08),
+      sizeMax: resolveNumberPath(resolver, card, 'particle.sizeMax', particle.sizeMax, 0.18),
+      colorStart: rgbToHexObject(resolveColorPath(resolver, card, 'particle.colorStart', particle.colorStart)),
+      colorEnd: rgbToHexObject(resolveColorPath(resolver, card, 'particle.colorEnd', particle.colorEnd)),
+      velocity: resolveVectorPath(resolver, card, 'particle.velocity', particle.velocity || particle.vel, ['Vec3']),
+      velocityRandom: resolveVectorPath(resolver, card, 'particle.velocityRandom', particle.velocityRandom || particle.velRandom, ['Vec3']),
+      speedMin: resolveNumberPath(resolver, card, 'particle.speedMin', particle.speedMin ?? particle.velSpeedMin, 0),
+      speedMax: resolveNumberPath(resolver, card, 'particle.speedMax', particle.speedMax ?? particle.velSpeedMax, 0),
+      visibleRange: resolveNumberPath(resolver, card, 'particle.visibleRange', particle.visibleRange, 128)
+    },
+    render: {
+      ...render,
+      axis: resolveVectorPath(resolver, card, 'render.axis', render.axis, ['Vec3', 'RelativeLocation']),
+      baseScale: resolveVectorPath(resolver, card, 'render.baseScale', render.baseScale, ['Vec3']),
+      alpha: resolveNumberPath(resolver, card, 'render.alpha', render.alpha, 100),
+      light: resolveNumberPath(resolver, card, 'render.light', render.light, 15),
+      roll: resolveNumberPath(resolver, card, 'render.roll', render.roll, 0),
+      yaw: resolveNumberPath(resolver, card, 'render.yaw', render.yaw, 0),
+      pitch: resolveNumberPath(resolver, card, 'render.pitch', render.pitch, 0),
+      sign: resolveNumberPath(resolver, card, 'render.sign', render.sign, index),
+      speedLimit: resolveNumberPath(resolver, card, 'render.speedLimit', render.speedLimit, 32)
+    }
+  };
+}
+
+function resolveNumberPath(resolver, card, path, value, fallback = 0) {
+  const binding = resolveBindingValue(resolver, card, path, NUMERIC_VALUE_TYPES);
+  if (binding) return toFiniteNumber(binding.value?.value, fallback);
+  return toFiniteNumber(value, fallback);
+}
+
+function resolveVectorPath(resolver, card, path, value = {}, allowedTypes = ['Vec3', 'RelativeLocation']) {
+  const fallback = vectorFrom(value);
+  const binding = resolveBindingValue(resolver, card, path, allowedTypes);
+  if (binding) return parseVectorLiteral(binding.value?.value, fallback);
+  return vec(
+    resolveNumberPath(resolver, card, `${path}.x`, fallback.x, fallback.x),
+    resolveNumberPath(resolver, card, `${path}.y`, fallback.y, fallback.y),
+    resolveNumberPath(resolver, card, `${path}.z`, fallback.z, fallback.z)
+  );
+}
+
+function resolveColorPath(resolver, card, path, hex) {
+  const fallback = hexToRgb(hex);
+  const binding = resolveBindingValue(resolver, card, path, ['Vec3', 'Vector3f']);
+  if (binding) {
+    const vector = parseVectorLiteral(binding.value?.value, vec(255, 255, 255));
+    if (binding.value?.type === 'Vector3f') {
+      return {
+        r: clamp(vector.x, 0, 1) * 255,
+        g: clamp(vector.y, 0, 1) * 255,
+        b: clamp(vector.z, 0, 1) * 255
+      };
+    }
+    return {
+      r: clamp(vector.x, 0, 255),
+      g: clamp(vector.y, 0, 255),
+      b: clamp(vector.z, 0, 255)
+    };
+  }
+  return {
+    r: resolveNumberFromPaths(resolver, card, [`${path}.r`, `${path}.x`], fallback.r),
+    g: resolveNumberFromPaths(resolver, card, [`${path}.g`, `${path}.y`], fallback.g),
+    b: resolveNumberFromPaths(resolver, card, [`${path}.b`, `${path}.z`], fallback.b)
+  };
+}
+
+function resolveNumberFromPaths(resolver, card, paths, fallback = 0) {
+  const path = paths.find((item) => String(card?.bindings?.[item] || '').trim());
+  if (!path) return fallback;
+  return clamp(resolveNumberPath(resolver, card, path, fallback, fallback), 0, 255);
+}
+
+function resolveBindingValue(resolver, card, path, expectedTypes) {
+  const name = String(card?.bindings?.[path] || '').trim();
+  if (!name) return null;
+  const value = resolver.values.get(name);
+  if (!value) {
+    reportBindingError(resolver, card, path, name, `未找到变量 ${name}`);
+    return null;
+  }
+  const type = String(value.type || '');
+  const accepts = expectedTypes instanceof Set ? expectedTypes.has(type) : expectedTypes.includes(type);
+  if (!accepts) {
+    reportBindingError(resolver, card, path, name, `${name} 类型是 ${type || '未知'}，不适用于这里`);
+    return null;
+  }
+  return { name, value };
+}
+
+function reportBindingError(resolver, card, path, name, reason) {
+  if (!resolver.collectErrors) return;
+  const key = `${card?.id || ''}:${path}:${name}:${reason}`;
+  if (resolver.seenErrors.has(key)) return;
+  resolver.seenErrors.add(key);
+  resolver.errors.push({
+    key,
+    message: `${card?.name || '发射器'} / ${formatBindingPath(path)}：${reason}，已使用默认值`
+  });
+}
+
+function formatBindingPath(path) {
+  const text = String(path || '');
+  const axis = text.match(/\.([xyzrgb])$/i)?.[1]?.toUpperCase();
+  const base = axis ? text.slice(0, -2) : text;
+  return `${BINDING_PATH_LABELS[base] || base}${axis ? `.${axis}` : ''}`;
+}
+
+function parseVectorLiteral(rawValue, fallback = vec()) {
+  if (Array.isArray(rawValue)) return vec(
+    toFiniteNumber(rawValue[0], fallback.x),
+    toFiniteNumber(rawValue[1], fallback.y),
+    toFiniteNumber(rawValue[2], fallback.z)
+  );
+  if (rawValue && typeof rawValue === 'object') return vectorFrom(rawValue, fallback);
+  const text = String(rawValue || '').trim();
+  const match = text.match(/^[A-Za-z0-9_]+\s*\(([^)]+)\)$/);
+  if (!match) return { ...fallback };
+  const parts = match[1].split(',').map((item) => item.trim().replace(/[fFdDlL]$/g, ''));
+  return vec(
+    toFiniteNumber(parts[0], fallback.x),
+    toFiniteNumber(parts[1], fallback.y),
+    toFiniteNumber(parts[2], fallback.z)
+  );
+}
+
+function rgbToHexObject(rgb) {
+  return rgbToHex(rgb.r, rgb.g, rgb.b);
+}
+
+function toFiniteNumber(value, fallback = 0) {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? numeric : fallback;
+}
+
+function isIdent(raw) {
+  return /^[A-Za-z_][A-Za-z0-9_]*$/.test(String(raw || '').trim());
+}
+
+function attachPreviewErrors(target, errors) {
+  Object.defineProperty(target, 'errors', {
+    value: Array.isArray(errors) ? errors : [],
+    configurable: true,
+    writable: true,
+    enumerable: false
+  });
+  return target;
+}
+
 export function createGeneratorPreviewRuntime() {
   const runtime = {
     tick: 0,
     particles: [],
     emitters: new Map(),
+    shapeCache: new Map(),
     snapshotPoints: [],
     renderBuffers: createRenderBuffers(256)
   };
@@ -31,6 +318,7 @@ export function createGeneratorPreviewRuntime() {
     runtime.particles = [];
     runtime.snapshotPoints = [];
     runtime.emitters.clear();
+    runtime.shapeCache.clear();
   }
 
   function clearParticles() {
@@ -44,7 +332,9 @@ export function createGeneratorPreviewRuntime() {
   }
 
   function tickOnce(project) {
-    const emitters = Array.isArray(project.emitters) ? project.emitters : [];
+    const resolver = createBindingResolver(project);
+    const emitters = (Array.isArray(project.emitters) ? project.emitters : [])
+      .map((card, index) => resolveEmitterCard(project, card, resolver, index));
     syncEmitterRuntime(runtime, emitters);
     const tick = runtime.tick;
 
@@ -85,7 +375,7 @@ export function createGeneratorPreviewRuntime() {
 
       if (particle.age >= particle.life) {
         if (project.deathBehavior?.enabled && project.deathBehavior?.mode === 'respawn') {
-          respawnParticle(particle);
+          respawnParticle(particle, runtime.shapeCache);
         } else {
           removeParticleAt(runtime, index);
         }
@@ -99,12 +389,15 @@ export function createGeneratorPreviewRuntime() {
     const countMax = Math.max(countMin, Math.trunc(Number(card.particle?.countMax || countMin)));
     const count = randomInt(countMin, countMax);
     for (let i = 0; i < count && runtime.particles.length < MAX_SIM_PARTICLES; i += 1) {
-      runtime.particles.push(createParticle(card));
+      runtime.particles.push(createParticle(card, runtime.shapeCache));
     }
   }
 
   function snapshot(project, options = {}) {
-    const contexts = new Map((Array.isArray(project?.emitters) ? project.emitters : [])
+    const resolver = createBindingResolver(project, { collectErrors: true });
+    const emitters = (Array.isArray(project?.emitters) ? project.emitters : [])
+      .map((card, index) => resolveEmitterCard(project, card, resolver, index));
+    const contexts = new Map(emitters
       .map((card) => [String(card.id || ''), createEmitterSnapshotContext(card)]));
     const points = runtime.snapshotPoints;
     points.length = 0;
@@ -120,11 +413,15 @@ export function createGeneratorPreviewRuntime() {
       writable: true,
       enumerable: false
     });
+    attachPreviewErrors(result, resolver.errors);
     return result;
   }
 
   function snapshotRenderData(project) {
-    const contexts = new Map((Array.isArray(project?.emitters) ? project.emitters : [])
+    const resolver = createBindingResolver(project, { collectErrors: true });
+    const emitters = (Array.isArray(project?.emitters) ? project.emitters : [])
+      .map((card, index) => resolveEmitterCard(project, card, resolver, index));
+    const contexts = new Map(emitters
       .map((card) => [String(card.id || ''), createEmitterSnapshotContext(card)]));
     const effectSignature = resolveEffectSignature(contexts);
     if (!effectSignature || effectSignature.includes('|') || !canUseBillboardBuffers(contexts)) {
@@ -152,7 +449,8 @@ export function createGeneratorPreviewRuntime() {
       alphas: buffers.alphas,
       sizes: buffers.sizes,
       rolls: buffers.rolls,
-      lifeProgresses: buffers.lifeProgresses
+      lifeProgresses: buffers.lifeProgresses,
+      errors: resolver.errors
     };
   }
 
@@ -203,8 +501,8 @@ function isEmitterActive(card, tick) {
   return tick >= start && (end < 0 || tick <= end);
 }
 
-function createParticle(card) {
-  const pos = sampleEmitterPoint(card);
+function createParticle(card, shapeCache) {
+  const pos = sampleEmitterPoint(card, shapeCache);
   const velocity = sampleVelocity(card, pos);
   const lifeMin = Math.max(1, Math.trunc(Number(card.particle?.lifeMin || 1)));
   const lifeMax = Math.max(lifeMin, Math.trunc(Number(card.particle?.lifeMax || lifeMin)));
@@ -226,8 +524,8 @@ function createParticle(card) {
   };
 }
 
-function respawnParticle(particle) {
-  const next = createParticle(particle.card || {});
+function respawnParticle(particle, shapeCache) {
+  const next = createParticle(particle.card || {}, shapeCache);
   particle.pos = next.pos;
   particle.prev = { ...next.pos };
   particle.vel = next.vel;
@@ -694,10 +992,16 @@ function cubic(p0, p1, p2, p3, t) {
   return mt * mt * mt * p0 + 3 * mt * mt * t * p1 + 3 * mt * t * t * p2 + t * t * t * p3;
 }
 
-function sampleEmitterPoint(card) {
+function sampleEmitterPoint(card, shapeCache) {
   const type = card.emitter?.type || 'point';
   const offset = vectorFrom(card.emitter?.offset);
   if (type === 'point') return { ...offset };
+  if (type === 'points_builder') {
+    const source = getCachedBuilderPoints(card, shapeCache);
+    if (!source.length) return { ...offset };
+    const point = source[randomInt(0, source.length - 1)];
+    return add(vectorFrom(point), offset);
+  }
   if (type === 'box') {
     const box = card.emitter?.box || {};
     let point = vec((Math.random() - 0.5) * Number(box.x || 1), (Math.random() - 0.5) * Number(box.y || 1), (Math.random() - 0.5) * Number(box.z || 1));
@@ -746,6 +1050,23 @@ function sampleEmitterPoint(card) {
   const angle = Math.random() * Math.PI * 2;
   const radius = Number(ring.r || 1) + (Math.random() - 0.5) * Number(ring.thickness || 0);
   return add(rotateFromYAxis(vec(Math.cos(angle) * radius, 0, Math.sin(angle) * radius), vectorFrom(ring.axis, vec(0, 1, 0))), offset);
+}
+
+function getCachedBuilderPoints(card, shapeCache) {
+  const id = String(card?.id || '');
+  const builderState = card?.emitter?.builderState || {};
+  const signature = JSON.stringify(builderState);
+  const cacheKey = id || signature;
+  const cached = shapeCache?.get(cacheKey);
+  if (cached?.signature === signature) return cached.points;
+  let points = [];
+  try {
+    points = evaluatePointsProject(builderState).map((point) => vectorFrom(point));
+  } catch {
+    points = [];
+  }
+  shapeCache?.set(cacheKey, { signature, points });
+  return points;
 }
 
 function sampleVelocity(card, spawnPos) {

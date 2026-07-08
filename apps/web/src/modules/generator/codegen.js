@@ -1,10 +1,18 @@
 import { curveToKotlin } from './curves.js';
 import { TEXTURE_SHEET_OPTIONS, normalizeGeneratorProject } from './defaults.js';
+import { generatePointsBuilderKotlin } from '../pointsbuilder/codegen.js';
 
 function safeIdent(raw, fallback = 'GeneratedEmitter') {
   const text = String(raw || '').trim().replace(/[^A-Za-z0-9_]/g, '_');
   if (!text) return fallback;
   return /^[A-Za-z_]/.test(text) ? text : `_${text}`;
+}
+
+function safeKotlinReference(raw, fallback) {
+  const text = String(raw || '').trim();
+  if (!text) return fallback;
+  const parts = text.split('.').map((part) => safeIdent(part, '')).filter(Boolean);
+  return parts.length ? parts.join('.') : fallback;
 }
 
 function safePackage(raw) {
@@ -46,6 +54,58 @@ function vec3(value = {}) {
   return `Vec3(${fmtD(value.x)}, ${fmtD(value.y)}, ${fmtD(value.z)})`;
 }
 
+function isIdent(raw) {
+  return /^[A-Za-z_][A-Za-z0-9_]*$/.test(String(raw || '').trim());
+}
+
+function projectValueMap(project) {
+  const values = [
+    ...(Array.isArray(project?.parameters?.variables) ? project.parameters.variables : []),
+    ...(Array.isArray(project?.parameters?.constants) ? project.parameters.constants : [])
+  ];
+  return new Map(values.filter((item) => isIdent(item?.name)).map((item) => [item.name, item]));
+}
+
+function resolveBindingRef(project, card, path) {
+  const name = String(card?.bindings?.[path] || '').trim();
+  if (!name) return null;
+  const value = projectValueMap(project).get(name);
+  return value ? { name, value } : null;
+}
+
+function resolveBinding(project, card, path) {
+  return resolveBindingRef(project, card, path)?.name || '';
+}
+
+function numberExpr(project, card, path, value, fallback = 0) {
+  const binding = resolveBinding(project, card, path);
+  return binding ? `${binding}.toDouble()` : fmtD(value, fallback);
+}
+
+function intExpr(project, card, path, value, fallback = 0) {
+  const binding = resolveBinding(project, card, path);
+  return binding ? `${binding}.toInt()` : fmtI(value, fallback);
+}
+
+function floatExpr(project, card, path, value, fallback = 0) {
+  const binding = resolveBinding(project, card, path);
+  return binding ? `(${binding}).toFloat()` : fmtF(value, fallback);
+}
+
+function vectorExpr(project, card, path, value = {}) {
+  const binding = resolveBindingRef(project, card, path);
+  if (binding?.value?.type === 'Vec3') return binding.name;
+  if (binding?.value?.type === 'RelativeLocation') return `${binding.name}.toVector()`;
+  return `Vec3(${numberExpr(project, card, `${path}.x`, value.x)}, ${numberExpr(project, card, `${path}.y`, value.y)}, ${numberExpr(project, card, `${path}.z`, value.z)})`;
+}
+
+function relativeExpr(project, card, path, value = {}) {
+  const binding = resolveBindingRef(project, card, path);
+  if (binding?.value?.type === 'RelativeLocation') return binding.name;
+  if (binding?.value?.type === 'Vec3') return `RelativeLocation(${binding.name}.x, ${binding.name}.y, ${binding.name}.z)`;
+  return `RelativeLocation(${numberExpr(project, card, `${path}.x`, value.x)}, ${numberExpr(project, card, `${path}.y`, value.y)}, ${numberExpr(project, card, `${path}.z`, value.z)})`;
+}
+
 function vec3Params(params = {}, prefix = '') {
   return `Vec3(${fmtD(params[`${prefix}X`])}, ${fmtD(params[`${prefix}Y`])}, ${fmtD(params[`${prefix}Z`])})`;
 }
@@ -66,7 +126,9 @@ function cameraOptionConstant(mode) {
 
 const textureSheetIds = new Set(TEXTURE_SHEET_OPTIONS.map((item) => item.id));
 
-function textureSheetStatement(sheet) {
+function textureSheetStatement(project, card, sheet) {
+  const binding = resolveBinding(project, card, 'render.textureSheet');
+  if (binding) return `setTextureSheet(${binding})`;
   const value = String(sheet || 'PARTICLE_SHEET_TRANSLUCENT').trim();
   if (textureSheetIds.has(value)) {
     return `setTextureSheet(TextureSheetsEnum.${value})`;
@@ -111,13 +173,77 @@ function vector3fFromHex(hex) {
   };
 }
 
-function emitEmitterPointBuilder(card, dataVar) {
+function vector3fExprFromHex(hex) {
+  const color = vector3fFromHex(hex);
+  return `Vector3f(${fmtF(color.x)}, ${fmtF(color.y)}, ${fmtF(color.z)})`;
+}
+
+function colorVectorBindingExpr(binding) {
+  if (binding.value?.type === 'Vector3f') {
+    return `Vector3f(${binding.name}.x.coerceIn(0f, 1f), ${binding.name}.y.coerceIn(0f, 1f), ${binding.name}.z.coerceIn(0f, 1f))`;
+  }
+  if (binding.value?.type === 'Vec3') {
+    return `Vector3f(((${binding.name}.x) / 255.0).coerceIn(0.0, 1.0).toFloat(), ((${binding.name}.y) / 255.0).coerceIn(0.0, 1.0).toFloat(), ((${binding.name}.z) / 255.0).coerceIn(0.0, 1.0).toFloat())`;
+  }
+  return '';
+}
+
+function colorChannelExpr(project, card, paths, fallback01) {
+  const binding = paths.map((item) => resolveBinding(project, card, item)).find(Boolean);
+  return binding ? `((${binding}.toDouble()) / 255.0).coerceIn(0.0, 1.0).toFloat()` : fmtF(fallback01);
+}
+
+function colorExpr(project, card, path, hex) {
+  const binding = resolveBindingRef(project, card, path);
+  const vectorBinding = binding ? colorVectorBindingExpr(binding) : '';
+  if (vectorBinding) return vectorBinding;
+  const color = vector3fFromHex(hex);
+  const channelPaths = [
+    [`${path}.r`, `${path}.x`],
+    [`${path}.g`, `${path}.y`],
+    [`${path}.b`, `${path}.z`]
+  ];
+  if (channelPaths.some((paths) => paths.some((item) => resolveBinding(project, card, item)))) {
+    return `Vector3f(${colorChannelExpr(project, card, channelPaths[0], color.x)}, ${colorChannelExpr(project, card, channelPaths[1], color.y)}, ${colorChannelExpr(project, card, channelPaths[2], color.z)})`;
+  }
+  return vector3fExprFromHex(hex);
+}
+
+function emitEmitterPointBuilder(project, card, dataVar) {
   const type = card.emitter.type;
   const offset = card.emitter.offset;
   const lines = [];
   lines.push('PointsBuilder()');
   if (type === 'point') {
-    lines.push(`    .addWith { List(${dataVar}.getRandomCount()) { ${rel(offset)} } }`);
+    lines.push(`    .addWith { List(${dataVar}.getRandomCount()) { ${relativeExpr(project, card, 'emitter.offset', offset)} } }`);
+    return lines.join('\n');
+  }
+  if (type === 'points_builder') {
+    const builderExpr = generatePointsBuilderKotlin(card.emitter.builderState || {})
+      .split('\n')
+      .map((line) => line.trimEnd())
+      .filter((line) => line.trim());
+    lines.push('    .addWith {');
+    lines.push('        val locs = arrayListOf<RelativeLocation>()');
+    if (builderExpr.length) {
+      lines.push('        val source = (');
+      builderExpr.forEach((line) => lines.push(`            ${line}`));
+      lines.push('        ).createWithoutClone()');
+    } else {
+      lines.push('        val source = emptyList<RelativeLocation>()');
+    }
+    lines.push(`        val count = ${dataVar}.getRandomCount().coerceAtLeast(1)`);
+    lines.push('        if (source.isEmpty()) {');
+    lines.push(`            repeat(count) { locs.add(${relativeExpr(project, card, 'emitter.offset', offset)}) }`);
+    lines.push('        } else {');
+    lines.push('            val rand = Random.Default');
+    lines.push('            repeat(count) {');
+    lines.push('                val base = source[rand.nextInt(source.size)]');
+    lines.push(`                locs.add(RelativeLocation(base.x + ${numberExpr(project, card, 'emitter.offset.x', offset.x)}, base.y + ${numberExpr(project, card, 'emitter.offset.y', offset.y)}, base.z + ${numberExpr(project, card, 'emitter.offset.z', offset.z)}))`);
+    lines.push('            }');
+    lines.push('        }');
+    lines.push('        locs');
+    lines.push('    }');
     return lines.join('\n');
   }
   if (type === 'box') {
@@ -126,17 +252,17 @@ function emitEmitterPointBuilder(card, dataVar) {
     lines.push('        val rand = Random.Default');
     lines.push('        val locs = arrayListOf<RelativeLocation>()');
     lines.push(`        repeat(${dataVar}.getRandomCount()) {`);
-    lines.push(`            var x = (rand.nextDouble() - 0.5) * ${fmtD(box.x)}`);
-    lines.push(`            var y = (rand.nextDouble() - 0.5) * ${fmtD(box.y)}`);
-    lines.push(`            var z = (rand.nextDouble() - 0.5) * ${fmtD(box.z)}`);
+    lines.push(`            var x = (rand.nextDouble() - 0.5) * ${numberExpr(project, card, 'emitter.box.x', box.x)}`);
+    lines.push(`            var y = (rand.nextDouble() - 0.5) * ${numberExpr(project, card, 'emitter.box.y', box.y)}`);
+    lines.push(`            var z = (rand.nextDouble() - 0.5) * ${numberExpr(project, card, 'emitter.box.z', box.z)}`);
     if (box.surface) {
       lines.push('            when (rand.nextInt(3)) {');
-      lines.push(`                0 -> x = (if (rand.nextBoolean()) -0.5 else 0.5) * ${fmtD(box.x)}`);
-      lines.push(`                1 -> y = (if (rand.nextBoolean()) -0.5 else 0.5) * ${fmtD(box.y)}`);
-      lines.push(`                else -> z = (if (rand.nextBoolean()) -0.5 else 0.5) * ${fmtD(box.z)}`);
+      lines.push(`                0 -> x = (if (rand.nextBoolean()) -0.5 else 0.5) * ${numberExpr(project, card, 'emitter.box.x', box.x)}`);
+      lines.push(`                1 -> y = (if (rand.nextBoolean()) -0.5 else 0.5) * ${numberExpr(project, card, 'emitter.box.y', box.y)}`);
+      lines.push(`                else -> z = (if (rand.nextBoolean()) -0.5 else 0.5) * ${numberExpr(project, card, 'emitter.box.z', box.z)}`);
       lines.push('            }');
     }
-    lines.push(`            locs.add(RelativeLocation(x + ${fmtD(offset.x)}, y + ${fmtD(offset.y)}, z + ${fmtD(offset.z)}))`);
+    lines.push(`            locs.add(RelativeLocation(x + ${numberExpr(project, card, 'emitter.offset.x', offset.x)}, y + ${numberExpr(project, card, 'emitter.offset.y', offset.y)}, z + ${numberExpr(project, card, 'emitter.offset.z', offset.z)}))`);
     lines.push('        }');
     lines.push('        locs');
     lines.push('    }');
@@ -144,6 +270,7 @@ function emitEmitterPointBuilder(card, dataVar) {
   }
   if (type === 'sphere' || type === 'sphere_surface') {
     const radius = type === 'sphere' ? card.emitter.sphere.r : card.emitter.sphereSurface.r;
+    const radiusPath = type === 'sphere' ? 'emitter.sphere.r' : 'emitter.sphereSurface.r';
     lines.push('    .addWith {');
     lines.push('        val rand = Random.Default');
     lines.push('        val locs = arrayListOf<RelativeLocation>()');
@@ -156,46 +283,46 @@ function emitEmitterPointBuilder(card, dataVar) {
     lines.push('            val dy = cos(phi)');
     lines.push('            val dz = sin(phi) * sin(theta)');
     lines.push(type === 'sphere'
-      ? `            val rr = ${fmtD(radius)} * cbrt(rand.nextDouble())`
-      : `            val rr = ${fmtD(radius)}`);
-    lines.push(`            locs.add(RelativeLocation(dx * rr + ${fmtD(offset.x)}, dy * rr + ${fmtD(offset.y)}, dz * rr + ${fmtD(offset.z)}))`);
+      ? `            val rr = ${numberExpr(project, card, radiusPath, radius)} * cbrt(rand.nextDouble())`
+      : `            val rr = ${numberExpr(project, card, radiusPath, radius)}`);
+    lines.push(`            locs.add(RelativeLocation(dx * rr + ${numberExpr(project, card, 'emitter.offset.x', offset.x)}, dy * rr + ${numberExpr(project, card, 'emitter.offset.y', offset.y)}, dz * rr + ${numberExpr(project, card, 'emitter.offset.z', offset.z)}))`);
     lines.push('        }');
     lines.push('        locs');
     lines.push('    }');
     return lines.join('\n');
   }
   if (type === 'line') {
-    lines.push(`    .addLine(${rel(card.emitter.line.dir)}, ${fmtD(card.emitter.line.step)}, ${dataVar}.getRandomCount())`);
-    lines.push(`    .pointsOnEach { it.add(${rel(offset)}) }`);
+    lines.push(`    .addLine(${relativeExpr(project, card, 'emitter.line.dir', card.emitter.line.dir)}, ${numberExpr(project, card, 'emitter.line.step', card.emitter.line.step)}, ${dataVar}.getRandomCount())`);
+    lines.push(`    .pointsOnEach { it.add(${relativeExpr(project, card, 'emitter.offset', offset)}) }`);
     return lines.join('\n');
   }
   if (type === 'circle') {
-    lines.push(`    .addCircle(${fmtD(card.emitter.circle.r)}, ${dataVar}.getRandomCount())`);
-    lines.push(`    .rotateTo(${rel(card.emitter.circle.axis)})`);
-    lines.push(`    .pointsOnEach { it.add(${rel(offset)}) }`);
+    lines.push(`    .addCircle(${numberExpr(project, card, 'emitter.circle.r', card.emitter.circle.r)}, ${dataVar}.getRandomCount())`);
+    lines.push(`    .rotateTo(${relativeExpr(project, card, 'emitter.circle.axis', card.emitter.circle.axis)})`);
+    lines.push(`    .pointsOnEach { it.add(${relativeExpr(project, card, 'emitter.offset', offset)}) }`);
     return lines.join('\n');
   }
   if (type === 'ring') {
-    lines.push(`    .addDiscreteCircleXZ(${fmtD(card.emitter.ring.r)}, ${dataVar}.getRandomCount(), ${fmtD(card.emitter.ring.thickness)})`);
-    lines.push(`    .rotateTo(${rel(card.emitter.ring.axis)})`);
-    lines.push(`    .pointsOnEach { it.add(${rel(offset)}) }`);
+    lines.push(`    .addDiscreteCircleXZ(${numberExpr(project, card, 'emitter.ring.r', card.emitter.ring.r)}, ${dataVar}.getRandomCount(), ${numberExpr(project, card, 'emitter.ring.thickness', card.emitter.ring.thickness)})`);
+    lines.push(`    .rotateTo(${relativeExpr(project, card, 'emitter.ring.axis', card.emitter.ring.axis)})`);
+    lines.push(`    .pointsOnEach { it.add(${relativeExpr(project, card, 'emitter.offset', offset)}) }`);
     return lines.join('\n');
   }
   if (type === 'arc') {
     const arc = card.emitter.arc;
-    lines.push(`    .addRadian(${fmtD(arc.r)}, ${dataVar}.getRandomCount(), ${fmtD(arc.start)} * PI / 180.0, ${fmtD(arc.end)} * PI / 180.0, ${fmtD(arc.rotate)} * PI / 180.0)`);
-    lines.push(`    .rotateTo(${rel(arc.axis)})`);
-    lines.push(`    .pointsOnEach { it.add(${rel(offset)}) }`);
+    lines.push(`    .addRadian(${numberExpr(project, card, 'emitter.arc.r', arc.r)}, ${dataVar}.getRandomCount(), ${numberExpr(project, card, 'emitter.arc.start', arc.start)} * PI / 180.0, ${numberExpr(project, card, 'emitter.arc.end', arc.end)} * PI / 180.0, ${numberExpr(project, card, 'emitter.arc.rotate', arc.rotate)} * PI / 180.0)`);
+    lines.push(`    .rotateTo(${relativeExpr(project, card, 'emitter.arc.axis', arc.axis)})`);
+    lines.push(`    .pointsOnEach { it.add(${relativeExpr(project, card, 'emitter.offset', offset)}) }`);
     return lines.join('\n');
   }
   if (type === 'spiral') {
     const spiral = card.emitter.spiral;
-    lines.push(`    .addSpiral(${fmtD(spiral.startR)}, ${fmtD(spiral.endR)}, ${fmtD(spiral.height)}, ${dataVar}.getRandomCount().coerceAtLeast(2), ${fmtD(spiral.rotateSpeed)}, ${fmtD(spiral.rBias)}, ${fmtD(spiral.hBias)})`);
-    lines.push(`    .rotateTo(${rel(spiral.axis)})`);
-    lines.push(`    .pointsOnEach { it.add(${rel(offset)}) }`);
+    lines.push(`    .addSpiral(${numberExpr(project, card, 'emitter.spiral.startR', spiral.startR)}, ${numberExpr(project, card, 'emitter.spiral.endR', spiral.endR)}, ${numberExpr(project, card, 'emitter.spiral.height', spiral.height)}, ${dataVar}.getRandomCount().coerceAtLeast(2), ${numberExpr(project, card, 'emitter.spiral.rotateSpeed', spiral.rotateSpeed)}, ${numberExpr(project, card, 'emitter.spiral.rBias', spiral.rBias)}, ${numberExpr(project, card, 'emitter.spiral.hBias', spiral.hBias)})`);
+    lines.push(`    .rotateTo(${relativeExpr(project, card, 'emitter.spiral.axis', spiral.axis)})`);
+    lines.push(`    .pointsOnEach { it.add(${relativeExpr(project, card, 'emitter.offset', offset)}) }`);
     return lines.join('\n');
   }
-  lines.push(`    .addWith { List(${dataVar}.getRandomCount()) { ${rel(offset)} } }`);
+  lines.push(`    .addWith { List(${dataVar}.getRandomCount()) { ${relativeExpr(project, card, 'emitter.offset', offset)} } }`);
   return lines.join('\n');
 }
 
@@ -308,6 +435,42 @@ function emitCommandQueueApplication(project) {
   return lines;
 }
 
+function defaultLiteralForType(type, value) {
+  const normalized = String(type || 'Double');
+  if (normalized === 'Int') return fmtI(value);
+  if (normalized === 'Long') return `${fmtI(value)}L`;
+  if (normalized === 'Float') return fmtF(value);
+  if (normalized === 'Double') return fmtD(value);
+  if (normalized === 'Boolean') return value === true || value === 'true' ? 'true' : 'false';
+  if (normalized === 'String') return fmtString(value);
+  const text = String(value || '').trim();
+  if (normalized === 'Vec3') return text || 'Vec3(0.0, 0.0, 0.0)';
+  if (normalized === 'RelativeLocation') return text || 'RelativeLocation(0.0, 0.0, 0.0)';
+  if (normalized === 'Vector3f') return text || 'Vector3f(0.0f, 0.0f, 0.0f)';
+  return fmtD(value);
+}
+
+function emitProjectParameterDeclarations(project) {
+  const lines = [];
+  const seen = new Set();
+  const variables = Array.isArray(project?.parameters?.variables) ? project.parameters.variables : [];
+  const constants = Array.isArray(project?.parameters?.constants) ? project.parameters.constants : [];
+  variables.forEach((item) => {
+    if (!isIdent(item?.name) || seen.has(item.name)) return;
+    seen.add(item.name);
+    if (item.codec !== false) lines.push('@CodecField');
+    lines.push(`var ${item.name}: ${item.type || 'Double'} = ${defaultLiteralForType(item.type, item.value)}`);
+    lines.push('');
+  });
+  constants.forEach((item) => {
+    if (!isIdent(item?.name) || seen.has(item.name)) return;
+    seen.add(item.name);
+    lines.push(`private val ${item.name}: ${item.type || 'Double'} = ${defaultLiteralForType(item.type, item.value)}`);
+    lines.push('');
+  });
+  return lines.join('\n').trimEnd();
+}
+
 function resolveGlobalGravity(project) {
   for (const queue of project.commandQueues || []) {
     for (const command of queue.commands || []) {
@@ -319,75 +482,76 @@ function resolveGlobalGravity(project) {
   return null;
 }
 
-function emitEmitterBlock(card, index) {
+function emitEmitterBlock(project, card, index) {
   const n = index + 1;
   const templateVar = `template${n}`;
   const dataVar = `data${n}`;
-  const color = vector3fFromHex(card.particle.colorStart);
   const lines = [];
   lines.push(`// 发射器 #${n}: ${card.name}`);
   lines.push(`if (${buildEmitterActiveExpr(card)}) {`);
   lines.push(`    val ${dataVar} = SimpleRandomParticleData().apply {`);
-  lines.push(`        minAge = ${fmtI(card.particle.lifeMin)}`);
-  lines.push(`        maxAge = ${fmtI(card.particle.lifeMax)}`);
-  lines.push(`        minCount = ${fmtI(card.particle.countMin)}`);
-  lines.push(`        maxCount = ${fmtI(card.particle.countMax)}`);
-  lines.push(`        minSize = ${fmtD(card.particle.sizeMin)}`);
-  lines.push(`        maxSize = ${fmtD(card.particle.sizeMax)}`);
-  lines.push(`        minSpeed = ${fmtD(card.particle.speedMin)}`);
-  lines.push(`        maxSpeed = ${fmtD(card.particle.speedMax)}`);
+  lines.push(`        minAge = ${intExpr(project, card, 'particle.lifeMin', card.particle.lifeMin)}`);
+  lines.push(`        maxAge = ${intExpr(project, card, 'particle.lifeMax', card.particle.lifeMax)}`);
+  lines.push(`        minCount = ${intExpr(project, card, 'particle.countMin', card.particle.countMin)}`);
+  lines.push(`        maxCount = ${intExpr(project, card, 'particle.countMax', card.particle.countMax)}`);
+  lines.push(`        minSize = ${numberExpr(project, card, 'particle.sizeMin', card.particle.sizeMin)}`);
+  lines.push(`        maxSize = ${numberExpr(project, card, 'particle.sizeMax', card.particle.sizeMax)}`);
+  lines.push(`        minSpeed = ${numberExpr(project, card, 'particle.speedMin', card.particle.speedMin)}`);
+  lines.push(`        maxSpeed = ${numberExpr(project, card, 'particle.speedMax', card.particle.speedMax)}`);
   lines.push('    }');
   lines.push(`    val ${templateVar} = ControlableParticleData().apply {`);
-  lines.push(`        velocity = ${vec3(card.particle.velocity)}`);
+  lines.push(`        velocity = ${vectorExpr(project, card, 'particle.velocity', card.particle.velocity)}`);
   lines.push(`        uniformSize = ${usesIndependentScale(card) ? 'false' : 'true'}`);
-  lines.push(`        weightSize = ${fmtF(card.render.baseScale.x)}`);
-  lines.push(`        heightSize = ${fmtF(usesIndependentScale(card) ? card.render.baseScale.y : card.render.baseScale.x)}`);
+  lines.push(`        weightSize = ${floatExpr(project, card, 'render.baseScale.x', card.render.baseScale.x)}`);
+  lines.push(`        heightSize = ${usesIndependentScale(card)
+    ? floatExpr(project, card, 'render.baseScale.y', card.render.baseScale.y)
+    : floatExpr(project, card, 'render.baseScale.x', card.render.baseScale.x)}`);
   if (usesDepthScale(card)) {
-    lines.push(`        depthSize = ${fmtF(card.render.baseScale.z)}`);
+    lines.push(`        depthSize = ${floatExpr(project, card, 'render.baseScale.z', card.render.baseScale.z)}`);
   }
-  lines.push(`        visibleRange = ${fmtF(card.particle.visibleRange)}`);
-  lines.push(`        color = Vector3f(${fmtF(color.x)}, ${fmtF(color.y)}, ${fmtF(color.z)})`);
-  lines.push(`        alpha = ${fmtF(Number(card.render.alpha || 0) / 100)}`);
-  lines.push(`        light = ${fmtI(card.render.light)}`);
-  lines.push(`        ${textureSheetStatement(card.render.textureSheet)}`);
+  lines.push(`        visibleRange = ${floatExpr(project, card, 'particle.visibleRange', card.particle.visibleRange)}`);
+  lines.push(`        color = ${colorExpr(project, card, 'particle.colorStart', card.particle.colorStart)}`);
+  lines.push(`        alpha = (${numberExpr(project, card, 'render.alpha', card.render.alpha)} / 100.0).toFloat()`);
+  lines.push(`        light = ${intExpr(project, card, 'render.light', card.render.light)}`);
+  lines.push(`        ${textureSheetStatement(project, card, card.render.textureSheet)}`);
   lines.push(`        cameraOption = ${cameraOptionConstant(card.render.billboardMode)}`);
   if (card.render.billboardMode === 'axis_billboard') {
-    lines.push(`        axis = ${vec3(card.render.axis)}`);
+    lines.push(`        axis = ${vectorExpr(project, card, 'render.axis', card.render.axis)}`);
   }
-  lines.push(`        roll = ${degToRad(card.render.roll)}`);
+  lines.push(`        roll = (${numberExpr(project, card, 'render.roll', card.render.roll)} * PI / 180.0).toFloat()`);
   if (card.render.billboardMode === 'none') {
-    lines.push(`        yaw = ${degToRad(card.render.yaw)}`);
-    lines.push(`        pitch = ${degToRad(card.render.pitch)}`);
+    lines.push(`        yaw = (${numberExpr(project, card, 'render.yaw', card.render.yaw)} * PI / 180.0).toFloat()`);
+    lines.push(`        pitch = (${numberExpr(project, card, 'render.pitch', card.render.pitch)} * PI / 180.0).toFloat()`);
   }
-  lines.push(`        speedLimit = ${fmtD(card.render.speedLimit)}`);
-  lines.push(`        sign = ${fmtI(card.render.sign)}`);
-  lines.push(`        effect = ${safeIdent(card.render.effectClass, 'ControlableEndRodEffect')}(uuid)`);
+  lines.push(`        speedLimit = ${numberExpr(project, card, 'render.speedLimit', card.render.speedLimit)}`);
+  lines.push(`        sign = ${intExpr(project, card, 'render.sign', card.render.sign)}`);
+  lines.push(`        effect = ${safeKotlinReference(card.render.effectClass, 'ControlableEndRodEffect')}(uuid)`);
   lines.push('    }');
   lines.push('    res.addAll(');
-  lines.push(indent(emitEmitterPointBuilder(card, dataVar), 8));
+  lines.push(indent(emitEmitterPointBuilder(project, card, dataVar), 8));
   lines.push('            .createWithoutClone()');
   lines.push('            .map { rel ->');
   lines.push(`                val speed = ${dataVar}.getRandomSpeed()`);
   lines.push(`                val particleSize = ${dataVar}.getRandomSize()`);
-  lines.push(`                val velocityJitter = Vec3((Random.nextDouble() * 2.0 - 1.0) * ${fmtD(card.particle.velocityRandom.x)}, (Random.nextDouble() * 2.0 - 1.0) * ${fmtD(card.particle.velocityRandom.y)}, (Random.nextDouble() * 2.0 - 1.0) * ${fmtD(card.particle.velocityRandom.z)})`);
+  lines.push(`                val velocityJitter = Vec3((Random.nextDouble() * 2.0 - 1.0) * ${numberExpr(project, card, 'particle.velocityRandom.x', card.particle.velocityRandom.x)}, (Random.nextDouble() * 2.0 - 1.0) * ${numberExpr(project, card, 'particle.velocityRandom.y', card.particle.velocityRandom.y)}, (Random.nextDouble() * 2.0 - 1.0) * ${numberExpr(project, card, 'particle.velocityRandom.z', card.particle.velocityRandom.z)})`);
   if (card.particle.velocityMode === 'spawn_relative') {
     lines.push('                val dir = rel.toVector().add(velocityJitter)');
     lines.push('                val velocity = if (dir.lengthSqr() < 1e-8) Vec3.ZERO else dir.normalize().scale(speed)');
   } else {
-    lines.push(`                val baseDir = ${vec3(card.particle.velocity)}.add(velocityJitter)`);
+    lines.push(`                val baseDir = ${vectorExpr(project, card, 'particle.velocity', card.particle.velocity)}.add(velocityJitter)`);
     lines.push('                val velocity = if (baseDir.lengthSqr() < 1e-8) Vec3.ZERO else baseDir.normalize().scale(speed)');
   }
   lines.push(`                ${templateVar}.clone().apply {`);
   lines.push(`                    maxAge = ${dataVar}.getRandomParticleMaxAge()`);
   if (usesIndependentScale(card)) {
     lines.push('                    uniformSize = false');
-    lines.push(`                    weightSize = (particleSize * ${fmtD(card.render.baseScale.x)}).toFloat()`);
-    lines.push(`                    heightSize = (particleSize * ${fmtD(card.render.baseScale.y)}).toFloat()`);
+    lines.push(`                    weightSize = (particleSize * ${numberExpr(project, card, 'render.baseScale.x', card.render.baseScale.x)}).toFloat()`);
+    lines.push(`                    heightSize = (particleSize * ${numberExpr(project, card, 'render.baseScale.y', card.render.baseScale.y)}).toFloat()`);
     if (usesDepthScale(card)) {
-      lines.push(`                    depthSize = (particleSize * ${fmtD(card.render.baseScale.z)}).toFloat()`);
+      lines.push(`                    depthSize = (particleSize * ${numberExpr(project, card, 'render.baseScale.z', card.render.baseScale.z)}).toFloat()`);
     }
   } else {
-    lines.push(`                    size = (particleSize * ${fmtD(card.render.baseScale.x)}).toFloat()`);
+    lines.push(`                    size = (particleSize * ${numberExpr(project, card, 'render.baseScale.x', card.render.baseScale.x)}).toFloat()`);
   }
   lines.push('                    this.velocity = velocity');
   lines.push('                } to rel');
@@ -432,12 +596,12 @@ function emitLifecycleAction(project) {
   enabled.forEach((card, index) => {
     const n = index + 1;
     const prefix = `emitter${n}`;
-    const start = vector3fFromHex(card.particle.colorStart);
-    const end = vector3fFromHex(card.particle.colorEnd);
-    lines.push(`            ${fmtI(card.render.sign)} -> {`);
+    lines.push(`            ${intExpr(project, card, 'render.sign', card.render.sign)} -> {`);
     if (card.particle.colorOverLifeEnabled) {
       lines.push('                val cp = lifeProgress.toFloat()');
-      lines.push(`                this.color = Vector3f(${fmtF(start.x)} + (${fmtF(end.x)} - ${fmtF(start.x)}) * cp, ${fmtF(start.y)} + (${fmtF(end.y)} - ${fmtF(start.y)}) * cp, ${fmtF(start.z)} + (${fmtF(end.z)} - ${fmtF(start.z)}) * cp)`);
+      lines.push(`                val startColor = ${colorExpr(project, card, 'particle.colorStart', card.particle.colorStart)}`);
+      lines.push(`                val endColor = ${colorExpr(project, card, 'particle.colorEnd', card.particle.colorEnd)}`);
+      lines.push('                this.color = Vector3f(startColor.x + (endColor.x - startColor.x) * cp, startColor.y + (endColor.y - startColor.y) * cp, startColor.z + (endColor.z - startColor.z) * cp)');
     }
     if (usesIndependentScale(card)) {
       lines.push('                this.uniformSize = false');
@@ -484,6 +648,7 @@ export function generateEmitterKotlin(rawProject) {
     lines.push('');
   }
   lines.push('import cn.coostack.cooparticlesapi.annotations.CooAutoRegister');
+  lines.push('import cn.coostack.cooparticlesapi.annotations.CodecField');
   lines.push('import cn.coostack.cooparticlesapi.network.particle.emitters.*');
   lines.push('import cn.coostack.cooparticlesapi.network.particle.emitters.command.*');
   lines.push('import cn.coostack.cooparticlesapi.network.particle.emitters.command.curve.*');
@@ -501,6 +666,11 @@ export function generateEmitterKotlin(rawProject) {
   lines.push('');
   lines.push('@CooAutoRegister');
   lines.push(`class ${className}(pos: Vec3, world: Level?) : ${baseClass}(pos, world) {`);
+  const parameterDeclarations = emitProjectParameterDeclarations(project);
+  if (parameterDeclarations) {
+    lines.push(indent(parameterDeclarations, 4));
+    lines.push('');
+  }
   project.emitters.filter((card) => card.enabled !== false).forEach((card, index) => {
     lines.push(indent(emitCurveDeclarations(card, index), 4));
     lines.push('');
@@ -531,7 +701,7 @@ export function generateEmitterKotlin(rawProject) {
   lines.push('        val res = mutableListOf<Pair<ControlableParticleData, RelativeLocation>>()');
   lines.push('');
   project.emitters.filter((card) => card.enabled !== false).forEach((card, index) => {
-    lines.push(indent(emitEmitterBlock(card, index), 8));
+    lines.push(indent(emitEmitterBlock(project, card, index), 8));
     lines.push('');
   });
   lines.push('        return res');

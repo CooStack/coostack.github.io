@@ -30,8 +30,8 @@
       >
         <defs>
           <linearGradient :id="fillId" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stop-color="rgba(56, 189, 248, 0.34)" />
-            <stop offset="100%" stop-color="rgba(56, 189, 248, 0.04)" />
+            <stop offset="0%" stop-color="var(--curve-fill-start)" />
+            <stop offset="100%" stop-color="var(--curve-fill-end)" />
           </linearGradient>
         </defs>
         <g class="curve-grid">
@@ -550,6 +550,17 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .curve-editor {
+  --curve-canvas-bg: var(--bg-panel-strong);
+  --curve-grid-color: rgba(148, 163, 184, 0.16);
+  --curve-line-color: var(--brand-2);
+  --curve-fill-start: rgba(56, 189, 248, 0.34);
+  --curve-fill-end: rgba(56, 189, 248, 0.04);
+  --curve-handle-color: var(--warning);
+  --curve-handle-line-color: rgba(245, 158, 11, 0.6);
+  --curve-point-color: #e2e8f0;
+  --curve-point-stroke: #020617;
+  --curve-selected-color: var(--warning);
+  --curve-selected-border: rgba(245, 158, 11, 0.5);
   border: 1px solid var(--border);
   border-radius: 8px;
   background: var(--bg-soft);
@@ -626,7 +637,7 @@ onBeforeUnmount(() => {
   min-height: 164px;
   border-radius: 8px;
   overflow: hidden;
-  background: var(--bg-panel-strong);
+  background: var(--curve-canvas-bg);
 }
 
 .expanded .curve-stage {
@@ -646,7 +657,7 @@ onBeforeUnmount(() => {
 }
 
 .curve-grid line {
-  stroke: rgba(148, 163, 184, 0.16);
+  stroke: var(--curve-grid-color);
   stroke-width: 1;
 }
 
@@ -656,37 +667,37 @@ onBeforeUnmount(() => {
 
 .curve-path {
   fill: none;
-  stroke: #38bdf8;
+  stroke: var(--curve-line-color);
   stroke-width: 3;
   vector-effect: non-scaling-stroke;
   pointer-events: none;
 }
 
 .curve-handles line {
-  stroke: rgba(245, 158, 11, 0.6);
+  stroke: var(--curve-handle-line-color);
   stroke-dasharray: 4 4;
   stroke-width: 1.5;
   vector-effect: non-scaling-stroke;
 }
 
 .curve-handle {
-  fill: #f59e0b;
-  stroke: #020617;
+  fill: var(--curve-handle-color);
+  stroke: var(--curve-point-stroke);
   stroke-width: 2;
   cursor: grab;
   vector-effect: non-scaling-stroke;
 }
 
 .curve-point {
-  fill: #e2e8f0;
-  stroke: #020617;
+  fill: var(--curve-point-color);
+  stroke: var(--curve-point-stroke);
   stroke-width: 2;
   cursor: grab;
   vector-effect: non-scaling-stroke;
 }
 
 .curve-point.selected {
-  fill: #f59e0b;
+  fill: var(--curve-selected-color);
 }
 
 .curve-frame-grid {
@@ -705,7 +716,7 @@ onBeforeUnmount(() => {
 }
 
 .curve-frame-row.selected {
-  border-color: rgba(245, 158, 11, 0.5);
+  border-color: var(--curve-selected-border);
 }
 
 .frame-index {

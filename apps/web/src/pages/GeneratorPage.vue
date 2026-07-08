@@ -1,5 +1,12 @@
 <template>
-  <div class="generator-page" :data-theme="project.settings.theme">
+  <div
+    class="generator-page"
+    :class="{ 'generator-page--skybox-off': project.settings.showSkybox === false }"
+    :data-theme="project.settings.theme"
+  >
+    <datalist id="generator-builder-number-options">
+      <option v-for="item in numericBindableRefs" :key="item.name" :value="item.name">{{ item.label }}</option>
+    </datalist>
     <header class="generator-topbar">
       <div class="generator-brand">
         <RouterLink class="btn small" to="/">返回主页</RouterLink>
@@ -51,7 +58,7 @@
               @click="project.selectedEmitterId = card.id"
             >
               <div class="card-main">
-                <button class="icon-btn" @click.stop="card.enabled = !card.enabled">{{ card.enabled ? '●' : '○' }}</button>
+                <button class="icon-btn emitter-toggle" @click.stop="card.enabled = !card.enabled">{{ card.enabled ? '●' : '○' }}</button>
                 <div>
                   <input v-model="card.name" class="plain-input" @click.stop />
                   <div class="sub">{{ emitterTypeLabel(card.emitter.type) }}</div>
@@ -92,6 +99,33 @@
           <div class="grid2">
             <label class="field"><span>间隔 tick</span><input v-model.number="project.rootLifecycle.intervalTick" class="input" type="number" min="1" step="1" /></label>
             <label class="field"><span>总 tick</span><input v-model.number="project.rootLifecycle.maxTick" class="input" type="number" min="1" step="1" /></label>
+          </div>
+          <div class="panel-title-row compact">
+            <span class="block-title">变量</span>
+            <button class="btn small" type="button" @click="addProjectVariable">+ 变量</button>
+          </div>
+          <div v-if="!project.parameters.variables.length" class="empty-state">暂无 @CodecField 变量。</div>
+          <div v-for="item in project.parameters.variables" :key="item.id" class="parameter-row">
+            <input v-model="item.name" class="input" type="text" placeholder="变量名" />
+            <select v-model="item.type" class="input" @change="syncParameterType(item)">
+              <option v-for="type in generatorValueTypes" :key="type" :value="type">{{ type }}</option>
+            </select>
+            <input v-model="item.value" class="input" type="text" placeholder="默认值" />
+            <label class="check-row"><input v-model="item.codec" type="checkbox" />CodecField</label>
+            <button class="icon-btn" type="button" @click="removeProjectVariable(item.id)">×</button>
+          </div>
+          <div class="panel-title-row compact">
+            <span class="block-title">常量</span>
+            <button class="btn small" type="button" @click="addProjectConstant">+ 常量</button>
+          </div>
+          <div v-if="!project.parameters.constants.length" class="empty-state">暂无常量。</div>
+          <div v-for="item in project.parameters.constants" :key="item.id" class="parameter-row compact-parameter-row">
+            <input v-model="item.name" class="input" type="text" placeholder="常量名" />
+            <select v-model="item.type" class="input" @change="syncParameterType(item)">
+              <option v-for="type in generatorValueTypes" :key="type" :value="type">{{ type }}</option>
+            </select>
+            <input v-model="item.value" class="input" type="text" placeholder="值" />
+            <button class="icon-btn" type="button" @click="removeProjectConstant(item.id)">×</button>
           </div>
         </section>
 
@@ -135,10 +169,17 @@
           :points="previewPoints"
           :show-grid="project.settings.showGrid"
           :show-axes="project.settings.showAxes"
+          :show-skybox="project.settings.showSkybox !== false"
           :point-size="project.settings.pointSize"
           :interpolation-ms="previewInterpolationMs"
           @fps="fpsText = formatFps($event)"
         />
+        <div v-if="previewErrors.length" class="preview-error-overlay" role="status">
+          <strong>配置错误</strong>
+          <ul>
+            <li v-for="item in previewErrors" :key="item.key || item.message">{{ item.message }}</li>
+          </ul>
+        </div>
       </section>
 
       <div class="panel-resizer panel-resizer--right" role="separator" aria-label="调整右侧面板宽度" @pointerdown="startPanelResize('right', $event)"></div>
@@ -154,6 +195,7 @@
             <div class="section-title">预览渲染</div>
             <div class="settings-grid">
               <label class="field"><span>粒子基本倍率</span><input v-model.number="project.settings.particleRenderScale" class="input" type="number" min="0.05" max="20" step="0.05" /></label>
+              <label class="check-row"><input v-model="project.settings.showSkybox" type="checkbox" />显示天空盒</label>
               <label class="check-row"><input v-model="project.settings.showGrid" type="checkbox" />显示网格</label>
               <label class="check-row"><input v-model="project.settings.showAxes" type="checkbox" />显示坐标轴</label>
             </div>
@@ -261,16 +303,11 @@
             <div class="section-title">基础参数</div>
             <div class="grid3 base-param-grid">
               <label class="field"><span>发射器类型</span><select v-model="selectedEmitter.emitter.type" class="input"><option v-for="type in emitterTypes" :key="type.id" :value="type.id">{{ type.label }}</option></select></label>
-              <label class="field"><span>Effect</span><select v-model="selectedEmitter.render.effectClass" class="input"><option v-for="item in effectOptions" :key="item.id" :value="item.className">{{ item.label }}</option></select></label>
-              <label class="field"><span>RenderType</span><select v-model="selectedEmitter.render.textureSheet" class="input"><option v-for="item in textureSheetOptions" :key="item.id" :value="item.id">{{ item.label }}</option></select></label>
+              <BindableField :card="selectedEmitter" path="render.effectClass" label="Effect" value-type="none" input-type="text" :autocomplete-options="effectAutocompleteOptions" />
+              <BindableField :card="selectedEmitter" path="render.textureSheet" label="RenderType" value-type="string" input-type="text" :autocomplete-options="renderTypeAutocompleteOptions" />
             </div>
 
-            <div class="vector-row">
-              <span>世界偏移</span>
-              <input v-model.number="selectedEmitter.emitter.offset.x" class="input" type="number" step="0.1" />
-              <input v-model.number="selectedEmitter.emitter.offset.y" class="input" type="number" step="0.1" />
-              <input v-model.number="selectedEmitter.emitter.offset.z" class="input" type="number" step="0.1" />
-            </div>
+            <BindableVector :card="selectedEmitter" path="emitter.offset" label="世界偏移" value-type="relative" step="0.1" />
 
             <EmitterSpecificFields :card="selectedEmitter" />
 
@@ -284,36 +321,24 @@
           <section class="editor-section">
             <div class="section-title">粒子参数</div>
             <div class="grid4">
-              <label class="field"><span>最少数量</span><input v-model.number="selectedEmitter.particle.countMin" class="input" type="number" min="1" step="1" /></label>
-              <label class="field"><span>最多数量</span><input v-model.number="selectedEmitter.particle.countMax" class="input" type="number" min="1" step="1" /></label>
-              <label class="field"><span>最短寿命 Tick</span><input v-model.number="selectedEmitter.particle.lifeMin" class="input" type="number" min="1" step="1" /></label>
-              <label class="field"><span>最长寿命 Tick</span><input v-model.number="selectedEmitter.particle.lifeMax" class="input" type="number" min="1" step="1" /></label>
+              <BindableField :card="selectedEmitter" path="particle.countMin" label="最少数量" value-type="int" min="1" step="1" />
+              <BindableField :card="selectedEmitter" path="particle.countMax" label="最多数量" value-type="int" min="1" step="1" />
+              <BindableField :card="selectedEmitter" path="particle.lifeMin" label="最短寿命 Tick" value-type="int" min="1" step="1" />
+              <BindableField :card="selectedEmitter" path="particle.lifeMax" label="最长寿命 Tick" value-type="int" min="1" step="1" />
             </div>
             <div class="grid4">
-              <label class="field"><span>最小大小</span><input v-model.number="selectedEmitter.particle.sizeMin" class="input" type="number" min="0" step="0.01" /></label>
-              <label class="field"><span>最大大小</span><input v-model.number="selectedEmitter.particle.sizeMax" class="input" type="number" min="0" step="0.01" /></label>
+              <BindableField :card="selectedEmitter" path="particle.sizeMin" label="最小大小" min="0" step="0.01" />
+              <BindableField :card="selectedEmitter" path="particle.sizeMax" label="最大大小" min="0" step="0.01" />
               <label class="field"><span>颜色过渡</span><select v-model="selectedEmitter.particle.colorOverLifeEnabled" class="input"><option :value="true">开启</option><option :value="false">关闭</option></select></label>
-              <label class="field"><span>可见距离</span><input v-model.number="selectedEmitter.particle.visibleRange" class="input" type="number" min="1" step="1" /></label>
+              <BindableField :card="selectedEmitter" path="particle.visibleRange" label="可见距离" value-type="int" min="1" step="1" />
             </div>
-            <div class="grid2">
-              <label class="field"><span>颜色 0%</span><input v-model="selectedEmitter.particle.colorStart" class="input color-input" type="color" /></label>
-              <label class="field"><span>颜色 100%</span><input v-model="selectedEmitter.particle.colorEnd" class="input color-input" type="color" /></label>
-            </div>
-            <div class="vector-row">
-              <span>速度方向</span>
-              <input v-model.number="selectedEmitter.particle.velocity.x" class="input" type="number" step="0.01" />
-              <input v-model.number="selectedEmitter.particle.velocity.y" class="input" type="number" step="0.01" />
-              <input v-model.number="selectedEmitter.particle.velocity.z" class="input" type="number" step="0.01" />
-            </div>
-            <div class="vector-row">
-              <span>速度随机量</span>
-              <input v-model.number="selectedEmitter.particle.velocityRandom.x" class="input" type="number" min="0" step="0.01" />
-              <input v-model.number="selectedEmitter.particle.velocityRandom.y" class="input" type="number" min="0" step="0.01" />
-              <input v-model.number="selectedEmitter.particle.velocityRandom.z" class="input" type="number" min="0" step="0.01" />
-            </div>
+            <BindableColorVector :card="selectedEmitter" path="particle.colorStart" label="颜色 0%" />
+            <BindableColorVector :card="selectedEmitter" path="particle.colorEnd" label="颜色 100%" />
+            <BindableVector :card="selectedEmitter" path="particle.velocity" label="速度方向" value-type="vec3" step="0.01" />
+            <BindableVector :card="selectedEmitter" path="particle.velocityRandom" label="速度随机量" value-type="vec3" min="0" step="0.01" />
             <div class="grid3">
-              <label class="field"><span>最小速度</span><input v-model.number="selectedEmitter.particle.speedMin" class="input" type="number" min="0" step="0.01" /></label>
-              <label class="field"><span>最大速度</span><input v-model.number="selectedEmitter.particle.speedMax" class="input" type="number" min="0" step="0.01" /></label>
+              <BindableField :card="selectedEmitter" path="particle.speedMin" label="最小速度" min="0" step="0.01" />
+              <BindableField :card="selectedEmitter" path="particle.speedMax" label="最大速度" min="0" step="0.01" />
               <label class="field"><span>速度模式</span><select v-model="selectedEmitter.particle.velocityMode" class="input"><option value="fixed">固定方向</option><option value="spawn_relative">从发射点向外</option></select></label>
             </div>
           </section>
@@ -322,29 +347,29 @@
             <div class="section-title">渲染与姿态</div>
             <div class="grid3">
               <label class="field"><span>相机模式</span><select v-model="selectedEmitter.render.billboardMode" class="input" @change="syncBillboardScaleMode(selectedEmitter)"><option v-for="mode in billboardModes" :key="mode.id" :value="mode.id">{{ mode.label }}</option></select></label>
-              <label class="field"><span>不透明度 %</span><input v-model.number="selectedEmitter.render.alpha" class="input" type="number" min="0" max="100" step="1" /></label>
-              <label class="field"><span>亮度</span><input v-model.number="selectedEmitter.render.light" class="input" type="number" min="-1" max="15" step="1" /></label>
+              <BindableField :card="selectedEmitter" path="render.alpha" label="不透明度 %" min="0" max="100" step="1" />
+              <BindableField :card="selectedEmitter" path="render.light" label="亮度" value-type="int" min="-1" max="15" step="1" />
             </div>
             <div class="grid3">
-              <label class="field"><span>滚转角 °</span><input v-model.number="selectedEmitter.render.roll" class="input" type="number" step="1" /></label>
+              <BindableField :card="selectedEmitter" path="render.roll" label="滚转角 °" step="1" />
               <template v-if="selectedEmitter.render.billboardMode === 'axis_billboard'">
                 <label class="field"><span>轴向偏航角 °</span><input class="input" type="number" step="1" :value="axisYaw(selectedEmitter)" @input="updateAxisAngle(selectedEmitter, 'yaw', $event.target.value)" /></label>
                 <label class="field"><span>轴向俯仰角 °</span><input class="input" type="number" step="1" :value="axisPitch(selectedEmitter)" @input="updateAxisAngle(selectedEmitter, 'pitch', $event.target.value)" /></label>
               </template>
               <template v-else-if="selectedEmitter.render.billboardMode === 'none'">
-                <label class="field"><span>偏航角 °</span><input v-model.number="selectedEmitter.render.yaw" class="input" type="number" step="1" /></label>
-                <label class="field"><span>俯仰角 °</span><input v-model.number="selectedEmitter.render.pitch" class="input" type="number" step="1" /></label>
+                <BindableField :card="selectedEmitter" path="render.yaw" label="偏航角 °" step="1" />
+                <BindableField :card="selectedEmitter" path="render.pitch" label="俯仰角 °" step="1" />
               </template>
             </div>
             <div class="grid3">
               <label class="field"><span>缩放模式</span><select v-model="selectedEmitter.render.scaleMode" class="input"><option v-for="mode in scaleModeOptions(selectedEmitter)" :key="mode.id" :value="mode.id">{{ mode.label }}</option></select></label>
-              <label class="field"><span>宽度倍率</span><input v-model.number="selectedEmitter.render.baseScale.x" class="input" type="number" min="0" step="0.01" /></label>
-              <label class="field"><span>高度倍率</span><input v-model.number="selectedEmitter.render.baseScale.y" class="input" type="number" min="0" step="0.01" /></label>
+              <BindableField :card="selectedEmitter" path="render.baseScale.x" label="宽度倍率" min="0" step="0.01" />
+              <BindableField :card="selectedEmitter" path="render.baseScale.y" label="高度倍率" min="0" step="0.01" />
             </div>
             <div class="grid3">
-              <label v-if="usesDepthScale(selectedEmitter)" class="field"><span>深度倍率</span><input v-model.number="selectedEmitter.render.baseScale.z" class="input" type="number" min="0" step="0.01" /></label>
-              <label class="field"><span>标记值</span><input v-model.number="selectedEmitter.render.sign" class="input" type="number" step="1" /></label>
-              <label class="field"><span>速度上限</span><input v-model.number="selectedEmitter.render.speedLimit" class="input" type="number" min="0" step="1" /></label>
+              <BindableField v-if="usesDepthScale(selectedEmitter)" :card="selectedEmitter" path="render.baseScale.z" label="深度倍率" min="0" step="0.01" />
+              <BindableField :card="selectedEmitter" path="render.sign" label="标记值" value-type="int" step="1" />
+              <BindableField :card="selectedEmitter" path="render.speedLimit" label="速度上限" min="0" step="1" />
             </div>
           </section>
 
@@ -402,31 +427,51 @@ import { RouterLink } from 'vue-router';
 import { computed, defineComponent, h, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue';
 import PreviewCanvas from '../components/PreviewCanvas.vue';
 import LifecycleCurveEditor from '../components/LifecycleCurveEditor.vue';
+import PointsNodeEditor from '../components/PointsNodeEditor.vue';
 import {
   BILLBOARD_MODES,
   COMMAND_TYPE_OPTIONS,
   EFFECT_OPTIONS,
   EMITTER_TYPES,
+  GENERATOR_VALUE_TYPES,
   GENERATOR_HOTKEY_DEFAULTS,
   GENERATOR_THEME_OPTIONS,
   TEXTURE_SHEET_OPTIONS,
   createCommandQueue,
   createDefaultCommandParams,
   createEmitterCard,
+  createGeneratorConstant,
   createGeneratorProject,
+  createGeneratorVariable,
   createQueueCommand,
   normalizeGeneratorProject
 } from '../modules/generator/defaults.js';
 import { generateEmitterKotlin } from '../modules/generator/codegen.js';
 import { createGeneratorPreviewRuntime } from '../modules/generator/preview-simulation.js';
+import { evaluatePointsProject } from '../modules/pointsbuilder/evaluator.js';
+import {
+  createFourierTerm,
+  createNodeByKind,
+  findNodeById,
+  findNodeContext,
+  getProjectNodes,
+  removeNodeById
+} from '../modules/pointsbuilder/defaults.js';
+import { FOURIER_TERM_FIELDS, getNodeField } from '../modules/pointsbuilder/kinds.js';
 
 const STORAGE_KEY = 'vue_emitter_generator_state_v2';
 const MAX_PREVIEW_UPDATES_PER_SECOND = 60;
+const LEFT_PANEL_MIN_WIDTH = 220;
+const RIGHT_PANEL_MIN_WIDTH = 260;
+const PREVIEW_MIN_WIDTH = 160;
+const PANEL_RESIZER_WIDTH = 8;
+const PANEL_WIDTH_MAX_FALLBACK = 2400;
 const fileInputRef = ref(null);
 const previewCanvasRef = ref(null);
 const fpsText = ref('--');
 const previewTick = ref(0);
 const previewPoints = shallowRef([]);
+const previewErrors = ref([]);
 const doTickText = ref('');
 const project = ref(createGeneratorProject(loadSavedProject()));
 const previewRuntime = createGeneratorPreviewRuntime();
@@ -450,6 +495,9 @@ const emitterTypes = EMITTER_TYPES;
 const billboardModes = BILLBOARD_MODES;
 const effectOptions = EFFECT_OPTIONS;
 const textureSheetOptions = TEXTURE_SHEET_OPTIONS;
+const effectAutocompleteOptions = EFFECT_OPTIONS.map((item) => ({ value: item.className, label: item.label }));
+const renderTypeAutocompleteOptions = TEXTURE_SHEET_OPTIONS.map((item) => ({ value: item.id, label: item.label }));
+const generatorValueTypes = GENERATOR_VALUE_TYPES;
 const commandTypeOptions = COMMAND_TYPE_OPTIONS;
 const generatorThemeOptions = GENERATOR_THEME_OPTIONS;
 const hotkeyFields = [
@@ -474,30 +522,311 @@ const workspaceStyle = computed(() => ({
   '--left-panel-width': `${project.value.settings.leftPanelWidth || 340}px`,
   '--right-panel-width': `${project.value.settings.rightPanelWidth || 480}px`
 }));
+const bindableRefs = computed(() => [
+  ...(project.value.parameters?.variables || []),
+  ...(project.value.parameters?.constants || [])
+].filter((item) => isValidValueName(item?.name)).map((item) => ({
+  name: item.name,
+  type: item.type,
+  label: `${item.name} : ${item.type}${item.codec === false ? ' const' : ''}`
+})));
+const numericBindableRefs = computed(() => bindableRefs.value.filter((item) => isNumericValueType(item.type)));
+const vectorBindingModes = [
+  { id: 'constant', label: '常量' },
+  { id: 'independent', label: '独立变量' },
+  { id: 'vector', label: '向量变量' }
+];
+
+const BindableField = defineComponent({
+  name: 'BindableField',
+  props: {
+    card: { type: Object, required: true },
+    path: { type: String, required: true },
+    label: { type: String, required: true },
+    valueType: { type: String, default: 'number' },
+    inputType: { type: String, default: '' },
+    step: { type: [String, Number], default: '0.01' },
+    min: { type: [String, Number], default: undefined },
+    max: { type: [String, Number], default: undefined },
+    list: { type: String, default: '' },
+    options: { type: Array, default: () => [] },
+    autocompleteOptions: { type: Array, default: () => [] },
+    compact: { type: Boolean, default: false }
+  },
+  setup(props) {
+    return () => h('label', { class: ['field', 'bindable-field', { compact: props.compact }] }, [
+      h('span', props.label),
+      renderBindableSingleInput(props.card, props.path, props)
+    ]);
+  }
+});
+
+const MinecraftAutocomplete = defineComponent({
+  name: 'MinecraftAutocomplete',
+  props: {
+    modelValue: { type: String, default: '' },
+    options: { type: Array, default: () => [] },
+    maxItems: { type: Number, default: 10 },
+    placeholder: { type: String, default: '' },
+    title: { type: String, default: '' }
+  },
+  emits: ['update:modelValue'],
+  setup(props, { emit }) {
+    const open = ref(false);
+    const activeIndex = ref(0);
+    const matches = computed(() => {
+      const query = String(props.modelValue || '').trim().toLowerCase();
+      const normalized = props.options
+        .map((item) => ({
+          value: String(item?.value || ''),
+          label: String(item?.label || item?.value || '')
+        }))
+        .filter((item) => item.value);
+      const filtered = query
+        ? normalized.filter((item) => item.value.toLowerCase().includes(query) || item.label.toLowerCase().includes(query))
+        : normalized;
+      return filtered
+        .sort((a, b) => scoreAutocomplete(a, query) - scoreAutocomplete(b, query) || a.value.localeCompare(b.value))
+        .slice(0, Math.max(1, props.maxItems));
+    });
+
+    function update(value) {
+      emit('update:modelValue', value);
+      activeIndex.value = 0;
+      open.value = true;
+    }
+
+    function accept(index = activeIndex.value) {
+      const item = matches.value[index];
+      if (!item) return;
+      emit('update:modelValue', item.value);
+      open.value = false;
+    }
+
+    function move(delta) {
+      if (!matches.value.length) return;
+      open.value = true;
+      activeIndex.value = (activeIndex.value + delta + matches.value.length) % matches.value.length;
+    }
+
+    function onKeydown(event) {
+      if (event.key === 'ArrowDown') {
+        event.preventDefault();
+        move(1);
+        return;
+      }
+      if (event.key === 'ArrowUp') {
+        event.preventDefault();
+        move(-1);
+        return;
+      }
+      if ((event.key === 'Tab' || event.key === 'Enter') && open.value && matches.value.length) {
+        event.preventDefault();
+        accept();
+        return;
+      }
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        open.value = false;
+      }
+    }
+
+    return () => h('div', { class: 'mc-autocomplete' }, [
+      h('input', {
+        class: 'input',
+        type: 'text',
+        value: props.modelValue,
+        placeholder: props.placeholder,
+        title: props.title || undefined,
+        autocomplete: 'off',
+        spellcheck: 'false',
+        onInput: (event) => update(event.target.value),
+        onFocus: () => { open.value = true; },
+        onBlur: () => { window.setTimeout(() => { open.value = false; }, 100); },
+        onKeydown
+      }),
+      open.value && matches.value.length
+        ? h('div', { class: 'mc-suggestions' }, matches.value.map((item, index) => h('button', {
+          key: item.value,
+          type: 'button',
+          class: ['mc-suggestion', { active: index === activeIndex.value }],
+          onMouseenter: () => { activeIndex.value = index; },
+          onMousedown: (event) => {
+            event.preventDefault();
+            accept(index);
+          }
+        }, [
+          h('span', { class: 'mc-suggestion-main' }, item.value),
+          item.label !== item.value ? h('span', { class: 'mc-suggestion-label' }, item.label) : null
+        ])))
+        : null
+    ]);
+  }
+});
+
+const BindableVector = defineComponent({
+  name: 'BindableVector',
+  props: {
+    card: { type: Object, required: true },
+    path: { type: String, required: true },
+    label: { type: String, required: true },
+    valueType: { type: String, default: 'vector' },
+    step: { type: [String, Number], default: '0.01' },
+    min: { type: [String, Number], default: undefined }
+  },
+  setup(props) {
+    const axes = [
+      { key: 'x', label: 'X' },
+      { key: 'y', label: 'Y' },
+      { key: 'z', label: 'Z' }
+    ];
+    return () => {
+      const mode = getBindingMode(props.card, props.path);
+      const controls = mode === 'constant'
+        ? h('div', { class: 'bindable-axis-grid' }, axes.map((axis) => renderAxisNumberInput(props.card, props.path, axis, {
+          step: props.step,
+          min: props.min
+        })))
+        : mode === 'independent'
+          ? h('div', { class: 'bindable-axis-grid' }, axes.map((axis) => renderAxisExpressionInput(
+            props.card,
+            `${props.path}.${axis.key}`,
+            axis,
+            bindingOptions('number')
+          )))
+          : h('div', { class: 'bindable-single-expression' }, [
+            renderBindingExpressionInput(props.card, props.path, props.valueType, '整体变量')
+          ]);
+      return h('div', { class: ['bindable-vector-row', `bindable-vector-row--${mode}`] }, [
+        h('span', { class: 'vector-label' }, props.label),
+        h('div', { class: 'bindable-vector-grid' }, [
+          h('div', { class: 'bindable-vector-head' }, [
+            h('span', { class: 'vector-kind' }, props.valueType === 'relative' ? '空间点' : 'Vec3'),
+            renderModeSegment(props.card, props.path, mode)
+          ]),
+          controls
+        ])
+      ]);
+    };
+  }
+});
+
+const BindableColorVector = defineComponent({
+  name: 'BindableColorVector',
+  props: {
+    card: { type: Object, required: true },
+    path: { type: String, required: true },
+    label: { type: String, required: true }
+  },
+  setup(props) {
+    const axes = [
+      { key: 'r', label: 'R' },
+      { key: 'g', label: 'G' },
+      { key: 'b', label: 'B' }
+    ];
+    return () => {
+      const mode = getBindingMode(props.card, props.path);
+      const controls = mode === 'constant'
+        ? h('div', { class: 'bindable-color-constant' }, [
+          h('div', { class: 'color-main-row' }, [
+            h('input', {
+              class: 'input color-picker-input',
+              type: 'color',
+              value: colorHexValue(props.card, props.path),
+              title: '调色板',
+              onInput: (event) => setPath(props.card, props.path, colorHexValueFromInput(event.target.value))
+            }),
+            h('input', {
+              class: 'input color-text-input',
+              type: 'text',
+              value: colorTextValue(props.card, props.path),
+              placeholder: '255, 128, 0 / 0xFF8000',
+              spellcheck: 'false',
+              onChange: (event) => applyColorText(props.card, props.path, event.target.value)
+            })
+          ]),
+          h('div', { class: 'color-channel-grid' }, axes.map((axis) => h('label', { key: axis.key, class: 'axis-number color-channel-number' }, [
+            h('span', { class: 'axis-chip' }, axis.label),
+            h('input', {
+              class: 'input',
+              type: 'number',
+              min: '0',
+              max: '255',
+              step: '1',
+              value: colorChannelValue(props.card, props.path, axis.key),
+              onInput: (event) => updateColorChannel(props.card, props.path, axis.key, event.target.value)
+            })
+          ])))
+        ])
+        : mode === 'independent'
+          ? h('div', { class: 'bindable-axis-grid' }, axes.map((axis) => renderAxisExpressionInput(
+            props.card,
+            `${props.path}.${axis.key}`,
+            axis,
+            bindingOptions('number')
+          )))
+          : h('div', { class: 'bindable-single-expression' }, [
+            renderBindingExpressionInput(props.card, props.path, 'color', 'RGB 向量变量')
+          ]);
+      return h('div', { class: ['bindable-vector-row', 'bindable-color-vector-row', `bindable-vector-row--${mode}`] }, [
+        h('span', { class: 'vector-label' }, props.label),
+        h('div', { class: 'bindable-vector-grid' }, [
+          h('div', { class: 'bindable-vector-head' }, [
+            h('span', { class: 'vector-kind' }, '颜色'),
+            renderModeSegment(props.card, props.path, mode)
+          ]),
+          controls
+        ])
+      ]);
+    };
+  }
+});
 
 const EmitterSpecificFields = defineComponent({
   name: 'EmitterSpecificFields',
   props: { card: { type: Object, required: true } },
   setup(props) {
-    const field = (label, path, attrs = {}) => h('label', { class: 'field' }, [
-      h('span', label),
-      h('input', {
-        class: 'input',
-        type: 'number',
-        step: attrs.step || '0.1',
-        min: attrs.min,
-        value: getPath(props.card, path),
-        onInput: (event) => setPath(props.card, path, Number(event.target.value))
-      })
-    ]);
-    const vector = (label, base) => h('div', { class: 'vector-row' }, [
-      h('span', label),
-      fieldlessNumber(props.card, `${base}.x`),
-      fieldlessNumber(props.card, `${base}.y`),
-      fieldlessNumber(props.card, `${base}.z`)
-    ]);
+    const field = (label, path, attrs = {}) => h(BindableField, {
+      card: props.card,
+      label,
+      path,
+      valueType: attrs.valueType || 'number',
+      step: attrs.step || '0.1',
+      min: attrs.min,
+      compact: true
+    });
+    const vector = (label, base, attrs = {}) => h(BindableVector, {
+      card: props.card,
+      label,
+      path: base,
+      valueType: attrs.valueType || 'vector',
+      step: attrs.step || '0.1',
+      min: attrs.min
+    });
     return () => {
       const type = props.card.emitter.type;
+      if (type === 'points_builder') {
+        return h('div', { class: 'field-pack builder-embed' }, [
+          h('div', { class: 'panel-title-row compact' }, [
+            h('span', { class: 'section-title' }, '内部 PointsBuilder'),
+            h('span', { class: 'chip' }, `点数：${pointsBuilderCount(props.card)}`)
+          ]),
+          h(PointsNodeEditor, {
+            title: '发射点源',
+            nodes: getProjectNodes(ensureBuilderState(props.card)),
+            selectedNodeId: props.card.emitter.builderState?.state?.selection?.focusedNodeId || '',
+            numberDatalistId: 'generator-builder-number-options',
+            onAddRoot: (kind) => addBuilderRootNode(props.card, kind),
+            onAddChild: (payload) => addBuilderChildNode(props.card, payload),
+            onRemove: (id) => removeBuilderNode(props.card, id),
+            onSelect: (id) => selectBuilderNode(props.card, id),
+            onUpdateParam: (payload) => updateBuilderNodeParam(props.card, payload),
+            onAddTerm: (id) => addBuilderFourierTerm(props.card, id),
+            onRemoveTerm: (payload) => removeBuilderFourierTerm(props.card, payload),
+            onUpdateTerm: (payload) => updateBuilderFourierTerm(props.card, payload)
+          })
+        ]);
+      }
       if (type === 'box') {
         return h('div', { class: 'field-pack' }, [
           h('div', { class: 'grid4' }, [
@@ -515,8 +844,8 @@ const EmitterSpecificFields = defineComponent({
           ])
         ]);
       }
-      if (type === 'sphere') return h('div', { class: 'field-pack' }, [field('半径', 'emitter.sphere.r')]);
-      if (type === 'sphere_surface') return h('div', { class: 'field-pack' }, [field('球面半径', 'emitter.sphereSurface.r')]);
+      if (type === 'sphere') return h('div', { class: 'compact-field-grid' }, [field('半径', 'emitter.sphere.r')]);
+      if (type === 'sphere_surface') return h('div', { class: 'compact-field-grid' }, [field('球面半径', 'emitter.sphereSurface.r')]);
       if (type === 'line') return h('div', { class: 'field-pack' }, [field('步长', 'emitter.line.step'), vector('方向', 'emitter.line.dir')]);
       if (type === 'circle') return h('div', { class: 'field-pack' }, [field('半径', 'emitter.circle.r'), vector('法线轴', 'emitter.circle.axis')]);
       if (type === 'ring') return h('div', { class: 'field-pack' }, [h('div', { class: 'grid2' }, [field('半径', 'emitter.ring.r'), field('厚度', 'emitter.ring.thickness')]), vector('法线轴', 'emitter.ring.axis')]);
@@ -527,16 +856,6 @@ const EmitterSpecificFields = defineComponent({
   }
 });
 
-function fieldlessNumber(target, path) {
-  return h('input', {
-    class: 'input',
-    type: 'number',
-    step: '0.1',
-    value: getPath(target, path),
-    onInput: (event) => setPath(target, path, Number(event.target.value))
-  });
-}
-
 function getPath(target, path) {
   return String(path).split('.').reduce((obj, key) => obj?.[key], target);
 }
@@ -546,6 +865,421 @@ function setPath(target, path, value) {
   const last = parts.pop();
   const parent = parts.reduce((obj, key) => obj?.[key], target);
   if (parent && last) parent[last] = value;
+}
+
+function renderBindableSingleInput(card, path, props) {
+  if (props.valueType === 'none' || props.options?.length) {
+    return renderValueInput(card, path, props);
+  }
+  const value = getBinding(card, path) || formatBindableSingleValue(getPath(card, path), props.valueType);
+  const options = [
+    ...(props.autocompleteOptions || []),
+    ...bindingOptions(props.valueType).map((item) => ({
+      value: item.name,
+      label: item.label
+    }))
+  ];
+  return h(MinecraftAutocomplete, {
+    class: 'bindable-single-input',
+    modelValue: value,
+    options,
+    maxItems: 10,
+    placeholder: props.valueType === 'string' ? '值 / 变量' : '数值 / 变量',
+    title: '输入常量或变量名',
+    'onUpdate:modelValue': (next) => applyBindableSingleInput(card, path, next, props.valueType)
+  });
+}
+
+function formatBindableSingleValue(value, valueType = 'number') {
+  if (valueType === 'boolean') return value === true ? 'true' : 'false';
+  return String(value ?? '');
+}
+
+function applyBindableSingleInput(card, path, value, valueType = 'number') {
+  const text = String(value ?? '').trim();
+  if (!text) {
+    setBinding(card, path, '');
+    if (valueType === 'string') setPath(card, path, '');
+    return;
+  }
+  if (valueType === 'string') {
+    const matchedBinding = bindingOptions('string').find((item) => item.name === text);
+    if (matchedBinding) {
+      setBinding(card, path, text);
+    } else {
+      setBinding(card, path, '');
+      setPath(card, path, text);
+    }
+    return;
+  }
+  if (valueType === 'boolean') {
+    if (/^(true|false)$/i.test(text)) {
+      setBinding(card, path, '');
+      setPath(card, path, /^true$/i.test(text));
+    } else {
+      setBinding(card, path, text);
+    }
+    return;
+  }
+  if (isNumericValueType(valueType) || valueType === 'number' || valueType === 'int') {
+    const numeric = Number(text);
+    if (Number.isFinite(numeric)) {
+      setBinding(card, path, '');
+      setPath(card, path, valueType === 'int' ? Math.trunc(numeric) : numeric);
+    } else {
+      setBinding(card, path, text);
+    }
+    return;
+  }
+  setBinding(card, path, text);
+}
+
+function renderValueInput(card, path, props) {
+  const value = getPath(card, path);
+  if (props.options?.length) {
+    return h('select', {
+      class: 'input',
+      value,
+      onChange: (event) => setPath(card, path, coerceBindableInputValue(event.target.value, props.valueType))
+    }, props.options.map((option) => h('option', { value: option.value }, option.label)));
+  }
+  const inputType = props.inputType || (props.valueType === 'color' ? 'color' : props.valueType === 'string' ? 'text' : 'number');
+  if (inputType === 'text' && props.autocompleteOptions?.length) {
+    return h(MinecraftAutocomplete, {
+      modelValue: String(value || ''),
+      options: props.autocompleteOptions,
+      maxItems: 10,
+      'onUpdate:modelValue': (next) => setPath(card, path, coerceBindableInputValue(next, props.valueType))
+    });
+  }
+  return h('input', {
+    class: ['input', { 'color-input': inputType === 'color' }],
+    type: inputType,
+    inputmode: props.valueType === 'number' || props.valueType === 'int' ? 'decimal' : undefined,
+    step: props.step,
+    min: props.min,
+    max: props.max,
+    list: props.list || undefined,
+    value,
+    onInput: (event) => setPath(card, path, coerceBindableInputValue(event.target.value, props.valueType))
+  });
+}
+
+function renderBindingSelect(card, path, valueType, emptyLabel = '变量') {
+  return renderBindingExpressionInput(card, path, valueType, emptyLabel);
+}
+
+function bindingOptions(valueType = 'number') {
+  if (valueType === 'color') return bindableRefs.value.filter((item) => ['Vec3', 'Vector3f'].includes(item.type));
+  if (valueType === 'string') return bindableRefs.value.filter((item) => item.type === 'String');
+  if (valueType === 'vec3') return bindableRefs.value.filter((item) => item.type === 'Vec3');
+  if (valueType === 'vector') return bindableRefs.value.filter((item) => ['Vec3', 'RelativeLocation'].includes(item.type));
+  if (valueType === 'relative') return bindableRefs.value.filter((item) => ['Vec3', 'RelativeLocation'].includes(item.type));
+  if (valueType === 'vector3f') return bindableRefs.value.filter((item) => item.type === 'Vector3f');
+  if (valueType === 'boolean') return bindableRefs.value.filter((item) => item.type === 'Boolean');
+  return numericBindableRefs.value;
+}
+
+function getBinding(card, path) {
+  return String(card?.bindings?.[path] || '');
+}
+
+function setBinding(card, path, value) {
+  if (!card.bindings || typeof card.bindings !== 'object') card.bindings = {};
+  const next = String(value || '').trim();
+  if (next) card.bindings[path] = next;
+  else delete card.bindings[path];
+}
+
+function renderBindingExpressionInput(card, path, valueType, placeholder = '变量') {
+  if (valueType === 'none') return null;
+  return h(MinecraftAutocomplete, {
+    class: 'binding-expression',
+    modelValue: getBinding(card, path),
+    options: bindingOptions(valueType),
+    maxItems: 10,
+    placeholder,
+    title: '绑定变量或常量',
+    'onUpdate:modelValue': (next) => setBinding(card, path, next)
+  });
+}
+
+function renderAxisExpressionInput(card, path, axis, options) {
+  return h('label', { key: axis.key, class: 'axis-expression' }, [
+    h('span', { class: 'axis-chip' }, axis.label),
+    h(MinecraftAutocomplete, {
+      class: 'binding-expression',
+      modelValue: getBinding(card, path),
+      options,
+      maxItems: 10,
+      placeholder: axis.label,
+      title: '绑定变量或常量',
+      'onUpdate:modelValue': (next) => setBinding(card, path, next)
+    })
+  ]);
+}
+
+function renderAxisNumberInput(card, basePath, axis, attrs = {}) {
+  return h('label', { key: axis.key, class: 'axis-number' }, [
+    h('span', { class: 'axis-chip' }, axis.label),
+    h('input', {
+      class: 'input',
+      type: 'number',
+      step: attrs.step || '0.01',
+      min: attrs.min,
+      value: getPath(card, `${basePath}.${axis.key}`),
+      onInput: (event) => setPath(card, `${basePath}.${axis.key}`, coerceBindableInputValue(event.target.value, 'number'))
+    })
+  ]);
+}
+
+function renderModeSegment(card, path, currentMode) {
+  return h('select', {
+    class: 'input mode-select',
+    value: currentMode,
+    'aria-label': '参数类型',
+    onChange: (event) => setBindingMode(card, path, event.target.value)
+  }, vectorBindingModes.map((mode) => h('option', {
+    key: mode.id,
+    value: mode.id
+  }, mode.label)));
+}
+
+function getBindingMode(card, path) {
+  const explicit = String(card?.bindingModes?.[path] || '').trim();
+  if (vectorBindingModes.some((mode) => mode.id === explicit)) return explicit;
+  if (getBinding(card, path)) return 'vector';
+  if (['x', 'y', 'z', 'r', 'g', 'b'].some((axis) => getBinding(card, `${path}.${axis}`))) return 'independent';
+  return 'constant';
+}
+
+function setBindingMode(card, path, mode) {
+  if (!card.bindingModes || typeof card.bindingModes !== 'object') card.bindingModes = {};
+  if (mode === 'constant') delete card.bindingModes[path];
+  else card.bindingModes[path] = mode;
+  if (mode === 'constant') {
+    clearBindings(card, [path, ...['x', 'y', 'z', 'r', 'g', 'b'].map((axis) => `${path}.${axis}`)]);
+  } else if (mode === 'independent') {
+    clearBindings(card, [path]);
+  } else if (mode === 'vector') {
+    clearBindings(card, ['x', 'y', 'z', 'r', 'g', 'b'].map((axis) => `${path}.${axis}`));
+  }
+}
+
+function clearBindings(card, paths) {
+  if (!card?.bindings || typeof card.bindings !== 'object') return;
+  paths.forEach((path) => { delete card.bindings[path]; });
+}
+
+function colorHexValue(card, path) {
+  const value = String(getPath(card, path) || '');
+  if (/^#[0-9a-fA-F]{6}$/.test(value)) return value;
+  const rgb = hexToRgb(value);
+  return rgbToHex(rgb.r, rgb.g, rgb.b);
+}
+
+function colorHexValueFromInput(value) {
+  const text = String(value || '').trim();
+  return /^#[0-9a-fA-F]{6}$/.test(text) ? text : '#ffffff';
+}
+
+function colorTextValue(card, path) {
+  const rgb = hexToRgb(getPath(card, path));
+  return `${Math.round(rgb.r)}, ${Math.round(rgb.g)}, ${Math.round(rgb.b)}`;
+}
+
+function colorChannelValue(card, path, channel) {
+  return Math.round(hexToRgb(getPath(card, path))[channel] || 0);
+}
+
+function updateColorChannel(card, path, channel, value) {
+  const rgb = hexToRgb(getPath(card, path));
+  rgb[channel] = clampNumber(value, 0, 255, rgb[channel] || 0);
+  setPath(card, path, rgbToHex(rgb.r, rgb.g, rgb.b));
+}
+
+function applyColorText(card, path, value) {
+  const parsed = parseColorInput(value);
+  if (!parsed) return;
+  setPath(card, path, rgbToHex(parsed.r, parsed.g, parsed.b));
+}
+
+function parseColorInput(value) {
+  const text = String(value || '').trim();
+  const hex = text.match(/^(?:#|0x)?([0-9a-fA-F]{6})$/);
+  if (hex) return hexToRgb(`#${hex[1]}`);
+  const numbers = text
+    .replace(/^rgba?\(/i, '')
+    .replace(/\)$/g, '')
+    .split(/[,\s]+/)
+    .map((part) => part.trim())
+    .filter(Boolean);
+  if (numbers.length < 3) return null;
+  return {
+    r: clampNumber(numbers[0], 0, 255, 255),
+    g: clampNumber(numbers[1], 0, 255, 255),
+    b: clampNumber(numbers[2], 0, 255, 255)
+  };
+}
+
+function coerceBindableInputValue(value, valueType = 'number') {
+  if (valueType === 'string' || valueType === 'color') return String(value || '');
+  if (valueType === 'boolean') return value === true || value === 'true';
+  if (valueType === 'int') {
+    const numeric = Number(value);
+    return Number.isFinite(numeric) ? Math.trunc(numeric) : 0;
+  }
+  if (valueType === 'number') {
+    const numeric = Number(value);
+    return Number.isFinite(numeric) ? numeric : 0;
+  }
+  return value;
+}
+
+function scoreAutocomplete(item, query) {
+  if (!query) return 0;
+  const value = item.value.toLowerCase();
+  const label = item.label.toLowerCase();
+  if (value === query) return 0;
+  if (value.startsWith(query)) return 1;
+  if (label.startsWith(query)) return 2;
+  if (value.includes(query)) return 3;
+  return 4;
+}
+
+function addProjectVariable() {
+  project.value.parameters.variables.push(createGeneratorVariable({
+    name: `var${project.value.parameters.variables.length + 1}`,
+    type: 'Double',
+    value: 0
+  }));
+}
+
+function removeProjectVariable(id) {
+  removeProjectParameter(project.value.parameters.variables, id);
+}
+
+function addProjectConstant() {
+  project.value.parameters.constants.push(createGeneratorConstant({
+    name: `const${project.value.parameters.constants.length + 1}`,
+    type: 'Double',
+    value: 0
+  }));
+}
+
+function removeProjectConstant(id) {
+  removeProjectParameter(project.value.parameters.constants, id);
+}
+
+function removeProjectParameter(list, id) {
+  const index = list.findIndex((item) => item.id === id);
+  if (index >= 0) list.splice(index, 1);
+}
+
+function syncParameterType(item) {
+  if (!item) return;
+  item.value = defaultParameterValue(item.type);
+}
+
+function defaultParameterValue(type) {
+  if (type === 'Boolean') return false;
+  if (type === 'String') return '';
+  if (type === 'Vec3') return 'Vec3(0.0, 0.0, 0.0)';
+  if (type === 'RelativeLocation') return 'RelativeLocation(0.0, 0.0, 0.0)';
+  if (type === 'Vector3f') return 'Vector3f(1.0f, 1.0f, 1.0f)';
+  return 0;
+}
+
+function isNumericValueType(type) {
+  return ['Int', 'Long', 'Float', 'Double'].includes(String(type || ''));
+}
+
+function isValidValueName(name) {
+  return /^[A-Za-z_][A-Za-z0-9_]*$/.test(String(name || '').trim());
+}
+
+function ensureBuilderState(card) {
+  if (!card.emitter.builderState) card.emitter.builderState = createGeneratorProject().emitters[0].emitter.builderState;
+  return card.emitter.builderState;
+}
+
+function pointsBuilderCount(card) {
+  try {
+    return evaluatePointsProject(ensureBuilderState(card)).length;
+  } catch {
+    return 0;
+  }
+}
+
+function addBuilderRootNode(card, kind) {
+  const state = ensureBuilderState(card);
+  const node = createNodeByKind(kind);
+  state.state.root.children.push(node);
+  selectBuilderNode(card, node.id);
+}
+
+function addBuilderChildNode(card, payload) {
+  const state = ensureBuilderState(card);
+  const parent = findNodeById(getProjectNodes(state), payload?.parentId);
+  if (!parent) return;
+  if (!Array.isArray(parent.children)) parent.children = [];
+  const node = createNodeByKind(payload.kind);
+  parent.children.push(node);
+  selectBuilderNode(card, node.id);
+}
+
+function removeBuilderNode(card, id) {
+  const state = ensureBuilderState(card);
+  removeNodeById(state.state.root.children, id);
+  if (state.state.selection.focusedNodeId === id) {
+    state.state.selection.focusedNodeId = getProjectNodes(state)[0]?.id || '';
+  }
+}
+
+function selectBuilderNode(card, id) {
+  const state = ensureBuilderState(card);
+  state.state.selection.focusedNodeId = id;
+}
+
+function updateBuilderNodeParam(card, payload) {
+  const state = ensureBuilderState(card);
+  const node = findNodeById(getProjectNodes(state), payload?.id);
+  if (!node) return;
+  const field = getNodeField(node.kind, payload.key);
+  const rawValue = payload.value;
+  if (!node.params) node.params = {};
+  if (field?.type === 'checkbox') node.params[payload.key] = rawValue === true || rawValue === 'true';
+  else if (field?.type === 'number') node.params[payload.key] = preserveExpressionNumber(rawValue);
+  else node.params[payload.key] = rawValue;
+}
+
+function addBuilderFourierTerm(card, nodeId) {
+  const node = findNodeById(getProjectNodes(ensureBuilderState(card)), nodeId);
+  if (!node) return;
+  if (!Array.isArray(node.terms)) node.terms = [];
+  node.terms.push(createFourierTerm());
+}
+
+function removeBuilderFourierTerm(card, payload) {
+  const node = findNodeById(getProjectNodes(ensureBuilderState(card)), payload?.nodeId);
+  if (!node || !Array.isArray(node.terms)) return;
+  const index = node.terms.findIndex((term) => term.id === payload.termId);
+  if (index >= 0) node.terms.splice(index, 1);
+}
+
+function updateBuilderFourierTerm(card, payload) {
+  const node = findNodeById(getProjectNodes(ensureBuilderState(card)), payload?.nodeId);
+  const term = node?.terms?.find((item) => item.id === payload.termId);
+  if (!term) return;
+  const field = FOURIER_TERM_FIELDS.find((item) => item.key === payload.key);
+  term[payload.key] = field?.type === 'number' ? preserveExpressionNumber(payload.value) : payload.value;
+}
+
+function preserveExpressionNumber(value) {
+  const text = String(value ?? '').trim();
+  if (!text) return 0;
+  const numeric = Number(text);
+  return Number.isFinite(numeric) ? numeric : text;
 }
 
 function loadSavedProject() {
@@ -614,8 +1348,10 @@ function clearPreviewParticles() {
 }
 
 function syncPreviewPoints() {
+  const data = previewRuntime.snapshotRenderData(project.value);
+  previewErrors.value = Array.isArray(data?.errors) ? data.errors : [];
   previewPoints.value = applyPreviewRenderScale(
-    previewRuntime.snapshotRenderData(project.value),
+    data,
     project.value.settings.particleRenderScale
   );
 }
@@ -833,10 +1569,15 @@ function syncCommandType(command) {
 
 function startPanelResize(side, event) {
   if (event.button !== 0) return;
+  const settings = project.value.settings;
+  const workspaceRect = event.currentTarget?.parentElement?.getBoundingClientRect?.();
+  const workspaceWidth = Number(workspaceRect?.width);
   panelResize = {
     side,
     startX: event.clientX,
-    startWidth: side === 'left' ? project.value.settings.leftPanelWidth : project.value.settings.rightPanelWidth
+    startWidth: Number(side === 'left' ? settings.leftPanelWidth : settings.rightPanelWidth) || (side === 'left' ? 340 : 480),
+    otherWidth: Number(side === 'left' ? settings.rightPanelWidth : settings.leftPanelWidth) || (side === 'left' ? 480 : 340),
+    workspaceWidth: Number.isFinite(workspaceWidth) && workspaceWidth > 0 ? workspaceWidth : window.innerWidth
   };
   event.currentTarget?.setPointerCapture?.(event.pointerId);
   window.addEventListener('pointermove', handlePanelResize);
@@ -847,10 +1588,28 @@ function handlePanelResize(event) {
   if (!panelResize) return;
   const delta = event.clientX - panelResize.startX;
   if (panelResize.side === 'left') {
-    project.value.settings.leftPanelWidth = clampNumber(panelResize.startWidth + delta, 280, 560, 340);
+    project.value.settings.leftPanelWidth = clampNumber(
+      panelResize.startWidth + delta,
+      LEFT_PANEL_MIN_WIDTH,
+      getPanelResizeMaxWidth('left'),
+      340
+    );
   } else {
-    project.value.settings.rightPanelWidth = clampNumber(panelResize.startWidth - delta, 340, 760, 480);
+    project.value.settings.rightPanelWidth = clampNumber(
+      panelResize.startWidth - delta,
+      RIGHT_PANEL_MIN_WIDTH,
+      getPanelResizeMaxWidth('right'),
+      480
+    );
   }
+}
+
+function getPanelResizeMaxWidth(side) {
+  const minWidth = side === 'left' ? LEFT_PANEL_MIN_WIDTH : RIGHT_PANEL_MIN_WIDTH;
+  const workspaceWidth = Number(panelResize?.workspaceWidth);
+  const otherWidth = Number(panelResize?.otherWidth);
+  const maxWidth = workspaceWidth - otherWidth - PREVIEW_MIN_WIDTH - PANEL_RESIZER_WIDTH * 2;
+  return Number.isFinite(maxWidth) ? Math.max(minWidth, maxWidth) : PANEL_WIDTH_MAX_FALLBACK;
 }
 
 function stopPanelResize() {
@@ -1293,6 +2052,11 @@ function normalizeVector(vector) {
   background: var(--generator-page-bg);
 }
 
+.generator-page,
+.generator-page * {
+  box-sizing: border-box;
+}
+
 .generator-page[data-theme='dark-2'] {
   --bg-panel: rgba(10, 31, 29, 0.86);
   --bg-panel-strong: rgba(7, 24, 23, 0.96);
@@ -1320,11 +2084,48 @@ function normalizeVector(vector) {
 
 .generator-page :deep(.input),
 .generator-page .input,
-.generator-page select,
-.generator-page textarea {
+.generator-page select {
+  width: 100%;
+  min-width: 0;
+  height: 40px;
+  min-height: 40px;
+  padding: 8px 10px;
+  font-size: 13px;
+  line-height: 1.25;
   background: var(--input-bg);
   border-color: var(--border);
   color: inherit;
+}
+
+.generator-page input[type='checkbox'],
+.generator-page input[type='radio'] {
+  width: 16px;
+  height: 16px;
+  min-width: 16px;
+  min-height: 16px;
+  margin: 0;
+  padding: 0;
+  accent-color: var(--brand);
+}
+
+.generator-page textarea {
+  width: 100%;
+  min-width: 0;
+  min-height: 40px;
+  padding: 8px 10px;
+  font-size: 13px;
+  line-height: 1.25;
+  background: var(--input-bg);
+  border-color: var(--border);
+  color: inherit;
+}
+
+.generator-page input[type='checkbox'] {
+  width: 16px;
+  height: 16px;
+  min-height: 0;
+  padding: 0;
+  flex: 0 0 auto;
 }
 
 .generator-topbar,
@@ -1353,6 +2154,11 @@ function normalizeVector(vector) {
 .generator-brand {
   align-items: center;
   gap: 12px;
+  min-width: 0;
+}
+
+.generator-brand > div {
+  min-width: 0;
 }
 
 .generator-brand h1 {
@@ -1364,6 +2170,12 @@ function normalizeVector(vector) {
   margin: 3px 0 0;
   color: var(--text-soft);
   font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.generator-brand code {
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 .generator-actions {
@@ -1374,7 +2186,7 @@ function normalizeVector(vector) {
 
 .generator-workspace {
   display: grid;
-  grid-template-columns: var(--left-panel-width, 340px) 8px minmax(0, 1fr) 8px var(--right-panel-width, 480px);
+  grid-template-columns: minmax(220px, var(--left-panel-width, 340px)) 8px minmax(160px, 1fr) 8px minmax(260px, var(--right-panel-width, 480px));
   height: calc(100vh - 142px);
   min-height: 560px;
   gap: 0;
@@ -1401,9 +2213,13 @@ function normalizeVector(vector) {
 
 .generator-right {
   width: auto;
+  gap: 16px;
+  padding: 16px;
+  scrollbar-gutter: stable;
 }
 
 .generator-preview {
+  position: relative;
   flex: 1 1 auto;
   min-width: 0;
   flex-direction: column;
@@ -1456,6 +2272,14 @@ function normalizeVector(vector) {
   padding-top: 12px;
 }
 
+.generator-right .editor-section {
+  gap: 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-soft);
+  padding: 12px;
+}
+
 .block-title,
 .section-title {
   font-weight: 700;
@@ -1497,6 +2321,17 @@ function normalizeVector(vector) {
   gap: 8px;
 }
 
+.emitter-list-card {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+}
+
+.emitter-list-card .row-actions {
+  grid-column: 2;
+  grid-row: 1;
+  align-self: center;
+}
+
 .emitter-list-card,
 .queue-card {
   cursor: pointer;
@@ -1514,15 +2349,23 @@ function normalizeVector(vector) {
 .card-main {
   align-items: center;
   gap: 8px;
+  min-width: 0;
+}
+
+.card-main > div {
+  min-width: 0;
 }
 
 .plain-input {
   width: 100%;
+  height: auto;
+  min-height: 0;
   border: 0;
   background: transparent;
   color: inherit;
   font-weight: 700;
   padding: 0;
+  line-height: 1.25;
 }
 
 .sub,
@@ -1545,6 +2388,20 @@ function normalizeVector(vector) {
   color: inherit;
 }
 
+.emitter-toggle {
+  width: 18px;
+  height: 18px;
+  min-width: 18px;
+  min-height: 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border-radius: 3px;
+  font-size: 10px;
+  line-height: 1;
+}
+
 .icon-btn:disabled {
   opacity: 0.4;
   cursor: default;
@@ -1555,13 +2412,16 @@ function normalizeVector(vector) {
 .mini-field {
   display: grid;
   gap: 6px;
+  min-width: 0;
 }
 
 .field span,
 .vector-row > span,
-.mini-field span {
+.mini-field span,
+.bindable-field > span {
   color: var(--text-soft);
   font-size: 12px;
+  line-height: 1.25;
 }
 
 .grid2,
@@ -1587,10 +2447,320 @@ function normalizeVector(vector) {
   align-items: end;
 }
 
+.generator-right .grid2 {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.generator-right .grid3 {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.generator-right .grid4 {
+  grid-template-columns: repeat(2, minmax(150px, 1fr));
+}
+
+.generator-right .base-param-grid {
+  grid-template-columns: minmax(140px, 0.8fr) minmax(220px, 1.2fr);
+}
+
+.generator-right .base-param-grid > :last-child {
+  grid-column: 1 / -1;
+}
+
 .command-param-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 8px;
+}
+
+.parameter-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(82px, 112px) minmax(0, 1.2fr) max-content 28px;
+  gap: 8px;
+  align-items: center;
+}
+
+.compact-parameter-row {
+  grid-template-columns: minmax(0, 1fr) minmax(82px, 112px) minmax(0, 1.2fr) 28px;
+}
+
+.parameter-row > .input {
+  min-width: 0;
+}
+
+.parameter-row .check-row {
+  min-width: max-content;
+}
+
+.bindable-field {
+  min-width: 0;
+  position: relative;
+}
+
+.bindable-field:focus-within {
+  z-index: 400;
+}
+
+.bindable-field :deep(.bindable-single-input) {
+  width: 100%;
+  min-width: 0;
+}
+
+.bindable-control {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(92px, 116px);
+  gap: 6px;
+  align-items: center;
+}
+
+.bindable-control.no-binding {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.binding-select {
+  min-width: 0;
+  font-size: 12px;
+}
+
+.generator-page :deep(.mc-autocomplete) {
+  position: relative;
+  min-width: 0;
+  z-index: 1;
+}
+
+.generator-page :deep(.mc-autocomplete:focus-within) {
+  z-index: 500;
+}
+
+.generator-page :deep(.mc-autocomplete > .input) {
+  width: 100%;
+}
+
+.generator-page :deep(.mc-suggestions) {
+  position: absolute;
+  z-index: 9999;
+  top: calc(100% + 4px);
+  left: 0;
+  width: max(100%, 300px);
+  max-width: min(520px, calc(100vw - 32px));
+  max-height: 284px;
+  overflow: hidden;
+  border: 1px solid rgba(120, 144, 176, 0.78);
+  border-radius: 4px;
+  background: #070b16;
+  box-shadow: 0 16px 36px rgba(0, 0, 0, 0.62);
+  padding: 3px;
+}
+
+.generator-page :deep(.mc-suggestion) {
+  width: 100%;
+  min-height: 28px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+  border: 0;
+  border-radius: 2px;
+  background: transparent;
+  color: #f8fafc;
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  padding: 4px 8px;
+}
+
+.generator-page :deep(.mc-suggestion.active) {
+  background: rgba(85, 170, 255, 0.42);
+  color: #ffffff;
+}
+
+.generator-page :deep(.mc-suggestion-main),
+.generator-page :deep(.mc-suggestion-label) {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.generator-page :deep(.mc-suggestion-label) {
+  color: rgba(226, 232, 240, 0.58);
+  font-size: 11px;
+}
+
+.bindable-vector-row {
+  display: grid;
+  grid-template-columns: 86px minmax(0, 1fr);
+  gap: 8px;
+  align-items: start;
+}
+
+.bindable-vector-row :deep(.bindable-vector-grid) {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.generator-right .bindable-vector-row {
+  grid-template-columns: 1fr;
+  gap: 6px;
+}
+
+.bindable-vector-row :deep(.vector-label) {
+  color: var(--text-soft);
+  font-size: 12px;
+  line-height: 1.25;
+  padding-top: 4px;
+}
+
+.bindable-vector-row :deep(.bindable-vector-head) {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 4px 8px;
+  align-items: end;
+  justify-content: stretch;
+}
+
+.bindable-vector-row :deep(.vector-kind) {
+  grid-column: 1;
+  grid-row: 1;
+  color: var(--text-soft);
+  font-size: 12px;
+  line-height: 1.2;
+  justify-self: start;
+  white-space: nowrap;
+}
+
+.bindable-vector-row :deep(.mode-select) {
+  grid-column: 1;
+  grid-row: 2;
+  width: 132px;
+  max-width: 100%;
+  min-width: 0;
+  font-size: 12px;
+}
+
+.bindable-vector-row :deep(.bindable-axis-grid) {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 8px;
+  min-width: 0;
+}
+
+.bindable-vector-row :deep(.axis-number),
+.bindable-vector-row :deep(.axis-expression) {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 4px;
+  align-items: end;
+  min-width: 0;
+}
+
+.bindable-vector-row :deep(.axis-chip) {
+  color: var(--text-soft);
+  font-size: 12px;
+  line-height: 1.2;
+  text-align: left;
+}
+
+.bindable-vector-row :deep(.bindable-single-expression) {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr);
+  min-width: 0;
+}
+
+.bindable-vector-row :deep(.bindable-color-constant) {
+  display: grid;
+  gap: 8px;
+  align-items: end;
+  min-width: 0;
+  width: 100%;
+  max-width: 100%;
+}
+
+.bindable-vector-row :deep(.color-main-row) {
+  display: grid;
+  grid-template-columns: 44px minmax(0, 1fr);
+  gap: 8px;
+  align-items: end;
+  min-width: 0;
+}
+
+.bindable-vector-row :deep(.color-channel-grid) {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  min-width: 0;
+}
+
+.bindable-vector-row :deep(.color-picker-input) {
+  width: 44px;
+  min-width: 44px;
+  height: 40px;
+  min-height: 40px;
+  padding: 3px;
+}
+
+.bindable-vector-row :deep(.color-text-input) {
+  min-width: 0;
+}
+
+.bindable-color-vector-row :deep(.color-channel-number) {
+  grid-template-columns: minmax(0, 1fr);
+  gap: 4px;
+}
+
+.bindable-color-vector-row :deep(.color-channel-number .input) {
+  min-width: 0;
+  padding-left: 4px;
+  padding-right: 4px;
+  text-align: center;
+}
+
+.compact-field-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.builder-embed {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-soft);
+  padding: 10px;
+}
+
+.builder-embed :deep(.panel) {
+  border: 0;
+  background: transparent;
+  padding: 0;
+}
+
+.builder-embed :deep(.panel-head),
+.builder-embed :deep(.inline-actions) {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.builder-embed :deep(.node-list),
+.builder-embed :deep(.list-column) {
+  display: grid;
+  gap: 8px;
+}
+
+.builder-embed :deep(.node-item) {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: rgba(15, 23, 42, 0.22);
+  padding: 8px;
+}
+
+.builder-embed :deep(.kv-grid) {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 8px;
 }
 
 .vector-row {
@@ -1610,6 +2780,16 @@ function normalizeVector(vector) {
   display: flex;
   align-items: center;
   gap: 8px;
+  min-width: 0;
+}
+
+.inline-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+  min-width: 0;
 }
 
 .settings-summary,
@@ -1626,7 +2806,7 @@ function normalizeVector(vector) {
 }
 
 .settings-grid {
-  grid-template-columns: minmax(150px, 1fr) repeat(2, max-content);
+  grid-template-columns: minmax(150px, 1fr) repeat(3, max-content);
   align-items: end;
 }
 
@@ -1718,6 +2898,32 @@ function normalizeVector(vector) {
   margin-top: 10px;
 }
 
+.preview-error-overlay {
+  position: absolute;
+  right: 14px;
+  bottom: 14px;
+  z-index: 20;
+  display: grid;
+  gap: 6px;
+  width: min(360px, calc(100% - 28px));
+  max-height: 35%;
+  overflow: auto;
+  border: 1px solid rgba(244, 63, 94, 0.42);
+  border-radius: 6px;
+  background: rgba(69, 10, 10, 0.86);
+  color: #fee2e2;
+  padding: 9px 10px;
+  font-size: 12px;
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.32);
+}
+
+.preview-error-overlay ul {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding-left: 16px;
+}
+
 .generator-canvas :deep(.preview-host),
 .generator-canvas :deep(.preview-host--bare),
 .generator-canvas :deep(.preview-canvas) {
@@ -1761,7 +2967,7 @@ function normalizeVector(vector) {
   color: #fca5a5;
 }
 
-@media (max-width: 1100px) {
+@media (max-width: 1180px) {
   .generator-workspace {
     display: flex;
     height: auto;
@@ -1805,10 +3011,26 @@ function normalizeVector(vector) {
   .grid2,
   .grid3,
   .grid4,
+  .generator-right .grid2,
+  .generator-right .grid3,
+  .generator-right .grid4,
+  .generator-right .base-param-grid,
+  .compact-field-grid,
   .command-param-grid,
+  .parameter-row,
+  .compact-parameter-row,
+  .bindable-vector-row,
+  .generator-right .bindable-vector-row,
+  .builder-embed :deep(.kv-grid),
   .settings-grid,
   .theme-choice-grid,
   .hotkey-row {
+    grid-template-columns: 1fr;
+  }
+
+  .bindable-vector-row :deep(.bindable-vector-head),
+  .bindable-vector-row :deep(.bindable-axis-grid),
+  .bindable-vector-row :deep(.color-channel-grid) {
     grid-template-columns: 1fr;
   }
 

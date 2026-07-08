@@ -1,4 +1,5 @@
 import { createLifecycleCurve, normalizeLifecycleCurve } from './curves.js';
+import { createPointsBuilderProject, normalizePointsBuilderProject } from '../pointsbuilder/defaults.js';
 
 let idSeed = 1;
 
@@ -9,6 +10,7 @@ function makeId(prefix = 'id') {
 
 export const EMITTER_TYPES = [
   { id: 'point', label: '点' },
+  { id: 'points_builder', label: 'PointsBuilder' },
   { id: 'box', label: '盒体' },
   { id: 'sphere', label: '球体' },
   { id: 'sphere_surface', label: '球面' },
@@ -149,6 +151,21 @@ export const GENERATOR_HOTKEY_DEFAULTS = {
   undo: 'KeyZ',
   redo: 'KeyY'
 };
+
+export const GENERATOR_VALUE_TYPES = [
+  'Int',
+  'Long',
+  'Float',
+  'Double',
+  'Boolean',
+  'String',
+  'Vec3',
+  'RelativeLocation',
+  'Vector3f'
+];
+
+const NUMERIC_VALUE_TYPES = new Set(['Int', 'Long', 'Float', 'Double']);
+const VECTOR_VALUE_TYPES = new Set(['Vec3', 'RelativeLocation', 'Vector3f']);
 
 function numberParam(key, label, defaultValue, options = {}) {
   return {
@@ -405,6 +422,33 @@ export function createCurveGroup() {
   };
 }
 
+export function createGeneratorValue(overrides = {}) {
+  const type = normalizeGeneratorValueType(overrides.type);
+  return normalizeGeneratorValue({
+    id: overrides.id || makeId('value'),
+    name: '',
+    type,
+    value: defaultValueForType(type),
+    codec: true,
+    ...overrides
+  });
+}
+
+export function createGeneratorVariable(overrides = {}) {
+  return createGeneratorValue({ codec: true, ...overrides });
+}
+
+export function createGeneratorConstant(overrides = {}) {
+  return createGeneratorValue({ codec: false, ...overrides });
+}
+
+function createEmitterPointsBuilderState() {
+  const project = createPointsBuilderProject('generator-pointsbuilder');
+  project.name = 'EmitterPointsBuilder';
+  project.kotlinEndMode = 'builder';
+  return project;
+}
+
 export function createEmitterCard(overrides = {}) {
   const id = overrides.id || makeId('emitter');
   return normalizeEmitterCard({
@@ -414,6 +458,7 @@ export function createEmitterCard(overrides = {}) {
     emitter: {
       type: 'sphere',
       offset: { x: 0, y: 0, z: 0 },
+      builderState: createEmitterPointsBuilderState(),
       box: { x: 2, y: 1, z: 2, density: 0, surface: false },
       sphere: { r: 2 },
       sphereSurface: { r: 2 },
@@ -461,6 +506,7 @@ export function createEmitterCard(overrides = {}) {
       sign: 0,
       speedLimit: 32
     },
+    bindings: {},
     curves: createCurveGroup(),
     ...overrides
   });
@@ -512,6 +558,10 @@ export function createGeneratorProject(overrides = {}) {
       intervalTick: 1,
       maxTick: 120
     },
+    parameters: {
+      variables: [],
+      constants: []
+    },
     doTickExpressions: [],
     deathBehavior: {
       enabled: true,
@@ -520,6 +570,7 @@ export function createGeneratorProject(overrides = {}) {
     settings: {
       showGrid: true,
       showAxes: true,
+      showSkybox: true,
       pointSize: 0.08,
       particleRenderScale: 1,
       theme: 'dark-1',
@@ -539,6 +590,7 @@ export function normalizeGeneratorProject(raw = {}) {
     settings: {
       showGrid: true,
       showAxes: true,
+      showSkybox: true,
       pointSize: 0.08,
       particleRenderScale: 1,
       theme: 'dark-1',
@@ -561,12 +613,13 @@ export function normalizeGeneratorProject(raw = {}) {
       commands: Array.isArray(queue.commands) ? queue.commands.map((command, commandIndex) => normalizeQueueCommand(command, commandIndex)) : []
     }))
     : [createCommandQueue()];
+  const parameters = normalizeGeneratorParameters(base.parameters);
   return {
     ...base,
     schemaVersion: 5,
     ticksPerSecond: clampInt(base.ticksPerSecond, 1, 200, 20),
     previewTicks: clampInt(base.previewTicks, 1, 2000, 120),
-    leftTab: ['emitters', 'queues', 'project', 'tick', 'death'].includes(base.leftTab) ? base.leftTab : 'emitters',
+    leftTab: ['emitters', 'queues', 'project', 'tick', 'death', 'settings'].includes(base.leftTab) ? base.leftTab : 'emitters',
     pageMode: base.pageMode === 'code' ? 'code' : 'editor',
     selectedEmitterId: emitters.some((item) => item.id === base.selectedEmitterId) ? base.selectedEmitterId : emitters[0]?.id || '',
     selectedQueueId: commandQueues.some((item) => item.id === base.selectedQueueId) ? base.selectedQueueId : commandQueues[0]?.id || '',
@@ -576,6 +629,7 @@ export function normalizeGeneratorProject(raw = {}) {
       baseClass: String(base.kotlin?.baseClass || 'AutoParticleEmitters')
     },
     rootLifecycle: normalizeRootLifecycle(base.rootLifecycle),
+    parameters,
     deathBehavior: {
       enabled: base.deathBehavior?.enabled !== false,
       mode: base.deathBehavior?.mode === 'respawn' ? 'respawn' : 'dissipate'
@@ -584,12 +638,13 @@ export function normalizeGeneratorProject(raw = {}) {
       ...base.settings,
       showGrid: base.settings.showGrid !== false,
       showAxes: base.settings.showAxes !== false,
+      showSkybox: base.settings.showSkybox !== false,
       pointSize: clampNumber(base.settings.pointSize, 0.01, 0.6, 0.08),
       particleRenderScale: clampNumber(base.settings.particleRenderScale, 0.05, 20, 1),
       theme: normalizeGeneratorTheme(base.settings.theme),
       hotkeys: normalizeGeneratorHotkeys(base.settings.hotkeys),
-      leftPanelWidth: clampInt(base.settings.leftPanelWidth, 280, 560, 340),
-      rightPanelWidth: clampInt(base.settings.rightPanelWidth, 340, 760, 480)
+      leftPanelWidth: clampInt(base.settings.leftPanelWidth, 220, 2400, 340),
+      rightPanelWidth: clampInt(base.settings.rightPanelWidth, 260, 2400, 480)
     },
     emitters,
     commandQueues
@@ -618,6 +673,10 @@ export function normalizeEmitterCard(raw = {}, index = 0, options = {}) {
     emitter: {
       type: normalizeEmitterType(card.emitter?.type),
       offset: normalizeVector(card.emitter?.offset, { x: 0, y: 0, z: 0 }),
+      builderState: normalizePointsBuilderProject(
+        card.emitter?.builderState || createEmitterPointsBuilderState(),
+        'generator-pointsbuilder'
+      ),
       box: {
         x: clampNumber(card.emitter?.box?.x, 0.001, 100, 2),
         y: clampNumber(card.emitter?.box?.y, 0.001, 100, 1),
@@ -695,6 +754,8 @@ export function normalizeEmitterCard(raw = {}, index = 0, options = {}) {
       sign: clampInt(renderSource.sign ?? templateSource.sign, -2147483648, 2147483647, 0),
       speedLimit: clampNumber(renderSource.speedLimit ?? templateSource.speedLimit, 0, 1000, 32)
     },
+    bindings: normalizeEmitterBindings(card.bindings),
+    bindingModes: normalizeEmitterBindingModes(card.bindingModes),
     curves: {
       size: {
         syncAxes: card.curves?.size?.syncAxes === true,
@@ -719,6 +780,91 @@ export function normalizeEmitterCard(raw = {}, index = 0, options = {}) {
   return next;
 }
 
+function normalizeGeneratorParameters(raw = {}) {
+  const source = raw && typeof raw === 'object' ? raw : {};
+  return {
+    variables: Array.isArray(source.variables)
+      ? source.variables.map((item, index) => normalizeGeneratorValue({ codec: true, ...item }, index))
+      : [],
+    constants: Array.isArray(source.constants)
+      ? source.constants.map((item, index) => normalizeGeneratorValue({ codec: false, ...item }, index))
+      : []
+  };
+}
+
+function normalizeGeneratorValue(raw = {}, index = 0) {
+  const type = normalizeGeneratorValueType(raw.type);
+  return {
+    id: String(raw.id || makeId('value')),
+    name: normalizeValueName(raw.name, `value${index + 1}`),
+    type,
+    value: normalizeDefaultValue(type, raw.value ?? raw.defaultValue),
+    codec: raw.codec !== false
+  };
+}
+
+function normalizeValueName(raw, fallback) {
+  const text = String(raw || '').trim().replace(/[^A-Za-z0-9_]/g, '_');
+  const safe = /^[A-Za-z_]/.test(text) ? text : text ? `_${text}` : '';
+  return safe || fallback;
+}
+
+function normalizeGeneratorValueType(rawType) {
+  const raw = String(rawType || '').trim();
+  const lowered = raw.toLowerCase();
+  if (lowered === 'int') return 'Int';
+  if (lowered === 'long') return 'Long';
+  if (lowered === 'float') return 'Float';
+  if (lowered === 'double') return 'Double';
+  if (lowered === 'boolean' || lowered === 'bool') return 'Boolean';
+  if (lowered === 'string') return 'String';
+  if (lowered === 'vec3') return 'Vec3';
+  if (lowered === 'relativelocation') return 'RelativeLocation';
+  if (lowered === 'vector3f') return 'Vector3f';
+  return GENERATOR_VALUE_TYPES.includes(raw) ? raw : 'Double';
+}
+
+function defaultValueForType(type) {
+  const normalized = normalizeGeneratorValueType(type);
+  if (normalized === 'Boolean') return false;
+  if (normalized === 'String') return '';
+  if (normalized === 'Vec3') return 'Vec3(0.0, 0.0, 0.0)';
+  if (normalized === 'RelativeLocation') return 'RelativeLocation(0.0, 0.0, 0.0)';
+  if (normalized === 'Vector3f') return 'Vector3f(0.0f, 0.0f, 0.0f)';
+  return 0;
+}
+
+function normalizeDefaultValue(type, value) {
+  const normalized = normalizeGeneratorValueType(type);
+  if (NUMERIC_VALUE_TYPES.has(normalized)) {
+    const numeric = toNumber(value, 0);
+    return normalized === 'Int' || normalized === 'Long' ? Math.trunc(numeric) : numeric;
+  }
+  if (normalized === 'Boolean') {
+    return value === true || value === 'true' || value === 1 || value === '1';
+  }
+  if (normalized === 'String' || VECTOR_VALUE_TYPES.has(normalized)) {
+    const text = String(value ?? '').trim();
+    return text || defaultValueForType(normalized);
+  }
+  return defaultValueForType(normalized);
+}
+
+function normalizeEmitterBindings(raw = {}) {
+  if (!raw || typeof raw !== 'object') return {};
+  return Object.fromEntries(Object.entries(raw)
+    .map(([path, value]) => [String(path || '').trim(), String(value || '').trim()])
+    .filter(([path, value]) => path && value));
+}
+
+function normalizeEmitterBindingModes(raw = {}) {
+  if (!raw || typeof raw !== 'object') return {};
+  const modes = new Set(['constant', 'independent', 'vector']);
+  return Object.fromEntries(Object.entries(raw)
+    .map(([path, value]) => [String(path || '').trim(), String(value || '').trim()])
+    .filter(([path, value]) => path && modes.has(value)));
+}
+
 function normalizeRootLifecycle(raw = {}) {
   const mode = ['once', 'interval', 'interval_n_tick'].includes(raw.mode) ? raw.mode : 'interval';
   return {
@@ -740,12 +886,12 @@ function normalizeBillboardMode(raw) {
 
 function normalizeEffectClass(raw) {
   const text = String(raw || 'ControlableEndRodEffect');
-  return EFFECT_CLASS_OPTIONS.includes(text) ? text : 'ControlableEndRodEffect';
+  return text.trim() || 'ControlableEndRodEffect';
 }
 
 function normalizeTextureSheet(raw) {
   const text = String(raw || 'PARTICLE_SHEET_TRANSLUCENT');
-  return TEXTURE_SHEET_OPTIONS.some((item) => item.id === text) ? text : 'PARTICLE_SHEET_TRANSLUCENT';
+  return text.trim() || 'PARTICLE_SHEET_TRANSLUCENT';
 }
 
 function normalizeGeneratorTheme(raw) {

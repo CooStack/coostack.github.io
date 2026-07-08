@@ -20,6 +20,7 @@
         :key="node.id"
         :node="node"
         :selected-node-id="selectedNodeId"
+        :number-datalist-id="numberDatalistId"
         @select="emit('select', $event)"
         @remove="emit('remove', $event)"
         @update-param="emit('update-param', $event)"
@@ -40,7 +41,8 @@ import PointsNodeTreeItem from './PointsNodeTreeItem.vue';
 defineProps({
   title: { type: String, default: '节点编辑器' },
   nodes: { type: Array, default: () => [] },
-  selectedNodeId: { type: String, default: '' }
+  selectedNodeId: { type: String, default: '' },
+  numberDatalistId: { type: String, default: '' }
 });
 
 const emit = defineEmits(['add-root', 'add-child', 'remove', 'select', 'update-param', 'add-term', 'remove-term', 'update-term']);

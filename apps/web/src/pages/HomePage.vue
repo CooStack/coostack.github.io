@@ -1177,6 +1177,14 @@ onBeforeUnmount(() => {
       "pointsbuilder"
       "codeflow";
   }
+  .profile-top { grid-template-columns: 1fr; }
+  .profile-avatar {
+    grid-column: 1;
+    grid-row: auto;
+    justify-self: start;
+    width: min(var(--avatar-size), 46vw);
+    height: min(var(--avatar-size), 46vw);
+  }
   .profile-links { grid-template-columns: 1fr; }
 }
 </style>
